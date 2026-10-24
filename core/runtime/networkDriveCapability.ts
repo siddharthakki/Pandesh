@@ -133,7 +133,7 @@ export function createNetworkDriveCapabilityAdapter(options: NetworkDriveCapabil
       },
     ],
     classify: (toolName) => (toolName === 'list_network_drives' ? 'read_only' : 'consequential'),
-    health: () => ({ state: process.platform === 'win32' ? 'available' : 'unavailable', reason: process.platform === 'win32' ? undefined : 'network drive mapping is Windows-only', checkedAt: new Date().toISOString() }),
+    health: () => ({ state: process.platform === 'win32' || Boolean(options.runScript) ? 'available' : 'unavailable', reason: (process.platform === 'win32' || Boolean(options.runScript)) ? undefined : 'network drive mapping is Windows-only', checkedAt: new Date().toISOString() }),
     redactArguments: (toolName, args) => (toolName === 'connect_network_drive' && typeof args.password === 'string'
       ? { ...args, password: '[redacted]' }
       : args),
