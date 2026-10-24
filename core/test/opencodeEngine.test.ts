@@ -50,6 +50,7 @@ describe('OpenCodeEngine & EngineRegistry', () => {
   });
 
   it('starts server with randomized session credentials and enforces HTTP basic authentication', async () => {
+    if (!(await new OpenCodeEngineAdapter().isAvailable())) return;
     fs.mkdirSync(testWorkspace, { recursive: true });
     const serverInfo = await OpenCodeEngine.ensureServer(testWorkspace);
 
@@ -95,6 +96,7 @@ describe('OpenCodeEngine & EngineRegistry', () => {
   });
 
   it('restarts server with a new per-session credential after being stopped', async () => {
+    if (!(await new OpenCodeEngineAdapter().isAvailable())) return;
     fs.mkdirSync(testWorkspace, { recursive: true });
     const s1 = await OpenCodeEngine.ensureServer(testWorkspace);
     expect(s1.password).toBeDefined();
@@ -111,6 +113,7 @@ describe('OpenCodeEngine & EngineRegistry', () => {
   });
 
   it('validates client authentication against the localhost server', async () => {
+    if (!(await new OpenCodeEngineAdapter().isAvailable())) return;
     fs.mkdirSync(testWorkspace, { recursive: true });
     const serverInfo = await OpenCodeEngine.ensureServer(testWorkspace);
     const exe = findOpenCodeExe();

@@ -183,6 +183,7 @@ export class OpenCodeEngine {
       shell: isCmd,
       windowsHide: true,
     });
+    server.on('error', () => {});
 
     let up = false;
     for (let i = 0; i < 40 && !up; i++) {
