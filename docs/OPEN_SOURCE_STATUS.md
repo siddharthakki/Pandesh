@@ -12,7 +12,7 @@ Source revision: `8166f627a3522493eb129ff8d91a1f164770a112` (v0.1.1 Pandesh alph
 - Root `package.json` says `"license": "MIT"`.
 - The old source README erroneously says `UNLICENSED`; do not copy it.
 - Release snapshot includes code, test suites, media and a large amount of generated evidence/caches.
-- Development CI includes a `self-hosted` runner on pull requests. **Never copy that workflow into public CI.**
+- The private repository's former self-hosted pull-request CI has been replaced with `ubuntu-latest` on `master` and `release/pandesh-alpha` (2026-10-24). The Windows guardian already uses `windows-latest`. **The old local runner still needs deregistration and any auto-start service/Windows Task Scheduler entry disabled.** Do not reintroduce the historical WSL-hosted workflow.
 - One OpenCode adapter uses a static local server password; remediate in the source before accepting it as publication-ready.
 - Older review text contains personal Windows user paths. Do not import historical reports, logs or design artifacts without review.
 - No obvious plaintext provider keys were found in the subset of files manually inspected. **This is not a comprehensive secrets certification.**
@@ -27,7 +27,8 @@ Source revision: `8166f627a3522493eb129ff8d91a1f164770a112` (v0.1.1 Pandesh alph
 - [ ] Review every image, icon, font, voice sample, audio/video file and design asset that will be published; verify provenance and permissions.
 - [ ] Confirm build completeness and tests using the sanitized snapshot; do not silently omit required runtime assets.
 - [ ] Inventory production dependencies and include all required third-party license and copyright notices.
-- [ ] Use only GitHub-hosted sandboxed CI on external pull requests. Restrict or disable old private self-hosted PR jobs.
+- [x] Replace the old self-hosted PR workflow with GitHub-hosted `ubuntu-latest` and keep product guardian on `windows-latest`.
+- [ ] Deregister the old runner in the private GitHub repository and disable its Windows/WSL auto-start tasks/services. No GitHub workflow presently requests it.
 - [ ] Ensure README, package metadata, `LICENSE`, CONTRIBUTING and SECURITY all agree.
 - [ ] Publish sanitized source to this repository, verify no sensitive files are tracked, and *then* mark the source release ready.
 - [ ] Link to this code repository from `Pandesh_Releases`, and publish the matching source revision/build information.
