@@ -1,28 +1,36 @@
 # Contributing to Pandesh
 
-Thanks for helping improve the local-first Pandesh assistant.
+Thanks for helping make a **local-first Windows AI personal assistant** more useful and reliable.
 
-**Source status:** The audited source snapshot is being prepared. Until it lands in this repository, please focus on product feedback, documentation, reproducible bugs, accessibility suggestions, and discussion.
+**Start here:** [First contributions](docs/CONTRIBUTOR_START_HERE.md) · [Support](SUPPORT.md) · [Roadmap](docs/ROADMAP.md) · [Code of Conduct](CODE_OF_CONDUCT.md).
 
-## Before submitting a bug
+**Current source status:** the complete audited Core/Desktop source has **not** yet been imported. You can already help through documentation pull requests, real-world alpha testing, accessibility review, local-model compatibility reports and reproducible bugs. Core code PRs will become practical after source publication.
 
-- Search existing issues in this source repository and in [Pandesh_Releases](https://github.com/siddharthakki/Pandesh_Releases/issues).
-- Give the **exact Pandesh version/build**, Windows version, selected model and local provider, reproducible steps, expected behavior and actual result.
-- Include *redacted* logs and cropped screenshots only when necessary. Do not upload tokens, private emails, home directories, full SQLite databases, or private code.
+## Where to contribute
 
-## Code contributions (after source import)
+- **Windows installer, model connectivity, UI or actual task failure:** use [Pandesh_Releases issues](https://github.com/siddharthakki/Pandesh_Releases/issues/new/choose).
+- **Docs, architecture explanation, source-publication feedback or future contribution proposals:** use [Pandesh issues](https://github.com/siddharthakki/Pandesh/issues/new/choose).
+- **Questions:** use GitHub Discussions when the maintainer enables it; until then a concise issue is acceptable if action is needed.
+- **Security concerns:** follow [SECURITY.md](SECURITY.md), not a public bug report.
 
-1. Open an issue before a substantial feature or architecture change.
-2. Fork the public repository and branch from the published default branch.
-3. Make focused changes; add reproduction coverage for fixes.
-4. Respect task/action permissions and process-ownership safety; don't weaken them for convenience.
-5. Prefer actual end-to-end behavior over mock-only claims; accurately label the scope of tests.
-6. Submit a pull request explaining the user scenario, risk and validation steps.
+## Send your first documentation PR
 
-**All public PRs must run in isolated GitHub-hosted CI.** We do not execute untrusted public contributions on a personal self-hosted runner.
+1. Check [good beginner tasks](docs/CONTRIBUTOR_START_HERE.md) or open a focused issue.
+2. Fork `siddharthakki/Pandesh`.
+3. Create a branch, make a small Markdown change, and confirm links/instructions are accurate.
+4. Open a PR to `main`, describing the user problem, the change and what you verified.
+5. Expect review. Don't silently change release checksums, license declarations, acceptance claims, or model safety policies.
 
-By submitting a contribution, you agree that your contribution can be distributed under the project's [MIT license](LICENSE), and you confirm you have the rights to contribute that code or asset. Do not copy third-party licensed code, datasets, proprietary credentials, or copyrighted media without appropriate rights and notices.
+## After code publication
 
-## Security reports
+Once the **buildable source** is available, contributors will use the same fork/branch/PR flow with documented `npm ci`, build and test commands. Pull requests must run **on GitHub-hosted runners only**. We do not execute untrusted public PRs on a personal machine.
 
-For a potential vulnerability, follow [SECURITY.md](SECURITY.md) rather than publicly posting exploit steps or secrets.
+Protect least-privilege approvals, process-ownership safety and durable task outcomes. Changes affecting execution of host processes, external communication or file mutation require explicit tests and reviewer scrutiny.
+
+## Copyright and licensing
+
+The project's own code is [MIT-licensed](LICENSE). By submitting, you confirm that you have the rights to your contribution and agree it can be distributed under MIT. **Upstream projects, fonts, audio, icons, images and AI model weights retain separate licenses**; include required attribution and do not copy proprietary assets or private files.
+
+## Privacy and conduct
+
+Follow the [Code of Conduct](CODE_OF_CONDUCT.md). Only post synthetic or appropriately redacted diagnostics; never upload credentials, full databases, private emails/calendars, or unreviewed screen recordings.
