@@ -1,0 +1,34 @@
+# Local dependencies and package outputs
+node_modules/
+dist/
+build/
+out/
+out-core/
+out-core-tsc/
+coverage/
+test-results/
+.cache/
+*.vsix
+*.log
+
+# Credentials and local data
+.env
+.env.*
+*.key
+*.pem
+*.p12
+*.pfx
+credentials.json
+secrets.json
+.secrets/
+.ollama-agent/
+.tmp/
+.acceptance-evidence/
+.guardian-evidence/
+
+# Local authoring environment
+.idea/
+.vscode/settings.json
+.vscode/launch.json
+.DS_Store
+Thumbs.db
