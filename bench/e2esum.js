@@ -1,0 +1,5 @@
+const fs=require('fs');const f=n=>JSON.parse(fs.readFileSync('bench/results/'+n,'utf8'));
+function agg(rows){const n=rows.length;const s=k=>rows.reduce((a,r)=>a+(r[k]||0),0);return {n,completed:rows.filter(r=>r.completed).length,turns:(s('turns')/n).toFixed(1),toolCalls:(s('toolCalls')/n).toFixed(1),promptTok:Math.round(s('promptTokens')/n),wallS:(s('wallS')/n).toFixed(0),citedRecall:(s('citedRecall')/n).toFixed(2),textRecall:(s('textRecall')/n).toFixed(2),usedNav:rows.filter(r=>/find_|impact|repo_map/.test(r.tools)).length}}
+for (const set of ['kkd','events']) for (const arm of ['before','after']) {const rows=f(`e2e_${set}_3b_${arm}.json`);console.log(set.padEnd(7),arm.padEnd(6),JSON.stringify(agg(rows)))}
+console.log('\nper task (after vs before): grounded = cites expected files / identifiers');
+for (const set of ['kkd','events']){const b=f(`e2e_${set}_3b_before.json`),a=f(`e2e_${set}_3b_after.json`);b.forEach((r,i)=>console.log(r.id.padEnd(22),'before turns',r.turns,'cite',r.citedRecall,'txt',r.textRecall??'-','| after turns',a[i].turns,'cite',a[i].citedRecall,'txt',a[i].textRecall??'-','tools',a[i].tools.split(',').slice(0,4).join(',')))}

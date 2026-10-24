@@ -1,0 +1,306 @@
+/* Kaam ka Dhaaga — the connected vertical execution thread.
+ *
+ * The connector is functional information, not decoration: the segment under each node carries that node's state
+ *   queued    muted, dashed          active     blue / cyan (purple while planning or delegating, green while coding)
+ *   delegated purple                 waiting    amber (the user is needed)
+ *   done      green                  failed     red
+ *   cancelled grey
+ * Every state is also carried by a glyph and by text, so motion and colour are never the only signal.
+ */
+:root {
+  --dg-muted: var(--vscode-descriptionForeground, #8a8a8a);
+  --dg-blue: var(--kd-chat, #3794ff);
+  --dg-cyan: #3fd0e0;
+  --dg-purple: var(--kd-agent, #a970ff);
+  --dg-green: var(--vscode-terminal-ansiGreen, #57c76d);
+  --dg-amber: var(--kd-amber, #d7a72c);
+  --dg-red: var(--kd-red, #f14c4c);
+  --dg-rail-x: 9px;
+  --dg-body-left: 30px;
+}
+
+.kd-dhaaga {
+  position: relative;
+  margin: 10px 0 12px;
+  padding: 10px 12px 10px 12px;
+  border: 1px solid var(--kd-border, rgba(127, 127, 127, 0.25));
+  border-radius: var(--kd-radius, 8px);
+  background: color-mix(in srgb, var(--vscode-editor-background, #1e1e1e) 88%, #0b1220);
+  font-size: 12px;
+  line-height: 1.45;
+  overflow: hidden;
+}
+.kd-dhaaga[hidden] { display: none; }
+
+.kd-dhaaga-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+.kd-dhaaga-panda { width: 22px; height: 22px; object-fit: contain; flex: 0 0 auto; }
+.kd-dhaaga-eyebrow {
+  font-size: 10px;
+  letter-spacing: 0.14em;
+  color: var(--dg-cyan);
+  font-weight: 600;
+}
+.kd-dhaaga-mode {
+  margin-left: auto;
+  padding: 1px 8px;
+  border-radius: 999px;
+  border: 1px solid color-mix(in srgb, var(--dg-blue) 55%, transparent);
+  color: var(--vscode-foreground);
+  font-size: 10.5px;
+  white-space: nowrap;
+}
+.kd-dhaaga[data-mode="saath_kar"] .kd-dhaaga-mode { border-color: color-mix(in srgb, var(--dg-purple) 60%, transparent); }
+.kd-dhaaga[data-mode="karke_dikha"] .kd-dhaaga-mode { border-color: color-mix(in srgb, var(--dg-green) 60%, transparent); }
+
+.kd-dhaaga-thread { list-style: none; margin: 0; padding: 0; }
+
+.kd-dhaaga-item {
+  --dg-c: var(--dg-muted);
+  position: relative;
+  padding: 0 0 12px var(--dg-body-left);
+  min-height: 20px;
+}
+/* Connector: the segment from this node's dot down to the next node's dot, coloured by THIS node's state. */
+.kd-dhaaga-item::after {
+  content: "";
+  position: absolute;
+  left: var(--dg-rail-x);
+  top: 16px;
+  bottom: -4px;
+  width: 0;
+  border-left: 2px solid var(--dg-c);
+  transform: translateX(-1px);
+  border-radius: 1px;
+}
+.kd-dhaaga-item:last-child { padding-bottom: 2px; }
+/* The last node keeps only a short stub, and only while the thread is still going. */
+.kd-dhaaga-item:last-child::after { bottom: auto; height: 10px; }
+.kd-dhaaga[data-active="false"] .kd-dhaaga-item:last-child::after { display: none; }
+
+.kd-dhaaga-dot {
+  position: absolute;
+  left: 0;
+  top: 2px;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  box-sizing: border-box;
+  border: 2px solid var(--dg-c);
+  background: var(--vscode-editor-background, #1e1e1e);
+  color: var(--dg-c);
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 1;
+}
+.kd-dhaaga-root .kd-dhaaga-dot { border-color: var(--dg-blue); color: var(--dg-blue); background: color-mix(in srgb, var(--dg-blue) 22%, transparent); }
+.kd-dhaaga-root { --dg-c: var(--dg-blue); }
+
+.kd-dhaaga-body { min-width: 0; }
+.kd-dhaaga-title { color: var(--vscode-foreground); font-weight: 500; opacity: 0.82; }
+.kd-dhaaga-sub { color: var(--dg-muted); font-size: 11px; }
+.kd-dhaaga-root-label { color: var(--dg-muted); font-size: 10.5px; letter-spacing: 0.04em; }
+.kd-dhaaga-root-text { color: var(--vscode-foreground); font-weight: 500; overflow-wrap: anywhere; }
+
+.kd-dhaaga-facts { list-style: none; margin: 2px 0 0; padding: 0; }
+.kd-dhaaga-facts li { color: var(--vscode-foreground); opacity: 0.9; font-size: 11.5px; overflow-wrap: anywhere; }
+.kd-dhaaga-facts li::before { content: "· "; color: var(--dg-muted); }
+
+/* State → node/segment colour + glyph. */
+.kd-dhaaga-item[data-status="queued"] { --dg-c: var(--dg-muted); }
+.kd-dhaaga-item[data-status="queued"]::after { border-left-style: dashed; opacity: 0.6; }
+.kd-dhaaga-item[data-status="queued"] .kd-dhaaga-dot { border-style: dashed; }
+.kd-dhaaga-item[data-status="active"] { --dg-c: var(--dg-blue); }
+.kd-dhaaga-item[data-status="active"][data-stage="repo_scanning"],
+.kd-dhaaga-item[data-status="active"][data-stage="reading_files"] { --dg-c: var(--dg-cyan); }
+.kd-dhaaga-item[data-status="active"][data-stage="planning"] { --dg-c: var(--dg-purple); }
+.kd-dhaaga-item[data-status="active"][data-stage="coding"] { --dg-c: var(--dg-green); }
+.kd-dhaaga-item[data-status="active"][data-stage="building"],
+.kd-dhaaga-item[data-status="active"][data-stage="testing"] { --dg-c: var(--dg-cyan); }
+.kd-dhaaga-item[data-status="delegated"] { --dg-c: var(--dg-purple); }
+.kd-dhaaga-item[data-status="waiting"] { --dg-c: var(--dg-amber); }
+.kd-dhaaga-item[data-status="done"] { --dg-c: var(--dg-green); }
+.kd-dhaaga-item[data-status="blocked"],
+.kd-dhaaga-item[data-status="failed"] { --dg-c: var(--dg-red); }
+.kd-dhaaga-item[data-status="blocked"] { --dg-c: var(--dg-amber); }
+.kd-dhaaga-item[data-status="cancelled"] { --dg-c: var(--dg-muted); }
+
+.kd-dhaaga-item[data-status="active"] .kd-dhaaga-dot::before { content: "●"; }
+.kd-dhaaga-item[data-status="delegated"] .kd-dhaaga-dot::before { content: "◆"; }
+.kd-dhaaga-item[data-status="waiting"] .kd-dhaaga-dot::before { content: "!"; }
+.kd-dhaaga-item[data-status="done"] .kd-dhaaga-dot::before { content: "✓"; }
+.kd-dhaaga-item[data-status="failed"] .kd-dhaaga-dot::before,
+.kd-dhaaga-item[data-status="blocked"] .kd-dhaaga-dot::before { content: "✕"; }
+.kd-dhaaga-item[data-status="cancelled"] .kd-dhaaga-dot::before { content: "–"; }
+.kd-dhaaga-item[data-status="queued"] .kd-dhaaga-dot::before { content: ""; }
+.kd-dhaaga-root .kd-dhaaga-dot::before { content: "◦"; }
+.kd-dhaaga-root .kd-dhaaga-dot::before { font-size: 12px; }
+
+/* Exactly one primary node. */
+.kd-dhaaga-item.is-current .kd-dhaaga-title { opacity: 1; font-weight: 650; }
+.kd-dhaaga-item.is-current .kd-dhaaga-dot {
+  background: color-mix(in srgb, var(--dg-c) 24%, var(--vscode-editor-background, #1e1e1e));
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--dg-c) 30%, transparent), 0 0 10px color-mix(in srgb, var(--dg-c) 55%, transparent);
+}
+.kd-dhaaga-item.is-current .kd-dhaaga-sub { color: var(--vscode-foreground); }
+.kd-dhaaga[data-active="true"] .kd-dhaaga-item.is-current[data-status="active"] .kd-dhaaga-dot,
+.kd-dhaaga[data-active="true"] .kd-dhaaga-item.is-current[data-status="delegated"] .kd-dhaaga-dot {
+  animation: kd-dhaaga-beat 1.8s ease-in-out infinite;
+}
+.kd-dhaaga[data-active="true"] .kd-dhaaga-item.is-current[data-status="waiting"] .kd-dhaaga-dot {
+  animation: kd-dhaaga-beat 2.6s ease-in-out infinite;
+}
+/* The active node's stub carries a subtle travelling pulse so the thread reads as "going". */
+.kd-dhaaga[data-active="true"] .kd-dhaaga-item.is-current[data-status="active"]:last-child::after {
+  animation: kd-dhaaga-stub 1.8s ease-in-out infinite;
+}
+@keyframes kd-dhaaga-beat {
+  0%, 100% { box-shadow: 0 0 0 2px color-mix(in srgb, var(--dg-c) 22%, transparent), 0 0 6px color-mix(in srgb, var(--dg-c) 35%, transparent); }
+  50% { box-shadow: 0 0 0 4px color-mix(in srgb, var(--dg-c) 38%, transparent), 0 0 14px color-mix(in srgb, var(--dg-c) 65%, transparent); }
+}
+@keyframes kd-dhaaga-stub { 0%, 100% { opacity: 0.45; } 50% { opacity: 1; } }
+
+/* Branches: physically attached to the delegating parent's rail. */
+.kd-dhaaga-branches { list-style: none; margin: 6px 0 0; padding: 0; }
+.kd-dhaaga-branch {
+  --dg-bc: var(--dg-muted);
+  position: relative;
+  padding: 1px 0 1px 18px;
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+.kd-dhaaga-branch::before {
+  content: "";
+  position: absolute;
+  left: calc(var(--dg-rail-x) - var(--dg-body-left));
+  top: -6px;
+  height: calc(100% + 6px);
+  border-left: 2px solid var(--dg-purple);
+}
+.kd-dhaaga-branch:last-child::before { height: calc(50% + 6px); }
+.kd-dhaaga-branch::after {
+  content: "";
+  position: absolute;
+  left: calc(var(--dg-rail-x) - var(--dg-body-left));
+  top: 50%;
+  width: 14px;
+  border-top: 2px solid var(--dg-purple);
+}
+.kd-dhaaga-branch-label { flex: 1 1 auto; min-width: 0; overflow-wrap: anywhere; }
+.kd-dhaaga-branch-state { flex: 0 0 auto; font-size: 11px; color: var(--dg-bc); }
+.kd-dhaaga-branch[data-status="done"] { --dg-bc: var(--dg-green); }
+.kd-dhaaga-branch[data-status="active"] { --dg-bc: var(--dg-purple); }
+.kd-dhaaga-branch[data-status="failed"],
+.kd-dhaaga-branch[data-status="blocked"] { --dg-bc: var(--dg-red); }
+.kd-dhaaga-branch[data-status="done"] .kd-dhaaga-branch-state::before { content: "✓"; }
+.kd-dhaaga-branch[data-status="active"] .kd-dhaaga-branch-state::before { content: "active"; }
+.kd-dhaaga-branch[data-status="failed"] .kd-dhaaga-branch-state::before { content: "failed"; }
+.kd-dhaaga-branch[data-status="cancelled"] .kd-dhaaga-branch-state::before { content: "cancelled"; }
+.kd-dhaaga-branch[data-status="queued"] .kd-dhaaga-branch-state::before { content: "queued"; }
+
+/* The action reference that lives IN the thread; the actionable card is pinned above the composer. */
+.kd-dhaaga-action {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 6px;
+  padding: 6px 10px;
+  border: 1px solid color-mix(in srgb, var(--dg-amber) 60%, transparent);
+  border-radius: var(--kd-radius, 8px);
+  background: color-mix(in srgb, var(--dg-amber) 10%, transparent);
+}
+.kd-dhaaga-action button {
+  padding: 2px 10px;
+  border: 1px solid var(--dg-amber);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--vscode-foreground);
+  cursor: pointer;
+  font: inherit;
+}
+.kd-dhaaga-action button:hover,
+.kd-dhaaga-action button:focus-visible { background: color-mix(in srgb, var(--dg-amber) 28%, transparent); outline: none; }
+
+.kd-dhaaga-details { margin-top: 4px; color: var(--dg-muted); font-size: 11px; }
+.kd-dhaaga-details > summary { cursor: pointer; }
+.kd-dhaaga-details pre {
+  max-height: 160px;
+  overflow: auto;
+  margin: 4px 0 0;
+  padding: 6px;
+  border-radius: 6px;
+  background: var(--vscode-textCodeBlock-background, rgba(128, 128, 128, 0.12));
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/* One compact live row, updated in place. */
+.kd-dhaaga-live {
+  margin: 6px 0 0 var(--dg-body-left);
+  color: var(--vscode-foreground);
+  font-size: 11.5px;
+}
+.kd-dhaaga-live[hidden] { display: none; }
+
+.kd-dhaaga[hidden] { display: none !important; }
+/* One live execution surface: a live Karke task renders in Kaam ka Dhaaga only. The legacy objective card, stage rail,
+   progress list, task line and status header never mount beside it (approval cards are actions and stay). */
+body[data-kd-execution-surface="dhaaga"] #task-request-entry,
+body[data-kd-execution-surface="dhaaga"] #autonomous-stage-tracker,
+body[data-kd-execution-surface="dhaaga"] #autonomous-conversational-progress,
+body[data-kd-execution-surface="dhaaga"] #kd-task-line,
+body[data-kd-execution-surface="dhaaga"] #autonomous-status > .autonomous-status-header {
+  display: none !important;
+}
+/* The rich legacy surfaces this thread replaces are no longer a second source of truth for current state. */
+.kd-work-state-panel { display: none !important; }
+/* The large banners generated on #messages::before (INVESTIGATING / WORKING ON THE TASK / WAITING / SAFE STOP / ...) are
+   inferred from the DOM and from legacy flags, so a restored transcript (tool cards, a thinking row) resurrects them.
+   The Dhaaga thread is the only primary execution visualization: they never render, however the DOM looks. */
+html body #messages#messages::before,
+html body #messages#messages[data-kd-work-state]::before {
+  content: none !important;
+  display: none !important;
+}
+body.kd-dhaaga-active #thinking-indicator { display: none !important; }
+/* Raw tool cards are technical history; they belong in Activity / "Show details", not the conversation. */
+#messages > .tool-card { display: none; }
+
+/* Resolved governed actions are one concise line; the raw payload and full diff sit behind a disclosure. */
+.capability-approval-card .capability-details > summary { cursor: pointer; font-size: 11.5px; opacity: 0.75; }
+.capability-approval-card .capability-raw-args { margin: 6px 0 0; max-height: 160px; overflow: auto; white-space: pre-wrap; word-break: break-all; font-size: 11px; }
+.capability-approval-card .proposal-diff { max-height: 240px; overflow: auto; }
+
+/* Pending actions are pinned directly above the composer: the SAME card the thread's node points at. */
+#messages > .approval-card:has(button[data-approval-response]:not(:disabled)),
+#messages > .capability-approval-card:not(.resolved),
+#messages > .mode-change-card:not(.resolved) {
+  position: sticky;
+  bottom: 0;
+  z-index: 5;
+  box-shadow: 0 -8px 14px -6px rgba(0, 0, 0, 0.45), 0 0 0 1px color-mix(in srgb, var(--dg-amber) 55%, transparent);
+  background: var(--vscode-editor-background, #1e1e1e);
+}
+.mode-change-card { padding: 10px 12px; border-radius: var(--kd-radius, 8px); border: 1px solid color-mix(in srgb, var(--dg-amber) 60%, transparent); }
+.mode-change-card.resolved { opacity: 0.7; border-color: var(--kd-border, rgba(127, 127, 127, 0.25)); }
+/* A consumed decision offers no actions: the card must not say "Saath Kar is active" and ask to continue at once. */
+.mode-change-card.resolved .mode-change-actions { display: none; }
+.mode-change-actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 8px; }
+.mode-change-actions button { padding: 4px 12px; border-radius: 6px; cursor: pointer; font: inherit; border: 1px solid var(--dg-amber); background: transparent; color: var(--vscode-foreground); }
+.mode-change-actions button.primary { background: color-mix(in srgb, var(--dg-amber) 30%, transparent); font-weight: 600; }
+.kd-pending-focus { outline: 2px solid var(--dg-amber); outline-offset: 2px; }
+
+@media (prefers-reduced-motion: reduce) {
+  .kd-dhaaga *,
+  .kd-dhaaga *::before,
+  .kd-dhaaga *::after { animation: none !important; transition: none !important; }
+  /* Progression stays legible without motion: the current node keeps a static ring, glyph and bold title. */
+  .kd-dhaaga-item.is-current .kd-dhaaga-dot { box-shadow: 0 0 0 3px color-mix(in srgb, var(--dg-c) 40%, transparent); }
+}

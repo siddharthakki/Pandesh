@@ -1,0 +1,15 @@
+      Tests  13 failed | 267 passed (280)
+ FAIL  core/test/validationInvariantAndReplacementGuard.test.ts > C. Golden-only raw model evidence > writes nothing when not enabled (normal runs)
+ FAIL  core/test/validationInvariantAndReplacementGuard.test.ts > C. Golden-only raw model evidence > writes raw reply, parsed arguments and parser failure under the Core
+ FAIL  src/test/suite/baatKarCoreDurability.test.ts > Baat Kar / Saath Kar Core execution cutover (M32 correction) > a whole-repository inspection of a large repository >
+ FAIL  src/test/suite/baatKarCoreDurability.test.ts > Baat Kar / Saath Kar Core execution cutover (M32 correction) > a whole-repository inspection of a large repository >
+ FAIL  src/test/suite/baatKarCoreDurability.test.ts > Baat Kar / Saath Kar Core execution cutover (M32 correction) > builds bounded repository context for a Baat reposito
+ FAIL  src/test/suite/baatKarCoreDurability.test.ts > Baat Kar / Saath Kar Core execution cutover (M32 correction) > fails closed (Phase 2 grounding contract) when reposi
+ FAIL  src/test/suite/baatKarCoreDurability.test.ts > Baat Kar / Saath Kar Core execution cutover (M32 correction) > fails closed when the repository context selector ret
+ FAIL  src/test/suite/composerLifecycleAndNewChatReset.test.ts > New Chat is a hard presentation reset > drops late events from the previous task/run until the user submi
+ FAIL  src/test/suite/composerLifecycleAndNewChatReset.test.ts > New Chat is a hard presentation reset > leaves no task, stage, header, work panel or steering target behi
+ FAIL  src/test/suite/composerLifecycleAndNewChatReset.test.ts > composer lifecycle while work is running > keeps the composer editable and never sends a second request w
+ FAIL  src/test/suite/governedNeonContinuity.test.ts > governed neon release contracts > renders a real Saath Kar panda panel with a six-stage Kaam ka Dhaaga tracker
+ FAIL  src/test/suite/m12RetrievalIntegrationPackaging.test.ts > M12 retrieval, integration, git isolation, and packaged runtime > packages into a test-owned temporary di
+ FAIL  src/test/suite/m33EverydayExperience.test.ts > M33 unified composer surface (media/chat.html + chat-everyday.js) > ships the recommendation chip, phase strip, and 
+ Test Files  6 failed | 12 passed (18)

@@ -1,0 +1,72 @@
+[
+ {
+  "id": "E1 how app works",
+  "p50": 120,
+  "p95": 137,
+  "firstMs": 137,
+  "tokens": 3257,
+  "fileRecall": 1,
+  "textRecall": 1,
+  "type": "overview",
+  "grounded": true,
+  "files": [
+   "event_forms.html"
+  ]
+ },
+ {
+  "id": "E2 where persisted",
+  "p50": 160,
+  "p95": 171,
+  "firstMs": 171,
+  "tokens": 1421,
+  "fileRecall": 1,
+  "textRecall": 0,
+  "type": "conceptual",
+  "grounded": false,
+  "files": [
+   "event_forms.html"
+  ]
+ },
+ {
+  "id": "E3 who calls fn",
+  "p50": 156,
+  "p95": 159,
+  "firstMs": 158,
+  "tokens": 1420,
+  "fileRecall": 1,
+  "textRecall": 0,
+  "type": "usage",
+  "grounded": false,
+  "files": [
+   "event_forms.html"
+  ]
+ },
+ {
+  "id": "E4 validation logic",
+  "p50": 166,
+  "p95": 173,
+  "firstMs": 159,
+  "tokens": 1421,
+  "fileRecall": 1,
+  "textRecall": 0,
+  "type": "conceptual",
+  "grounded": false,
+  "files": [
+   "event_forms.html"
+  ]
+ },
+ {
+  "id": "E5 break if modify",
+  "p50": 166,
+  "p95": 169,
+  "firstMs": 164,
+  "tokens": 1421,
+  "fileRecall": 1,
+  "textRecall": 0,
+  "type": "conceptual",
+  "grounded": false,
+  "files": [
+   "event_forms.html"
+  ]
+ }
+]

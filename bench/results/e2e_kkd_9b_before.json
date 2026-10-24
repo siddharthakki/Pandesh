@@ -1,0 +1,50 @@
+[
+ {
+  "id": "K3 who calls fn",
+  "arm": "before",
+  "model": "hf.co/bartowski/Qwen_Qwen3.5-9B-GGUF:Q6_K_L",
+  "completed": true,
+  "turns": 2,
+  "toolCalls": 1,
+  "tools": "grep",
+  "promptTokens": 2232,
+  "evalTokens": 258,
+  "toolChars": 2231,
+  "wallS": 97.6,
+  "citedRecall": 1,
+  "textRecall": 1,
+  "answer": "The function `extractTsJsStructure` is called from: 1. **`src/autonomy/workspaceScan.ts`** (lines 10 and 83) 2. **`src/context/RepositoryIndex.ts`** (line 486) The function is defined in `src/context/RepositoryIndex.ts` at line 160."
+ },
+ {
+  "id": "K5 break if modify",
+  "arm": "before",
+  "model": "hf.co/bartowski/Qwen_Qwen3.5-9B-GGUF:Q6_K_L",
+  "completed": true,
+  "turns": 4,
+  "toolCalls": 3,
+  "tools": "search_files,grep,read_file",
+  "promptTokens": 6172,
+  "evalTokens": 516,
+  "toolChars": 5652,
+  "wallS": 154.4,
+  "citedRecall": 0.75,
+  "textRecall": 1,
+  "answer": "Based on the code analysis, `validateToolArguments` is a critical validation function used across the codebase. Here's what might break if you modify it: **Primary callers that could break:** - `core/runtime/inlineToolCalls.ts` (lines 142, 227) - Used for inli"
+ },
+ {
+  "id": "K7 relevant tests",
+  "arm": "before",
+  "model": "hf.co/bartowski/Qwen_Qwen3.5-9B-GGUF:Q6_K_L",
+  "completed": true,
+  "turns": 3,
+  "toolCalls": 2,
+  "tools": "search_files,read_file",
+  "promptTokens": 3036,
+  "evalTokens": 436,
+  "toolChars": 1619,
+  "wallS": 162.3,
+  "citedRecall": 1,
+  "textRecall": 1,
+  "answer": "The relevant tests for `ToolArgumentValidator` are in `src/test/suite/toolArgumentValidator.test.ts`. The test suite contains 3 tests: 1. **`accepts a complete write_file call`** - Validates that a complete `write_file` call with `path` and `content` arguments"
+ }
+]

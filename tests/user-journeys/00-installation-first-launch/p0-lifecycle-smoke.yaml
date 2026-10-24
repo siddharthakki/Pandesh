@@ -1,0 +1,50 @@
+schemaVersion: 2
+id: p0-lifecycle-smoke
+title: Install, use all three modes, complete, and reopen one frozen product
+priority: P0
+suites: [p0, full]
+driver: p0-lifecycle
+profilePolicy: same
+requiresApprovals: true
+prompt: Explain what this repository contains.
+lifecycle:
+  - install exact frozen VSIX into fresh directories
+  - first launch
+  - Baat Kar response
+  - Saath Kar rejection then approved delivery
+  - Karke Dikha deterministic delivery
+  - close all VS Code windows
+  - reopen the same workspace and profile
+steps:
+  - verify no KarkeDikha extension is present before installing the exact VSIX
+  - open the actual KarkeDikha Activity Bar view and inspect the visible first-launch UI
+  - select Baat Kar, type the prompt into the visible unified composer, and click the visible Send control
+  - select Saath Kar and reject, then resubmit and approve, mutation through visible controls
+  - select Karke Dikha and approve proposal, mutation, and delivery through visible controls
+  - close all VS Code windows, confirm the owned process ends, and reopen the same workspace with the same profile
+assertions:
+  - panda, unified composer, all three modes, provider, model, approval configuration, and a clean initial conversation render
+  - Baat Kar owns one request and one response without task, approval, worktree, file, or Git change
+  - rejected Saath Kar creates no file and one rejection; approved Saath Kar delivers only note-saath.txt with exact content
+  - Karke Dikha uses trivial maxStages zero with zero model calls, graph executions, graph stages, or 30B selection
+  - note-auto.txt contains exactly Hello, completion publishes live, Stop disappears, Send returns, and Git is clean
+  - all three completed conversations restore exactly once without task resurrection and the composer remains usable
+result:
+  files:
+    - path: note-saath.txt
+      content: Hello from Saath Kar
+    - path: note-auto.txt
+      content: Hello
+  terminalState: completed
+checks:
+  visibleUi: true
+  route: true
+  durableState: true
+  filesystem: true
+  git: true
+  restartResult: true
+evidence:
+  - exact VSIX path, bytes, SHA-256, and source SHA
+  - VS Code version and user-data, extensions, Core-data, and workspace identity
+  - screenshots and DOM snapshots at first launch, every mode boundary, completion, close, and reopen
+  - Extension Host, VS Code, driver, lifecycle, route, task, filesystem, Git, JUnit, and concise result evidence

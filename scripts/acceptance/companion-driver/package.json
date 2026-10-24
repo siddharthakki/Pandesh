@@ -1,0 +1,15 @@
+{
+  "name": "ollama-agent-acceptance-companion-driver",
+  "displayName": "Ollama Agent Acceptance Companion Driver",
+  "description": "Test-only VS Code extension that drives real ollama-agent commands via a harness-owned control file inside a normal, isolated VS Code window. Built and installed only by scripts/acceptance/plainVsCodeHost.mjs; never packaged into the ollama-agent VSIX and not published anywhere.",
+  "version": "0.1.0",
+  "publisher": "ollama-agent-acceptance-harness",
+  "private": true,
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "main": "./extension.js"
+}

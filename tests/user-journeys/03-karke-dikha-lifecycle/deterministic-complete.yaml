@@ -1,0 +1,22 @@
+schemaVersion: 2
+id: deterministic-complete
+title: Karke Dikha completes one deterministic governed task without a model
+priority: P1
+p1Index: 4
+suites: [p1, lifecycle, full]
+driver: p1-lifecycle
+profilePolicy: same
+requiresApprovals: true
+prompt: create note-auto.txt containing Hello
+lifecycle: [Karke Dikha selection, proposal, mutation, validation, delivery, live completion, close and reopen]
+steps:
+  - select Karke Dikha and submit through the visible unified composer and visible Send control
+  - approve proposal, mutation, and delivery through visible controls
+  - close every test-owned VS Code window and reopen the same named profile and workspace
+assertions:
+  - the route is trivial with maxStages zero, zero model and graph work, and no 30B selection
+  - real approvals are visible and note-auto.txt contains exactly Hello
+  - completion appears without reload, Stop disappears, Send returns, Git is clean, and one response remains
+result: { file: note-auto.txt, content: Hello, terminalState: completed }
+checks: { visibleUi: true, route: true, durableState: true, filesystem: true, git: true, restartResult: true }
+evidence: [route counters, approvals, task and attempt IDs, DOM, screenshots, file hash, Git, logs, and JUnit]

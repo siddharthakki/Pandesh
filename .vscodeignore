@@ -1,0 +1,185 @@
+.git/
+.github/
+.vscode/
+.ollama-agent/
+# Nested verification/checkpoint git worktrees are sometimes created inside
+# the repo root for clean-checkout testing (see `git worktree list`); they
+# follow an `ollama-agent-*` naming convention and must never be packaged.
+ollama-agent-*/
+ollama-agent-*/**
+.forge/
+.acceptance-evidence/
+.acceptance-input/
+.tmp/
+.tmp/**
+.guardian-cache/
+.guardian-evidence/
+.guardian-build/
+# M35 dogfood acceptance evidence/documentation: internal CI provenance
+# records, never shipped product content.
+acceptance/
+.aider*
+.aider*/**
+.claude/
+resources/
+scripts/
+# Dependencies: both bundles are self-contained (esbuild.js / esbuild.core.js) except `vscode` and the native
+# `@vscode/sqlite3`, and Core's ASR packages ship from runtime-assets/. Only sqlite3's runtime files are re-included.
+# vsce rewrites a pattern ending in `/` to `<dir>/**`, so a directory negation such as `!node_modules/` re-includes
+# EVERY production dependency file (previously ~4,500 files: typescript, shiki, react-dom, sqlite3 build
+# intermediates, .ts sources, .obj/.pdb/.iobj). Negate files, never directories, here.
+node_modules/**
+!node_modules/@vscode/sqlite3/package.json
+!node_modules/@vscode/sqlite3/lib/*.js
+!node_modules/@vscode/sqlite3/build/Release/*.node
+src/
+core/
+tests/
+docs/
+coverage/
+esbuild.js
+esbuild.core.js
+esbuild.tools.js
+out/**
+!out/extension.js
+!out/extension.js.map
+!out/webview-v2/
+!out/webview-v2/webview.js
+!out/webview-v2/webview.css
+out-core-tsc/
+out-core/**
+!out-core/core.js
+!out-core/core.js.map
+# M31 Core runtime artifacts: these live under the user's global data directory
+# (%LOCALAPPDATA%\KarkeDikha / $XDG_DATA_HOME/karkedikha) at runtime, never inside
+# the repo — these excludes are defensive, in case a local dev/test run leaves one
+# behind in the working directory.
+core.lock
+core.json
+core.db
+core.db-*
+*.migration-backup
+tsconfig.core.json
+M12_CODEX_REVIEW_OUTPUT.md
+M12_HUMAN_REVIEW_BUNDLE.txt
+HANDOFF.md
+*.vsix
+vitest.config.ts
+.env*
+credentials*.json
+secrets*.json
+id_rsa*
+id_ed25519*
+*.pem
+*.key
+*.p12
+*.pfx
+*.log
+*.tmp
+**/*.test.*
+**/*.map
+# NOTE: stray .ts/.tsx source files that ship inside some npm dependencies
+# (tailwind-merge, style-to-object, style-to-js, parse5's nested `entities`
+# dependency, ...) are NOT excludable via a .vscodeignore pattern here: the
+# `!node_modules/` negation below (needed so @vscode/sqlite3's native binary
+# still ships) unconditionally overrides every other node_modules exclusion
+# in vsce's ignore/negate-OR matcher — see scripts/strip-node-modules-ts-
+# sources.mjs, wired into `vscode:prepublish`, which removes them from disk
+# before `vsce package` runs instead.
+**/*.obj
+**/*.pdb
+**/*.ipdb
+**/*.iobj
+**/*.lib
+**/*.tlog
+**/*.vcxproj
+**/sqlite-autoconf-*/**
+**/sqlite-autoconf-*.tar.gz
+tsconfig.json
+package-lock.json
+# Explicitly out-of-scope local files (M31): never packaged.
+everyday-mvp-evidence.json
+media/chat.html.before-api-facade.bak
+# Local development/audit artifacts found in the M32 final packaging pass
+# (never committed — untracked working-tree files a prior session left behind
+# at repo root) that vsce was otherwise sweeping into the shipped VSIX.
+audit.txt
+# A stray tracked scratch file literally named "The signature is now" (not an ignore-rule typo).
+The signature is now
+
+# Local application/build outputs - never ship in VS Code extension
+dist/
+dist/**
+apps/
+apps/**
+.idea/
+.tmp-*
+.golden-cache/**
+.golden-evidence/**
+.tools/**
+
+# Repo-root dev/test binary caches populated by scripts/fetch-gws.mjs and
+# scripts/fetch-piper.mjs for local testing only. gws.exe is resolved solely
+# via the KARKEDIKHA_GWS_BIN env var at runtime (see
+# core/runtime/connectors/gwsTransport.ts, resolveGwsBinaryPath) and piper has
+# no reference anywhere in src/ or core/ — neither ships in the extension.
+runtime/
+runtime/**
+
+# Wake-word model cache from scripts/fetch-openwakeword-models.mjs, which is
+# not wired into any packaging script; nothing in src/ or core/ consumes it.
+# models/whisper-base-en is a separate, required ASR asset and is NOT excluded
+# (see core/attachments/audioProcessing.ts and scripts/fetch-whisper-model.mjs).
+models/openwakeword/
+models/openwakeword/**
+
+# Internal demo/scratch output from ad-hoc "brag" video generation runs and
+# the graphify cache directory, never shipped product content.
+graphify-out/
+graphify-out/**
+brag-output/
+brag-output/**
+brag-output-manual/
+brag-output-manual/**
+brag-output-codex-checkpoint/
+brag-output-codex-checkpoint/**
+brag-output-handoff.zip
+
+# Stray packaged VSIX and JetBrains project files left at repo root.
+.artifacts/
+.artifacts/**
+
+# Local dev convenience script and extra vitest configs, not extension content.
+install-latest.ps1
+vitest.golden.config.ts
+vitest.platform.config.ts
+vitest.webview-v2.config.ts
+
+# Internal planning/history docs — design rationale for developers, not
+# content the shipped extension reads (AGENTS.md-style lookups in
+# src/platform/M14Platform.ts and src/intelligence/InstructionEngine.ts read
+# the *user's* workspace root, never this repo's own copy).
+AI_OS*.md
+AGENTS.md
+INVESTIGATION_NOTE.md
+
+# M47: local qualification evidence and packaged builds must never be packaged into a VSIX.
+.m46-results/
+.m46-results/**
+.m47-golden/
+.m47-golden/**
+*.vsix
+docs/media/
+
+# Local benchmark/qualification evidence (raw model replies, logs, run CSVs) and per-milestone evidence dirs such
+# as .m47-1-evidence/. Previously shipped: .model-bench/ (~480 files) and .m47-1-evidence/.
+.model-bench/
+.m[0-9]*-*/
+.golden-cache/
+.golden-evidence/
+esbuild.webview-v2.js
+.gitignore
+
+# Local UAT scratch workspaces: never shipped.
+uat-*/
+uat-*/**

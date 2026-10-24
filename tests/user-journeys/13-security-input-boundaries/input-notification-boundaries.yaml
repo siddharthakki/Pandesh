@@ -1,0 +1,20 @@
+schemaVersion: 2
+id: input-notification-boundaries
+title: Input, workspace, and notification boundaries remain safe and recoverable
+priority: P2
+suites: [recovery, full]
+driver: catalogue-contract
+profilePolicy: fresh
+requiresApprovals: true
+prompt: create safe.txt containing Safe
+lifecycle: [malformed and ambiguous requests, multiple files, path traversal, multi-root, trust disabled, notification unanswered, dismissed, delayed, and failed]
+steps:
+  - submit each boundary through the visible unified composer and visible Send control
+  - approve only eligible safe work through visible controls and leave, dismiss, delay, or fail notifications as specified
+assertions:
+  - unsafe or ambiguous input fails closed without mutation
+  - notification disposition never blocks durable completion publication
+  - final visible, durable, filesystem, and Git state agree
+result: { terminalState: completed }
+checks: { visibleUi: true, route: true, durableState: true, filesystem: true, git: true }
+evidence: [input digest and classification, notification timing, DOM, screenshots, durable events, files, Git, logs, and JUnit]

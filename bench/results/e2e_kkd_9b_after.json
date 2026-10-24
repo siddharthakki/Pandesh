@@ -1,0 +1,50 @@
+[
+ {
+  "id": "K3 who calls fn",
+  "arm": "after",
+  "model": "hf.co/bartowski/Qwen_Qwen3.5-9B-GGUF:Q6_K_L",
+  "completed": true,
+  "turns": 4,
+  "toolCalls": 3,
+  "tools": "find_symbol,grep,find_references",
+  "promptTokens": 7465,
+  "evalTokens": 442,
+  "toolChars": 4411,
+  "wallS": 254.7,
+  "citedRecall": 1,
+  "textRecall": 1,
+  "answer": "The function `extractTsJsStructure` is defined in `src/context/RepositoryIndex.ts` at line 160. It is called from: 1. **`src/autonomy/workspaceScan.ts`** (lines 10 and 83) 2. **`src/context/RepositoryIndex.ts`** (line 486)"
+ },
+ {
+  "id": "K5 break if modify",
+  "arm": "after",
+  "model": "hf.co/bartowski/Qwen_Qwen3.5-9B-GGUF:Q6_K_L",
+  "completed": true,
+  "turns": 3,
+  "toolCalls": 2,
+  "tools": "find_symbol,impact_analysis",
+  "promptTokens": 4952,
+  "evalTokens": 854,
+  "toolChars": 3439,
+  "wallS": 219.8,
+  "citedRecall": 0.75,
+  "textRecall": 1,
+  "answer": "If you modify `validateToolArguments`, the following could break: **Directly affected files:** - `core/runtime/inlineToolCalls.ts` - Used for inline tool call validation (lines 142, 227) - `src/reliability/ToolCallReliability.ts` - Used for tool call reliabili"
+ },
+ {
+  "id": "K7 relevant tests",
+  "arm": "after",
+  "model": "hf.co/bartowski/Qwen_Qwen3.5-9B-GGUF:Q6_K_L",
+  "completed": true,
+  "turns": 4,
+  "toolCalls": 3,
+  "tools": "find_symbol,grep,read_file_range",
+  "promptTokens": 8028,
+  "evalTokens": 453,
+  "toolChars": 5134,
+  "wallS": 269.9,
+  "citedRecall": 1,
+  "textRecall": 1,
+  "answer": "The relevant test for `ToolArgumentValidator` is: **`src/test/suite/toolArgumentValidator.test.ts`** This test file contains tests for the `validateToolArguments` function exported from `ToolArgumentValidator`, including: - Tests for accepting complete tool ca"
+ }
+]

@@ -1,0 +1,19 @@
+schemaVersion: 2
+id: git-worktree-recovery
+title: Repository drift and Git or worktree failures fail closed
+priority: P2
+suites: [recovery, full]
+driver: catalogue-contract
+profilePolicy: fresh
+requiresApprovals: true
+prompt: create guarded.txt containing Guarded
+lifecycle: [target exists, target changes, dirty repository, branch change, worktree failure, commit failure, refresh hang, read-only and non-Git workspaces]
+steps:
+  - submit each case through the visible unified composer and visible Send control
+  - use visible controls only where approval remains eligible and inspect final recovery state
+assertions:
+  - stale proposal or repository identity never mutates or delivers
+  - final visible, durable, filesystem, branch, status, and log state agree
+result: { terminalState: blocked }
+checks: { visibleUi: true, route: true, durableState: true, filesystem: true, git: true }
+evidence: [repository and worktree identity, failure classification, DOM, screenshots, files, branch, status, log, runtime logs, and JUnit]

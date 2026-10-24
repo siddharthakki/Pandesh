@@ -1,0 +1,19 @@
+schemaVersion: 2
+id: two-window-isolation
+title: Simultaneous Workspace A and B windows cannot capture each other's tasks
+priority: P1
+suites: [windows, full]
+driver: catalogue-contract
+profilePolicy: same
+requiresApprovals: true
+prompt: create window-owned.txt containing Window A
+lifecycle: [open two simultaneous windows with one profile, run independent tasks, complete repository-specific delivery]
+steps:
+  - submit active work in A through its visible unified composer and visible Send control
+  - submit a normal message in B and finish both tasks using only each window's visible controls
+assertions:
+  - B has no A task, Stop, approval, steering capture, or ownership notification
+  - B cannot alter A and each repository receives only its own delivery
+result: { terminalState: completed }
+checks: { visibleUi: true, route: true, durableState: true, filesystem: true, git: true }
+evidence: [window and workspace identities, task IDs, DOM, screenshots, repository hashes, Git, logs, and JUnit]

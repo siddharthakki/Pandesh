@@ -1,0 +1,34 @@
+[
+ {
+  "id": "E2 where persisted",
+  "arm": "after",
+  "model": "hf.co/bartowski/Qwen_Qwen3.5-9B-GGUF:Q6_K_L",
+  "completed": true,
+  "turns": 5,
+  "toolCalls": 4,
+  "tools": "find_relevant,read_file,find_symbol,read_file_range",
+  "promptTokens": 14012,
+  "evalTokens": 441,
+  "toolChars": 8739,
+  "wallS": 185.2,
+  "citedRecall": 1,
+  "textRecall": 1,
+  "answer": "Form data is persisted in the browser's `localStorage` via the `saveDB` function in `event_forms.html`. The function stores the entire database object (including forms) as a JSON string under the key `DB_KEY`. ```javascript function saveDB(){try{localStorage.s"
+ },
+ {
+  "id": "E3 who calls fn",
+  "arm": "after",
+  "model": "hf.co/bartowski/Qwen_Qwen3.5-9B-GGUF:Q6_K_L",
+  "completed": true,
+  "turns": 2,
+  "toolCalls": 1,
+  "tools": "find_references",
+  "promptTokens": 2892,
+  "evalTokens": 342,
+  "toolChars": 804,
+  "wallS": 86.2,
+  "citedRecall": 1,
+  "textRecall": 1,
+  "answer": "The `saveDB` function is defined in `event_forms.html` at line 376. It is called in the following locations within the same file: 1. **Line 377**: Inside the `commit()` function 2. **Line 380**: Inside the `snap()` function 3. **Line 518**: Direct call 4. **Li"
+ }
+]

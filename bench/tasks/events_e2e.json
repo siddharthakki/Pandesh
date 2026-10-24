@@ -1,0 +1,7 @@
+[
+ {"id":"E1 how app works","question":"How does this application work?","expect":["event_forms.html"],"expectText":["route","localStorage"]},
+ {"id":"E2 where persisted","question":"Where is form data persisted?","expect":["event_forms.html"],"expectText":["saveDB","localStorage"]},
+ {"id":"E3 who calls fn","question":"Who calls saveDB?","expect":["event_forms.html"],"expectText":["commit","snap"]},
+ {"id":"E4 validation logic","question":"Find the validation logic.","expect":["event_forms.html"],"expectText":["required"]},
+ {"id":"E5 break if modify","question":"What might break if I modify the commit function?","expect":["event_forms.html"],"expectText":["commit"]}
+]

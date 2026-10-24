@@ -1,0 +1,23 @@
+{
+  "tool": "Inno Setup",
+  "version": "6.7.3",
+  "installerUrl": "https://github.com/jrsoftware/issrc/releases/download/is-6_7_3/innosetup-6.7.3.exe",
+  "installerSha256": "9C73C3BAE7ED48D44112A0F48E66742C00090BDB5BEF71D9D3C056C66E97B732",
+  "productName": "Pandesh",
+  "setupFileName": "Pandesh-Setup.exe",
+  "appId": "KarkeDikha.Pandesh",
+  "appIdGuid": "{8F3C2A91-6B4E-4D17-9C5A-2E8F0B7D4A11}",
+  "publisher": "KarkeDikha",
+  "privilegesRequired": "lowest",
+  "defaultInstallDirName": "Programs\\Pandesh",
+  "dataDirRelative": "KarkeDikha\\desktop",
+  "electronVersion": "33.4.11",
+  "notes": [
+    "Builds from the existing portable tree (npm run desktop:package).",
+    "The product version is NOT pinned here: it is read from apps/desktop/package.json at build time and passed to the installer as /DMyAppVersion, so there is exactly one version string.",
+    "Per-user install; no administrator elevation required.",
+    "The Inno AppId GUID is unchanged from the Jarvis Desktop builds, so an existing installation upgrades in place and keeps the user's data.",
+    "User data stays under %LOCALAPPDATA%\\KarkeDikha\\desktop — never packaged.",
+    "Ollama/local-only remains the default; OpenRouter stays paused."
+  ]
+}

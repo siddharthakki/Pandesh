@@ -1,0 +1,525 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta http-equiv="Content-Security-Policy"
+          content="default-src 'none'; style-src {{cspSource}}; script-src 'nonce-{{nonce}}' {{cspSource}}; img-src {{cspSource}} data:;">
+    <title>KarkeDikha</title>
+    <link rel="stylesheet" href="{{cssUri}}">
+    <link rel="stylesheet" href="{{cssUri}}" data-layout-fixes="chat-layout-fixes.css">
+    <link rel="stylesheet" href="{{cssUri}}" data-layout-fixes="chat-dhaaga.css">
+    <link rel="stylesheet" href="{{cssUri}}" data-layout-fixes="chat-palette.css">
+    <link rel="stylesheet" href="{{cssUri}}" data-layout-fixes="chat-responsive.css">
+</head>
+<body>
+    <svg class="kd-panda-sprite" aria-hidden="true" focusable="false">
+      <symbol id="kd-panda-head" viewBox="0 0 32 32">
+        <circle cx="16" cy="18" r="11" fill="currentColor" opacity="0.12"/>
+        <circle cx="7" cy="8" r="4" fill="currentColor"/>
+        <circle cx="25" cy="8" r="4" fill="currentColor"/>
+        <circle cx="16" cy="18" r="10" fill="none" stroke="currentColor" stroke-width="2"/>
+        <circle cx="11" cy="16" r="2.4" fill="currentColor"/>
+        <circle cx="21" cy="16" r="2.4" fill="currentColor"/>
+        <ellipse cx="16" cy="22" rx="2.2" ry="1.6" fill="currentColor"/>
+      </symbol>
+      <symbol id="kd-accent-thinking" viewBox="0 0 16 16"><circle cx="2" cy="8" r="1.4" fill="currentColor"/><circle cx="8" cy="4" r="1.4" fill="currentColor"/><circle cx="14" cy="8" r="1.4" fill="currentColor"/></symbol>
+      <symbol id="kd-accent-reading" viewBox="0 0 16 16"><rect x="2" y="1" width="12" height="14" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.6"/><line x1="4.5" y1="9" x2="11.5" y2="9" stroke="currentColor" stroke-width="1.6"/></symbol>
+      <symbol id="kd-accent-searching" viewBox="0 0 16 16"><circle cx="6.5" cy="6.5" r="4.5" fill="none" stroke="currentColor" stroke-width="1.8"/><line x1="10" y1="10" x2="14.5" y2="14.5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></symbol>
+      <symbol id="kd-accent-planning" viewBox="0 0 16 16"><circle cx="3" cy="3" r="1.6" fill="currentColor"/><circle cx="13" cy="3" r="1.6" fill="currentColor"/><circle cx="8" cy="13" r="1.6" fill="currentColor"/><line x1="3" y1="3" x2="8" y2="13" stroke="currentColor" stroke-width="1.2"/><line x1="13" y1="3" x2="8" y2="13" stroke="currentColor" stroke-width="1.2"/></symbol>
+      <symbol id="kd-accent-delegating" viewBox="0 0 16 16"><circle cx="8" cy="2.5" r="1.8" fill="currentColor"/><circle cx="2.5" cy="13" r="1.6" fill="currentColor"/><circle cx="8" cy="13" r="1.6" fill="currentColor"/><circle cx="13.5" cy="13" r="1.6" fill="currentColor"/><line x1="8" y1="4.3" x2="2.5" y2="11.4" stroke="currentColor" stroke-width="1.2"/><line x1="8" y1="4.3" x2="8" y2="11.4" stroke="currentColor" stroke-width="1.2"/><line x1="8" y1="4.3" x2="13.5" y2="11.4" stroke="currentColor" stroke-width="1.2"/></symbol>
+      <symbol id="kd-accent-coding" viewBox="0 0 16 16"><path d="M5 3 1 8l4 5" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/><path d="M11 3l4 5-4 5" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+      <symbol id="kd-accent-building" viewBox="0 0 16 16"><rect x="1" y="9" width="5" height="5" fill="currentColor"/><rect x="9" y="9" width="5" height="5" fill="currentColor"/><rect x="5" y="2" width="5" height="5" fill="currentColor" opacity="0.6"/></symbol>
+      <symbol id="kd-accent-testing" viewBox="0 0 16 16"><path d="M2 8.5l3.2 3.2L14 3" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+      <symbol id="kd-accent-reviewing" viewBox="0 0 16 16"><circle cx="6.5" cy="6.5" r="4.5" fill="none" stroke="currentColor" stroke-width="1.8"/><line x1="10" y1="10" x2="14.5" y2="14.5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></symbol>
+      <symbol id="kd-accent-waiting" viewBox="0 0 16 16"><path d="M3 1h10M3 15h10" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/><path d="M4 1c0 4 8 4 8 0M4 15c0-4 8-4 8 0" fill="none" stroke="currentColor" stroke-width="1.4"/></symbol>
+      <symbol id="kd-accent-blocked" viewBox="0 0 16 16"><line x1="8" y1="2" x2="8" y2="10" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><circle cx="8" cy="13.5" r="1.5" fill="currentColor"/></symbol>
+      <symbol id="kd-accent-failed" viewBox="0 0 16 16"><line x1="3" y1="3" x2="13" y2="13" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><line x1="13" y1="3" x2="3" y2="13" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></symbol>
+      <symbol id="kd-accent-completed" viewBox="0 0 16 16"><path d="M2 8.5l3.2 3.2L14 3" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+      <symbol id="kd-panda-approval" viewBox="0 0 32 32">
+        <use href="#kd-panda-head"/>
+        <rect x="19" y="19" width="10" height="12" rx="1" fill="var(--vscode-editor-background,#1e1e1e)" stroke="currentColor" stroke-width="1.6"/>
+        <line x1="21.5" y1="23" x2="26.5" y2="23" stroke="currentColor" stroke-width="1.2"/>
+        <line x1="21.5" y1="26" x2="26.5" y2="26" stroke="currentColor" stroke-width="1.2"/>
+      </symbol>
+    </svg>
+    <div class="app-shell">
+        <header class="top-bar">
+            <div class="top-bar-left">
+                <div class="brand-mark kd-panda-icon" data-state="idle" aria-hidden="true"><img class="kd-panda-img" alt=""><svg class="kd-panda-fallback" viewBox="0 0 32 32"><use href="#kd-panda-head"/></svg></div>
+                <div id="mode-buttons" class="mode-buttons" role="radiogroup" aria-label="KarkeDikha mode">
+                    <button class="mode-button mode-auto active" data-mode="auto" role="radio" aria-checked="true" title="Auto — chooses the safest suitable mode">Auto</button>
+                    <button class="mode-button mode-chat" data-mode="chat" role="radio" aria-checked="false" title="Baat Kar — Chat">Baat Kar</button>
+                    <button class="mode-button mode-agent" data-mode="agent" role="radio" aria-checked="false" title="Saath Kar — Agent">Saath Kar</button>
+                    <button class="mode-button mode-autonomous" data-mode="autonomous" role="radio" aria-checked="false" title="Karke Dikha — Autonomous">Karke Dikha</button>
+                </div>
+                <select id="mode-select" class="visually-hidden" title="Agent mode" tabindex="-1" aria-hidden="true">
+                    <option value="auto" selected>Auto</option>
+                    <option value="chat">Baat Kar</option>
+                    <option value="agent">Saath Kar</option>
+                    <option value="autonomous">Karke Dikha</option>
+                </select>
+            </div>
+            <div class="top-bar-right">
+                <button id="new-conversation-toolbar-btn" class="btn btn-primary compact-btn" type="button" title="Start a new chat" aria-label="Start a new chat"><span class="kd-ic" aria-hidden="true">+</span><span class="kd-lbl"> New chat</span></button>
+                <button id="history-toggle" class="btn btn-ghost" aria-controls="history-drawer" aria-expanded="false" title="History" aria-label="History"><span class="kd-ic" aria-hidden="true">☰</span><span class="kd-lbl">History</span></button>
+                <button id="activity-toggle" class="btn btn-ghost" aria-controls="activity-panel" aria-expanded="false" title="Runs: tasks, changes, approvals and failures" aria-label="Runs"><span class="kd-ic" aria-hidden="true">⚡</span><span class="kd-lbl">Runs</span> <span id="activity-summary" hidden></span></button>
+                <button id="overflow-menu-btn" class="btn btn-ghost btn-icon" aria-haspopup="true" aria-expanded="false" aria-controls="overflow-menu" title="More actions" aria-label="More actions"><span class="kd-ic" aria-hidden="true">⋯</span></button>
+            </div>
+        </header>
+
+        <section id="operator-context" class="operator-context" aria-label="Operating context">
+            <div class="oc-field oc-field-workspace">
+                <span class="oc-label">Workspace</span>
+                <span id="oc-workspace" class="oc-value" tabindex="0" title="No workspace folder is open">No workspace</span>
+            </div>
+            <div class="oc-field">
+                <span class="oc-label">Mode</span>
+                <span id="oc-mode" class="oc-value">Auto</span>
+            </div>
+            <div class="oc-field">
+                <span class="oc-label">Supervision</span>
+                <span id="oc-supervision" class="oc-value">Ask me</span>
+            </div>
+            <div class="oc-field oc-field-model">
+                <span class="oc-label">Model</span>
+                <span class="oc-value-row">
+                    <span id="oc-model" class="oc-value">Auto</span>
+                    <button id="oc-why-btn" class="oc-why-btn" type="button" aria-haspopup="true" aria-expanded="false" aria-controls="oc-why-popover" title="Why this model?" hidden>&#x24D8;</button>
+                </span>
+            </div>
+            <div class="oc-field">
+                <span class="oc-label">Thinking</span>
+                <span id="oc-thinking" class="oc-value">Default</span>
+            </div>
+            <div class="oc-field">
+                <span class="oc-label">Provider</span>
+                <span id="oc-provider" class="oc-value">&#x2014;</span>
+            </div>
+            <div class="oc-field oc-field-config">
+                <button id="oc-config-btn" class="oc-config-btn" type="button" title="Configure KarkeDikha" aria-label="Configure KarkeDikha">&#x1F527;</button>
+            </div>
+            <div class="oc-field">
+                <span class="oc-label">Status</span>
+                <span id="oc-status" class="oc-value oc-status" data-state="ready">Ready</span>
+            </div>
+            <section id="oc-why-popover" class="oc-why-popover" hidden aria-label="Why this model">
+                <div id="oc-why-body"></div>
+            </section>
+        </section>
+
+        <button id="autonomous-banner" class="autonomous-banner" hidden>
+            <span id="autonomous-banner-text">Autonomous task needs your attention</span>
+        </button>
+
+        <div id="overflow-menu" class="overflow-menu" hidden role="menu">
+            <button id="local-board-menu-btn" class="menu-item" role="menuitem">Board</button>
+            <button id="repo-intel-rebuild" class="menu-item" role="menuitem">Rebuild repository index</button>
+            <button id="repo-intel-pause" class="menu-item" role="menuitem" hidden>Pause indexing</button>
+            <button id="repo-intel-resume" class="menu-item" role="menuitem" hidden>Resume indexing</button>
+            <button id="clear-btn" class="menu-item" role="menuitem">Clear conversation</button>
+            <button id="autonomous-copy-diagnostics-btn" class="menu-item" role="menuitem" hidden>Copy diagnostics</button>
+            <button id="autonomous-open-worktree-btn" class="menu-item" role="menuitem" hidden>Open worktree</button>
+            <button id="export-markdown-btn" class="menu-item" role="menuitem">Export Markdown</button>
+            <button id="export-json-btn" class="menu-item" role="menuitem">Export JSON</button>
+            <button id="clear-log-btn" class="menu-item" role="menuitem">Clear runtime log</button>
+        </div>
+
+        <div class="status-row">
+            <button id="status-row-toggle" class="status-row-summary" aria-haspopup="true" aria-expanded="false" aria-controls="status-details-popover">
+                <span id="status-row-text">Ready</span>
+            </button>
+            <span id="model-suitability-summary" class="model-suitability-summary" hidden></span>
+            <span id="model-badge" class="model-badge" title="Last routed model" hidden></span>
+            <button id="stop-btn" class="btn btn-danger compact-btn" hidden>■ Stop</button>
+            <section id="status-details-popover" class="status-details-popover" hidden aria-label="Runtime details">
+                <div id="toolbar" class="toolbar">
+                    <label class="field-label" for="model-select">Model</label>
+                    <select id="model-select" title="Available models (routing is automatic)">
+                        <option value="">Loading models…</option>
+                    </select>
+                </div>
+                <div id="autonomy-mode-row" class="autonomy-mode-row" title="Who resolves an autonomous Karke Dikha task's ordinary proposal/mutation/delivery approvals — applies whenever a message is routed to Karke Dikha, including by Auto">
+                    <span class="autonomy-mode-label">Autonomy</span>
+                    <select id="autonomy-mode-select" aria-label="Autonomy mode for the next Karke Dikha task">
+                        <option value="supervised" selected>Supervised — ask before applying/delivering changes</option>
+                        <option value="hands_off">Hands-off — complete safe in-scope work without asking</option>
+                    </select>
+                </div>
+                <div id="permission-summary" class="permission-summary" aria-live="polite">
+                    <strong id="permission-summary-label">Ask before changes</strong>
+                    <span id="permission-summary-description">Requests approval before editing files or running mutating commands.</span>
+                    <button id="permission-use-default" class="btn btn-ghost compact-btn" hidden>Use mode default</button>
+                </div>
+                <div id="permission-toolbar" class="permission-toolbar advanced-permissions">
+                    <div class="field-label">Advanced</div>
+                    <label class="field-label" for="permission-profile-select">Permission profile</label>
+                    <select id="permission-profile-select" title="Permission profile"></select>
+                    <div id="permission-capabilities" class="permission-capabilities">workspace.read</div>
+                </div>
+                <section id="context-panel" class="context-panel" aria-label="Context usage">
+                    <div class="context-line">
+                        <span id="context-model">No model selected</span>
+                        <span id="context-status" class="context-status unknown">unknown</span>
+                    </div>
+                    <div class="context-meter"><span id="context-meter-fill"></span></div>
+                    <div id="context-summary" class="context-summary">Context usage will appear during execution.</div>
+                    <div id="context-breakdown" class="context-breakdown"></div>
+                </section>
+                <section id="repository-intelligence-panel" class="repository-intelligence-panel" aria-label="Repository intelligence">
+                    <div class="repo-intel-header">
+                        <div id="repo-intel-title" class="repo-intel-title">Checking index</div>
+                        <span id="repo-intel-state" class="repo-intel-state unavailable">unavailable</span>
+                    </div>
+                    <div id="repo-intel-meta" class="repo-intel-meta">Repository identity will appear after indexing.</div>
+                    <div id="repo-intel-stats" class="repo-intel-stats"></div>
+                    <div id="repo-intel-selected" class="repo-intel-selected"></div>
+                </section>
+            </section>
+        </div>
+
+        <main class="workspace">
+            <section class="chat-window" aria-label="Agent terminal">
+                <div class="chat-messages-shell">
+                <div id="messages" class="chat-messages">
+                    <div id="ambient-placeholder" class="ambient-placeholder">
+                        <span id="everyday-welcome-panda" class="kd-panda-icon kd-panda-icon--welcome"><img class="kd-panda-img" alt="KarkeDikha panda, ready to help" width="56" height="56"><svg class="kd-panda-fallback" viewBox="0 0 32 32" aria-hidden="true"><use href="#kd-panda-head"/></svg></span>
+                        <strong>What would you like to work on?</strong>
+                        <p>Ask a question or start a governed coding task.</p>
+                    </div>
+
+                    <article id="task-request-entry" class="kd-objective-card" hidden>
+                        <span class="kd-objective-label">Karke Dikha objective</span>
+                        <span id="kd-autonomy-badge" class="kd-autonomy-badge" hidden title="This task's autonomy mode is set once when it starts and does not change while it runs">Hands-off</span>
+                        <p id="autonomous-prompt-summary"></p>
+                        <ul id="autonomous-prompt-constraints" class="kd-objective-constraints" hidden></ul>
+                    </article>
+                    <section id="autonomous-status" class="autonomous-status kd-task-message" hidden aria-label="KarkeDikha task response">
+                        <div class="autonomous-status-header">
+                            <span id="autonomous-panda" class="kd-panda-icon kd-panda-icon--status" data-state="idle" aria-hidden="true"><img class="kd-panda-img" alt=""><svg class="kd-panda-fallback" viewBox="0 0 32 32"><use href="#kd-panda-head"/></svg></span>
+                            <span id="autonomous-panda-label" class="kd-panda-state-label" aria-live="polite"></span>
+                        </div>
+                        <div id="kd-task-line" class="kd-task-line" role="status" aria-live="polite"></div>
+                        <ol id="autonomous-stage-tracker" class="task-stage-tracker" aria-label="Task stages">
+                            <li data-stage="planning">Understanding your request</li>
+                            <li data-stage="proposal">Preparing the change</li>
+                            <li data-stage="approval">Waiting for your approval</li>
+                            <li data-stage="editing">Making the change</li>
+                            <li data-stage="validate">Checking the result</li>
+                            <li data-stage="deliver">Ready to apply</li>
+                        </ol>
+                        <div id="autonomous-conversational-progress" class="autonomous-conversational-progress" aria-label="Task progress"></div>
+                        <div id="kd-pinned-approval-slot" class="kd-pinned-approval-slot"></div>
+                        <details id="kd-task-details" class="kd-task-details">
+                            <summary>Details</summary>
+                            <div class="autonomous-summary">
+                                <div><span class="field-label">Repository</span> <span id="autonomous-repo">—</span></div>
+                                <div><span class="field-label">Branch / HEAD</span> <span id="autonomous-branch">—</span></div>
+                                <div><span class="field-label">Provider / Model</span> <span id="autonomous-provider-model">—</span></div>
+                                <div><span class="field-label">Permission profile</span> <span id="autonomous-permission">normal</span></div>
+                                <div><span class="field-label">Delivery policy</span> <span id="autonomous-delivery">Isolated worktree · approval required before mutation, commit and PR · stops at delivery approval</span></div>
+                            <div id="kd-developer-diagnostics" class="kd-developer-diagnostics">
+                                <button type="button" id="kd-developer-diagnostics-toggle" class="btn-link everyday-disclosure-toggle" aria-expanded="false">▸ Developer diagnostics</button>
+                                <div id="kd-developer-diagnostics-content" hidden>
+                                    <div class="everyday-diagnostic-ids">
+                                        <span id="autonomous-task-id">—</span>
+                                        <span id="autonomous-attempt-id">—</span>
+                                    </div>
+                                </div>
+                            </div>
+                        <section id="proposal-approval-card" class="delivery-approval-card everyday-approval-card kd-dhadkan" data-dhadkan-state="waiting_for_proposal_approval" hidden aria-label="Coding proposal approval">
+                            <div>
+                                <strong id="proposal-card-title">Coding proposal</strong>
+                                <p class="everyday-approval-why">KarkeDikha wants to make this change. Nothing is written yet — approving lets it prepare the exact edits listed below.</p>
+                                <p id="proposal-card-summary"></p>
+                                <ul id="proposal-card-operations" class="proposal-card-operations"></ul>
+                                <p class="everyday-approval-scope">Changes the repository: not yet — this step only approves the plan.</p>
+                                <p id="proposal-card-validation"></p>
+                                <p id="proposal-card-warnings"></p>
+                                <p id="proposal-card-status" class="proposal-card-status"></p>
+                                <div class="autonomous-actions">
+                                    <button id="proposal-approve-btn" class="btn btn-primary">Approve &amp; Run</button>
+                                    <button id="proposal-revise-btn" class="btn btn-ghost">Request Revision</button>
+                                    <button id="proposal-reject-btn" class="btn btn-danger">Reject</button>
+                                </div>
+                                <div id="proposal-revision-form" class="autonomous-actions" hidden>
+                                    <textarea id="proposal-revision-text" rows="2" placeholder="Describe the revision needed…"></textarea>
+                                    <button id="proposal-revision-submit-btn" class="btn btn-primary">Submit Revision</button>
+                                    <button id="proposal-revision-cancel-btn" class="btn btn-ghost">Cancel</button>
+                                </div>
+                            </div>
+                        </section>
+                        <section id="mutation-approval-card" class="delivery-approval-card everyday-approval-card kd-dhadkan" data-dhadkan-state="waiting_for_mutation_approval" hidden aria-label="Mutation approval">
+                            <div>
+                                <strong id="mutation-card-title">Mutation approval required</strong>
+                                <p class="everyday-approval-why">Permission is needed because KarkeDikha is about to write the approved files. Everything happens in an isolated copy — your working files stay untouched until delivery.</p>
+                                <p id="mutation-card-summary"></p>
+                                <p class="everyday-approval-scope">Changes the repository: yes, inside the isolated worktree only.</p>
+                                <p id="mutation-card-status" class="proposal-card-status"></p>
+                                <div class="autonomous-actions">
+                                    <button id="mutation-approve-btn" class="btn btn-primary">Approve</button>
+                                    <button id="mutation-deny-btn" class="btn btn-danger">Deny</button>
+                                </div>
+                            </div>
+                        </section>
+                        <section id="delivery-approval-card" class="delivery-approval-card kd-dhadkan" data-dhadkan-state="waiting_for_delivery_approval" hidden aria-label="Delivery approval">
+                            <div>
+                                <strong>Delivery approval required</strong>
+                                <p class="everyday-approval-why">The work is done and checked. Approving records the verified change on the task branch and applies that verified commit to your current working branch.</p>
+                                <p class="everyday-approval-scope">Changes the repository: yes — one commit on a dedicated task branch.</p>
+                                <div id="delivery-evidence" class="delivery-evidence"></div>
+                                <div class="autonomous-actions">
+                                    <button id="delivery-review-btn" class="btn btn-ghost">Review Changes</button>
+                                    <button id="delivery-approve-btn" class="btn btn-primary" title="Approve Delivery">Apply</button>
+                                    <button id="delivery-reject-btn" class="btn btn-danger">Reject Delivery</button>
+                                </div>
+                            </div>
+                        </section>
+                        <div id="autonomous-timeline" class="autonomous-timeline kd-thread"></div>
+                        </details>
+                    </section>
+                </div>
+                <button type="button" id="kd-jump-latest" class="kd-jump-latest" hidden>Jump to latest</button>
+                </div>
+
+                <div id="input-area" class="input-area">
+                    <!-- Dismissible info notice for restored repository context -->
+                    <div id="everyday-continuity" class="everyday-continuity" hidden role="status" aria-live="polite">
+                        <span class="everyday-continuity-icon" aria-hidden="true">ℹ</span>
+                        <span id="everyday-continuity-text" class="everyday-continuity-text"></span>
+                        <button type="button" id="everyday-continuity-dismiss" class="everyday-continuity-dismiss" title="Dismiss notice" aria-label="Dismiss notice">✕</button>
+                    </div>
+                    <div id="everyday-phase" class="everyday-phase" hidden role="status" aria-live="polite">
+                        <span id="everyday-phase-label" class="everyday-phase-label"></span>
+                        <span id="everyday-phase-sentence" class="everyday-phase-sentence"></span>
+                    </div>
+                    <div id="repo-health-warning" class="repo-health-warning" hidden role="alert">
+                        <div class="repo-health-bar">
+                            <span class="repo-health-icon">⚠</span>
+                            <span id="repo-health-message" class="repo-health-text">KarkeDikha runtime files are tracked by Git in this repository. This can block safe delivery.</span>
+                            <button type="button" id="repo-health-fix-btn" class="btn btn-secondary btn-sm">Show fix</button>
+                        </div>
+                        <div id="repo-health-details" class="repo-health-details" hidden>
+                            <p>Runtime-owned state should not be version-controlled. Run this in your terminal to untrack them safely:</p>
+                            <code>git rm -r --cached .ollama-agent</code>
+                        </div>
+                    </div>
+                    <div id="everyday-reco-row" class="everyday-reco-row" hidden>
+                        <div class="everyday-reco-text">
+                            <span id="everyday-reco-label" class="everyday-reco-label">Baat Kar — recommended</span>
+                            <span id="everyday-reco-reason" class="everyday-reco-reason"></span>
+                        </div>
+                        <div class="everyday-mode-options" role="group" aria-label="Choose how KarkeDikha handles this request">
+                            <button type="button" class="everyday-mode-option" data-mode="chat" aria-pressed="false" title="Baat Kar — answers without touching your files">Baat Kar</button>
+                            <button type="button" class="everyday-mode-option" data-mode="agent" aria-pressed="false" title="Saath Kar — inspects the workspace with bounded tools">Saath Kar</button>
+                            <button type="button" class="everyday-mode-option" data-mode="autonomous" aria-pressed="false" title="Karke Dikha — makes governed changes with your approval">Karke Dikha</button>
+                        </div>
+                    </div>
+                    <div id="attachments-row"></div>
+                    <div id="composer-chips" class="kd-composer-chips" aria-label="Model and supervision">
+                        <button type="button" id="model-chip" class="kd-chip-btn" aria-haspopup="dialog" aria-expanded="false" title="Model: Auto">
+                            <span id="model-chip-icon" aria-hidden="true">✦</span>
+                            <span id="model-chip-label" class="kd-chip-label">Auto</span>
+                            <span class="kd-chip-caret" aria-hidden="true">▾</span>
+                        </button>
+                        <div class="kd-supervision-wrap">
+                            <button type="button" id="supervision-chip" class="kd-chip-btn" aria-haspopup="menu" aria-expanded="false" data-supervision="ask" title="Ask me — pause when approval or policy requires.">
+                                <span>Supervision:</span>
+                                <span id="supervision-chip-label" class="kd-chip-label">Ask me</span>
+                                <span class="kd-chip-caret" aria-hidden="true">▾</span>
+                            </button>
+                            <div id="supervision-popover" class="kd-supervision-popover" role="menu" aria-label="Supervision" hidden>
+                                <button type="button" class="kd-supervision-option active" role="menuitemradio" aria-checked="true" data-supervision="ask">
+                                    <span class="name">Ask me</span>
+                                    <span class="desc">Pause when approval or policy requires</span>
+                                </button>
+                                <button type="button" class="kd-supervision-option" role="menuitemradio" aria-checked="false" data-supervision="hands_off">
+                                    <span class="name">Hands-off</span>
+                                    <span class="desc">Continue automatically within allowed policy</span>
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                    <div id="input-row" class="input-shell">
+                        <div class="compact-mode-wrapper">
+                            <button type="button" id="compact-mode-btn" class="compact-mode-btn" aria-haspopup="true" aria-expanded="false" title="Mode: Baat Kar (Chat)">
+                                <span id="compact-mode-label">Baat Kar</span>
+                                <span class="compact-mode-caret" aria-hidden="true">▾</span>
+                            </button>
+                            <div id="compact-mode-popover" class="compact-mode-popover" hidden role="menu" aria-label="Select execution mode">
+                                <div id="compact-mode-reco-hint" class="compact-mode-reco-hint">
+                                    <span id="compact-mode-reco-title" class="compact-mode-reco-title">Auto Recommendation</span>
+                                    <span id="compact-mode-reco-desc" class="compact-mode-reco-desc">Recommended mode based on your input</span>
+                                </div>
+                                <div class="compact-mode-options" role="radiogroup">
+                                    <button type="button" class="compact-mode-option" data-mode="auto" role="radio" aria-checked="true">
+                                        <span class="compact-mode-name">Auto</span>
+                                        <span class="compact-mode-desc">KKD decides how to handle each request</span>
+                                    </button>
+                                    <button type="button" class="compact-mode-option" data-mode="chat" role="radio" aria-checked="false">
+                                        <span class="compact-mode-name">Baat Kar</span>
+                                        <span class="compact-mode-desc">Understand and explore — no changes</span>
+                                    </button>
+                                    <button type="button" class="compact-mode-option" data-mode="agent" role="radio" aria-checked="false">
+                                        <span class="compact-mode-name">Saath Kar</span>
+                                        <span class="compact-mode-desc">Make changes together</span>
+                                    </button>
+                                    <button type="button" class="compact-mode-option" data-mode="autonomous" role="radio" aria-checked="false">
+                                        <span class="compact-mode-name">Karke Dikha</span>
+                                        <span class="compact-mode-desc">Execute the task end-to-end</span>
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                        <button id="attach-btn" class="btn btn-ghost btn-icon" title="Attach file" aria-label="Attach file">＋</button>
+                        <textarea id="user-input" placeholder="Message KarkeDikha…" rows="1"></textarea>
+                        <button id="unified-task-stop-btn" class="btn btn-danger compact-btn" type="button" hidden>Stop</button>
+                        <button id="send-btn" class="btn send-btn" aria-label="Send message" disabled>Send</button>
+                    </div>
+                    <div id="action-row" class="action-row">
+                        <span class="keyboard-hint">Enter to send · Shift+Enter for newline</span>
+                    </div>
+                </div>
+
+                <section id="autonomous-composer" class="autonomous-composer" aria-label="Autonomous task composer" hidden>
+                    <textarea id="autonomous-input" class="autonomous-textarea" placeholder="Describe the autonomous coding task in as much detail as needed. Markdown is fine — line breaks are preserved." rows="6"></textarea>
+                    <div id="autonomous-error" class="autonomous-error" hidden></div>
+                    <div class="autonomous-actions">
+                        <button id="autonomous-start-btn" class="btn btn-primary" data-action="send">Send</button>
+                        <button id="autonomous-stop-btn" class="btn btn-danger compact-btn" type="button" hidden>Stop</button>
+                        <button id="autonomous-tools-btn" class="btn btn-ghost btn-icon" aria-haspopup="true" aria-expanded="false" aria-controls="autonomous-tools-menu" title="Task draft tools">⋯</button>
+                        <span id="autonomous-counts" class="autonomous-counts keyboard-hint">0 characters · 0 UTF-8 bytes · limit 40,000 bytes</span>
+                    </div>
+                    <div id="autonomous-tools-menu" class="overflow-menu" hidden role="menu">
+                        <button id="autonomous-clear-btn" class="menu-item" role="menuitem">Clear Draft</button>
+                        <button id="autonomous-copy-btn" class="menu-item" role="menuitem">Copy Prompt</button>
+                        <button id="autonomous-load-last-btn" class="menu-item" role="menuitem">Load Last Task Prompt</button>
+                    </div>
+                </section>
+            </section>
+        </main>
+
+        <div id="drawer-scrim" class="drawer-scrim" hidden></div>
+
+        <aside id="history-drawer" class="drawer history-drawer" aria-label="History" hidden>
+            <div class="panel-header">
+                <h2>History</h2>
+                <button id="history-close-btn" class="btn btn-ghost btn-icon" aria-label="Close history">✕</button>
+            </div>
+            <button id="new-conversation-btn" class="btn btn-primary new-chat-btn">＋ New chat</button>
+            <div class="section-heading">Recent chats</div>
+            <input id="workbench-search-input" class="workbench-search-input" type="search" maxlength="200" placeholder="Search conversations">
+            <div id="workbench-search-results" class="conversations" aria-live="polite"></div>
+            <div id="conversations-list" class="conversations"></div>
+            <div class="section-heading">Run timelines</div>
+            <span id="everyday-history-panda" class="kd-panda-icon kd-panda-icon--history" aria-hidden="true"><img class="kd-panda-img" alt="" width="40" height="40"><svg class="kd-panda-fallback" viewBox="0 0 32 32"><use href="#kd-panda-head"/></svg></span>
+            <div id="everyday-history-status" class="everyday-history-status">Open History to load your tasks.</div>
+            <div id="everyday-history-list" class="everyday-history-list"></div>
+        </aside>
+
+        <aside id="activity-panel" class="drawer activity-panel" aria-label="Runs" hidden>
+            <div class="panel-header">
+                <h2>Runs</h2>
+                <button id="activity-close-btn" class="btn btn-ghost btn-icon" aria-label="Close runs">✕</button>
+            </div>
+            <span id="operations-updated" class="updated-label">Waiting for data</span>
+
+            <div class="metrics-grid">
+                <article class="metric-card">
+                    <span id="metric-tasks" class="metric-value">0</span>
+                    <span class="metric-label">Tasks</span>
+                </article>
+                <article class="metric-card active-run">
+                    <span id="metric-running" class="metric-value">0</span>
+                    <span class="metric-label">Running</span>
+                </article>
+                <article class="metric-card blocked-run">
+                    <span id="metric-blocked" class="metric-value">0</span>
+                    <span class="metric-label">Blocked</span>
+                </article>
+                <article class="metric-card">
+                    <span id="metric-worktrees" class="metric-value">0</span>
+                    <span class="metric-label">Worktrees</span>
+                </article>
+            </div>
+
+            <section class="task-panel">
+                <div class="task-panel-header">
+                    <div class="section-heading task-panel-title">Recent tasks</div>
+                    <button id="archive-old-tasks-btn" class="btn btn-ghost task-archive-old-btn" type="button">Archive old</button>
+                </div>
+                <div class="view-toggle" role="tablist" aria-label="Task view">
+                    <button id="task-view-active-btn" class="view-toggle-btn active" type="button" role="tab" aria-selected="true">Active</button>
+                    <button id="task-view-history-btn" class="view-toggle-btn" type="button" role="tab" aria-selected="false">History</button>
+                </div>
+                <div class="task-stream-shell">
+                <div id="operations-task-list" class="task-stream-list">
+                    <div class="empty-state">No durable tasks yet.</div>
+                </div>
+                <button type="button" id="kd-activity-jump-latest" class="kd-jump-latest kd-jump-latest--activity" hidden>Jump to latest</button>
+                </div>
+            </section>
+
+            <details class="runtime-log-details">
+                <summary>Runtime log</summary>
+                <div id="runtime-log-list" class="log-container" role="log" aria-live="polite">
+                    <div class="log-empty">Runtime events will appear here.</div>
+                </div>
+            </details>
+        </aside>
+    </div>
+
+    <script nonce="{{nonce}}">
+      (() => {
+        const acquire = window.acquireVsCodeApi;
+        if (typeof acquire !== 'function') {
+          throw new Error('VS Code webview API is unavailable.');
+        }
+        const rawApi = acquire();
+        const api = {
+          postMessage: message => rawApi.postMessage(message),
+          getState: () => rawApi.getState(),
+          setState: state => rawApi.setState(state),
+        };
+        Object.defineProperty(window, '__ollamaAgentVsCodeApi', {
+          value: api,
+          configurable: false,
+          enumerable: false,
+          writable: false,
+        });
+        Object.defineProperty(window, 'acquireVsCodeApi', {
+          value: () => api,
+          configurable: false,
+          enumerable: false,
+          writable: false,
+        });
+        Object.defineProperty(window, '__pandaBaseUri', {
+          value: '{{pandaBaseUri}}',
+          configurable: false,
+          enumerable: false,
+          writable: false,
+        });
+      })();
+    </script>
+    <script nonce="{{nonce}}" src="{{jsUri}}"></script>
+    <script nonce="{{nonce}}">
+      (() => {
+        const files = ['chat-fixes.js', 'chat-dashboard.js', 'chat-operations.js', 'chat-runtime-fixes.js', 'chat-autonomous.js', 'model-palette.js', 'chat-operator-context.js', 'chat-sidebar-ui.js', 'chat-model-palette.js', 'chat-attach-dnd.js', 'everyday-presentation.js', 'chat-everyday.js', 'chat-dhaaga.js', 'chat-result-card.js'];
+        const load = index => {
+          if (index >= files.length) return;
+          const script = document.createElement('script');
+          script.nonce = '{{nonce}}';
+          script.async = false;
+          script.src = '{{jsUri}}'.replace(/chat\.js(?:\?.*)?$/, files[index]);
+          script.onload = () => load(index + 1);
+          document.body.appendChild(script);
+        };
+        load(0);
+
+        document.querySelectorAll('[data-layout-fixes]').forEach(layout => {
+          layout.href = '{{cssUri}}'.replace(/chat\.css(?:\?.*)?$/, layout.dataset.layoutFixes);
+        });
+      })();
+    </script>
+</body>
+</html>

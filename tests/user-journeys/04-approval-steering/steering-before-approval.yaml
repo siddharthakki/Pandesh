@@ -1,0 +1,20 @@
+schemaVersion: 2
+id: steering-before-approval
+title: Steering before approval invalidates stale scope
+priority: P1
+p1Index: 9
+suites: [p1, lifecycle, full]
+driver: p1-lifecycle
+profilePolicy: fresh
+requiresApprovals: true
+prompt: create note.txt containing Hello
+lifecycle: [proposal pending, visible steering, revised proposal, mutation, delivery]
+steps:
+  - select Karke Dikha and submit through the visible unified composer and visible Send control
+  - steer with Use greeting.txt instead through the same visible unified composer and approve revised work through visible controls
+assertions:
+  - task ID stays fixed, instruction revision increments, and no Baat Kar answer or workbench answer controls appear
+  - stale note.txt evidence is invalidated and only greeting.txt is eligible and delivered
+result: { file: greeting.txt, content: Hello, absentFile: note.txt, terminalState: completed }
+checks: { visibleUi: true, route: true, durableState: true, filesystem: true, git: true }
+evidence: [task attempt revision and approval IDs, DOM, screenshots, events, exact files, Git, logs, and JUnit]

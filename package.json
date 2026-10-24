@@ -1,0 +1,919 @@
+{
+  "name": "ollama-agent",
+  "displayName": "KarkeDikha",
+  "description": "Local AI coding agent powered by Ollama with tool execution, checkpoints, approval flows, observability, diagnostics, and bounded external control",
+  "version": "0.1.2",
+  "publisher": "ollama-agent",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/siddharthakki/ollama-agent.git"
+  },
+  "engines": {
+    "vscode": "^1.100.0"
+  },
+  "categories": [
+    "AI",
+    "Other"
+  ],
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "ollama-agent-sidebar",
+          "title": "KarkeDikha",
+          "icon": "$(robot)"
+        }
+      ]
+    },
+    "views": {
+      "ollama-agent-sidebar": [
+        {
+          "type": "webview",
+          "id": "ollama-agent.chatView",
+          "name": "KarkeDikha",
+          "retainContextWhenHidden": true
+        }
+      ]
+    },
+    "commands": [
+      {
+        "command": "ollama-agent.openChat",
+        "title": "Open",
+        "category": "KarkeDikha"
+      },
+      {
+        "command": "ollama-agent.focus",
+        "title": "Focus",
+        "category": "KarkeDikha"
+      },
+      {
+        "command": "ollama-agent.showActivity",
+        "title": "Show Activity",
+        "category": "KarkeDikha"
+      },
+      {
+        "command": "ollama-agent.runDiagnostics",
+        "title": "Run Self Diagnostics",
+        "category": "KarkeDikha"
+      },
+      {
+        "command": "ollama-agent.showSetupReadiness",
+        "title": "Setup / Readiness",
+        "category": "KarkeDikha"
+      },
+      {
+        "command": "ollama-agent.reloadAgentPlatformConfiguration",
+        "title": "Reload Agent Platform Configuration",
+        "category": "KarkeDikha"
+      },
+      {
+        "command": "ollama-agent.showEffectiveInstructions",
+        "title": "Show Effective Instructions",
+        "category": "KarkeDikha"
+      },
+      {
+        "command": "ollama-agent.listAgentProfiles",
+        "title": "List Agent Profiles",
+        "category": "KarkeDikha"
+      },
+      {
+        "command": "ollama-agent.selectAgentProfile",
+        "title": "Select Agent Profile",
+        "category": "KarkeDikha"
+      },
+      {
+        "command": "ollama-agent.listSkills",
+        "title": "List Skills",
+        "category": "KarkeDikha"
+      },
+      {
+        "command": "ollama-agent.runSkill",
+        "title": "Run Skill",
+        "category": "KarkeDikha"
+      },
+      {
+        "command": "ollama-agent.listSlashCommands",
+        "title": "List Slash Commands",
+        "category": "KarkeDikha"
+      },
+      {
+        "command": "ollama-agent.listMcpServers",
+        "title": "List MCP Servers",
+        "category": "KarkeDikha"
+      },
+      {
+        "command": "ollama-agent.refreshMcpServers",
+        "title": "Refresh MCP Servers",
+        "category": "KarkeDikha"
+      },
+      {
+        "command": "ollama-agent.manageMcpTrust",
+        "title": "Manage MCP Trust",
+        "category": "KarkeDikha"
+      },
+      {
+        "command": "ollama-agent.startLocalForgeMcpServer",
+        "title": "Start Local Forge MCP Server",
+        "category": "KarkeDikha"
+      },
+      {
+        "command": "ollama-agent.stopLocalForgeMcpServer",
+        "title": "Stop Local Forge MCP Server",
+        "category": "KarkeDikha"
+      },
+      {
+        "command": "ollama-agent.listLocalExtensions",
+        "title": "List Local Extensions",
+        "category": "KarkeDikha"
+      },
+      {
+        "command": "ollama-agent.manageLocalExtensions",
+        "title": "Manage Local Extensions",
+        "category": "KarkeDikha"
+      },
+      {
+        "command": "ollama-agent.runM14Diagnostics",
+        "title": "Run M14 Diagnostics",
+        "category": "KarkeDikha"
+      },
+      {
+        "command": "ollama-agent.configureProviderModel",
+        "title": "Configure Provider Model",
+        "category": "KarkeDikha"
+      },
+      {
+        "command": "ollama-agent.setUpOrcaRouter",
+        "title": "Set Up OrcaRouter (Cloud Models)",
+        "category": "KarkeDikha"
+      },
+      {
+        "command": "ollama-agent.clearOrcaRouter",
+        "title": "Remove OrcaRouter Credentials",
+        "category": "KarkeDikha"
+      },
+      {
+        "command": "ollama-agent.removeAllCloudCredentials",
+        "title": "Remove All Cloud Provider Credentials",
+        "category": "KarkeDikha"
+      },
+      {
+        "command": "ollama-agent.refreshFreeProviders",
+        "title": "Refresh Free Provider Catalog",
+        "category": "KarkeDikha"
+      },
+      {
+        "command": "ollama-agent.setCloudFallbackApiKey",
+        "title": "Set Cloud Fallback API Key",
+        "category": "KarkeDikha"
+      },
+      {
+        "command": "ollama-agent.clearCloudFallbackApiKey",
+        "title": "Clear Cloud Fallback API Key",
+        "category": "KarkeDikha"
+      },
+      {
+        "command": "ollama-agent.setApiKey",
+        "title": "Set Primary Provider API Key",
+        "category": "KarkeDikha"
+      },
+      {
+        "command": "ollama-agent.clearApiKey",
+        "title": "Clear Primary Provider API Key",
+        "category": "KarkeDikha"
+      },
+      {
+        "command": "ollama-agent.runGovernedForgeDemo",
+        "title": "Run Governed Forge Demo",
+        "category": "KarkeDikha"
+      },
+      {
+        "command": "ollama-agent.runForgeCodingTask",
+        "title": "Run Forge Coding Task",
+        "category": "KarkeDikha"
+      },
+      {
+        "command": "ollama-agent.runForgeReadinessCheck",
+        "title": "Run Forge Readiness Check",
+        "category": "KarkeDikha"
+      },
+      {
+        "command": "ollama-agent.startAutonomousTask",
+        "title": "Start Autonomous Task",
+        "category": "KarkeDikha"
+      },
+      {
+        "command": "ollama-agent.startTaskFromGitHubIssue",
+        "title": "Start Task from GitHub Issue",
+        "category": "KarkeDikha"
+      },
+      {
+        "command": "ollama-agent.showBackgroundTasks",
+        "title": "Show Background Tasks",
+        "category": "KarkeDikha"
+      },
+      {
+        "command": "ollama-agent.showTaskDetails",
+        "title": "Show Task Details",
+        "category": "KarkeDikha"
+      },
+      {
+        "command": "ollama-agent.pauseTask",
+        "title": "Pause Task",
+        "category": "KarkeDikha"
+      },
+      {
+        "command": "ollama-agent.resumeTask",
+        "title": "Resume Task",
+        "category": "KarkeDikha"
+      },
+      {
+        "command": "ollama-agent.cancelTask",
+        "title": "Cancel Task",
+        "category": "KarkeDikha"
+      },
+      {
+        "command": "ollama-agent.retryTask",
+        "title": "Retry Task",
+        "category": "KarkeDikha"
+      },
+      {
+        "command": "ollama-agent.continuePreviousTask",
+        "title": "Continue Previous Task",
+        "category": "KarkeDikha"
+      },
+      {
+        "command": "ollama-agent.sendFollowUpInstruction",
+        "title": "Send Follow-Up Instruction",
+        "category": "KarkeDikha"
+      },
+      {
+        "command": "ollama-agent.scheduleTask",
+        "title": "Schedule Task",
+        "category": "KarkeDikha"
+      },
+      {
+        "command": "ollama-agent.manageScheduledTasks",
+        "title": "Manage Scheduled Tasks",
+        "category": "KarkeDikha"
+      },
+      {
+        "command": "ollama-agent.showMergeReadiness",
+        "title": "Show Merge Readiness",
+        "category": "KarkeDikha"
+      },
+      {
+        "command": "ollama-agent.openDraftPullRequest",
+        "title": "Open Draft Pull Request",
+        "category": "KarkeDikha"
+      },
+      {
+        "command": "ollama-agent.runEvaluationSuite",
+        "title": "Run Evaluation Suite",
+        "category": "KarkeDikha"
+      },
+      {
+        "command": "ollama-agent.evaluateCurrentAutonomousTask",
+        "title": "Evaluate Current Autonomous Task",
+        "category": "KarkeDikha"
+      },
+      {
+        "command": "ollama-agent.showLatestEvaluationReport",
+        "title": "Show Latest Evaluation Report",
+        "category": "KarkeDikha"
+      },
+      {
+        "command": "ollama-agent.compareEvaluationBaseline",
+        "title": "Compare Evaluation Baseline",
+        "category": "KarkeDikha"
+      },
+      {
+        "command": "ollama-agent.showQualityGateDecision",
+        "title": "Show Quality Gate Decision",
+        "category": "KarkeDikha"
+      },
+      {
+        "command": "ollama-agent.exportPrivacySafeEvaluationReport",
+        "title": "Export Privacy-Safe Evaluation Report",
+        "category": "KarkeDikha"
+      },
+      {
+        "command": "ollama-agent.rebuildRepositoryIntelligence",
+        "title": "Rebuild Repository Intelligence",
+        "category": "Forge"
+      },
+      {
+        "command": "ollama-agent.pauseRepositoryIndexing",
+        "title": "Pause Repository Indexing",
+        "category": "Forge"
+      },
+      {
+        "command": "ollama-agent.resumeRepositoryIndexing",
+        "title": "Resume Repository Indexing",
+        "category": "Forge"
+      },
+      {
+        "command": "ollama-agent.showRepositoryIntelligenceStatus",
+        "title": "Show Repository Intelligence Status",
+        "category": "Forge"
+      },
+      {
+        "command": "ollama-agent.pinCurrentFileForTask",
+        "title": "Pin Current File for Task",
+        "category": "Forge"
+      },
+      {
+        "command": "ollama-agent.excludePathFromRetrieval",
+        "title": "Exclude Path from Retrieval",
+        "category": "Forge"
+      },
+      {
+        "command": "ollama-agent.stop",
+        "title": "Stop Agent",
+        "category": "KarkeDikha"
+      },
+      {
+        "command": "ollama-agent.showCheckpoints",
+        "title": "Show Checkpoints",
+        "category": "KarkeDikha"
+      },
+      {
+        "command": "ollama-agent.rewindLastCheckpoint",
+        "title": "Rewind Last Checkpoint",
+        "category": "KarkeDikha"
+      },
+      {
+        "command": "ollama-agent.clearSession",
+        "title": "Clear Session",
+        "category": "KarkeDikha"
+      },
+      {
+        "command": "ollama-agent.openWebChat",
+        "title": "Open Web Chat Interface",
+        "category": "KarkeDikha"
+      },
+      {
+        "command": "ollama-agent.provisionEngineeringOrganization",
+        "title": "Provision Engineering Organization",
+        "category": "KarkeDikha Engineering"
+      },
+      {
+        "command": "ollama-agent.runEngineeringSprint",
+        "title": "Start Autonomous Engineering Sprint",
+        "category": "KarkeDikha Engineering"
+      },
+      {
+        "command": "ollama-agent.syncEngineeringOrganization",
+        "title": "Synchronize Engineering Organization",
+        "category": "KarkeDikha Engineering"
+      },
+      {
+        "command": "ollama-agent.showEngineeringOrganizationStatus",
+        "title": "Show Engineering Organization Status",
+        "category": "KarkeDikha Engineering"
+      },
+      {
+        "command": "ollama-agent.showDailyScrum",
+        "title": "Show Daily Scrum",
+        "category": "KarkeDikha Engineering"
+      },
+      {
+        "command": "ollama-agent.showLocalBoard",
+        "title": "Show Local Board",
+        "category": "KarkeDikha Engineering"
+      },
+      {
+        "command": "ollama-agent.restartKarkeDikhaCore",
+        "title": "Restart KarkeDikha Core",
+        "category": "KarkeDikha"
+      },
+      {
+        "command": "ollama-agent.openPreview",
+        "title": "Open Preview",
+        "category": "KarkeDikha",
+        "icon": "$(open-preview)"
+      },
+      {
+        "command": "ollama-agent.openPreviewExternal",
+        "title": "Open Preview in External Browser",
+        "category": "KarkeDikha"
+      }
+    ],
+    "configuration": {
+      "title": "KarkeDikha",
+      "properties": {
+        "ollama-agent.model": {
+          "type": "string",
+          "default": "",
+          "description": "Fallback model when no specific model is matched by the router. Leave empty for Auto: KarkeDikha discovers installed models and selects a viable one automatically."
+        },
+        "ollama-agent.uiV2Enabled": {
+          "type": "boolean",
+          "default": false,
+          "description": "Load the React-based UI v2 chat shell instead of the legacy webview (Phase 1, strangler migration)."
+        },
+        "ollama-agent.agentModel": {
+          "type": "string",
+          "default": "",
+          "description": "Model used for autonomous agent tasks (tool calling, editing, planning). Leave empty for Auto: any installed model with tool-calling capability is discovered and selected automatically."
+        },
+        "ollama-agent.autocompleteModel": {
+          "type": "string",
+          "default": "qwen2.5-coder:1.5b",
+          "description": "Fast small model used exclusively for inline autocomplete. Not used for agent or chat."
+        },
+        "ollama-agent.editModel": {
+          "type": "string",
+          "default": "",
+          "description": "Model used for targeted file edits and patches. Leave empty for Auto: an installed model is discovered and selected automatically."
+        },
+        "ollama-agent.reviewerModel": {
+          "type": "string",
+          "default": "",
+          "description": "Model used for code review and validation. Leave empty for Auto: an installed model is discovered and selected automatically."
+        },
+        "ollama-agent.codingModel": {
+          "type": "string",
+          "default": "",
+          "description": "Model used for coding tasks (writing, fixing, refactoring code). Leave empty for Auto: an installed model is discovered and selected automatically."
+        },
+        "ollama-agent.codingFallbackModel": {
+          "type": "string",
+          "default": "",
+          "description": "Fallback coding model if the primary coding model is unavailable. Leave empty for Auto: an installed model is discovered and selected automatically."
+        },
+        "ollama-agent.chatModel": {
+          "type": "string",
+          "default": "",
+          "description": "Model used for general conversation and reasoning. Leave empty for Auto: an installed model is discovered and selected automatically."
+        },
+        "ollama-agent.visionModel": {
+          "type": "string",
+          "default": "qwen3-vl:30b",
+          "description": "Model used automatically when images or documents are attached"
+        },
+        "ollama-agent.embeddingModel": {
+          "type": "string",
+          "default": "nomic-embed-text",
+          "description": "Model used for embeddings and RAG"
+        },
+        "ollama-agent.systemOne.enabled": {
+          "type": "boolean",
+          "default": false,
+          "description": "Experimental: send each turn to a LOCAL System-One decision provider for shadow comparison with KarkeDikha's own routing. Never changes routing. Loopback endpoints only."
+        },
+        "ollama-agent.systemOne.mode": {
+          "type": "string",
+          "enum": [
+            "off",
+            "shadow"
+          ],
+          "default": "shadow",
+          "description": "System-One mode. Only 'shadow' (record-and-compare) is supported; 'off' disables it. Requires ollama-agent.systemOne.enabled."
+        },
+        "ollama-agent.systemOne.provider": {
+          "type": "string",
+          "default": "ollaya",
+          "description": "System-One provider implementation to use. Currently only 'ollaya' (a local Ollaya/Laya/Jev-compatible server) is supported."
+        },
+        "ollama-agent.systemOne.endpoint": {
+          "type": "string",
+          "default": "http://127.0.0.1:8771",
+          "description": "Loopback URL of the local System-One provider (127.0.0.1 / localhost only)."
+        },
+        "ollama-agent.systemOne.model": {
+          "type": "string",
+          "default": "",
+          "description": "Optional model id to request from the System-One provider. Empty uses the provider's own default."
+        },
+        "ollama-agent.systemOne.timeoutMs": {
+          "type": "number",
+          "default": 800,
+          "minimum": 100,
+          "maximum": 5000,
+          "description": "Per-request timeout for the System-One provider. On timeout or error KarkeDikha behaves as if System-One were off."
+        },
+        "ollama-agent.laya.enabled": {
+          "type": "boolean",
+          "default": false,
+          "description": "Deprecated: use ollama-agent.systemOne.enabled. Kept for backward compatibility; used only when systemOne.enabled is not explicitly set."
+        },
+        "ollama-agent.laya.mode": {
+          "type": "string",
+          "enum": [
+            "off",
+            "shadow"
+          ],
+          "default": "shadow",
+          "description": "Deprecated: use ollama-agent.systemOne.mode. Kept for backward compatibility; used only when systemOne.mode is not explicitly set."
+        },
+        "ollama-agent.laya.endpoint": {
+          "type": "string",
+          "default": "http://127.0.0.1:8771",
+          "description": "Deprecated: use ollama-agent.systemOne.endpoint. Kept for backward compatibility; used only when systemOne.endpoint is not explicitly set."
+        },
+        "ollama-agent.laya.timeoutMs": {
+          "type": "number",
+          "default": 800,
+          "minimum": 100,
+          "maximum": 5000,
+          "description": "Deprecated: use ollama-agent.systemOne.timeoutMs. Kept for backward compatibility; used only when systemOne.timeoutMs is not explicitly set."
+        },
+        "ollama-agent.apiBase": {
+          "type": "string",
+          "default": "http://localhost:11434",
+          "description": "Inference backend base URL. Ollama default: http://localhost:11434. LM Studio default: http://localhost:1234."
+        },
+        "ollama-agent.searxngUrl": {
+          "type": "string",
+          "default": "",
+          "description": "Optional local SearXNG endpoint for approved web research. Empty disables research."
+        },
+        "ollama-agent.providerType": {
+          "type": "string",
+          "enum": [
+            "ollama",
+            "openai-compatible"
+          ],
+          "enumDescriptions": [
+            "Ollama native API (/api/chat). Recommended for local Ollama installs.",
+            "OpenAI-compatible API (/v1/chat/completions). Use for LM Studio or any OpenAI-format endpoint."
+          ],
+          "default": "ollama",
+          "description": "Inference provider type. Set to 'openai-compatible' for LM Studio or generic OpenAI endpoints."
+        },
+        "ollama-agent.modelRoutingPolicy": {
+          "type": "string",
+          "enum": [
+            "local-only",
+            "local-first-cloud-fallback"
+          ],
+          "enumDescriptions": [
+            "Only the configured local provider may receive repository or task context.",
+            "Try the local provider first. If a local run fails for a recoverable runtime reason, the configured cloud fallback endpoint may receive the same repository/task context for exactly one retry."
+          ],
+          "default": "local-only",
+          "markdownDescription": "Repository-data boundary for automatic model routing. `local-first-cloud-fallback` explicitly permits sending repository and task context to `#ollama-agent.cloudFallbackApiBase#`. It has no effect until that endpoint, `#ollama-agent.cloudFallbackModel#` and the API key (command: *KarkeDikha: Set Cloud Fallback API Key*) are all configured."
+        },
+        "ollama-agent.cloudFallbackApiBase": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "OpenAI-compatible base URL used only for the bounded cloud fallback. Ignored unless `#ollama-agent.modelRoutingPolicy#` is `local-first-cloud-fallback`."
+        },
+        "ollama-agent.cloudFallbackModel": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "Model requested from `#ollama-agent.cloudFallbackApiBase#` during a bounded cloud fallback. Ignored unless `#ollama-agent.modelRoutingPolicy#` is `local-first-cloud-fallback`."
+        },
+        "ollama-agent.orcaRouterApiBase": {
+          "type": "string",
+          "default": "https://api.orcarouter.ai/v1",
+          "markdownDescription": "OpenAI-compatible base URL for OrcaRouter, used only when you manually pick an OrcaRouter model. The API key is stored in VS Code SecretStorage (command: *KarkeDikha: Set Up OrcaRouter (Cloud Models)*), never in settings."
+        },
+        "ollama-agent.cloudProviders": {
+          "type": "object",
+          "default": {},
+          "additionalProperties": {
+            "type": "object",
+            "properties": {
+              "enabled": {
+                "type": "boolean"
+              },
+              "baseUrl": {
+                "type": "string"
+              },
+              "accountId": {
+                "type": "string"
+              },
+              "selectedModel": {
+                "type": "string"
+              }
+            },
+            "additionalProperties": false
+          },
+          "markdownDescription": "Non-secret configuration of connected cloud providers, keyed by provider id (managed from KarkeDikha Setup). API keys are never stored here; they live in VS Code SecretStorage."
+        },
+        "ollama-agent.skills.enabled": {
+          "type": "boolean",
+          "default": true,
+          "markdownDescription": "Resolve a few relevant skills (built-in, yours in extension storage, and `.ollama-agent/skills` or `skills/` in a trusted workspace) per turn as short advisory guidance. Skills cannot grant permissions or bypass approvals."
+        },
+        "ollama-agent.repositoryGraph.enabled": {
+          "type": "boolean",
+          "default": true,
+          "markdownDescription": "Index the workspace in the background (symbols, imports, tests) to help repository questions find the right files. Indexing is incremental and never blocks first use; source text, not the index, is what the model is shown."
+        },
+        "ollama-agent.repositoryGraph.maxFiles": {
+          "type": "number",
+          "default": 150000,
+          "minimum": 1000,
+          "markdownDescription": "Upper bound on files the repository graph tracks (a memory bound). Larger repositories keep the most relevant files and report partial coverage."
+        },
+        "ollama-agent.cloudSpendMode": {
+          "type": "string",
+          "enum": [
+            "FREE_ONLY",
+            "BUDGETED",
+            "UNRESTRICTED"
+          ],
+          "default": "FREE_ONLY",
+          "markdownDescription": "Hard cloud spend policy. `FREE_ONLY` (default) only ever uses models known to be free and never silently falls through to paid usage."
+        },
+        "ollama-agent.cloudAllowCredits": {
+          "type": "boolean",
+          "default": false,
+          "markdownDescription": "Under `FREE_ONLY`, also allow models classified as trial or promotional (credit-limited, not recurring free)."
+        },
+        "ollama-agent.openRouterModel": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "Named OpenRouter model id (e.g. `openai/gpt-5.6-sol`) required when OpenRouter is explicitly selected later. Empty refuses; no substitute. Independent of `#ollama-agent.cloudFallbackModel#`. API base is fixed to `https://openrouter.ai/api/v1` for this slice."
+        },
+        "ollama-agent.openRouterMaxUsd": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "markdownDescription": "Positive finite USD spend cap required when OpenRouter is explicitly selected later. Missing, zero, or non-numeric refuses before any call. Independent of cloud-fallback settings."
+        },
+        "ollama-agent.contextWindow": {
+          "type": "number",
+          "default": 8192,
+          "minimum": 512,
+          "description": "Context window size in tokens. Vision requests automatically use at least 16384."
+        },
+        "ollama-agent.maxOutputTokens": {
+          "type": "number",
+          "default": 0,
+          "minimum": 0,
+          "description": "Maximum tokens to generate per response. Set to 0 to use the provider's default."
+        },
+        "ollama-agent.temperature": {
+          "type": "number",
+          "default": 0.7,
+          "minimum": 0,
+          "maximum": 2,
+          "description": "Sampling temperature (0.0 = deterministic, 2.0 = very random)."
+        },
+        "ollama-agent.requestTimeout": {
+          "type": "number",
+          "default": 300000,
+          "minimum": 5000,
+          "description": "Hard timeout for a single model request in milliseconds."
+        },
+        "ollama-agent.commandTimeout": {
+          "type": "number",
+          "default": 120000,
+          "minimum": 1000,
+          "description": "Maximum duration of a validation or tool command in milliseconds."
+        },
+        "ollama-agent.allowOutsideWorkspace": {
+          "type": "boolean",
+          "default": false,
+          "description": "Allow agent to read/write files outside the workspace root"
+        },
+        "ollama-agent.maxIterations": {
+          "type": "number",
+          "default": 20,
+          "minimum": 1,
+          "description": "Maximum tool-call iterations per agent run"
+        },
+        "ollama-agent.maxToolOutputChars": {
+          "type": "number",
+          "default": 20000,
+          "minimum": 1000,
+          "description": "Maximum characters of tool output sent back to the model"
+        },
+        "ollama-agent.maxFileReadChars": {
+          "type": "number",
+          "default": 50000,
+          "minimum": 1000,
+          "description": "Maximum characters read from a single file"
+        },
+        "ollama-agent.maxTaskWallClock": {
+          "type": "number",
+          "default": 3600000,
+          "minimum": 60000,
+          "description": "Maximum active execution time per durable task in milliseconds. Paused and approval-wait time is excluded."
+        },
+        "ollama-agent.maxTaskModelCalls": {
+          "type": "number",
+          "default": 30,
+          "minimum": 1,
+          "description": "Maximum inference calls per durable task."
+        },
+        "ollama-agent.maxTaskToolCalls": {
+          "type": "number",
+          "default": 100,
+          "minimum": 1,
+          "description": "Maximum tool executions per durable task."
+        },
+        "ollama-agent.maxTaskRepairAttempts": {
+          "type": "number",
+          "default": 3,
+          "minimum": 1,
+          "description": "Maximum bounded repair cycles after required validation failures."
+        },
+        "ollama-agent.maxTaskOutputBytes": {
+          "type": "number",
+          "default": 5242880,
+          "minimum": 1024,
+          "description": "Maximum streamed model output bytes recorded for a durable task."
+        },
+        "ollama-agent.maxTaskNoProgressSteps": {
+          "type": "number",
+          "default": 4,
+          "minimum": 1,
+          "description": "Number of repeated progress fingerprints before the task is blocked as stuck."
+        },
+        "ollama-agent.requireApprovalForWrites": {
+          "type": "boolean",
+          "default": true,
+          "description": "Require user approval before writing files"
+        },
+        "ollama-agent.requireApprovalForCommands": {
+          "type": "boolean",
+          "default": true,
+          "description": "Require user approval before running commands"
+        },
+        "ollama-agent.enableAuditLog": {
+          "type": "boolean",
+          "default": true,
+          "description": "Write audit log JSONL files to .ollama-agent/audit/"
+        },
+        "ollama-agent.enableCheckpoints": {
+          "type": "boolean",
+          "default": true,
+          "description": "Create file checkpoints before mutations"
+        },
+        "ollama-agent.trustedAutonomyEnabled": {
+          "type": "boolean",
+          "default": false,
+          "description": "Explicitly opt into one persisted autonomous contract per Agent task. In-contract file changes and safe validation commands skip repetitive approval; hard denials and out-of-contract actions still stop or ask."
+        },
+        "ollama-agent.progressHeartbeatMs": {
+          "type": "number",
+          "default": 15000,
+          "minimum": 5000,
+          "description": "Interval for persisted progress heartbeats while a durable autonomous task is running."
+        },
+        "ollama-agent.sequentialRolesEnabled": {
+          "type": "boolean",
+          "default": false,
+          "description": "Run Supervisor, Planner, Implementer, Reviewer, and Validator sequentially for Agent tasks. Adds local model calls but improves handoffs and review discipline."
+        },
+        "ollama-agent.maxReviewerRepairPasses": {
+          "type": "number",
+          "default": 1,
+          "minimum": 0,
+          "maximum": 3,
+          "description": "Maximum bounded implementation repair turns triggered by blocking Reviewer findings."
+        }
+      }
+    },
+    "menus": {
+      "editor/title": [
+        {
+          "command": "ollama-agent.openPreview",
+          "when": "resourceExtname == .html || resourceExtname == .htm",
+          "group": "navigation"
+        }
+      ]
+    }
+  },
+  "scripts": {
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "bundle": "node esbuild.js",
+    "bundle:watch": "node esbuild.js --watch",
+    "bundle:core": "node esbuild.core.js",
+    "bundle:core:watch": "node esbuild.core.js --watch",
+    "bundle:webview-v2": "node esbuild.webview-v2.js",
+    "bundle:webview-v2:watch": "node esbuild.webview-v2.js --watch",
+    "typecheck:webview-v2": "tsc -p src/webview-v2/tsconfig.json",
+    "desktop": "node apps/desktop/launch.mjs",
+    "desktop:launch": "node apps/desktop/launch.mjs",
+    "desktop:package": "node apps/desktop/scripts/package-portable.mjs",
+    "desktop:package-smoke": "node apps/desktop/scripts/package-smoke.mjs",
+    "desktop:installer": "node apps/desktop/scripts/package-installer.mjs",
+    "desktop:installer-smoke": "node apps/desktop/scripts/installer-smoke.mjs",
+    "desktop:smoke:sandbox": "node apps/desktop/scripts/sandbox-smoke/sandbox-smoke.mjs",
+    "desktop:smoke:sandbox:check": "node apps/desktop/scripts/sandbox-smoke/sandbox-smoke.mjs --check",
+    "vscode:prepublish": "node scripts/fetch-whisper-model.mjs && node scripts/stage-asr-runtime-assets.mjs && node esbuild.js --production && node esbuild.core.js --production && node esbuild.webview-v2.js --production && node scripts/verify-release-assets.mjs && node scripts/strip-node-modules-ts-sources.mjs",
+    "test": "node scripts/run-vitest-with-heap.mjs",
+    "test:platform": "vitest run --config vitest.platform.config.ts",
+    "test:webview-v2": "vitest run --config vitest.webview-v2.config.ts",
+    "test:golden": "vitest run --config vitest.golden.config.ts",
+    "test:golden:v2": "vitest run --config vitest.golden.config.ts src/test/golden/goldenV2.test.ts --reporter=verbose",
+    "test:golden:v2:release": "npm run test:golden:v2 && npm run test:golden:packaged",
+    "model:list": "node scripts/model-bench/list-models.mjs",
+    "model:test": "node scripts/model-bench/run-model-bench.mjs --suite qualifier",
+    "model:test:one": "node scripts/model-bench/run-model-bench.mjs --suite qualifier",
+    "model:test:scenario": "node scripts/model-bench/run-model-bench.mjs",
+    "model:test:full": "node scripts/model-bench/run-model-bench.mjs --suite daily",
+    "model:test:resume": "node scripts/model-bench/run-model-bench.mjs --resume",
+    "model:test:report": "node scripts/model-bench/build-report.mjs",
+    "model:test:cohort": "node scripts/model-bench/cohort.mjs",
+    "model:test:unit": "node --test scripts/model-bench/lib.test.mjs scripts/model-bench/repetitionIsolation.test.mjs",
+    "test:platform:win32": "vitest run --config vitest.platform.config.ts core/test/platform/windowsProcessTreeCancellation.platform.test.ts",
+    "validate": "npm run compile && npm test",
+    "test:extension": "vitest run src/test/suite/extensionAcceptance.test.ts",
+    "test:dogfood:physical": "node scripts/run-vitest-with-heap.mjs run src/test/suite/physicalDogfoodAcceptance.test.ts",
+    "test:dogfood:approval-cycle": "node scripts/acceptance/run-webview-approval-dogfood.mjs",
+    "dogfood:m17:launch": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/dogfood-m17-launch.ps1",
+    "test:extension-host-transport-probe": "node scripts/acceptance/run-extension-host-transport-probe.mjs",
+    "test:acceptance:packaged": "node scripts/acceptance/run-packaged-acceptance.mjs",
+    "test:live:ollama": "node scripts/live-ollama-smoke.mjs",
+    "test:live:forge-proposal": "npm run compile && node scripts/live-forge-proposal-smoke.mjs",
+    "test:live:m13": "npm run compile && node scripts/live-m13-acceptance.mjs",
+    "test:live:m14": "node scripts/live-m14-acceptance.mjs",
+    "test:live:m15": "node scripts/live-m15-acceptance.mjs",
+    "test:live:m16": "node scripts/live-m16-acceptance.mjs",
+    "test:live:m17": "npm run compile && node scripts/live-m17-acceptance.mjs",
+    "test:live:m42": "node scripts/run-live-m42-dogfood.mjs",
+    "test:dogfood:m17-github-delivery": "npm run compile && node scripts/m17-github-delivery-dogfood.mjs",
+    "test:dogfood:packaged-github-delivery": "node scripts/acceptance/run-packaged-github-delivery-dogfood.mjs",
+    "test:dogfood:packaged-delivery-boundary": "node scripts/acceptance/run-packaged-github-delivery-dogfood.mjs",
+    "test:live:m17-ui": "node scripts/live-m17-ui-dogfood.mjs",
+    "test:e2e:m18-m22": "npm run compile && node scripts/m18-m22-headless-e2e.mjs",
+    "verify": "npm run compile && npm test && npm run test:extension",
+    "eval:init": "npm run compile && node out/evals/cli.js --init .ollama-agent/evals/observations.json",
+    "eval:run": "npm run compile && node out/evals/cli.js",
+    "release:check": "npm run compile && node esbuild.tools.js && node out/release/cli.js",
+    "e2e:check": "npm run compile && node esbuild.tools.js && node out/e2e/cli.js",
+    "package:verify": "npm run validate && npm run release:check && npm run e2e:check",
+    "clean:webview-v2": "node -e \"require('fs').rmSync('out/webview-v2', { recursive: true, force: true })\"",
+    "package": "npm run clean:webview-v2 && npm run compile && node esbuild.js --production && node esbuild.core.js --production && node esbuild.webview-v2.js --production && node scripts/verify-release-assets.mjs && vsce package --out karkedikha.vsix",
+    "package:win32-x64": "npm run clean:webview-v2 && npm run compile && node scripts/fetch-whisper-model.mjs && node scripts/stage-asr-runtime-assets.mjs && node esbuild.js --production && node esbuild.core.js --production && node esbuild.webview-v2.js --production && node scripts/verify-release-assets.mjs && vsce package --target win32-x64 --out karkedikha-win32-x64.vsix",
+    "test:e2e:everyday-mvp": "npm run compile && node scripts/everyday-assistant-board-smoke.mjs",
+    "test:e2e:m31-packaged-ui": "node scripts/acceptance/run-packaged-m31-ui-dogfood.mjs",
+    "test:e2e:onboarding-local-only": "node scripts/acceptance/run-onboarding-local-only-acceptance.mjs",
+    "test:e2e:baat-core-readiness": "node scripts/acceptance/run-baat-core-readiness-acceptance.mjs",
+    "test:e2e:unified-conversation-v1": "node scripts/acceptance/run-unified-conversation-v1-acceptance.mjs",
+    "test:e2e:durable-continuity": "node scripts/acceptance/run-durable-continuity-acceptance.mjs",
+    "test:e2e:multi-profile-core": "node scripts/acceptance/run-multi-profile-core-acceptance.mjs",
+    "test:e2e:m32-core-execution": "node scripts/acceptance/run-m32-core-execution-acceptance.mjs",
+    "test:e2e:m32-packaged-dogfood": "node scripts/acceptance/run-m32-packaged-dogfood.mjs",
+    "test:guardian:generate": "node scripts/guardian/generate-journeys.mjs",
+    "test:guardian:lint": "node scripts/guardian/generate-journeys.mjs --check && node scripts/guardian/validate-journeys.mjs",
+    "test:guardian:focused": "node --test scripts/guardian/journey-contracts.test.mjs scripts/guardian/page-object-contracts.test.mjs src/ui-test/support/fakeOllamaServer.test.mjs && npm run test:guardian:lint",
+    "test:guardian:build-vsix": "node scripts/guardian/build-frozen-vsix.mjs",
+    "test:guardian:p0": "node scripts/guardian/run-guardian.mjs p0",
+    "test:guardian:p1": "node scripts/guardian/run-guardian.mjs p1",
+    "test:guardian:lifecycle": "node scripts/guardian/run-guardian.mjs lifecycle",
+    "test:guardian:workspace": "node scripts/guardian/run-guardian.mjs workspace",
+    "test:guardian:windows": "node scripts/guardian/run-guardian.mjs windows",
+    "test:guardian:installation": "node scripts/guardian/run-guardian.mjs installation",
+    "test:guardian:recovery": "node scripts/guardian/run-guardian.mjs recovery",
+    "test:guardian:smoke": "npm run test:guardian:p0",
+    "test:guardian:full": "node scripts/guardian/run-guardian.mjs full",
+    "test:guardian:negative": "node scripts/guardian/run-guardian.mjs negative",
+    "test:guardian:watch": "node scripts/guardian/watch.mjs",
+    "test:guardian:report": "node scripts/guardian/report.mjs",
+    "test:e2e:progress-completion-ux": "node scripts/acceptance/run-progress-completion-ux-acceptance.mjs",
+    "test:e2e:task-scoped-autonomy": "node scripts/acceptance/run-task-scoped-autonomy-acceptance.mjs",
+    "test:golden:packaged": "node scripts/golden/run-golden.mjs"
+  },
+  "devDependencies": {
+    "@testing-library/jest-dom": "^7.0.1",
+    "@testing-library/react": "^16.3.3",
+    "@types/chai": "^5.2.3",
+    "@types/jsdom": "^28.0.3",
+    "@types/mocha": "^10.0.10",
+    "@types/node": "^20.0.0",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "@types/vscode": "^1.85.0",
+    "@types/ws": "^8.18.1",
+    "@vscode/test-cli": "^0.0.15",
+    "@vscode/test-electron": "^3.0.0",
+    "@vscode/vsce": "^3.9.2",
+    "@xenova/transformers": "^2.17.2",
+    "chai": "^6.2.2",
+    "chrome-remote-interface": "^0.34.0",
+    "esbuild": "^0.28.1",
+    "jsdom": "^29.1.1",
+    "mammoth": "^1.12.0",
+    "mocha": "^11.7.6",
+    "mocha-junit-reporter": "^2.2.1",
+    "pdfjs-dist": "^6.1.200",
+    "vitest": "^4.1.9",
+    "vscode-extension-tester": "^8.23.0",
+    "ws": "^8.21.1",
+    "yaml": "^2.9.0"
+  },
+  "dependencies": {
+    "@earendil-works/pi-agent-core": "^1.2.0",
+    "@earendil-works/pi-ai": "^1.2.0",
+    "@sinclair/typebox": "^0.34.52",
+    "@vscode/sqlite3": "^5.1.14-vscode",
+    "react": "^19.3.0",
+    "react-dom": "^19.3.0",
+    "shiki": "^4.4.3",
+    "streamdown": "^2.6.0",
+    "typescript": "^5.9.3",
+    "undici": "7.28.0"
+  }
+}

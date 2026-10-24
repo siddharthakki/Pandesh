@@ -1,0 +1,10 @@
+[
+ {"id":"K1 how does app work","question":"How does this application work?","kind":"map","arg":["repository","context"],"expect":["package.json","src/extension.ts"]},
+ {"id":"K2 where persisted","question":"Where are agent tasks persisted?","kind":"arch","arg":["task","persisted","store"],"expect":["src/agent/TaskStore.ts"]},
+ {"id":"K3 who calls fn","question":"Who calls extractTsJsStructure?","kind":"refs","arg":"extractTsJsStructure","expect":["src/context/RepositoryIndex.ts","src/autonomy/workspaceScan.ts"]},
+ {"id":"K4 dependents","question":"Which files depend on RepositoryIndex?","kind":"dependents","arg":"src/context/RepositoryIndex.ts","expect":["src/autonomy/workspaceScan.ts","src/coding/ValidationFloor.ts"]},
+ {"id":"K5 break if modify","question":"What might break if I modify validateToolArguments?","kind":"impact","arg":"validateToolArguments","expect":["src/tools/ToolArgumentValidator.ts","src/tools/ToolRegistry.ts","src/reliability/ToolCallReliability.ts","src/test/suite/toolArgumentValidator.test.ts"]},
+ {"id":"K6 validation logic","question":"Find the validation logic","kind":"arch","arg":["validate","arguments","tool"],"expect":["src/tools/ToolArgumentValidator.ts"]},
+ {"id":"K7 relevant tests","question":"Relevant tests for ToolArgumentValidator","kind":"tests","arg":"src/tools/ToolArgumentValidator.ts","expect":["src/test/suite/toolArgumentValidator.test.ts"]},
+ {"id":"K8 definition","question":"Where is RepositoryIndex defined?","kind":"defs","arg":"RepositoryIndex","expect":["src/context/RepositoryIndex.ts"]}
+]

@@ -1,0 +1,20 @@
+schemaVersion: 2
+id: return-completed-history
+title: Returning to completed History stays terminal
+priority: P1
+p1Index: 16
+suites: [p1, lifecycle, full]
+driver: p1-lifecycle
+profilePolicy: fresh
+requiresApprovals: true
+prompt: create completed-history.txt containing Complete
+lifecycle: [governed completion, visible New chat, visible History selection]
+steps:
+  - select Karke Dikha and submit through the visible unified composer and visible Send control
+  - approve proposal mutation and delivery through visible controls, start a visible New chat, then select the completed conversation in History
+assertions:
+  - the historical conversation renders exactly once and remains terminal
+  - viewing History cannot reactivate task ownership Stop or approval controls
+result: { file: completed-history.txt, content: Complete, terminalState: completed }
+checks: { visibleUi: true, route: true, durableState: true, filesystem: true, git: true }
+evidence: [conversation task and attempt IDs, DOM, screenshots, exact file hash, Git, logs, and JUnit]

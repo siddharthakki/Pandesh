@@ -1,0 +1,132 @@
+/* Responsive contract for the chat panel.
+ *
+ * INVARIANT: narrowing the sidebar may reflow, abbreviate, iconize or move controls, but never makes a capability
+ * unreachable. Header actions collapse text → icon (labels are visually clipped, never `display:none`, so the accessible
+ * name survives); the composer wraps into two rows; cards and chips shrink with `min-width:0` and truncate technical text
+ * with an ellipsis (full text stays in the tooltip). Enforced by src/test/suite/responsiveLayout.test.ts.
+ *
+ * Widths are the webview's own width: wide editor panel > 700, normal sidebar 481–700, narrow 341–480, very narrow ≤ 340.
+ */
+
+/* ── Header ───────────────────────────────────────────────────────────────────────── */
+.top-bar { flex-wrap: wrap; row-gap: 6px; min-width: 0; }
+.top-bar-left, .top-bar-right { min-width: 0; }
+.top-bar-right { flex-wrap: wrap; justify-content: flex-end; }
+.top-bar .btn { position: relative; }
+.top-bar .btn .kd-ic { display: inline-block; line-height: 1; }
+
+/* Normal sidebar: New chat becomes a compact "+" (History / Activity keep their words). */
+@media (max-width: 700px) {
+  #new-conversation-toolbar-btn { min-width: 32px; min-height: 32px; padding-inline: 10px; }
+  #new-conversation-toolbar-btn .kd-lbl {
+    position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap;
+  }
+}
+
+/* Narrow sidebar: every header action is an icon button (tooltips + aria-labels carry the names). */
+@media (max-width: 480px) {
+  .top-bar .btn { min-width: 32px; min-height: 32px; padding-inline: 8px; }
+  #history-toggle .kd-lbl, #activity-toggle .kd-lbl {
+    position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap;
+  }
+  .top-bar-right { gap: 4px; }
+}
+
+/* Very narrow: the bar may wrap onto a second line; nothing is removed. */
+@media (max-width: 340px) {
+  .top-bar { padding-inline: 6px; }
+  .top-bar-left { flex: 1 1 auto; }
+  .top-bar-right { flex: 1 1 100%; justify-content: flex-start; }
+  .top-bar .btn { min-width: 36px; min-height: 36px; }
+}
+
+/* ── Operator status strip ────────────────────────────────────────────────────────── */
+.operator-context { min-width: 0; flex-wrap: wrap; }
+.operator-context .oc-field { min-width: 0; max-width: 100%; }
+.operator-context .oc-value { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100%; }
+
+/* ── Status row ───────────────────────────────────────────────────────────────────── */
+.status-row { flex-wrap: wrap; min-width: 0; row-gap: 4px; }
+
+/* ── Composer: two rows when narrow, message input keeps priority width ──────────── */
+.input-area, #input-row, .input-shell, #composer-chips { min-width: 0; max-width: 100%; }
+.input-shell { flex-wrap: wrap; }
+.input-shell > #user-input { flex: 1 1 12em; min-width: 0; }
+#send-btn { flex: 0 0 auto; flex-shrink: 0; min-width: 52px; }
+#unified-task-stop-btn { flex-shrink: 0; }
+#attach-btn { flex-shrink: 0; min-width: 32px; }
+.compact-mode-wrapper { min-width: 0; max-width: 100%; }
+
+@media (max-width: 600px) {
+  .input-shell > #user-input { flex: 1 1 100%; order: -1; }
+  #send-btn { margin-left: auto; }
+}
+
+/* Decision chips: wrap, shrink, truncate the long model name — never push other controls off-screen. */
+#composer-chips { flex-wrap: wrap; }
+#composer-chips .kd-chip-btn { min-width: 0; max-width: 100%; }
+#composer-chips .kd-chip-btn .kd-chip-label { min-width: 0; }
+@media (max-width: 600px) {
+  #model-chip { max-width: 100%; flex: 1 1 auto; }
+  #supervision-chip { max-width: 100%; }
+  .kd-supervision-popover { min-width: min(270px, calc(100vw - 24px)); }
+}
+
+/* ── Cards: shrink, wrap, never force horizontal scrolling ───────────────────────── */
+.approval-card, .tool-card, .repository-context-evidence, .kd-objective-card, .context-panel, .autonomous-status {
+  min-width: 0; max-width: 100%; box-sizing: border-box;
+}
+.approval-card .approval-tool, .approval-card pre, .tool-card pre { white-space: pre-wrap; overflow-wrap: anywhere; word-break: break-word; max-width: 100%; }
+.approval-buttons { display: flex; flex-wrap: wrap; gap: 6px; }
+.approval-buttons .btn { flex: 1 1 auto; min-width: 0; }
+.autonomous-actions, .actions, .action-row { flex-wrap: wrap; }
+#messages, .chat-messages { min-width: 0; overflow-x: hidden; overflow-wrap: anywhere; }
+.chat-window, .workspace, .app-shell { min-width: 0; max-width: 100%; }
+@media (max-width: 480px) {
+  .approval-buttons .btn { flex-basis: 45%; }
+}
+
+/* Drag-and-drop target feedback */
+.input-area.kd-drop-active .input-shell { border-color: var(--vscode-focusBorder, #3794ff); box-shadow: 0 0 0 2px color-mix(in srgb, var(--vscode-focusBorder, #3794ff) 35%, transparent); }
+.input-area.kd-drop-active::after { content: 'Drop to attach'; display: block; text-align: center; font-size: 11px; opacity: .8; padding-top: 4px; }
+
+/* ── Dogfood stabilization (2026-10-06): ultra-narrow Dhaaga, picker selection, history actions, prompt inspector ── */
+
+/* Ultra-narrow: Dhaaga collapses to a compact status line (root + current step) instead of a giant vertical timeline. */
+@media (max-width: 300px) {
+  .kd-dhaaga { padding: 6px 8px; margin: 6px 0; }
+  .kd-dhaaga-head { flex-wrap: wrap; row-gap: 2px; }
+  .kd-dhaaga-eyebrow { white-space: normal; }
+  .kd-dhaaga-thread > .kd-dhaaga-item:not(:last-child):not(.kd-dhaaga-root) { display: none; }
+  .kd-dhaaga-item { padding-bottom: 2px; }
+  .kd-dhaaga-item::after { display: none; }
+  .kd-dhaaga-body, .kd-dhaaga-title, .kd-dhaaga-sub, .kd-dhaaga-root-text { min-width: 0; overflow-wrap: anywhere; word-break: normal; }
+}
+
+/* Model picker: the selected filter and the selected model are unmistakable, driven by the semantic state. */
+.kd-chip[aria-pressed="true"] {
+  background: var(--vscode-button-background); color: var(--vscode-button-foreground);
+  border-color: var(--vscode-focusBorder, #3794ff); font-weight: 600;
+}
+.kd-pal-row[aria-selected="true"] {
+  background: color-mix(in srgb, var(--vscode-list-activeSelectionBackground, #094771) 55%, transparent);
+  border-left: 3px solid var(--vscode-focusBorder, #3794ff);
+}
+.kd-pal-row[aria-selected="true"] .kd-pal-primary::after { content: " \2713"; color: var(--vscode-focusBorder, #3794ff); }
+.kd-pal-row[aria-disabled="true"] { opacity: .5; cursor: not-allowed; }
+
+/* History: View and Copy are two separate, evenly sized controls. */
+.kd-history-prompt-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 6px; }
+.kd-history-prompt-actions > button { flex: 0 0 auto; min-height: 26px; padding: 2px 10px; }
+
+/* Full prompt inspector: a side drawer that does not block the chat, not a full-screen overlay. */
+.kd-prompt-modal { position: fixed; inset: 0; z-index: 40; pointer-events: none; background: transparent; display: flex; justify-content: flex-end; }
+.kd-prompt-modal[hidden] { display: none; }
+.kd-prompt-modal-panel {
+  pointer-events: auto; width: min(420px, 100%); max-height: 100%; overflow: auto; box-sizing: border-box; padding: 12px;
+  background: var(--vscode-sideBar-background, var(--vscode-editor-background, #1e1e1e));
+  border-left: 1px solid var(--vscode-panel-border, rgba(127,127,127,.35)); box-shadow: -4px 0 12px rgba(0,0,0,.25);
+}
+.kd-prompt-modal-header { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.kd-prompt-modal-text { white-space: pre-wrap; overflow-wrap: anywhere; margin: 10px 0; }
+.kd-prompt-modal-actions { display: flex; gap: 8px; flex-wrap: wrap; }

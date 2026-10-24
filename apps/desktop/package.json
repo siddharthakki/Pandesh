@@ -1,0 +1,15 @@
+{
+  "name": "pandesh",
+  "private": true,
+  "version": "0.1.2",
+  "description": "Pandesh — the local-first personal AI assistant desktop host over the existing KarkeDikha Core",
+  "productName": "Pandesh",
+  "main": "out/main.js",
+  "scripts": {
+    "start": "node launch.mjs"
+  },
+  "devDependencies": {
+    "electron": "33.4.11",
+    "rcedit": "^5.0.2"
+  }
+}

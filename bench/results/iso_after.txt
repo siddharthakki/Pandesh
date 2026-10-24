@@ -1,0 +1,17 @@
+      Tests  15 failed | 156 passed (171)
+ FAIL  core/test/validationInvariantAndReplacementGuard.test.ts > C. Golden-only raw model evidence > writes nothing when not enabled (normal runs)
+ FAIL  core/test/validationInvariantAndReplacementGuard.test.ts > C. Golden-only raw model evidence > writes raw reply, parsed arguments and parser failure under the Core data dir when enabled
+ FAIL  src/test/suite/baatKarCoreDurability.test.ts > Baat Kar / Saath Kar Core execution cutover (M32 correction) > a whole-repository inspection of a large repository > submits a bounded package Cor
+ FAIL  src/test/suite/baatKarCoreDurability.test.ts > Baat Kar / Saath Kar Core execution cutover (M32 correction) > a whole-repository inspection of a large repository > submits a bounded package Cor
+ FAIL  src/test/suite/baatKarCoreDurability.test.ts > Baat Kar / Saath Kar Core execution cutover (M32 correction) > builds bounded repository context for a Baat repository question and submits it wit
+ FAIL  src/test/suite/baatKarCoreDurability.test.ts > Baat Kar / Saath Kar Core execution cutover (M32 correction) > fails closed (Phase 2 grounding contract) when repository-context retrieval fails f
+ FAIL  src/test/suite/baatKarCoreDurability.test.ts > Baat Kar / Saath Kar Core execution cutover (M32 correction) > fails closed when the repository context selector returns no evidence at all for a 
+ FAIL  src/test/suite/composerLifecycleAndNewChatReset.test.ts > New Chat is a hard presentation reset > drops late events from the previous task/run until the user submits again
+ FAIL  src/test/suite/composerLifecycleAndNewChatReset.test.ts > New Chat is a hard presentation reset > leaves no task, stage, header, work panel or steering target behind
+ FAIL  src/test/suite/composerLifecycleAndNewChatReset.test.ts > composer lifecycle while work is running > keeps the composer editable and never sends a second request while a plain turn runs
+ FAIL  src/test/suite/governedNeonContinuity.test.ts > governed neon release contracts > renders a real Saath Kar panda panel with a six-stage Kaam ka Dhaaga tracker
+ FAIL  src/test/suite/m12RetrievalIntegrationPackaging.test.ts > M12 retrieval, integration, git isolation, and packaged runtime > packages into a test-owned temporary directory and loads runtime depe
+ FAIL  src/test/suite/m33EverydayExperience.test.ts > M33 unified composer surface (media/chat.html + chat-everyday.js) > ships the recommendation chip, phase strip, and history containers
+ FAIL  src/test/suite/m38PackagedThreeCapabilityWorkflow.test.ts > M38 packaged three-capability workflow (deterministic) > combines local inspection, governed research, and a governed GitHub write in
+ FAIL  src/test/suite/policySafeRuntime.test.ts > policy-safe autonomous runtime > blocks immediately and never validates or repairs after a policy denial
+ Test Files  8 failed | 3 passed (11)

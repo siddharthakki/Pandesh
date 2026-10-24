@@ -1,0 +1,1237 @@
+/* Safety net: [hidden] must never be overridden by a later, more specific
+   display rule anywhere in this stylesheet (or chat.css, loaded before it). */
+[hidden],
+.hidden {
+  display: none !important;
+}
+
+.kd-panda-sprite {
+  position: absolute;
+  width: 0;
+  height: 0;
+  overflow: hidden;
+}
+
+.top-region {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.chat-window {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: hidden;
+  border-right: 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.chat-messages-shell {
+  position: relative;
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.chat-messages,
+#messages {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overflow-anchor: none;
+  overscroll-behavior: contain;
+  scrollbar-gutter: auto;
+  padding-right: 2px;
+}
+
+.kd-jump-latest {
+  position: absolute;
+  left: 50%;
+  bottom: 12px;
+  z-index: 6;
+  transform: translateX(-50%);
+  padding: 6px 12px;
+  border: 1px solid var(--kd-border, var(--vscode-panel-border, #333));
+  border-radius: 999px;
+  color: var(--vscode-button-foreground, var(--vscode-foreground));
+  background: var(--vscode-button-background, var(--vscode-editorWidget-background));
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.28);
+  font-size: 12px;
+  cursor: pointer;
+}
+.kd-jump-latest:hover {
+  background: var(--vscode-button-hoverBackground, var(--vscode-toolbar-hoverBackground));
+}
+
+/* Every timeline entry owns its rendered height. Without this, the flex
+   column shrinks long approval cards while their controls overflow outside
+   both the card and the scrollable box; scrollHeight then falsely equals
+   clientHeight and an enabled approval is still impossible to reach. */
+.chat-messages > *,
+#messages > * {
+  flex-shrink: 0;
+}
+
+.toolbar select {
+  color-scheme: dark;
+}
+
+.toolbar select option {
+  color: #e7edf6;
+  background-color: #111827;
+}
+
+.metrics-panel {
+  flex: 0 0 auto;
+  max-height: 220px;
+  display: grid;
+  grid-template-columns: minmax(220px, 0.55fr) minmax(320px, 1.45fr);
+  gap: 18px;
+  padding: 14px 20px;
+  border-top: 0;
+  overflow: hidden;
+}
+
+.metrics-panel .panel-header {
+  grid-column: 1;
+  align-self: start;
+}
+
+.metrics-panel .metrics-grid {
+  grid-column: 1;
+}
+
+.metrics-panel .task-panel {
+  grid-column: 2;
+  grid-row: 1 / span 2;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.metrics-panel .task-stream-list {
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.bottom-log-stream {
+  flex: 0 0 190px;
+  height: 190px;
+}
+
+#stop-btn:disabled {
+  opacity: 0.65;
+  cursor: wait;
+}
+
+@media (max-width: 760px) {
+  .top-region {
+    display: flex;
+    flex-direction: column;
+  }
+
+  .metrics-panel {
+    width: auto;
+    max-height: 210px;
+    grid-template-columns: 1fr;
+  }
+
+  .metrics-panel .panel-header,
+  .metrics-panel .metrics-grid,
+  .metrics-panel .task-panel {
+    grid-column: 1;
+    grid-row: auto;
+  }
+
+  .metrics-panel .task-panel {
+    display: none;
+  }
+}
+
+@media (max-height: 720px) {
+  .metrics-panel {
+    max-height: 170px;
+    padding-top: 10px;
+    padding-bottom: 10px;
+  }
+
+  .bottom-log-stream {
+    flex-basis: 145px;
+    height: 145px;
+  }
+}
+
+.mode-toolbar {
+  display: contents;
+}
+
+/* Autonomous mode composer */
+.autonomous-composer {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px;
+  border-top: 1px solid var(--vscode-panel-border, #333);
+}
+
+.autonomous-summary {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 4px 16px;
+  font-size: 12px;
+  opacity: 0.85;
+}
+
+.autonomous-textarea {
+  width: 100%;
+  min-height: 120px;
+  max-height: 420px;
+  resize: vertical;
+  font-family: var(--vscode-editor-font-family, monospace);
+  font-size: 13px;
+  padding: 8px;
+  box-sizing: border-box;
+}
+
+.autonomous-counts {
+  font-size: 12px;
+  opacity: 0.75;
+}
+
+.autonomous-counts.over-limit {
+  color: var(--vscode-errorForeground, #f14c4c);
+  font-weight: 600;
+}
+
+.autonomous-error {
+  font-size: 12px;
+  color: var(--vscode-errorForeground, #f14c4c);
+  border: 1px solid var(--vscode-errorForeground, #f14c4c);
+  border-radius: 4px;
+  padding: 6px 8px;
+}
+
+.autonomous-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+/* Task-Scoped Autonomy V1 — the selector that decides the NEXT task's mode.
+ * Deliberately plain/quiet (not a prominent toggle) since supervised is the
+ * default and Hands-off is an occasional, deliberate choice. */
+.autonomy-mode-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  margin: 4px 0;
+}
+
+.autonomy-mode-label {
+  color: var(--vscode-descriptionForeground);
+  opacity: 0.85;
+}
+
+#autonomy-mode-select {
+  font-size: 12px;
+  background: var(--vscode-dropdown-background, var(--vscode-input-background));
+  color: var(--vscode-dropdown-foreground, var(--vscode-input-foreground));
+  border: 1px solid var(--vscode-dropdown-border, var(--vscode-input-border, transparent));
+  border-radius: 4px;
+  padding: 2px 6px;
+  max-width: 100%;
+}
+
+/* The ACTIVE task's own frozen mode — never the live selector above, which
+ * only ever decides the next submission. Small and calm, not alarming: this
+ * is a deliberate, already-made choice, not a warning. */
+.kd-autonomy-badge {
+  display: inline-block;
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: .04em;
+  padding: 1px 6px;
+  border-radius: 999px;
+  margin-left: 6px;
+  color: var(--vscode-charts-purple, var(--vscode-focusBorder));
+  border: 1px solid currentColor;
+  vertical-align: middle;
+}
+
+.autonomous-status {
+  border-top: 1px dashed var(--vscode-panel-border, #333);
+  padding-top: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.autonomous-status-header {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  font-size: 12px;
+  opacity: 0.85;
+}
+
+.autonomous-original-prompt pre {
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-size: 12px;
+  max-height: 200px;
+  overflow-y: auto;
+  border: 1px solid var(--vscode-panel-border, #333);
+  padding: 8px;
+  border-radius: 4px;
+}
+
+.autonomous-timeline {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: none;
+  overflow: visible;
+  font-size: 12px;
+}
+
+.autonomous-timeline-entry {
+  border-left: 2px solid var(--vscode-focusBorder, #007acc);
+  padding: 2px 8px;
+  white-space: pre-wrap;
+}
+
+.autonomous-timeline-entry.state-blocked,
+.autonomous-timeline-entry.state-failed {
+  border-left-color: var(--vscode-errorForeground, #f14c4c);
+}
+
+.autonomous-timeline-entry.state-completed {
+  border-left-color: var(--vscode-terminal-ansiGreen, #2ea043);
+}
+
+.autonomous-timeline-entry.state-cancelled {
+  border-left-color: var(--vscode-descriptionForeground, #999);
+}
+
+/* ── KarkeDikha mascot + motion layer ─────────────────────────────────── */
+:root {
+  --kd-amber: #d7a72c;
+  --kd-red: var(--vscode-errorForeground, #f14c4c);
+  --kd-motion-fast: 220ms;
+  --kd-motion-slow: 1600ms;
+}
+
+.kd-panda-icon {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  color: var(--vscode-foreground);
+}
+.kd-panda-icon svg { width: 100%; height: 100%; }
+.kd-panda-icon--lg { width: 32px; height: 32px; }
+
+/* Production WebP layer sits over the inline SVG fallback until it's known
+   to have loaded (kd-img-ready). See applyPandaImage() in chat-autonomous.js. */
+.kd-panda-img { display: none; width: 100%; height: 100%; object-fit: contain; }
+.kd-panda-icon.kd-img-ready .kd-panda-img { display: block; }
+.kd-panda-icon.kd-img-ready .kd-panda-fallback { display: none; }
+
+.brand-mark.kd-panda-icon { width: 34px; height: 34px; }
+.kd-panda-icon--banner { width: 30px; height: 30px; }
+.kd-panda-icon--approval,
+.kd-panda-icon--status { width: 64px; height: 64px; }
+
+@media (max-width: 520px) {
+  .brand-mark.kd-panda-icon { width: 26px; height: 26px; }
+  .kd-panda-icon--banner { width: 22px; height: 22px; }
+  .kd-panda-icon--approval,
+  .kd-panda-icon--status { width: 44px; height: 44px; }
+}
+.kd-panda-icon[data-state="thinking"],
+.kd-panda-icon[data-state="planning"] { color: var(--kd-chat); }
+.kd-panda-icon[data-state="delegating"] { color: var(--kd-agent); }
+.kd-panda-icon[data-state="coding"],
+.kd-panda-icon[data-state="building"],
+.kd-panda-icon[data-state="testing"] { color: var(--kd-autonomous); }
+.kd-panda-icon[data-state="waiting_for_delivery_approval"] { color: var(--kd-amber); }
+.kd-panda-icon[data-state="blocked"],
+.kd-panda-icon[data-state="failed"] { color: var(--kd-red); }
+.kd-panda-icon[data-state="completed"] { color: var(--vscode-terminal-ansiGreen, #2ea043); }
+
+.kd-panda-label { color: var(--vscode-descriptionForeground); font-size: 11px; }
+
+/* Dhadkan — active-surface breathing glow. One primary surface at a time. */
+.kd-dhadkan {
+  border-radius: var(--kd-radius);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--vscode-focusBorder) 45%, transparent);
+  animation: kd-dhadkan-blue var(--kd-motion-slow) ease-in-out infinite;
+}
+.kd-dhadkan[data-dhadkan-state="delegating"],
+.kd-dhadkan[data-dhadkan-state="planning"] { animation-name: kd-dhadkan-purple; }
+.kd-dhadkan[data-dhadkan-state="coding"] { animation-name: kd-dhadkan-green; }
+.kd-dhadkan[data-dhadkan-state="building"],
+.kd-dhadkan[data-dhadkan-state="testing"] { animation-name: kd-dhadkan-cyan; }
+/* Progress & Completion UX V1 (Step 3 closure pass): waiting for the user
+ * must never look like active work. The proposal and mutation approval cards
+ * carry a static `data-dhadkan-state="waiting_for_proposal_approval"` /
+ * `"waiting_for_mutation_approval"` in chat.html (never reassigned by JS,
+ * unlike the task wrapper's dhadkan state) — without this rule they matched
+ * no state-specific selector above and fell back to the base kd-dhadkan-blue
+ * "active work" glow, the same color as an in-progress assistant bubble. */
+.kd-dhadkan[data-dhadkan-state="waiting_for_proposal_approval"],
+.kd-dhadkan[data-dhadkan-state="waiting_for_mutation_approval"],
+.kd-dhadkan[data-dhadkan-state="waiting_for_delivery_approval"] { animation: kd-dhadkan-amber 2.4s ease-in-out infinite; }
+
+@keyframes kd-dhadkan-blue {
+  0%, 100% { box-shadow: 0 0 0 1px color-mix(in srgb, var(--kd-chat) 35%, transparent); }
+  50% { box-shadow: 0 0 0 2px color-mix(in srgb, var(--kd-chat) 65%, transparent); }
+}
+@keyframes kd-dhadkan-purple {
+  0%, 100% { box-shadow: 0 0 0 1px color-mix(in srgb, var(--kd-agent) 35%, transparent); }
+  50% { box-shadow: 0 0 0 2px color-mix(in srgb, var(--kd-agent) 65%, transparent); }
+}
+@keyframes kd-dhadkan-green {
+  0%, 100% { box-shadow: 0 0 0 1px color-mix(in srgb, var(--kd-autonomous) 35%, transparent); }
+  50% { box-shadow: 0 0 0 2px color-mix(in srgb, var(--kd-autonomous) 65%, transparent); }
+}
+@keyframes kd-dhadkan-cyan {
+  0%, 100% { box-shadow: 0 0 0 1px color-mix(in srgb, #3fd0e0 35%, transparent); }
+  50% { box-shadow: 0 0 0 2px color-mix(in srgb, #3fd0e0 65%, transparent); }
+}
+@keyframes kd-dhadkan-amber {
+  0%, 100% { box-shadow: 0 0 0 1px color-mix(in srgb, var(--kd-amber) 35%, transparent); }
+  50% { box-shadow: 0 0 0 2px color-mix(in srgb, var(--kd-amber) 70%, transparent); }
+}
+
+/* Kaam ka Dhaaga — compact connected execution thread. */
+.kd-thread { position: relative; padding-left: 2px; }
+.kd-thread .autonomous-timeline-entry {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--kd-space-2);
+  border-left: none;
+  padding: 2px var(--kd-space-1);
+}
+.kd-thread-node {
+  flex: 0 0 auto;
+  width: 8px;
+  height: 8px;
+  margin-top: 4px;
+  border-radius: 50%;
+  background: var(--vscode-descriptionForeground);
+}
+.kd-thread-body { min-width: 0; white-space: pre-wrap; }
+.kd-timeline-diagnostics {
+  margin-top: 4px;
+  color: var(--vscode-descriptionForeground);
+  font-size: 11px;
+}
+.kd-timeline-diagnostics > summary {
+  cursor: pointer;
+  color: var(--vscode-descriptionForeground);
+}
+.kd-timeline-diagnostics pre {
+  max-height: 200px;
+  overflow: auto;
+  margin: 6px 0 0;
+  padding: 6px;
+  border-radius: var(--kd-radius, 6px);
+  background: var(--vscode-textCodeBlock-background, rgba(128, 128, 128, 0.1));
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.autonomous-timeline-entry.is-subagent { margin-left: var(--kd-space-4); }
+.autonomous-timeline-entry.is-subagent .kd-thread-node { width: 6px; height: 6px; background: var(--kd-agent); }
+.autonomous-timeline-entry.state-queued .kd-thread-node { background: var(--vscode-descriptionForeground); opacity: 0.5; }
+.autonomous-timeline-entry.state-preparing .kd-thread-node,
+.autonomous-timeline-entry.state-running .kd-thread-node,
+.autonomous-timeline-entry.state-validating .kd-thread-node { background: var(--kd-chat); }
+.autonomous-timeline-entry.state-blocked .kd-thread-node,
+.autonomous-timeline-entry.state-failed .kd-thread-node { background: var(--kd-red); }
+.autonomous-timeline-entry.state-waiting_for_delivery_approval .kd-thread-node,
+.autonomous-timeline-entry.state-waiting_for_approval .kd-thread-node { background: var(--kd-amber); }
+.autonomous-timeline-entry.state-completed .kd-thread-node { background: var(--vscode-terminal-ansiGreen, #2ea043); }
+.autonomous-timeline-entry.state-cancelled .kd-thread-node { background: var(--vscode-descriptionForeground); }
+
+.delivery-approval-card:not([hidden]) {
+  display: flex;
+  gap: var(--kd-space-2);
+  align-items: flex-start;
+  border: 1px solid color-mix(in srgb, var(--kd-amber) 45%, var(--kd-border));
+  border-radius: var(--kd-radius);
+  padding: var(--kd-space-2) var(--kd-space-3);
+}
+
+.autonomous-status-header { display: flex; align-items: center; gap: var(--kd-space-2); }
+
+/* Reduced motion: state text and colors remain, animation is removed. */
+@media (prefers-reduced-motion: reduce) {
+  .kd-dhadkan { animation: none !important; box-shadow: 0 0 0 1px color-mix(in srgb, var(--vscode-focusBorder) 55%, transparent); }
+  .kd-panda-icon, .autonomous-timeline-entry { transition: none !important; }
+}
+
+/* Compact VS Code contributed-view shell. */
+:root {
+  --kd-space-1: 4px;
+  --kd-space-2: 8px;
+  --kd-space-3: 12px;
+  --kd-space-4: 16px;
+  --kd-radius: 8px;
+  --kd-border: var(--vscode-panel-border, rgba(127, 127, 127, 0.25));
+  --kd-chat: #3794ff;
+  --kd-agent: #a970ff;
+  --kd-autonomous: #57c76d;
+}
+
+body {
+  color: var(--vscode-foreground);
+  background: var(--vscode-sideBar-background, var(--vscode-editor-background));
+  font-family: var(--vscode-font-family, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif);
+  overflow-x: hidden;
+}
+
+.app-shell { display: flex; flex-direction: column; background: var(--vscode-sideBar-background, var(--vscode-editor-background)); }
+.visually-hidden { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+
+/* ── Top bar: brand + segmented mode control + drawer/menu triggers ──── */
+.top-bar {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--kd-space-2);
+  padding: var(--kd-space-2) var(--kd-space-3);
+  border-bottom: 1px solid var(--kd-border);
+  background: var(--vscode-sideBar-background, var(--vscode-editor-background));
+}
+.top-bar-left, .top-bar-right { display: flex; align-items: center; gap: var(--kd-space-2); min-width: 0; }
+.brand-mark { width: 22px; height: 22px; border: 0; border-radius: 6px; box-shadow: none; color: var(--vscode-foreground); background: var(--vscode-input-background); flex: 0 0 auto; }
+.mode-buttons { display: flex; align-items: center; gap: 2px; padding: 2px; border-radius: var(--kd-radius); background: var(--vscode-input-background); }
+.mode-button {
+  --mode-accent: var(--kd-chat);
+  position: relative;
+  min-width: 0;
+  min-height: 26px;
+  padding: 4px 10px;
+  border: 0;
+  border-radius: 6px;
+  color: var(--vscode-descriptionForeground);
+  background: transparent;
+  font-size: 12px;
+  cursor: pointer;
+}
+.mode-button:hover { color: var(--vscode-foreground); background: var(--vscode-list-hoverBackground, rgba(127,127,127,.1)); }
+.mode-button.active { color: var(--vscode-foreground); background: color-mix(in srgb, var(--mode-accent) 22%, transparent); }
+.mode-agent { --mode-accent: var(--kd-agent); }
+.mode-autonomous { --mode-accent: var(--kd-autonomous); }
+#history-toggle, #activity-toggle, #overflow-menu-btn { font-size: 11px; }
+#activity-summary { color: var(--vscode-descriptionForeground); }
+
+/* ── Persistent autonomous banner (only visible when a gate is pending and Karke Dikha isn't the active mode) ── */
+.autonomous-banner {
+  display: flex;
+  align-items: center;
+  gap: var(--kd-space-2);
+  flex: 0 0 auto;
+  width: 100%;
+  padding: 6px var(--kd-space-3);
+  border: 0;
+  border-bottom: 1px solid color-mix(in srgb, var(--kd-amber) 45%, var(--kd-border));
+  color: var(--vscode-foreground);
+  background: color-mix(in srgb, var(--kd-amber) 14%, transparent);
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+}
+
+/* ── Overflow / composer-tool dropdown menus ─────────────────────────── */
+.overflow-menu {
+  position: absolute;
+  z-index: 20;
+  display: flex;
+  flex-direction: column;
+  min-width: 200px;
+  padding: 4px;
+  border: 1px solid var(--kd-border);
+  border-radius: var(--kd-radius);
+  background: var(--vscode-editorWidget-background, var(--vscode-sideBar-background));
+  box-shadow: 0 6px 20px rgba(0,0,0,0.25);
+}
+#overflow-menu { top: 40px; right: var(--kd-space-3); }
+#autonomous-tools-menu { bottom: 100%; right: 0; margin-bottom: 4px; }
+.autonomous-actions { position: relative; }
+.menu-item { padding: 6px 10px; border: 0; border-radius: 6px; color: var(--vscode-foreground); background: transparent; text-align: left; font-size: 12px; cursor: pointer; }
+.menu-item:hover { background: var(--vscode-list-hoverBackground, rgba(127,127,127,.1)); }
+
+/* ── Compact status row + expandable details popover ─────────────────── */
+.status-row { position: relative; display: flex; align-items: center; gap: var(--kd-space-2); flex: 0 0 auto; padding: 4px var(--kd-space-3); border-bottom: 1px solid var(--kd-border); }
+.status-row-summary { flex: 1; min-width: 0; overflow: hidden; padding: 2px 4px; border: 0; background: transparent; color: var(--vscode-descriptionForeground); font-size: 11px; text-align: left; text-overflow: ellipsis; white-space: nowrap; cursor: pointer; }
+.status-row-summary:hover { color: var(--vscode-foreground); }
+.permission-status-chip { flex: 0 0 auto; padding: 3px 7px; border: 1px solid var(--kd-border); border-radius: 999px; color: var(--vscode-foreground); background: var(--vscode-input-background); font-size: 11px; cursor: pointer; }
+.permission-summary { display: flex; flex-direction: column; gap: 3px; padding: var(--kd-space-1) 0; color: var(--vscode-descriptionForeground); font-size: 11px; }
+.permission-summary strong { color: var(--vscode-foreground); }
+.permission-summary .btn { align-self: flex-start; }
+.advanced-permissions { margin-top: var(--kd-space-1); padding-top: var(--kd-space-2); border-top: 1px solid var(--kd-border); }
+.status-details-popover {
+  position: absolute;
+  z-index: 20;
+  top: 100%;
+  left: var(--kd-space-3);
+  right: var(--kd-space-3);
+  display: flex;
+  flex-direction: column;
+  gap: var(--kd-space-1);
+  max-height: 60vh;
+  padding: var(--kd-space-2) var(--kd-space-3);
+  overflow-y: auto;
+  border: 1px solid var(--kd-border);
+  border-radius: var(--kd-radius);
+  background: var(--vscode-editorWidget-background, var(--vscode-sideBar-background));
+  box-shadow: 0 6px 20px rgba(0,0,0,0.25);
+}
+.toolbar, .permission-toolbar { gap: var(--kd-space-2); padding: var(--kd-space-1) 0; }
+.toolbar select, .permission-toolbar select { min-width: 0; max-width: 220px; border-color: var(--kd-border); border-radius: 6px; color: var(--vscode-input-foreground, var(--vscode-foreground)); background: var(--vscode-input-background); }
+.context-panel, .repository-intelligence-panel { padding: var(--kd-space-1) 0; border: 0; border-top: 1px solid var(--kd-border); border-radius: 0; background: transparent; }
+.autonomous-summary { display: flex; flex-direction: column; gap: 2px; padding-top: var(--kd-space-1); border-top: 1px solid var(--kd-border); font-size: 11px; }
+.autonomous-summary > div[hidden] { display: none; }
+
+/* ── Workspace / chat window ─────────────────────────────────────────── */
+.workspace { flex: 1; min-height: 0; background: var(--vscode-editor-background); }
+.chat-window { display: flex; flex-direction: column; height: 100%; padding: var(--kd-space-3); border: 0; }
+.chat-messages { flex: 1; min-height: 0; padding: var(--kd-space-2) 0; }
+.input-area, #input-area, .autonomous-composer { position: sticky; bottom: 0; z-index: 3; padding: var(--kd-space-2) 0 0; border-top: 1px solid var(--kd-border); background: var(--vscode-editor-background); }
+.input-shell, .autonomous-textarea { border-color: var(--kd-border); border-radius: var(--kd-radius); box-shadow: none; background: var(--vscode-input-background); }
+.autonomous-textarea { min-height: 96px; color: var(--vscode-input-foreground, var(--vscode-foreground)); }
+.autonomous-composer:not([hidden]) { display: flex; flex-direction: column; gap: var(--kd-space-2); padding-top: var(--kd-space-2); }
+.autonomous-actions { display: flex; flex-wrap: wrap; align-items: center; gap: var(--kd-space-2); }
+
+/* Approval cards + timeline render inline in the conversation, at the chronological point they occur. */
+.autonomous-status:not([hidden]) { display: flex; flex-direction: column; gap: var(--kd-space-2); margin: var(--kd-space-2) 0; }
+.task-focus-header { order: 1; padding: 0 0 var(--kd-space-2); border-bottom: 1px solid var(--kd-border); }
+.task-focus-title { display: block; overflow: hidden; font-size: 13px; line-height: 1.35; text-overflow: ellipsis; white-space: nowrap; }
+.task-stage-tracker { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 4px; margin: var(--kd-space-2) 0 0; padding: 0; list-style: none; }
+.task-stage-tracker li { overflow: hidden; padding-top: 5px; border-top: 2px solid var(--kd-border); color: var(--vscode-descriptionForeground); font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
+.task-stage-tracker li.is-complete { border-color: var(--vscode-testing-iconPassed, #2ea043); color: var(--vscode-foreground); }
+.task-stage-tracker li.is-current { border-color: var(--vscode-focusBorder); color: var(--vscode-foreground); font-weight: 600; }
+.timeline-request { order: 2; }
+.autonomous-timeline { order: 3; display: flex; flex-direction: column; gap: 6px; }
+.delivery-approval-card { order: 4; }
+.autonomous-status-header, .autonomous-original-prompt { order: 5; }
+/* The state-driven panda ("Soch raha hoon…" etc.) is part of the product's
+   visual identity — keep it visible but compact so it never crowds the
+   approval cards above it. */
+.autonomous-status-header { display: flex; align-items: center; gap: 6px; min-height: 24px; }
+.autonomous-status-header .kd-panda-icon--status { width: 22px; height: 22px; flex: 0 0 auto; }
+.autonomous-status-header .kd-panda-label { font-size: 11px; color: var(--vscode-descriptionForeground); }
+.timeline-fact { padding: 7px 9px; border-left: 2px solid var(--kd-border); color: var(--vscode-descriptionForeground); font-size: 12px; }
+.timeline-fact strong { color: var(--vscode-foreground); }
+.timeline-fact p { margin: 3px 0 0; color: var(--vscode-foreground); white-space: pre-wrap; }
+.timeline-fact.state-completed { border-left-color: var(--vscode-testing-iconPassed, #2ea043); }
+.delivery-evidence { display: flex; flex-direction: column; gap: 3px; margin: 6px 0; color: var(--vscode-descriptionForeground); font-size: 11px; }
+
+.ambient-placeholder { gap: 4px; }
+
+/* ── Drawers: History / Activity — closed by default, overlay the timeline ── */
+.drawer-scrim {
+  position: fixed;
+  inset: 0;
+  z-index: 15;
+  background: rgba(0,0,0,0.25);
+}
+.drawer {
+  position: fixed;
+  top: 0;
+  right: 0;
+  z-index: 16;
+  display: flex;
+  flex-direction: column;
+  gap: var(--kd-space-2);
+  width: min(320px, 90vw);
+  height: 100%;
+  padding: var(--kd-space-3);
+  overflow-y: auto;
+  border-left: 1px solid var(--kd-border);
+  background: var(--vscode-sideBar-background, var(--vscode-editor-background));
+  box-shadow: -8px 0 24px rgba(0,0,0,0.3);
+}
+.drawer[hidden] { display: none; }
+.drawer .panel-header { display: flex; align-items: center; justify-content: space-between; }
+.drawer .panel-header h2 { font-size: 13px; }
+.activity-panel.drawer { overflow: hidden; }
+.activity-panel .metrics-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: var(--kd-space-2); flex: 0 0 auto; }
+.activity-panel .task-panel {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.task-stream-shell {
+  position: relative;
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.activity-panel .task-stream-list {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+}
+.kd-jump-latest--activity { bottom: 8px; }
+.runtime-log-details summary { padding: 4px 0; color: var(--vscode-descriptionForeground); font-size: 11px; cursor: pointer; }
+.runtime-log-details .log-container { max-height: 240px; }
+
+button:focus-visible, select:focus-visible, textarea:focus-visible, [tabindex]:focus-visible { outline: 1px solid var(--vscode-focusBorder); outline-offset: 1px; }
+
+@media (max-width: 520px) {
+  .top-bar { flex-wrap: wrap; }
+  .mode-button { padding: 4px 7px; font-size: 11px; }
+  /* History / Activity labels collapse to icons in chat-responsive.css (never display:none). */
+  .chat-window { padding: var(--kd-space-2); }
+  .field-label, .keyboard-hint { display: none; }
+  .toolbar select, .permission-toolbar select { max-width: 100%; }
+  .drawer { width: 100vw; }
+  .status-details-popover { left: var(--kd-space-2); right: var(--kd-space-2); }
+}
+@media (prefers-reduced-motion: reduce) { *, *::before, *::after { scroll-behavior: auto !important; transition-duration: 0.01ms !important; animation-duration: 0.01ms !important; } }
+
+.story-draft-card,.workspace-required-card{border-left:3px solid var(--vscode-focusBorder);display:grid;gap:8px}.story-draft-title{font-size:1.05em;font-weight:600}.story-draft-card ul{margin:0;padding-left:20px}.story-draft-meta{font-size:11px;opacity:.75}.story-draft-actions{flex-wrap:wrap}
+
+/* ═══ M33 Everyday Product Experience ══════════════════════════════════════
+   One unified composer, human-readable progress, outcome-first cards, and a
+   durable task History — presentation only, layered over the existing DOM. */
+
+/* The mode-first radio group is replaced by the recommendation chip. The
+   buttons stay in the DOM (compatibility + diagnostics) but are not part of
+   the default everyday interface. */
+.mode-buttons { display: none !important; }
+/* Model routing is a diagnostic, not a default-surface fact. It remains in
+   the collapsed status Details popover. */
+#model-badge { display: none !important; }
+.model-suitability-summary { min-width: 0; max-width: 42ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; color: var(--vscode-descriptionForeground); }
+
+/* One composer only: the unified input is always available; the legacy
+   autonomous composer is retired from the visible interface (its DOM remains
+   for programmatic compatibility). */
+#autonomous-composer { display: none !important; }
+#input-area { display: flex !important; flex-direction: column; gap: var(--kd-space-2); }
+
+/* ── Recommendation chip (legacy full-width row removed from view) ── */
+#everyday-reco-row, .everyday-reco-row { display: none !important; }
+.everyday-reco-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.everyday-reco-label { font-weight: 600; font-size: 12px; }
+.everyday-reco-reason { font-size: 11px; color: var(--vscode-descriptionForeground); }
+.everyday-mode-options { display: flex; gap: 4px; flex-wrap: wrap; }
+.everyday-mode-option { font-size: 11px; padding: 3px 8px; border-radius: 999px; border: 1px solid var(--kd-border); background: transparent; color: var(--vscode-foreground); cursor: pointer; }
+.everyday-mode-option:hover { background: var(--vscode-list-hoverBackground); }
+.everyday-mode-option.active { background: var(--vscode-button-background); color: var(--vscode-button-foreground); border-color: var(--vscode-button-background); }
+.everyday-mode-option:focus-visible { outline: 1px solid var(--vscode-focusBorder); outline-offset: 1px; }
+
+/* ── Panda identity surfaces (approved assets under media/panda/) ──
+   Fixed square boxes on every panda surface: the image and its
+   currentColor SVG fallback occupy the same reserved space in light and
+   dark themes, so swaps never shift layout. */
+.kd-panda-icon--welcome { width: 56px; height: 56px; display: inline-block; margin: 0 auto 4px; }
+.kd-panda-icon--phase { width: 20px; height: 20px; flex: 0 0 auto; align-self: center; }
+.kd-panda-icon--outcome { width: 28px; height: 28px; justify-self: start; }
+.kd-panda-icon--history { width: 40px; height: 40px; display: block; margin: 2px auto 4px; }
+.ambient-placeholder { text-align: center; }
+
+/* ── Progress strip (fixed phase vocabulary) ── */
+/* Durable Conversational Continuity V1 — the resumed-objective cue. */
+.everyday-continuity { padding: 5px 8px; border-radius: var(--kd-radius); font-size: 11px; color: var(--vscode-descriptionForeground); background: var(--vscode-editorWidget-background, var(--vscode-input-background)); border-left: 3px solid var(--vscode-charts-blue, var(--vscode-focusBorder)); }
+.everyday-continuity.is-stale { border-left-color: var(--vscode-editorWarning-foreground, #d29922); }
+.everyday-phase { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px; padding: 5px 8px; border-radius: var(--kd-radius); background: var(--vscode-editorWidget-background, var(--vscode-input-background)); border-left: 3px solid var(--vscode-progressBar-background, var(--vscode-focusBorder)); }
+.everyday-phase-label { font-weight: 600; font-size: 12px; }
+.everyday-phase-sentence { font-size: 11px; color: var(--vscode-descriptionForeground); }
+.everyday-phase.is-completed { border-left-color: var(--vscode-testing-iconPassed, #2ea043); }
+.everyday-phase.is-blocked { border-left-color: var(--vscode-editorError-foreground, #f85149); }
+
+/* ── Outcome / blocker cards ── */
+.everyday-outcome-card { display: grid; gap: var(--kd-space-2); padding: var(--kd-space-2); margin-bottom: var(--kd-space-2); border: 1px solid var(--kd-border); border-radius: var(--kd-radius); background: var(--vscode-editorWidget-background, var(--vscode-input-background)); }
+.everyday-outcome-card.is-success { border-left: 3px solid var(--vscode-testing-iconPassed, #2ea043); }
+.everyday-outcome-card.is-blocked { border-left: 3px solid var(--vscode-editorError-foreground, #f85149); }
+.everyday-blocker-actions { display: flex; flex-wrap: wrap; gap: var(--kd-space-1); margin-top: var(--kd-space-1); }
+.everyday-guidance-form { display: grid; gap: var(--kd-space-1); margin-top: var(--kd-space-1); width: 100%; }
+.everyday-guidance-input { width: 100%; box-sizing: border-box; resize: vertical; min-height: 48px; padding: 6px; font-family: inherit; font-size: 12px; background: var(--vscode-input-background); color: var(--vscode-input-foreground); border: 1px solid var(--vscode-input-border, var(--kd-border)); border-radius: var(--kd-radius); }
+.everyday-guidance-input:focus { outline: 1px solid var(--vscode-focusBorder); outline-offset: -1px; }
+.everyday-guidance-actions { display: flex; gap: var(--kd-space-1); }
+.everyday-outcome-headline { font-size: 13px; line-height: 1.4; }
+.everyday-evidence { display: grid; gap: 4px; }
+.everyday-evidence-row { display: grid; grid-template-columns: minmax(90px, 130px) 1fr; gap: 8px; font-size: 12px; }
+.everyday-evidence-label { color: var(--vscode-descriptionForeground); }
+.everyday-evidence-value { overflow-wrap: anywhere; }
+
+/* ── Collapsed diagnostics ── */
+.everyday-details summary { font-size: 11px; color: var(--vscode-descriptionForeground); cursor: pointer; padding: 2px 0; }
+.everyday-details-json { max-height: 260px; overflow: auto; font-size: 11px; background: var(--vscode-textCodeBlock-background, rgba(128,128,128,.1)); padding: 6px; border-radius: var(--kd-radius); }
+.everyday-diagnostic-ids span { display: block; font-size: 11px; color: var(--vscode-descriptionForeground); overflow-wrap: anywhere; }
+
+/* ── Durable task history ── */
+.everyday-history-status { font-size: 11px; color: var(--vscode-descriptionForeground); padding: 2px 0 6px; }
+.everyday-history-list { display: grid; gap: 6px; margin-bottom: var(--kd-space-2); }
+.everyday-history-item { border: 1px solid var(--kd-border); border-radius: var(--kd-radius); overflow: hidden; }
+.everyday-history-header { display: grid; gap: 3px; width: 100%; text-align: left; padding: 6px 8px; background: transparent; border: none; color: var(--vscode-foreground); cursor: pointer; }
+.everyday-history-header:hover { background: var(--vscode-list-hoverBackground); }
+.everyday-history-header:focus-visible { outline: 1px solid var(--vscode-focusBorder); outline-offset: -1px; }
+.everyday-history-request { font-size: 12px; font-weight: 600; overflow-wrap: anywhere; }
+.everyday-history-meta { display: flex; flex-wrap: wrap; gap: 6px; font-size: 10px; color: var(--vscode-descriptionForeground); }
+.everyday-history-phase { padding: 0 6px; border-radius: 999px; border: 1px solid var(--kd-border); }
+.everyday-history-phase.phase-completed { color: var(--vscode-testing-iconPassed, #2ea043); border-color: currentColor; }
+.everyday-history-phase.phase-blocked { color: var(--vscode-editorError-foreground, #f85149); border-color: currentColor; }
+.everyday-history-outcome { font-size: 11px; color: var(--vscode-descriptionForeground); }
+.everyday-history-body { padding: 6px 8px; border-top: 1px solid var(--kd-border); font-size: 11px; }
+.everyday-history-timeline { display: grid; gap: 4px; }
+.everyday-history-step { display: grid; gap: 1px; padding-left: 10px; border-left: 2px solid var(--kd-border); }
+.everyday-history-step.is-approval { border-left-color: var(--vscode-focusBorder); }
+.everyday-history-step.is-completed { border-left-color: var(--vscode-testing-iconPassed, #2ea043); }
+.everyday-history-step.is-blocked, .everyday-history-step.is-stopped { border-left-color: var(--vscode-editorError-foreground, #f85149); }
+.everyday-history-step-time { font-size: 10px; color: var(--vscode-descriptionForeground); }
+
+/* ── Approval-card plain language ── */
+.everyday-approval-why { font-size: 11px; color: var(--vscode-descriptionForeground); margin: 4px 0; }
+.everyday-approval-scope { font-size: 11px; font-weight: 600; margin: 4px 0; }
+
+/* Simplified conversational autonomous task surface.
+ * Progress & Completion UX V1 (Step 10): this card renders Karke Dikha's
+ * OWN resolved/frozen goal — which, on a continued objective, includes
+ * constraints carried forward from earlier turns (see
+ * ConversationContinuity.ts#formatCarriedConstraints). That text was never
+ * typed verbatim by the user for THIS turn, so it must never look like a
+ * chat bubble the user sent: no `.bubble`/`.user` class, no right-aligned
+ * "outgoing message" shape. The literal text the user actually typed keeps
+ * rendering in its own ordinary `.bubble.user` chat bubble, untouched. */
+.kd-objective-card {
+  align-self: stretch;
+  width: auto;
+  max-width: none;
+  margin: var(--kd-space-2) 0 var(--kd-space-1);
+  padding: 8px 11px;
+  border-radius: var(--kd-radius);
+  border-left: 3px solid var(--vscode-charts-purple, var(--vscode-focusBorder));
+  background: var(--vscode-editorWidget-background, var(--vscode-input-background));
+}
+.kd-objective-card .kd-objective-label {
+  display: block;
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: .04em;
+  color: var(--vscode-descriptionForeground);
+  margin-bottom: 2px;
+}
+.kd-objective-card p { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+.kd-objective-constraints { margin: 6px 0 0; padding-left: 16px; font-size: 11px; color: var(--vscode-descriptionForeground); }
+.kd-objective-constraints li { margin: 2px 0; }
+.autonomous-status:not([hidden]) {
+  display: flex;
+  flex-direction: column;
+  gap: var(--kd-space-2);
+  min-height: 0;
+  margin: 0 0 var(--kd-space-2);
+  padding: var(--kd-space-2) 0 0;
+  border: 0;
+}
+.autonomous-status-header { order: 0; min-height: 0; }
+.autonomous-status-header .kd-panda-icon--status {
+  width: 72px;
+  height: 72px;
+  flex: 0 0 72px;
+}
+.autonomous-status-header .kd-panda-img,
+.autonomous-status-header .kd-panda-fallback {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+.kd-task-line { order: 1; font-size: 13px; line-height: 1.45; }
+.kd-pinned-approval-slot { order: 2; }
+.kd-task-details { order: 3; }
+.kd-task-details > summary {
+  width: fit-content;
+  padding: 2px 0;
+  color: var(--vscode-descriptionForeground);
+  font-size: 11px;
+  cursor: pointer;
+}
+.kd-task-details .autonomous-summary {
+  margin-top: var(--kd-space-2);
+  padding: var(--kd-space-2) 0;
+}
+.kd-task-details .autonomous-timeline {
+  max-height: none;
+  overflow: visible;
+}
+.autonomous-status > .everyday-outcome-card { order: 4; margin-bottom: 0; }
+body[data-mode="autonomous"] .status-row-summary,
+body[data-mode="autonomous"] #model-suitability-summary,
+body[data-mode="autonomous"] #model-badge,
+body[data-mode="autonomous"] .status-row > #stop-btn,
+body[data-mode="autonomous"] #everyday-phase,
+body[data-autonomous-task-active="true"] .status-row-summary,
+body[data-autonomous-task-active="true"] #model-suitability-summary,
+body[data-autonomous-task-active="true"] #model-badge,
+body[data-autonomous-task-active="true"] .status-row > #stop-btn,
+body[data-autonomous-task-active="true"] #everyday-phase {
+  display: none !important;
+}
+
+.repo-health-warning {
+  margin: var(--kd-space-2) 0;
+  padding: 8px 12px;
+  border-radius: var(--kd-radius);
+  border: 1px solid var(--vscode-editorWarning-foreground, #cca700);
+  background: var(--vscode-inputValidation-warningBackground, rgba(204, 167, 0, 0.1));
+  font-size: 12px;
+}
+.repo-health-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.repo-health-icon {
+  color: var(--vscode-editorWarning-foreground, #cca700);
+  font-weight: bold;
+}
+.repo-health-text {
+  flex: 1;
+}
+.repo-health-details {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--vscode-editorWarning-foreground, #cca700);
+}
+.repo-health-details code {
+  display: block;
+  margin-top: 4px;
+  padding: 4px 8px;
+  border-radius: 3px;
+  background: var(--vscode-textCodeBlock-background);
+  font-family: var(--vscode-editor-font-family);
+}
+.kd-developer-diagnostics {
+  margin-top: var(--kd-space-2);
+  padding: var(--kd-space-1) 0;
+}
+.kd-developer-diagnostics summary {
+  color: var(--vscode-descriptionForeground);
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.everyday-technical-details {
+  margin-top: var(--kd-space-2);
+  padding: 4px 0;
+  border-top: 1px solid var(--kd-border);
+}
+.everyday-technical-details summary {
+  color: var(--vscode-descriptionForeground);
+  font-size: 11px;
+  cursor: pointer;
+}
+.everyday-technical-content {
+  margin-top: 6px;
+  padding: 6px;
+  background: var(--vscode-textCodeBlock-background);
+  border-radius: 3px;
+  font-size: 11px;
+}
+.technical-code-row {
+  font-weight: 600;
+  margin-bottom: 4px;
+}
+.technical-msg-row {
+  color: var(--vscode-descriptionForeground);
+}
+
+/* ── KarkeDikha UX Hardening: Conversational Canvas Styling ──────────────── */
+.chat-messages,
+#messages {
+  max-width: 880px;
+  width: 100%;
+  margin: 0 auto;
+  box-sizing: border-box;
+  padding: 16px 12px;
+  gap: 16px;
+}
+
+/* Assistant messages sit directly on the conversational canvas (ChatGPT / Claude / Gemini style) */
+.bubble.assistant {
+  align-self: flex-start;
+  width: 100%;
+  max-width: 100%;
+  border: none !important;
+  border-radius: 0 !important;
+  background: transparent !important;
+  box-shadow: none !important;
+  padding: 4px 6px 12px 6px !important;
+  color: var(--vscode-foreground, #cccccc);
+  line-height: 1.65;
+}
+
+.bubble.user {
+  align-self: flex-end;
+  max-width: min(85%, 680px);
+  padding: 10px 14px;
+  border-radius: 12px 12px 2px 12px;
+  background: var(--vscode-button-background, #007acc);
+  color: var(--vscode-button-foreground, #ffffff);
+  border: 1px solid var(--vscode-button-border, rgba(255, 255, 255, 0.1));
+}
+
+/* Minimal conversational footer on assistant messages */
+.message-actions-bar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 8px;
+  padding-top: 4px;
+  position: relative;
+}
+
+.message-action-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 8px;
+  font-size: 11px;
+  font-family: inherit;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--vscode-descriptionForeground, #888888);
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.message-action-btn:hover {
+  color: var(--vscode-foreground, #ffffff);
+  background: var(--vscode-toolbar-hoverBackground, rgba(255, 255, 255, 0.08));
+}
+
+.message-overflow-container {
+  position: relative;
+  display: inline-flex;
+}
+
+.message-overflow-popover {
+  position: absolute;
+  bottom: calc(100% + 4px);
+  left: 0;
+  background: var(--vscode-editorWidget-background, #252526);
+  border: 1px solid var(--vscode-editorWidget-border, #454545);
+  border-radius: 6px;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.35);
+  padding: 4px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  z-index: 100;
+  min-width: 140px;
+}
+
+.message-overflow-popover .overflow-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  padding: 5px 8px;
+  font-size: 11px;
+  text-align: left;
+  background: transparent;
+  border: none;
+  border-radius: 4px;
+  color: var(--vscode-foreground, #cccccc);
+  cursor: pointer;
+}
+
+.message-overflow-popover .overflow-item:hover {
+  background: var(--vscode-list-hoverBackground, rgba(255, 255, 255, 0.08));
+  color: var(--vscode-foreground, #ffffff);
+}
+
+.message-overflow-popover .overflow-item.active {
+  color: var(--vscode-textLink-foreground, #3794ff);
+  font-weight: 500;
+}
+
+.message-overflow-popover .overflow-divider {
+  height: 1px;
+  margin: 3px 0;
+  background: var(--vscode-editorWidget-border, #454545);
+}
+
+/* ── Compact Composer-integrated Mode Selector ──────────────────────────── */
+.compact-mode-container {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  flex-shrink: 0;
+}
+
+.compact-mode-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 8px;
+  height: 26px;
+  font-size: 11px;
+  font-weight: 500;
+  border-radius: 5px;
+  border: 1px solid var(--vscode-input-border, #3c3c3c);
+  background: var(--vscode-input-background, rgba(255, 255, 255, 0.04));
+  color: var(--vscode-foreground, #cccccc);
+  cursor: pointer;
+  transition: background 0.15s ease, border-color 0.15s ease;
+  white-space: nowrap;
+}
+
+.compact-mode-btn:hover {
+  background: var(--vscode-toolbar-hoverBackground, rgba(255, 255, 255, 0.08));
+  border-color: var(--vscode-focusBorder, #007acc);
+}
+
+.compact-mode-caret {
+  font-size: 10px;
+  opacity: 0.7;
+}
+
+.compact-mode-popover {
+  position: absolute;
+  bottom: calc(100% + 6px);
+  left: 0;
+  width: 250px;
+  background: var(--vscode-editorWidget-background, #252526);
+  border: 1px solid var(--vscode-editorWidget-border, #454545);
+  border-radius: 8px;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.4);
+  padding: 4px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  z-index: 200;
+}
+
+.compact-mode-option {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  padding: 6px 10px;
+  border: none;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--vscode-foreground, #cccccc);
+  text-align: left;
+  cursor: pointer;
+  transition: background 0.12s ease;
+}
+
+.compact-mode-option:hover {
+  background: var(--vscode-list-hoverBackground, rgba(255, 255, 255, 0.08));
+}
+
+.compact-mode-option.active {
+  background: var(--vscode-list-activeSelectionBackground, rgba(0, 122, 204, 0.25));
+  color: var(--vscode-list-activeSelectionForeground, #ffffff);
+}
+
+.compact-mode-option strong {
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.compact-mode-option .mode-desc {
+  font-size: 10px;
+  color: var(--vscode-descriptionForeground, #888888);
+  margin-top: 2px;
+  line-height: 1.3;
+}
+
+/* ── Resumed-conversation notice ────────────────────────────────────────── */
+.everyday-continuity {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+  margin: 6px 12px;
+  background: var(--vscode-editorInfo-background, rgba(55, 148, 255, 0.1));
+  border: 1px solid var(--vscode-editorInfo-foreground, rgba(55, 148, 255, 0.3));
+  border-radius: 6px;
+  font-size: 11px;
+  color: var(--vscode-foreground, #cccccc);
+}
+
+.continuity-icon {
+  font-size: 12px;
+  color: var(--vscode-editorInfo-foreground, #3794ff);
+}
+
+.continuity-text {
+  flex: 1;
+  line-height: 1.4;
+}
+
+.continuity-dismiss {
+  background: transparent;
+  border: none;
+  color: var(--vscode-descriptionForeground, #888888);
+  cursor: pointer;
+  padding: 2px 4px;
+  border-radius: 3px;
+  font-size: 11px;
+  line-height: 1;
+}
+
+.continuity-dismiss:hover {
+  color: var(--vscode-foreground, #ffffff);
+  background: var(--vscode-toolbar-hoverBackground, rgba(255, 255, 255, 0.1));
+}
+
+/* ── Autonomous Conversational Progress ────────────────────────────── */
+.autonomous-conversational-progress {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px 12px;
+  margin: 6px 0 10px 0;
+  border-radius: 6px;
+  font-family: var(--vscode-font-family, inherit);
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+.conversational-progress-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--vscode-foreground, #cccccc);
+  padding: 2px 0;
+  word-break: break-word;
+}
+
+.conversational-progress-item.status-success {
+  color: var(--vscode-testing-iconPassed, #73c991);
+}
+
+.conversational-progress-item.status-failure {
+  color: var(--vscode-testing-iconFailed, #f14c4c);
+}
+
+.conversational-progress-item.status-waiting {
+  color: var(--vscode-editorWarning-foreground, #cca700);
+  font-weight: 500;
+}
+
+.conversational-progress-item.status-in-progress {
+  color: var(--vscode-descriptionForeground, #999999);
+}

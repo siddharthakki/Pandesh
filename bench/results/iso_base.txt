@@ -1,0 +1,13 @@
+ FAIL  core/test/validationInvariantAndReplacementGuard.test.ts > C. Golden-only raw model evidence > writes nothing when not enabled (normal runs)
+ FAIL  core/test/validationInvariantAndReplacementGuard.test.ts > C. Golden-only raw model evidence > writes raw reply, parsed arguments and parser fa
+ FAIL  src/test/suite/baatKarCoreDurability.test.ts > Baat Kar / Saath Kar Core execution cutover (M32 correction) > a whole-repository inspection of 
+ FAIL  src/test/suite/baatKarCoreDurability.test.ts > Baat Kar / Saath Kar Core execution cutover (M32 correction) > a whole-repository inspection of 
+ FAIL  src/test/suite/baatKarCoreDurability.test.ts > Baat Kar / Saath Kar Core execution cutover (M32 correction) > builds bounded repository context
+ FAIL  src/test/suite/baatKarCoreDurability.test.ts > Baat Kar / Saath Kar Core execution cutover (M32 correction) > fails closed (Phase 2 grounding c
+ FAIL  src/test/suite/baatKarCoreDurability.test.ts > Baat Kar / Saath Kar Core execution cutover (M32 correction) > fails closed when the repository 
+ FAIL  src/test/suite/composerLifecycleAndNewChatReset.test.ts > New Chat is a hard presentation reset > drops late events from the previous task/run 
+ FAIL  src/test/suite/composerLifecycleAndNewChatReset.test.ts > New Chat is a hard presentation reset > leaves no task, stage, header, work panel or 
+ FAIL  src/test/suite/composerLifecycleAndNewChatReset.test.ts > composer lifecycle while work is running > keeps the composer editable and never send
+ FAIL  src/test/suite/governedNeonContinuity.test.ts > governed neon release contracts > renders a real Saath Kar panda panel with a six-stage Kaam ka
+ FAIL  src/test/suite/m12RetrievalIntegrationPackaging.test.ts > M12 retrieval, integration, git isolation, and packaged runtime > packages into a tes
+ FAIL  src/test/suite/m33EverydayExperience.test.ts > M33 unified composer surface (media/chat.html + chat-everyday.js) > ships the recommendation chi

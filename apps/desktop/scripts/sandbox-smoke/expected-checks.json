@@ -1,0 +1,32 @@
+{
+  "description": "Every check the guest must report, each required to be PASS. The host rejects a report that lacks any of these names, repeats one, or contains an unlisted name, so a crashed or truncated guest run can never pass.",
+  "requiredChecks": [
+    "SandboxBoot",
+    "CleanEnvironment",
+    "InstallerIntegrity",
+    "UserDataSentinelSeeded",
+    "InstallerExecution",
+    "UnrelatedProcessSurvivesInstall",
+    "InstallPaths",
+    "Shortcuts",
+    "ProhibitedPackagedFiles",
+    "CredentialMaterial",
+    "PiDependencyImport",
+    "CoreHealth",
+    "CoreAuthenticatedApi",
+    "DesktopCoreConnected",
+    "MissingOllamaHandling",
+    "UnrelatedProcessSurvivesAppStart",
+    "UnauthorizedKillProcessRejected",
+    "UnauthorizedPortControlRejected",
+    "UnauthorizedPortCleanupRejected",
+    "UnattendedMachineControlRejected",
+    "UnauthorizedShellBypassRejected",
+    "UnrelatedProcessSurvivesShutdown",
+    "BuildIdentityConsistent",
+    "UserDataAfterRun",
+    "UninstallRemovesProgram",
+    "UserDataAfterUninstall",
+    "NetworkIsolation"
+  ]
+}
