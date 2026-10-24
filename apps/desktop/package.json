@@ -11,5 +11,8 @@
   "devDependencies": {
     "electron": "33.4.11",
     "rcedit": "^5.0.2"
+  },
+  "overrides": {
+    "yauzl": "^3.3.1"
   }
 }

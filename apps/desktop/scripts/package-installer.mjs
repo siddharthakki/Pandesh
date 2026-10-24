@@ -128,6 +128,7 @@ async function ensureInnoSetup(pin) {
     '/VERYSILENT',
     '/SUPPRESSMSGBOXES',
     '/NORESTART',
+    '/CURRENTUSER',
     `/DIR=${extractDir}`,
   ], { stdio: 'inherit', windowsHide: true });
   if (extract.status !== 0 || !fs.existsSync(iscc)) {
