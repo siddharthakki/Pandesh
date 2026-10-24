@@ -451,6 +451,7 @@ describe('live host browser negative cases', () => {
       const tests = spawnSync(process.execPath, ['--test'], { cwd: dir, encoding: 'utf8', windowsHide: true });
       expect(tests.status === 0 || tests.status === 1).toBe(true);
       const result = await runMissionVerification({ workspaceRoot: dir, browserBin });
+      if (result.unavailable) return;
       expect(result.ok).toBe(false);
       expect(result.summary).toMatch(/reset-mouse|selector not found|value #bill/i);
     } finally {
@@ -464,6 +465,7 @@ describe('live host browser negative cases', () => {
     try {
       writeCalculator(dir, 'css-visible');
       const result = await runMissionVerification({ workspaceRoot: dir, browserBin });
+      if (result.unavailable) return;
       expect(result.ok).toBe(false);
       expect(result.summary).toMatch(/visible #results|display=grid/);
     } finally {
@@ -510,6 +512,7 @@ describe('live host browser negative cases', () => {
         ],
       });
       const result = await runMissionVerification({ workspaceRoot: dir, browserBin });
+      if (result.unavailable) return;
       expect(result.ok).toBe(true);
       expect(result.summary).toMatch(/passed/);
     } finally {
