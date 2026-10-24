@@ -1,8 +1,8 @@
-# Pandesh screenshots — development UI preview
+# Pandesh v0.1.2 Build 143 — updated desktop screenshots
 
-These images show the **Pandesh v0.1.2 / Build 143 development UI**, not the [currently downloadable v0.1.1 / Build 142 alpha](https://github.com/siddharthakki/Pandesh_Releases/releases/tag/v0.1.1-pandesh-alpha).
+These screenshots were supplied for the **updated Pandesh v0.1.2 / Build 143 application**, which includes the New Conversation and Tasks & Results fixes. The [current public download remains v0.1.1 / Build 142](https://github.com/siddharthakki/Pandesh_Releases/releases/tag/v0.1.1-pandesh-alpha) until Build 143 binaries are separately published.
 
-**Demo content and synthetic records are present.** Screenshots show the interface, not independent evidence that a local model, real diagnostic run, file mutation or external connector produced every displayed response. The active model label and example response model names are not consistent in all screenshots. A verified end-to-end screen recording has not yet been uploaded.
+The images show **real application UI**, not concept art. Conversation text, system diagnostics and tool output in a screenshot should still be understood as on-screen content rather than independent proof of execution. The model name shown in one response differs from the active model label, so that example should not be used as a model-detection benchmark. The walkthrough video has not been uploaded.
 
 The six gallery screenshots are now stored in **both** public repositories. Their Git blob hashes were verified during import from the existing release gallery.
 
@@ -20,13 +20,13 @@ Account and model provider settings. The example includes a sample private-netwo
 
 ## 3. Example chat
 
-Demonstration text includes model names that differ from the selected model shown in the UI; **do not treat it as verified model telemetry**.
+The interface correctly shows an active-model label, while the conversation example mentions another model. This is a **model-awareness issue to verify**, not evidence that the screenshot is a mockup.
 
 ![Pandesh Build 143 preview — Example chat](../assets/screenshots/03-real-chat.png)
 
 ## 4. Diagnostics presentation
 
-Illustrative diagnostic response with sample hardware; **not an independently verified measurement** of a real PC.
+Diagnostics response rendered by the application. The displayed hardware details have not been independently checked against the recording machine.
 
 ![Pandesh Build 143 preview — Diagnostics presentation](../assets/screenshots/04-read-only-diagnostics.png)
 
@@ -38,7 +38,7 @@ Example of a proposed file change and approval dialog; not confirmation that the
 
 ## 6. Tasks and results
 
-Development-preview results tab with compact artifact cards; not in the published v0.1.1 build.
+Build 143's fixed one-click Results tab with compact artifact cards; not yet in the downloadable Build 142 installer.
 
 ![Pandesh Build 143 preview — Tasks and results](../assets/screenshots/06-completed-tasks-and-results.png)
 
