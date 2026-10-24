@@ -6,9 +6,9 @@ Looking for a **personal AI assistant for Windows**, an **Ollama desktop assista
 
 [**⬇ Download Windows Alpha**](https://github.com/siddharthakki/Pandesh_Releases/releases/tag/v0.1.1-pandesh-alpha) · [**📖 Start here**](https://github.com/siddharthakki/Pandesh_Releases/blob/main/docs/GETTING_STARTED.md) · [**🏗 Architecture**](docs/ARCHITECTURE.md) · [**🗺 Roadmap**](docs/ROADMAP.md) · [**🐛 Report an issue**](https://github.com/siddharthakki/Pandesh_Releases/issues)
 
-![Pandesh Panda desktop assistant — Build 143 development preview with demo data](assets/screenshots/01-welcome-chat.png)
+![Pandesh v0.1.2 Build 143 Panda desktop assistant — updated conversation interface](assets/screenshots/01-welcome-chat.png)
 
-<sub>Screenshot: v0.1.2 Build 143 development preview. Demo data is illustrative. The currently downloadable release is v0.1.1 Build 142.</sub>
+<sub>Actual Pandesh desktop interface from the fixed v0.1.2 Build 143. The separate public download still serves v0.1.1 Build 142 until the patch binaries are published.</sub>
 
 ## What is Pandesh?
 
@@ -46,7 +46,7 @@ For verified download checksums, permissions, troubleshooting and the full insta
 
 [![Pandesh Tasks and Results — direct Results view, Build 143 development preview](assets/screenshots/06-completed-tasks-and-results.png)](docs/SCREENSHOTS.md)
 
-<sub>Tasks & Results shown in a later development build. Screenshots include synthetic content and are not standalone execution evidence. A real walkthrough video has not yet been released.</sub>
+<sub>Build 143 fixes New Conversation navigation and introduces direct Tasks / Results tabs. Screenshots show the updated application; the visual examples are not substitutes for executable acceptance tests. The walkthrough video has not yet been published.</sub>
 
 ## Architecture and principles
 
