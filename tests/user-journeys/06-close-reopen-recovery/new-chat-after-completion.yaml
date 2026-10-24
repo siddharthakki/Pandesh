@@ -1,0 +1,20 @@
+schemaVersion: 2
+id: new-chat-after-completion
+title: New chat after completion owns an empty composer
+priority: P1
+p1Index: 15
+suites: [p1, lifecycle, full]
+driver: p1-lifecycle
+profilePolicy: fresh
+requiresApprovals: true
+prompt: create completed-before-new-chat.txt containing Complete
+lifecycle: [governed completion, visible New chat, History retention]
+steps:
+  - select Karke Dikha and submit through the visible unified composer and visible Send control
+  - approve proposal mutation and delivery through visible controls then use visible New chat and open History
+assertions:
+  - the new current conversation is empty and the completed conversation remains in History
+  - old task approval Stop and steering ownership do not leak into the new composer
+result: { file: completed-before-new-chat.txt, content: Complete, terminalState: completed }
+checks: { visibleUi: true, route: true, durableState: true, filesystem: true, git: true }
+evidence: [old and new conversation IDs, task and attempt IDs, DOM, screenshots, exact file hash, Git, logs, and JUnit]

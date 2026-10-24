@@ -1,0 +1,5 @@
+# Keep executable shell scripts usable from WSL even when the repository is checked out on Windows.
+*.sh text eol=lf
+
+# This source intentionally contains literal NUL fingerprint delimiters.
+src/coding/ChangeScopeReconciliation.ts diff

@@ -1,0 +1,20 @@
+schemaVersion: 2
+id: steering-after-close
+title: Steering after full close and reopen preserves task ownership
+priority: P1
+p1Index: 11
+suites: [p1, lifecycle, full]
+driver: p1-lifecycle
+profilePolicy: same
+requiresApprovals: true
+prompt: create note.txt containing Hello
+lifecycle: [proposal pending, close VS Code, reopen same profile and workspace, visible steering, revised completion]
+steps:
+  - select Karke Dikha and submit through the visible unified composer and visible Send control
+  - close every test-owned VS Code window, reopen the same profile, steer with Use greeting.txt instead, and approve through visible controls
+assertions:
+  - close and reopen retain exact task attempt and approval ownership while revision advances
+  - only greeting.txt is delivered and no stale control or Baat Kar answer appears
+result: { file: greeting.txt, content: Hello, absentFile: note.txt, terminalState: completed }
+checks: { visibleUi: true, route: true, durableState: true, filesystem: true, git: true, restartResult: true }
+evidence: [task attempt revision and approval IDs, DOM, screenshots, events, exact files, Git, process exits, logs, and JUnit]

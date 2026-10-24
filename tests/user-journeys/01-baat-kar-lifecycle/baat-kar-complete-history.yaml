@@ -1,0 +1,21 @@
+schemaVersion: 2
+id: baat-kar-complete-history
+title: Baat Kar answers, starts a new chat, and restores completed History
+priority: P1
+p1Index: 1
+suites: [p1, lifecycle, full]
+driver: p1-lifecycle
+profilePolicy: same
+requiresApprovals: false
+prompt: Explain what this repository contains.
+lifecycle: [first Baat Kar turn, completion, close VS Code, reopen same profile and workspace, return from History]
+steps:
+  - select Baat Kar and submit through the visible unified composer and visible Send control
+  - close every test-owned VS Code window and reopen the same named profile and workspace
+  - open History through the visible UI and select the completed conversation
+assertions:
+  - one request and one answer exist with no task, worktree, approval, filesystem mutation, or Git mutation
+  - History restores the exact conversation once and new chat remains independent
+result: { terminalState: answered }
+checks: { visibleUi: true, route: true, durableState: true, filesystem: true, git: true, restartResult: true }
+evidence: [mode and route projection, conversation IDs, DOM, screenshots, files, Git, logs, and JUnit]

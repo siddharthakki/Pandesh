@@ -1,0 +1,145 @@
+{
+ "root": "C:\\Projects\\awesome-llm-apps",
+ "node": "v24.16.0",
+ "cold": {
+  "readyMs": 1460,
+  "firstUsableMs": 182,
+  "files": 1767,
+  "symbols": 3728,
+  "rssDeltaMb": 39
+ },
+ "warm": {
+  "readyMs": 405,
+  "restored": 921,
+  "parsed": 0,
+  "skipped": 921
+ },
+ "queries": [
+  {
+   "id": "M1 who calls fn (py)",
+   "kind": "refs",
+   "engine": {
+    "p50": 147.7,
+    "p95": 171,
+    "tokens": 219,
+    "fileRecall": 1,
+    "textRecall": 1,
+    "files": [
+     "advanced_ai_agents/multi_agent_apps/devpulse_ai/adapters/github.py",
+     "advanced_ai_agents/multi_agent_apps/devpulse_ai/main.py",
+     "advanced_ai_agents/multi_agent_apps/devpulse_ai/main.py",
+     "advanced_ai_agents/multi_agent_apps/devpulse_ai/adapters/github.py",
+     "advanced_ai_agents/multi_agent_apps/devpulse_ai/streamlit_app.py",
+     "advanced_ai_agents/multi_agent_apps/devpulse_ai/streamlit_app.py"
+    ]
+   },
+   "rg": {
+    "p50": 114.6,
+    "tokens": 1373,
+    "fileRecall": 1,
+    "textRecall": 1
+   }
+  },
+  {
+   "id": "M2 definition (py)",
+   "kind": "defs",
+   "engine": {
+    "p50": 0,
+    "p95": 0.1,
+    "tokens": 19,
+    "fileRecall": 1,
+    "textRecall": 1,
+    "files": [
+     "advanced_ai_agents/multi_agent_apps/devpulse_ai/adapters/arxiv.py"
+    ]
+   },
+   "rg": {
+    "p50": 116.8,
+    "tokens": 1376,
+    "fileRecall": 1,
+    "textRecall": 1
+   }
+  },
+  {
+   "id": "M3 break if modify",
+   "kind": "impact",
+   "engine": {
+    "p50": 152.3,
+    "p95": 178.1,
+    "tokens": 308,
+    "fileRecall": 1,
+    "textRecall": 1,
+    "files": [
+     "rag_tutorials/agentic_typed_rag_pydanticai/app.py",
+     "rag_tutorials/agentic_typed_rag_pydanticai/rag.py",
+     "rag_tutorials/autonomous_rag/autorag.py",
+     "advanced_ai_agents/multi_agent_apps/ai_news_and_podcast_agents/web/src/App.test.js",
+     "rag_tutorials/agentic_typed_rag_pydanticai/test_typed_rag.py",
+     "rag_tutorials/agentic_typed_rag_pydanticai/app.py"
+    ]
+   },
+   "rg": {
+    "p50": 120.8,
+    "tokens": 1595,
+    "fileRecall": 1,
+    "textRecall": 1
+   }
+  },
+  {
+   "id": "M4 where is X (arch)",
+   "kind": "arch",
+   "engine": {
+    "p50": 8,
+    "p95": 13.3,
+    "tokens": 6000,
+    "fileRecall": 1,
+    "textRecall": 1,
+    "files": [
+     "advanced_llm_apps/thinkpath_chatbot_app/main.js",
+     "advanced_ai_agents/multi_agent_apps/devpulse_ai/main.py",
+     "advanced_ai_agents/single_agent_apps/earnings_call_analyst_agent/live_demo/server.py",
+     "advanced_ai_agents/multi_agent_apps/devpulse_ai/adapters/huggingface.py",
+     "advanced_ai_agents/single_agent_apps/earnings_call_analyst_agent/research.py",
+     "rag_tutorials/agentic_typed_rag_pydanticai/rag.py"
+    ]
+   },
+   "rg": {
+    "p50": 121.2,
+    "tokens": 2039,
+    "fileRecall": 1,
+    "textRecall": 1
+   }
+  },
+  {
+   "id": "M5 how app works (map)",
+   "kind": "map",
+   "engine": {
+    "p50": 1.9,
+    "p95": 4.2,
+    "tokens": 1187,
+    "fileRecall": 0.5,
+    "textRecall": 1,
+    "files": [
+     "generative_ui_agents/ai-shadcn-component-generator/apps/ui/src/lib/utils.ts",
+     "advanced_ai_agents/multi_agent_apps/devpulse_ai/main.py",
+     "advanced_ai_agents/multi_agent_apps/ai_news_and_podcast_agents/beifong/db/config.py",
+     "advanced_ai_agents/multi_agent_apps/ai_news_and_podcast_agents/web/src/services/api.js",
+     "advanced_ai_agents/multi_agent_apps/ai_news_and_podcast_agents/beifong/db/agent_config_v2.py",
+     "advanced_ai_agents/multi_agent_apps/devpulse_ai/agents/__init__.py"
+    ]
+   },
+   "rg": {
+    "p50": 124.7,
+    "tokens": 433,
+    "fileRecall": 0,
+    "textRecall": 1
+   }
+  }
+ ],
+ "queryCpuMs": 656,
+ "rssMb": 173,
+ "incremental": {
+  "refreshMs": 2,
+  "newSymbolVisibleImmediately": true
+ }
+}

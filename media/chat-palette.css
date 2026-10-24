@@ -1,0 +1,96 @@
+/* Model palette + composer decision chips. Calm dark surfaces; accent only for the active row and selection. */
+.kd-pal-overlay {
+  position: fixed; inset: 0; z-index: 1000;
+  display: flex; align-items: flex-start; justify-content: center;
+  padding: 8vh 12px 12px;
+  background: color-mix(in srgb, var(--vscode-editor-background, #1e1e1e) 62%, transparent);
+  backdrop-filter: blur(1px);
+}
+.kd-palette {
+  width: min(700px, 100%); max-height: min(78vh, 640px);
+  display: flex; flex-direction: column;
+  background: var(--vscode-quickInput-background, var(--vscode-editorWidget-background, #252526));
+  color: var(--vscode-foreground);
+  border: 1px solid var(--vscode-widget-border, var(--vscode-panel-border, #454545));
+  border-radius: 8px; box-shadow: 0 10px 34px rgba(0, 0, 0, .45);
+  overflow: hidden;
+}
+.kd-pal-head { display: flex; align-items: center; justify-content: space-between; padding: 10px 14px 4px; }
+.kd-pal-title { font-size: 12px; letter-spacing: .05em; text-transform: uppercase; opacity: .75; font-weight: 600; }
+.kd-pal-close { background: transparent; border: 0; color: inherit; cursor: pointer; opacity: .7; font-size: 14px; padding: 2px 6px; }
+.kd-pal-close:hover { opacity: 1; }
+.kd-pal-search {
+  margin: 6px 14px 8px; padding: 9px 11px; font-size: 14px;
+  background: var(--vscode-input-background); color: var(--vscode-input-foreground);
+  border: 1px solid var(--vscode-input-border, var(--vscode-panel-border, #454545)); border-radius: 6px;
+}
+.kd-pal-search:focus { outline: 1px solid var(--vscode-focusBorder); outline-offset: -1px; }
+.kd-pal-filters { display: flex; flex-wrap: wrap; gap: 6px; padding: 0 14px 10px; }
+.kd-chip {
+  font-size: 12px; padding: 4px 11px; border-radius: 999px; cursor: pointer;
+  background: transparent; color: var(--vscode-foreground);
+  border: 1px solid var(--vscode-widget-border, var(--vscode-panel-border, #454545));
+}
+.kd-chip:hover { background: var(--vscode-list-hoverBackground); }
+.kd-chip.on { background: var(--vscode-button-background); color: var(--vscode-button-foreground); border-color: transparent; }
+.kd-pal-list { position: relative; overflow-y: auto; flex: 1 1 auto; min-height: 220px; max-height: 480px; border-top: 1px solid var(--vscode-panel-border, #333); }
+.kd-pal-header {
+  box-sizing: border-box; padding: 8px 14px 0; font-size: 11px; letter-spacing: .05em; text-transform: uppercase;
+  opacity: .65; font-weight: 600; background: var(--vscode-quickInput-background, var(--vscode-editorWidget-background, #252526));
+}
+.kd-pal-empty { box-sizing: border-box; padding: 10px 14px; opacity: .7; }
+.kd-pal-row { box-sizing: border-box; padding: 7px 36px 7px 14px; cursor: pointer; overflow: hidden; border-left: 3px solid transparent; }
+.kd-pal-row.active { background: var(--vscode-list-activeSelectionBackground, var(--vscode-list-hoverBackground)); }
+.kd-pal-row.selected { border-left-color: var(--vscode-focusBorder, #3794ff); }
+.kd-pal-primary { font-size: 14px; font-weight: 600; line-height: 1.3; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.kd-pal-secondary { font-size: 12px; opacity: .72; line-height: 1.3; font-family: var(--vscode-editor-font-family, monospace); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.kd-pal-meta { display: flex; align-items: center; gap: 6px; margin-top: 3px; font-size: 11px; flex-wrap: nowrap; overflow: hidden; }
+.kd-pal-provider { opacity: .85; margin-right: 2px; white-space: nowrap; }
+.kd-pal-ctx { opacity: .6; margin-left: 2px; }
+.kd-pal-check { position: absolute; right: 14px; top: 50%; transform: translateY(-50%); color: var(--vscode-focusBorder, #3794ff); font-weight: 700; }
+.kd-pal-row { }
+.kd-pal-foot { display: flex; justify-content: space-between; gap: 12px; padding: 7px 14px; font-size: 11px; opacity: .7; border-top: 1px solid var(--vscode-panel-border, #333); }
+
+/* Badges: text always carries the meaning; colour only reinforces it. */
+.kd-badge { font-size: 10px; font-weight: 600; letter-spacing: .04em; padding: 1px 6px; border-radius: 4px; border: 1px solid var(--vscode-widget-border, #555); opacity: .92; white-space: nowrap; }
+.kd-badge.b-local { color: #3fb950; border-color: color-mix(in srgb, #3fb950 55%, transparent); }
+.kd-badge.b-cloud { color: #a78bfa; border-color: color-mix(in srgb, #a78bfa 55%, transparent); }
+.kd-badge.b-free { color: #3fb950; border-color: color-mix(in srgb, #3fb950 55%, transparent); }
+.kd-badge.b-paid { color: #f85149; border-color: color-mix(in srgb, #f85149 55%, transparent); }
+.kd-badge.b-trial, .kd-badge.b-promo { color: #d29922; border-color: color-mix(in srgb, #d29922 55%, transparent); }
+.kd-badge.b-vision, .kd-badge.b-tools { color: #58a6ff; border-color: color-mix(in srgb, #58a6ff 55%, transparent); }
+.kd-badge.b-coding { color: #2dd4bf; border-color: color-mix(in srgb, #2dd4bf 55%, transparent); }
+.kd-badge.b-auto { color: var(--vscode-foreground); }
+
+/* Composer chips */
+.kd-chip-btn {
+  display: inline-flex; align-items: center; gap: 6px; max-width: 260px;
+  padding: 4px 10px; font-size: 12px; cursor: pointer; border-radius: 6px;
+  background: var(--vscode-dropdown-background); color: var(--vscode-dropdown-foreground);
+  border: 1px solid var(--vscode-dropdown-border, var(--vscode-panel-border, #454545));
+}
+.kd-chip-btn:hover { background: var(--vscode-list-hoverBackground); }
+.kd-chip-btn .kd-chip-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
+.kd-chip-btn[data-supervision="hands_off"] { border-color: color-mix(in srgb, #d29922 70%, transparent); }
+.kd-chip-btn .kd-chip-caret { opacity: .65; }
+.kd-composer-chips { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin: 0 0 6px; }
+.kd-supervision-wrap { position: relative; }
+.kd-supervision-popover {
+  position: absolute; bottom: calc(100% + 4px); left: 0; z-index: 30; min-width: 270px; padding: 4px;
+  background: var(--vscode-quickInput-background, var(--vscode-editorWidget-background, #252526));
+  border: 1px solid var(--vscode-widget-border, #454545); border-radius: 6px; box-shadow: 0 6px 20px rgba(0, 0, 0, .4);
+}
+.kd-supervision-option { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; width: 100%; text-align: left; padding: 7px 10px; border: 0; border-radius: 4px; background: transparent; color: inherit; cursor: pointer; }
+.kd-supervision-option:hover, .kd-supervision-option.active { background: var(--vscode-list-hoverBackground); }
+.kd-supervision-option .name { font-weight: 600; font-size: 12px; }
+.kd-supervision-option .desc { font-size: 11px; opacity: .7; }
+
+@media (max-width: 420px) {
+  .kd-pal-overlay { padding-top: 2vh; }
+  .kd-palette { max-height: 92vh; }
+  .kd-chip-btn { max-width: 100%; }
+}
+@media (prefers-reduced-motion: reduce) { .kd-pal-overlay { backdrop-filter: none; } }
+
+/* Mode selection lives in the composer; the header is status only. The hidden controls stay in the DOM for the scripts that sync them. */
+#mode-buttons { display: none; }

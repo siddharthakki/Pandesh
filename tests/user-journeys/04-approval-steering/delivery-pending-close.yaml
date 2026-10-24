@@ -1,0 +1,21 @@
+schemaVersion: 2
+id: delivery-pending-close
+title: Delivery approval restores once and delivers once after close
+priority: P1
+p1Index: 7
+suites: [p1, lifecycle, full]
+driver: p1-lifecycle
+profilePolicy: same
+requiresApprovals: true
+prompt: create pending-delivery.txt containing Delivered
+lifecycle: [proposal and mutation approved, delivery pending, close VS Code, reopen same profile and workspace, approve original delivery]
+steps:
+  - select Karke Dikha and submit through the visible unified composer and visible Send control
+  - approve proposal and mutation through visible controls, leave delivery pending, and close every test-owned VS Code window
+  - reopen the same profile and workspace and approve the restored delivery through visible controls
+assertions:
+  - isolated work is not delivered before approval and the same delivery approval restores once
+  - approval delivers the exact file exactly once with clean Git
+result: { file: pending-delivery.txt, content: Delivered, terminalState: completed }
+checks: { visibleUi: true, route: true, durableState: true, filesystem: true, git: true, restartResult: true }
+evidence: [task attempt approval and diff IDs, DOM, screenshots, task events, exact file hash, Git, process exits, logs, and JUnit]

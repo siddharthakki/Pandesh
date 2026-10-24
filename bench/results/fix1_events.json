@@ -1,0 +1,115 @@
+{
+ "root": "C:\\Users\\siddh\\AppData\\Local\\Temp\\kkd_ef_copy",
+ "node": "v24.16.0",
+ "cold": {
+  "readyMs": 147,
+  "firstUsableMs": 101,
+  "files": 1,
+  "symbols": 0,
+  "rssDeltaMb": 2
+ },
+ "warm": {
+  "readyMs": 145,
+  "restored": 0,
+  "parsed": 0,
+  "skipped": 0
+ },
+ "queries": [
+  {
+   "id": "E1 how app works",
+   "kind": "arch",
+   "engine": {
+    "p50": 98,
+    "p95": 106.7,
+    "tokens": 0,
+    "fileRecall": 0,
+    "textRecall": 0,
+    "files": []
+   },
+   "rg": {
+    "p50": 22.4,
+    "tokens": 1810,
+    "fileRecall": 1,
+    "textRecall": 0.5
+   }
+  },
+  {
+   "id": "E2 where persisted",
+   "kind": "arch",
+   "engine": {
+    "p50": 97.8,
+    "p95": 104.2,
+    "tokens": 0,
+    "fileRecall": 0,
+    "textRecall": 0,
+    "files": []
+   },
+   "rg": {
+    "p50": 22.1,
+    "tokens": 0,
+    "fileRecall": 0,
+    "textRecall": 0
+   }
+  },
+  {
+   "id": "E3 who calls fn",
+   "kind": "trace",
+   "engine": {
+    "p50": 34.5,
+    "p95": 35.7,
+    "tokens": 0,
+    "fileRecall": 0,
+    "textRecall": 0,
+    "files": []
+   },
+   "rg": {
+    "p50": 23.3,
+    "tokens": 753,
+    "fileRecall": 1,
+    "textRecall": 1
+   }
+  },
+  {
+   "id": "E4 validation logic",
+   "kind": "arch",
+   "engine": {
+    "p50": 102,
+    "p95": 108.5,
+    "tokens": 0,
+    "fileRecall": 0,
+    "textRecall": 0,
+    "files": []
+   },
+   "rg": {
+    "p50": 23.8,
+    "tokens": 0,
+    "fileRecall": 0,
+    "textRecall": 0
+   }
+  },
+  {
+   "id": "E5 break if modify",
+   "kind": "trace",
+   "engine": {
+    "p50": 34,
+    "p95": 38.4,
+    "tokens": 0,
+    "fileRecall": 0,
+    "textRecall": 0,
+    "files": []
+   },
+   "rg": {
+    "p50": 25,
+    "tokens": 998,
+    "fileRecall": 1,
+    "textRecall": 1
+   }
+  }
+ ],
+ "queryCpuMs": 765,
+ "rssMb": 97,
+ "incremental": {
+  "refreshMs": 0.5,
+  "newSymbolVisibleImmediately": false
+ }
+}

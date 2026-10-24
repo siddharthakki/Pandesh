@@ -1,0 +1,153 @@
+[
+ {
+  "id": "K1 how does app work",
+  "p50": 150,
+  "p95": 196,
+  "firstMs": 196,
+  "tokens": 5242,
+  "fileRecall": 0.5,
+  "textRecall": 1,
+  "type": "overview",
+  "grounded": true,
+  "files": [
+   "README.md",
+   "package.json",
+   "src/extension.ts",
+   "core/index.ts",
+   "src/webview-v2/App.tsx"
+  ]
+ },
+ {
+  "id": "K2 where persisted",
+  "p50": 233,
+  "p95": 250,
+  "firstMs": 250,
+  "tokens": 3080,
+  "fileRecall": 0,
+  "textRecall": 1,
+  "type": "conceptual",
+  "grounded": true,
+  "files": [
+   "src/agent/AgentEngineTypes.ts",
+   "src/agent/AgentStateMachine.ts",
+   "src/agent/LocalAgentEngine.ts",
+   "src/agent/ValidatedAgentRuntime.ts",
+   "src/agent/ConversationAwareAgentRuntime.ts",
+   "src/agent/AgentRuntime.ts"
+  ]
+ },
+ {
+  "id": "K3 who calls fn",
+  "p50": 227,
+  "p95": 237,
+  "firstMs": 226,
+  "tokens": 4901,
+  "fileRecall": 0,
+  "textRecall": 1,
+  "type": "usage",
+  "grounded": true,
+  "files": [
+   "core/runtime/inlineToolCalls.ts",
+   ".tmp-footer-infer-experiments.cjs",
+   "core/runtime/executor.ts",
+   "core/runtime/localCoreQuestion.ts",
+   "core/runtime/missionActions.ts",
+   "core/runtime/missionProtocol.ts"
+  ]
+ },
+ {
+  "id": "K4 dependents",
+  "p50": 201,
+  "p95": 205,
+  "firstMs": 205,
+  "tokens": 6179,
+  "fileRecall": 0,
+  "textRecall": 1,
+  "type": "conceptual",
+  "grounded": true,
+  "files": [
+   "src/test/suite/m20DependencyCapacity.test.ts",
+   "src/test/suite/codingValidationWorktreeDependencies.test.ts",
+   "src/context/RepositoryIndex.ts",
+   "src/context/ContextSelector.ts",
+   "src/context/RepositoryContextService.ts",
+   "src/context/RepositoryTypes.ts"
+  ]
+ },
+ {
+  "id": "K5 break if modify",
+  "p50": 246,
+  "p95": 251,
+  "firstMs": 251,
+  "tokens": 5659,
+  "fileRecall": 0,
+  "textRecall": 1,
+  "type": "conceptual",
+  "grounded": true,
+  "files": [
+   "AI_OS_ARCHITECTURE.md",
+   "esbuild.bench.js",
+   "src/mission/ProviderCircuitBreaker.ts",
+   "src/mission/MissionRuntimeSupervisor.ts",
+   "src/mission/MissionSupervisor.ts",
+   "src/reliability/AdmissionRecovery.ts"
+  ]
+ },
+ {
+  "id": "K6 validation logic",
+  "p50": 239,
+  "p95": 266,
+  "firstMs": 242,
+  "tokens": 5476,
+  "fileRecall": 0,
+  "textRecall": 1,
+  "type": "conceptual",
+  "grounded": true,
+  "files": [
+   "src/coding/ValidationRunner.ts",
+   "core/runtime/workspaceValidation.ts",
+   "core/runtime/staticHtmlValidation.ts",
+   "core/runtime/completionGate.ts",
+   "core/runtime/executionClaims.ts",
+   "core/runtime/executor.ts"
+  ]
+ },
+ {
+  "id": "K7 relevant tests",
+  "p50": 235,
+  "p95": 239,
+  "firstMs": 228,
+  "tokens": 5316,
+  "fileRecall": 1,
+  "textRecall": 1,
+  "type": "identifier",
+  "grounded": true,
+  "files": [
+   "esbuild.bench.js",
+   "src/test/suite/toolArgumentValidator.test.ts",
+   "AGENTS.md",
+   "AI_OS_ROADMAP.md",
+   "package.json",
+   ".gitignore"
+  ]
+ },
+ {
+  "id": "K8 definition",
+  "p50": 171,
+  "p95": 184,
+  "firstMs": 178,
+  "tokens": 6773,
+  "fileRecall": 1,
+  "textRecall": 1,
+  "type": "architecture",
+  "grounded": true,
+  "files": [
+   "src/context/RepositoryIndex.ts",
+   "src/context/RepositoryTypes.ts",
+   "src/autonomy/RepositoryIntel.ts",
+   "src/context/ContextSelector.ts",
+   "src/context/RepositoryContextService.ts",
+   "src/context/RepositoryContextBudget.ts"
+  ]
+ }
+]

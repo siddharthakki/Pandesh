@@ -1,0 +1,153 @@
+[
+ {
+  "id": "K1 how does app work",
+  "p50": 186,
+  "p95": 209,
+  "firstMs": 209,
+  "tokens": 5241,
+  "fileRecall": 1,
+  "textRecall": 1,
+  "type": "overview",
+  "grounded": true,
+  "files": [
+   "README.md",
+   "package.json",
+   "src/extension.ts",
+   "core/index.ts",
+   "src/webview-v2/App.tsx"
+  ]
+ },
+ {
+  "id": "K2 where persisted",
+  "p50": 316,
+  "p95": 337,
+  "firstMs": 337,
+  "tokens": 2634,
+  "fileRecall": 1,
+  "textRecall": 1,
+  "type": "conceptual",
+  "grounded": true,
+  "files": [
+   "src/agent/LocalAgentEngine.ts",
+   "src/agent/ValidatedAgentRuntime.ts",
+   "src/agent/TaskStore.ts",
+   "src/agent/TaskTypes.ts",
+   "src/agent/AgentLoop.ts",
+   "src/agent/AgentEngineTypes.ts"
+  ]
+ },
+ {
+  "id": "K3 who calls fn",
+  "p50": 313,
+  "p95": 326,
+  "firstMs": 319,
+  "tokens": 4711,
+  "fileRecall": 1,
+  "textRecall": 1,
+  "type": "usage",
+  "grounded": true,
+  "files": [
+   "core/runtime/inlineToolCalls.ts",
+   "core/runtime/modelBackend.ts",
+   "src/context/RepositoryIndex.ts",
+   "src/autonomy/workspaceScan.ts",
+   "bench/dbg2.ts",
+   "src/context/RepositoryContextService.ts"
+  ]
+ },
+ {
+  "id": "K4 dependents",
+  "p50": 320,
+  "p95": 329,
+  "firstMs": 319,
+  "tokens": 5294,
+  "fileRecall": 0,
+  "textRecall": 1,
+  "type": "conceptual",
+  "grounded": true,
+  "files": [
+   "src/agent/AgentLoop.ts",
+   "src/context/RepositoryIndex.ts",
+   "src/context/RepositoryContextService.ts",
+   "core/domain/dependencies.ts",
+   "src/agent/ProviderGatewayGovernedModelExecutionDependency.ts",
+   "src/agent/GovernedModelExecutionDispatcher.ts"
+  ]
+ },
+ {
+  "id": "K5 break if modify",
+  "p50": 334,
+  "p95": 346,
+  "firstMs": 346,
+  "tokens": 4097,
+  "fileRecall": 0.5,
+  "textRecall": 1,
+  "type": "conceptual",
+  "grounded": true,
+  "files": [
+   "src/tools/ToolArgumentValidator.ts",
+   "core/runtime/inlineToolCalls.ts",
+   "src/tools/ToolRegistry.ts",
+   "src/mission/ProviderCircuitBreaker.ts",
+   "src/mission/MissionRuntimeSupervisor.ts",
+   "src/tools/ToolSchemas.ts"
+  ]
+ },
+ {
+  "id": "K6 validation logic",
+  "p50": 333,
+  "p95": 356,
+  "firstMs": 336,
+  "tokens": 3406,
+  "fileRecall": 0,
+  "textRecall": 1,
+  "type": "conceptual",
+  "grounded": true,
+  "files": [
+   "core/runtime/workspaceValidation.ts",
+   "src/coding/ValidationFloor.ts",
+   "src/coding/ValidationRunner.ts",
+   "core/runtime/staticHtmlValidation.ts",
+   "src/validation/ValidationTypes.ts",
+   "src/coding/CodingProposal.ts"
+  ]
+ },
+ {
+  "id": "K7 relevant tests",
+  "p50": 325,
+  "p95": 360,
+  "firstMs": 360,
+  "tokens": 3768,
+  "fileRecall": 1,
+  "textRecall": 1,
+  "type": "identifier",
+  "grounded": true,
+  "files": [
+   "bench/results/baseline_kkd.json",
+   "bench/results/baseline_fp_kkd.json",
+   "src/tools/navigationTools.ts",
+   "bench/results/fix1_kkd.json",
+   "bench/results/e2e_kkd_3b_before.json",
+   "bench/results/e2e_kkd_9b_after.json"
+  ]
+ },
+ {
+  "id": "K8 definition",
+  "p50": 238,
+  "p95": 244,
+  "firstMs": 244,
+  "tokens": 6773,
+  "fileRecall": 1,
+  "textRecall": 1,
+  "type": "architecture",
+  "grounded": true,
+  "files": [
+   "src/context/RepositoryIndex.ts",
+   "src/context/RepositoryTypes.ts",
+   "src/autonomy/RepositoryIntel.ts",
+   "src/context/ContextSelector.ts",
+   "src/context/RepositoryContextService.ts",
+   "src/context/RepositoryContextBudget.ts"
+  ]
+ }
+]

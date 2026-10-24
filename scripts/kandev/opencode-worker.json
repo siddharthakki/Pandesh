@@ -1,0 +1,60 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "model": "ollama/qwen3-coder:swift-27b",
+  "small_model": "ollama/qwen3-coder:swift-27b",
+  "autoupdate": false,
+  "share": "disabled",
+  "plugin": [],
+  "mcp": {},
+  "provider": {
+    "ollama": {
+      "npm": "@ai-sdk/openai-compatible",
+      "name": "Ollama Local",
+      "options": {
+        "baseURL": "http://127.0.0.1:11434/v1",
+        "timeout": false
+      },
+      "models": {
+        "qwen3-coder:swift-27b": {
+          "name": "Qwen3 Coder Swift 27B",
+          "limit": {
+            "context": 32768,
+            "output": 8192
+          }
+        }
+      }
+    }
+  },
+  "permission": {
+    "*": "ask",
+    "kandev_*": "deny",
+    "engram_*": "deny",
+    "external_directory": "deny",
+    "read": {
+      "*": "allow",
+      "*.env": "deny",
+      "*.env.*": "deny",
+      "*.env.example": "allow"
+    },
+    "glob": "allow",
+    "grep": "allow",
+    "list": "allow",
+    "todowrite": "allow",
+    "todoread": "allow",
+    "edit": "allow",
+    "bash": {
+      "*": "ask",
+      "npm test*": "allow",
+      "npm run test*": "allow",
+      "npm run lint*": "allow",
+      "npm run typecheck*": "allow",
+      "git status*": "allow",
+      "git diff*": "allow",
+      "git log*": "allow",
+      "git show*": "allow",
+      "git ls-files*": "allow",
+      "node *": "allow"
+    },
+    "webfetch": "ask"
+  }
+}

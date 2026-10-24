@@ -1,0 +1,20 @@
+schemaVersion: 2
+id: stop-during-execution
+title: Stop during execution fences late output
+priority: P1
+p1Index: 13
+suites: [p1, lifecycle, full]
+driver: p1-lifecycle
+profilePolicy: same
+requiresApprovals: true
+prompt: create stopped-during-execution.txt containing Never delivered
+lifecycle: [proposal and mutation approved, execution starts, visible Stop, cancellation, Developer Reload Window]
+steps:
+  - select Karke Dikha and submit through the visible unified composer and visible Send control
+  - approve proposal and mutation through visible controls then use the exact-task visible Stop during execution
+assertions:
+  - cancellation wins and late executor model or tool output cannot mutate deliver or complete
+  - reload does not resurrect the task approval or Stop
+result: { absentFile: stopped-during-execution.txt, terminalState: cancelled }
+checks: { visibleUi: true, route: true, durableState: true, filesystem: true, git: true, restartResult: true }
+evidence: [task attempt cancellation and event ordering, DOM, screenshots, exact files, Git, logs, and JUnit]

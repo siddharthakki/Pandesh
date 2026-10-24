@@ -1,0 +1,603 @@
+/* Compatibility base first, governed-neon presentation last. */
+@import url('./chat-layout-base.css');
+@import url('./chat-governed-neon.css');
+@import url('./chat-dhaaga.css');
+
+/*
+ * Regression-contract mirrors.
+ *
+ * These declarations intentionally repeat the structural invariants from
+ * chat-layout-base.css. Several layout tests (and any future static checks)
+ * treat this file itself as the contract boundary rather than resolving
+ * @import rules. Keeping the invariants visible here is idempotent at runtime
+ * while preserving the split between compatibility hardening and the visual
+ * governed-neon layer.
+ */
+.chat-window {
+  overflow: hidden;
+}
+
+.chat-messages,
+#messages {
+  overflow-x: hidden;
+  overflow-y: auto;
+  overflow-anchor: none;
+}
+
+.chat-messages > *,
+#messages > * {
+  flex-shrink: 0;
+}
+
+.input-area {
+  position: sticky;
+}
+
+@media (max-width: 520px) {
+  .chat-messages,
+  #messages {
+    overflow-x: hidden;
+  }
+}
+
+/* ── Release visual contract: never leave a new/cleared chat as a blank void. ──
+ * chat.js historically clears #messages with innerHTML, which can remove the
+ * static ambient-placeholder node. This fallback is intentionally CSS-only so
+ * conversation restore/clear semantics remain untouched. */
+#messages:not(:has(.bubble, .tool-card, .approval-card, .repository-context-evidence, #task-request-entry:not([hidden]), #autonomous-status:not([hidden]))):not(:has(#ambient-placeholder:not([hidden])))::before {
+  content: "KarkeDikha\A\A What are we building today?\A Ask, inspect, or make a governed change.\A\A Local-first  ·  Governed changes  ·  Repository-aware";
+  width: min(100%, 560px);
+  min-height: 300px;
+  margin: auto;
+  padding: 148px 28px 28px;
+  border: 1px solid rgba(137, 177, 198, 0.13);
+  border-radius: 20px;
+  color: #8297a3;
+  background:
+    url('./panda/mascot-idle.webp') center 24px / 112px 112px no-repeat,
+    radial-gradient(circle at 50% 21%, rgba(71, 229, 222, 0.10), transparent 35%),
+    linear-gradient(160deg, rgba(14, 30, 42, 0.78), rgba(8, 18, 27, 0.76));
+  box-shadow: 0 26px 80px rgba(0, 0, 0, 0.24), inset 0 1px 0 rgba(255, 255, 255, 0.025);
+  white-space: pre-line;
+  text-align: center;
+  line-height: 1.65;
+  font-size: 11px;
+}
+
+/* The actual ambient panda owns its halo so absolute decoration cannot drift
+ * to the surrounding placeholder. */
+body .ambient-placeholder .kd-panda-icon--welcome {
+  position: relative;
+  z-index: 0;
+}
+
+/* ── Unified governed-work state block ──────────────────────────────────────
+ * Saath Kar uses ordinary tool/approval cards rather than #autonomous-status.
+ * Surface the same panda + Kaam ka Dhaaga visual language from truthful DOM
+ * state, while leaving the existing tool cards as secondary evidence below. */
+#messages:has(.tool-card, .approval-card):not(:has(#autonomous-status:not([hidden])))::before {
+  content: "MAKING THE CHANGE\A KarkeDikha is working through the governed task.\A\A ✓ Understanding   ✓ Preparing   ○ Waiting approval\A ● Making change     ○ Checking result   ○ Ready to apply";
+  position: sticky;
+  top: 0;
+  z-index: 8;
+  width: min(100%, 900px);
+  min-height: 154px;
+  margin: 0 auto 14px;
+  padding: 24px 26px 22px 154px;
+  border: 1px solid rgba(71, 229, 222, 0.30);
+  border-radius: 17px;
+  color: #b5c7d0;
+  background:
+    url('./panda/action-coding.webp') 24px center / 108px 108px no-repeat,
+    radial-gradient(circle at 14% 50%, rgba(71, 229, 222, 0.12), transparent 26%),
+    linear-gradient(155deg, rgba(12, 29, 41, 0.97), rgba(7, 18, 27, 0.97));
+  box-shadow: 0 18px 50px rgba(0, 0, 0, 0.32), 0 0 28px rgba(71, 229, 222, 0.055);
+  backdrop-filter: blur(16px);
+  white-space: pre-line;
+  line-height: 1.65;
+  font-size: 11px;
+  font-weight: 560;
+  letter-spacing: 0.005em;
+}
+
+/* Thinking before a tool appears is the Investigating state. */
+#messages:has(.thinking):not(:has(.tool-card, .approval-card, #autonomous-status:not([hidden])))::before {
+  content: "INVESTIGATING\A Reading your request and repository context.\A\A ● Understanding   ○ Preparing   ○ Waiting approval\A ○ Making change     ○ Checking result   ○ Ready to apply";
+  position: sticky;
+  top: 0;
+  z-index: 8;
+  width: min(100%, 900px);
+  min-height: 154px;
+  margin: 0 auto 14px;
+  padding: 24px 26px 22px 154px;
+  border: 1px solid rgba(71, 229, 222, 0.25);
+  border-radius: 17px;
+  color: #b5c7d0;
+  background:
+    url('./panda/action-searching.webp') 24px center / 108px 108px no-repeat,
+    radial-gradient(circle at 14% 50%, rgba(71, 229, 222, 0.11), transparent 26%),
+    linear-gradient(155deg, rgba(12, 29, 41, 0.97), rgba(7, 18, 27, 0.97));
+  box-shadow: 0 18px 50px rgba(0, 0, 0, 0.30), 0 0 24px rgba(71, 229, 222, 0.045);
+  backdrop-filter: blur(16px);
+  white-space: pre-line;
+  line-height: 1.65;
+  font-size: 11px;
+  font-weight: 560;
+}
+
+/* Pending human decision always wins over generic working state. The live
+ * approval card is pending only while an enabled action remains; chat.js
+ * replaces the card contents after a decision rather than adding .resolved. */
+#messages:has(.approval-card:has(button:not(:disabled))):not(:has(#autonomous-status:not([hidden])))::before,
+#messages:has(.mutation-confirmation-card:has(button:not(:disabled))):not(:has(#autonomous-status:not([hidden])))::before {
+  content: "WAITING FOR YOUR APPROVAL\A The next governed action needs your decision.\A\A ✓ Understanding   ✓ Preparing   ● Waiting approval\A ○ Making change     ○ Checking result   ○ Ready to apply";
+  border-color: rgba(217, 164, 65, 0.48);
+  color: #d8c89d;
+  background:
+    url('./panda/action-approval.webp') 24px center / 108px 108px no-repeat,
+    radial-gradient(circle at 14% 50%, rgba(217, 164, 65, 0.13), transparent 26%),
+    linear-gradient(155deg, rgba(35, 29, 18, 0.98), rgba(15, 19, 24, 0.98));
+  box-shadow: 0 18px 50px rgba(0, 0, 0, 0.32), 0 0 28px rgba(217, 164, 65, 0.07);
+}
+
+/* Validation/test failures are a SAFE STOP, not another log row. */
+#messages:has(.tool-card.failed, .tool-card.blocked):not(:has(#autonomous-status:not([hidden])))::before {
+  content: "SAFE STOP\A Validation or a governed action failed. Nothing should be treated as delivered yet.\A\A ✓ Understanding   ✓ Preparing   ✓ Change attempted\A ✕ Checking result   ○ Review / repair   ○ Ready to apply";
+  border-color: rgba(229, 101, 112, 0.48);
+  color: #e0a9ae;
+  background:
+    url('./panda/action-blocked.webp') 24px center / 108px 108px no-repeat,
+    radial-gradient(circle at 14% 50%, rgba(229, 101, 112, 0.13), transparent 26%),
+    linear-gradient(155deg, rgba(36, 20, 26, 0.98), rgba(15, 17, 23, 0.98));
+  box-shadow: 0 18px 50px rgba(0, 0, 0, 0.34), 0 0 28px rgba(229, 101, 112, 0.07);
+}
+
+/* A running tool reads as active work rather than raw IO. */
+#messages:has(.tool-card.running):not(:has(.approval-card:has(button:not(:disabled)), .tool-card.failed, .tool-card.blocked, #autonomous-status:not([hidden])))::before {
+  content: "WORKING ON THE TASK\A KarkeDikha is executing the governed step and will surface validation before completion.\A\A ✓ Understanding   ✓ Preparing   ✓ Scope governed\A ● Making / checking   ○ Review result   ○ Ready to apply";
+}
+
+/* The event-driven state set by chat-dashboard.js is authoritative for Saath
+ * Kar terminal and transition states. These rules intentionally appear after
+ * DOM inference so a completed task cannot remain visually stuck in working. */
+#messages[data-kd-work-state="investigating"]:not(:has(#autonomous-status:not([hidden])))::before {
+  content: "INVESTIGATING\A Reading your request and repository context.\A\A ● Understanding   ○ Preparing   ○ Waiting approval\A ○ Making change     ○ Checking result   ○ Ready to apply";
+  border-color: rgba(71, 229, 222, 0.28);
+  color: #b5c7d0;
+  background:
+    url('./panda/action-searching.webp') 24px center / 108px 108px no-repeat,
+    radial-gradient(circle at 14% 50%, rgba(71, 229, 222, 0.12), transparent 26%),
+    linear-gradient(155deg, rgba(12, 29, 41, 0.98), rgba(7, 18, 27, 0.98));
+}
+
+#messages[data-kd-work-state="working"]:has(.tool-card, .approval-card):not(:has(#autonomous-status:not([hidden])))::before {
+  content: "MAKING THE CHANGE\A KarkeDikha is executing the governed work.\A\A ✓ Understanding   ✓ Preparing   ✓ Scope governed\A ● Making change     ○ Checking result   ○ Ready to apply";
+  border-color: rgba(71, 229, 222, 0.34);
+  color: #b5c7d0;
+  background:
+    url('./panda/action-coding.webp') 24px center / 108px 108px no-repeat,
+    radial-gradient(circle at 14% 50%, rgba(71, 229, 222, 0.12), transparent 26%),
+    linear-gradient(155deg, rgba(12, 29, 41, 0.98), rgba(7, 18, 27, 0.98));
+}
+
+#messages[data-kd-work-state="waiting"]:has(.tool-card, .approval-card, .mutation-confirmation-card):not(:has(#autonomous-status:not([hidden])))::before {
+  content: "WAITING FOR YOUR APPROVAL\A The next governed action needs your decision.\A\A ✓ Understanding   ✓ Preparing   ● Waiting approval\A ○ Making change     ○ Checking result   ○ Ready to apply";
+  border-color: rgba(217, 164, 65, 0.52);
+  color: #dbc99a;
+  background:
+    url('./panda/action-approval.webp') 24px center / 108px 108px no-repeat,
+    radial-gradient(circle at 14% 50%, rgba(217, 164, 65, 0.14), transparent 26%),
+    linear-gradient(155deg, rgba(35, 29, 18, 0.98), rgba(15, 19, 24, 0.98));
+  box-shadow: 0 18px 50px rgba(0, 0, 0, 0.33), 0 0 30px rgba(217, 164, 65, 0.08);
+}
+
+#messages[data-kd-work-state="checking"]:has(.tool-card, .approval-card):not(:has(#autonomous-status:not([hidden])))::before {
+  content: "CHECKING THE RESULT\A Running or reviewing the governed validation before completion.\A\A ✓ Understanding   ✓ Preparing   ✓ Change made\A ✓ Making change     ● Checking result   ○ Ready to apply";
+  border-color: rgba(71, 229, 222, 0.42);
+  color: #bce0df;
+  background:
+    url('./panda/action-reviewing.webp') 24px center / 108px 108px no-repeat,
+    radial-gradient(circle at 14% 50%, rgba(71, 229, 222, 0.14), transparent 26%),
+    linear-gradient(155deg, rgba(10, 34, 43, 0.98), rgba(7, 18, 27, 0.98));
+  box-shadow: 0 18px 50px rgba(0, 0, 0, 0.32), 0 0 30px rgba(71, 229, 222, 0.07);
+}
+
+#messages[data-kd-work-state="blocked"]:has(.tool-card, .approval-card):not(:has(#autonomous-status:not([hidden])))::before {
+  content: "SAFE STOP\A A governed action or validation failed. Nothing is being presented as delivered.\A\A ✓ Understanding   ✓ Preparing   ✓ Change attempted\A ✕ Checking result   ○ Review / repair   ○ Ready to apply";
+  border-color: rgba(229, 101, 112, 0.54);
+  color: #e2a7ad;
+  background:
+    url('./panda/action-blocked.webp') 24px center / 108px 108px no-repeat,
+    radial-gradient(circle at 14% 50%, rgba(229, 101, 112, 0.14), transparent 26%),
+    linear-gradient(155deg, rgba(36, 20, 26, 0.98), rgba(15, 17, 23, 0.98));
+  box-shadow: 0 18px 50px rgba(0, 0, 0, 0.34), 0 0 30px rgba(229, 101, 112, 0.08);
+}
+
+#messages[data-kd-work-state="stopped"]:has(.tool-card, .approval-card):not(:has(#autonomous-status:not([hidden])))::before {
+  content: "STOPPED SAFELY\A The run was stopped. No further governed work is continuing.\A\A ✓ Understanding   ✓ Preparing   ○ Current work stopped\A ○ Checking result   ○ Review / resume   ○ Ready to apply";
+  border-color: rgba(229, 101, 112, 0.38);
+  color: #cfa3a8;
+  background:
+    url('./panda/action-failed.webp') 24px center / 108px 108px no-repeat,
+    radial-gradient(circle at 14% 50%, rgba(229, 101, 112, 0.10), transparent 26%),
+    linear-gradient(155deg, rgba(31, 21, 26, 0.98), rgba(15, 17, 23, 0.98));
+}
+
+#messages[data-kd-work-state="completed"]:has(.tool-card, .approval-card):not(:has(#autonomous-status:not([hidden])))::before {
+  content: "COMPLETED\A The governed task finished. Review the result and evidence below.\A\A ✓ Understanding   ✓ Preparing   ✓ Scope governed\A ✓ Making change     ✓ Checking result   ✓ Ready to apply";
+  border-color: rgba(101, 212, 154, 0.52);
+  color: #bce7ce;
+  background:
+    url('./panda/action-completed.webp') 24px center / 108px 108px no-repeat,
+    radial-gradient(circle at 14% 50%, rgba(101, 212, 154, 0.15), transparent 26%),
+    linear-gradient(155deg, rgba(13, 35, 30, 0.98), rgba(7, 18, 23, 0.98));
+  box-shadow: 0 18px 50px rgba(0, 0, 0, 0.32), 0 0 32px rgba(101, 212, 154, 0.09);
+}
+
+/* ── Real Saath Kar state panel: panda + Kaam ka Dhaaga ──────────────────── */
+#messages:has(#kd-work-state-panel:not([hidden]))::before {
+  content: none !important;
+  display: none !important;
+}
+
+#messages:has(#autonomous-status:not([hidden])) #kd-work-state-panel {
+  display: none !important;
+}
+
+.kd-work-state-panel {
+  position: sticky;
+  top: 0;
+  z-index: 12;
+  width: min(100%, 920px);
+  margin: 0 auto 16px;
+  display: grid;
+  grid-template-columns: 126px minmax(0, 1fr);
+  gap: 20px;
+  align-items: center;
+  padding: 17px 20px 17px 16px;
+  border: 1px solid rgba(71, 229, 222, 0.32);
+  border-radius: 18px;
+  color: #d9e6eb;
+  background:
+    radial-gradient(circle at 9% 52%, rgba(71, 229, 222, 0.10), transparent 20%),
+    linear-gradient(155deg, rgba(12, 29, 41, 0.97), rgba(7, 18, 27, 0.98));
+  box-shadow: 0 20px 54px rgba(0, 0, 0, 0.34), 0 0 28px rgba(71, 229, 222, 0.055);
+  backdrop-filter: blur(16px);
+}
+
+.kd-work-state-panel[hidden] { display: none !important; }
+
+.kd-work-state-panda {
+  position: relative;
+  width: 112px;
+  height: 112px;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  background: radial-gradient(circle, rgba(71, 229, 222, 0.12), rgba(71, 229, 222, 0.025) 52%, transparent 70%);
+}
+
+.kd-work-state-panda::after {
+  content: "";
+  position: absolute;
+  left: 13px;
+  right: 13px;
+  bottom: 3px;
+  height: 17px;
+  border-radius: 50%;
+  background: radial-gradient(ellipse, rgba(71, 229, 222, 0.18), transparent 67%);
+  filter: blur(5px);
+}
+
+.kd-work-state-panda img {
+  position: relative;
+  z-index: 1;
+  width: 104px;
+  height: 104px;
+  object-fit: contain;
+  filter: drop-shadow(0 10px 18px rgba(0,0,0,.30));
+}
+
+.kd-work-state-content { min-width: 0; }
+.kd-work-state-eyebrow {
+  color: #6f8792;
+  font-size: 9px;
+  font-weight: 760;
+  letter-spacing: .11em;
+  text-transform: uppercase;
+}
+.kd-work-state-eyebrow::before { content: "Kaam ka Dhaaga · "; color: #47e5de; }
+.kd-work-state-title {
+  display: block;
+  margin-top: 3px;
+  color: #e7f0f5;
+  font-size: 16px;
+  font-weight: 760;
+  letter-spacing: -.015em;
+}
+.kd-work-state-description {
+  margin: 3px 0 14px;
+  color: #91a8b3;
+  font-size: 10.5px;
+  line-height: 1.45;
+}
+
+.kd-work-stage-tracker {
+  position: relative;
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 4px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.kd-work-stage-tracker::before {
+  content: "";
+  position: absolute;
+  top: 13px;
+  left: 8%;
+  right: 8%;
+  height: 2px;
+  background: linear-gradient(90deg, rgba(71,229,222,.30), rgba(91,126,145,.28));
+  box-shadow: 0 0 10px rgba(71,229,222,.06);
+}
+.kd-work-stage-tracker > li {
+  position: relative;
+  z-index: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 5px;
+  color: #617581;
+  text-align: center;
+}
+.kd-work-stage-node {
+  width: 27px;
+  height: 27px;
+  display: grid;
+  place-items: center;
+  border: 1px solid rgba(107,139,155,.32);
+  border-radius: 50%;
+  color: #718995;
+  background: #0a1620;
+  box-shadow: 0 0 0 4px rgba(7,18,27,.92);
+  font-size: 9px;
+  font-weight: 800;
+}
+.kd-work-stage-label {
+  max-width: 92px;
+  font-size: 9px;
+  line-height: 1.25;
+}
+.kd-work-stage-tracker > li.is-complete { color: #82b9a0; }
+.kd-work-stage-tracker > li.is-complete .kd-work-stage-node {
+  border-color: rgba(101,212,154,.52);
+  color: #071812;
+  background: #65d49a;
+  box-shadow: 0 0 0 4px rgba(7,18,27,.92), 0 0 15px rgba(101,212,154,.18);
+}
+.kd-work-stage-tracker > li.is-current { color: #bfeae7; }
+.kd-work-stage-tracker > li.is-current .kd-work-stage-node {
+  border-color: rgba(117,243,236,.74);
+  color: #06181a;
+  background: #75f3ec;
+  box-shadow: 0 0 0 4px rgba(7,18,27,.92), 0 0 20px rgba(71,229,222,.25);
+  animation: kd-work-node-pulse 1.8s ease-in-out infinite;
+}
+
+.kd-work-state-panel[data-state="waiting"] {
+  border-color: rgba(217,164,65,.48);
+  box-shadow: 0 20px 54px rgba(0,0,0,.34), 0 0 30px rgba(217,164,65,.075);
+}
+.kd-work-state-panel[data-state="waiting"] .kd-work-state-eyebrow::before,
+.kd-work-state-panel[data-state="waiting"] .kd-work-state-title { color: #e4be68; }
+.kd-work-state-panel[data-state="waiting"] .kd-work-stage-tracker > li.is-current .kd-work-stage-node {
+  border-color: rgba(255,204,71,.78);
+  color: #231a05;
+  background: #d9a441;
+  box-shadow: 0 0 0 4px rgba(18,17,14,.94), 0 0 20px rgba(217,164,65,.24);
+}
+
+.kd-work-state-panel[data-state="blocked"],
+.kd-work-state-panel[data-state="stopped"] {
+  border-color: rgba(229,101,112,.48);
+  box-shadow: 0 20px 54px rgba(0,0,0,.34), 0 0 30px rgba(229,101,112,.07);
+}
+.kd-work-state-panel[data-state="blocked"] .kd-work-state-eyebrow::before,
+.kd-work-state-panel[data-state="blocked"] .kd-work-state-title,
+.kd-work-state-panel[data-state="stopped"] .kd-work-state-eyebrow::before,
+.kd-work-state-panel[data-state="stopped"] .kd-work-state-title { color: #e78992; }
+.kd-work-state-panel[data-state="blocked"] .kd-work-stage-tracker > li.is-blocked .kd-work-stage-node,
+.kd-work-state-panel[data-state="stopped"] .kd-work-stage-tracker > li.is-stopped .kd-work-stage-node {
+  border-color: rgba(229,101,112,.72);
+  color: #24080d;
+  background: #e56570;
+  box-shadow: 0 0 0 4px rgba(20,13,17,.94), 0 0 20px rgba(229,101,112,.22);
+}
+
+.kd-work-state-panel[data-state="completed"] {
+  border-color: rgba(101,212,154,.50);
+  box-shadow: 0 20px 54px rgba(0,0,0,.34), 0 0 34px rgba(101,212,154,.08);
+}
+.kd-work-state-panel[data-state="completed"] .kd-work-state-eyebrow::before,
+.kd-work-state-panel[data-state="completed"] .kd-work-state-title { color: #78dda7; }
+
+.kd-work-state-panel[data-state="investigating"] .kd-work-state-panda img { animation: kd-work-panda-breathe 3.4s ease-in-out infinite; }
+.kd-work-state-panel[data-state="working"] .kd-work-state-panda img { animation: kd-work-panda-work 2.2s ease-in-out infinite; }
+.kd-work-state-panel[data-state="waiting"] .kd-work-state-panda img { animation: kd-work-panda-attention 2.6s ease-in-out infinite; }
+.kd-work-state-panel[data-state="checking"] .kd-work-state-panda img { animation: kd-work-panda-scan 2.1s ease-in-out infinite; }
+.kd-work-state-panel[data-state="completed"] .kd-work-state-panda img { animation: kd-work-panda-complete .72s cubic-bezier(.2,.9,.2,1) 1; }
+
+@keyframes kd-work-node-pulse {
+  0%,100% { transform: scale(1); }
+  50% { transform: scale(1.08); }
+}
+@keyframes kd-work-panda-breathe {
+  0%,100% { transform: translateY(0) scale(1); }
+  50% { transform: translateY(-3px) scale(1.015); }
+}
+@keyframes kd-work-panda-work {
+  0%,100% { transform: translateY(0) rotate(0); }
+  50% { transform: translateY(-2px) rotate(-1deg); }
+}
+@keyframes kd-work-panda-attention {
+  0%,100% { transform: scale(1); filter: drop-shadow(0 10px 18px rgba(0,0,0,.30)); }
+  50% { transform: scale(1.025); filter: drop-shadow(0 10px 22px rgba(217,164,65,.22)); }
+}
+@keyframes kd-work-panda-scan {
+  0%,100% { transform: translateX(0); }
+  50% { transform: translateX(3px); }
+}
+@keyframes kd-work-panda-complete {
+  0% { transform: translateY(0) scale(.96); }
+  45% { transform: translateY(-7px) scale(1.05); }
+  100% { transform: translateY(0) scale(1); }
+}
+
+/* Evidence stays available, but no longer visually outranks the state block. */
+#messages:has(.tool-card, .approval-card) .tool-card,
+#messages:has(.tool-card, .approval-card) .repository-context-evidence {
+  opacity: 0.84;
+}
+
+/* ── Completion truthfulness for generated code ─────────────────────────────
+ * A code block is not a file and is not a preview. Only show this warning in
+ * a conversation that has no governed tool evidence; once tools have actually
+ * produced a file, the evidence surface is the authority instead. */
+#messages:not(:has(.tool-card, .approval-card)) .bubble.assistant:has(pre)::before {
+  content: "CODE SUGGESTION · No file created or preview generated";
+  display: block;
+  width: fit-content;
+  margin: 0 0 9px;
+  padding: 4px 8px;
+  border: 1px solid rgba(217, 164, 65, 0.25);
+  border-radius: 999px;
+  color: #c5aa6d;
+  background: rgba(217, 164, 65, 0.065);
+  font-size: 9.5px;
+  font-weight: 700;
+  letter-spacing: 0.055em;
+  text-transform: uppercase;
+}
+
+@media (max-width: 700px) {
+  #messages:has(.tool-card, .approval-card):not(:has(#autonomous-status:not([hidden])))::before,
+  #messages:has(.thinking):not(:has(.tool-card, .approval-card, #autonomous-status:not([hidden])))::before,
+  #messages[data-kd-work-state]:has(.tool-card, .approval-card):not(:has(#autonomous-status:not([hidden])))::before {
+    min-height: 212px;
+    padding: 126px 18px 18px;
+    background-position: center 16px, center, center;
+    background-size: 96px 96px, auto, auto;
+    text-align: center;
+  }
+
+  .kd-work-state-panel {
+    position: relative;
+    top: auto;
+    grid-template-columns: 1fr;
+    gap: 8px;
+    padding: 14px;
+  }
+  .kd-work-state-panda {
+    width: 96px;
+    height: 96px;
+    margin: 0 auto;
+  }
+  .kd-work-state-panda img { width: 90px; height: 90px; }
+  .kd-work-state-content { text-align: center; }
+  .kd-work-stage-tracker {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    row-gap: 12px;
+  }
+  .kd-work-stage-tracker::before { display: none; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .kd-work-state-panel .kd-work-state-panda img,
+  .kd-work-state-panel .kd-work-stage-node {
+    animation: none !important;
+  }
+}
+
+/* M50 operator context strip: workspace, mode, model, thinking, provider, governance and status, always visible. */
+.operator-context {
+  position: relative;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 14px;
+  padding: 6px 12px;
+  border-bottom: 1px solid var(--vscode-panel-border, rgba(128, 128, 128, 0.3));
+  font-size: 11px;
+  line-height: 1.3;
+}
+.oc-field { display: flex; flex-direction: column; min-width: 0; }
+.oc-field-workspace { max-width: 100%; }
+.oc-label {
+  font-size: 9px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--vscode-descriptionForeground, rgba(128, 128, 128, 0.9));
+}
+.oc-value {
+  min-width: 0;
+  max-width: 28ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--vscode-foreground);
+}
+.oc-value-row { display: inline-flex; align-items: center; gap: 4px; min-width: 0; }
+.oc-field-model .oc-value { max-width: 34ch; }
+.oc-status[data-state="working"] { color: var(--vscode-charts-blue, #3794ff); }
+.oc-status[data-state="waiting"] { color: var(--vscode-charts-yellow, #cca700); }
+.oc-status[data-state="blocked"] { color: var(--vscode-errorForeground, #f14c4c); }
+.oc-why-btn {
+  padding: 0 3px;
+  border: 0;
+  background: transparent;
+  color: var(--vscode-textLink-foreground, #3794ff);
+  font-size: 12px;
+  cursor: pointer;
+}
+.oc-why-popover {
+  position: absolute;
+  top: 100%;
+  left: 12px;
+  right: 12px;
+  z-index: 20;
+  max-height: 60vh;
+  overflow: auto;
+  padding: 8px 10px;
+  border: 1px solid var(--vscode-panel-border, rgba(128, 128, 128, 0.4));
+  background: var(--vscode-editorWidget-background, var(--vscode-editor-background));
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.35);
+}
+.oc-why-title { font-weight: 600; margin-bottom: 4px; }
+.oc-why-heading { margin-top: 6px; font-size: 9px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--vscode-descriptionForeground); }
+.oc-why-path { word-break: break-all; user-select: text; }
+.oc-why-footnote { margin-top: 6px; color: var(--vscode-descriptionForeground); font-size: 10px; }
+
+/* The operator context strip is the one primary source for workspace / mode / model / thinking / provider /
+   governance / status. The legacy last-routed-model badge restated the model, so it is demoted out of the row. */
+.status-row .model-badge { display: none !important; }
+
+.oc-config-btn { background: transparent; border: 1px solid var(--vscode-widget-border, transparent); color: inherit; border-radius: 4px; cursor: pointer; padding: 1px 6px; align-self: flex-end; }
+.oc-config-btn:hover, .oc-config-btn:focus-visible { background: var(--vscode-toolbar-hoverBackground, rgba(128,128,128,.2)); }
+
+/* Compact TaskResult / artifact card */
+.kd-result-card { margin: 8px 0; padding: 8px 10px; border: 1px solid var(--vscode-widget-border, rgba(128,128,128,.35)); border-left-width: 3px; border-radius: 6px; font-size: 12px; }
+.kd-result-ok { border-left-color: var(--vscode-testing-iconPassed, #3fb950); }
+.kd-result-warn { border-left-color: var(--vscode-editorWarning-foreground, #d29922); }
+.kd-result-bad { border-left-color: var(--vscode-errorForeground, #f85149); }
+.kd-result-head { display: flex; gap: 10px; align-items: baseline; font-weight: 600; }
+.kd-result-validation { font-weight: 400; opacity: .8; }
+.kd-result-summary, .kd-result-warning { margin-top: 4px; }
+.kd-result-warning { color: var(--vscode-editorWarning-foreground, #d29922); }
+.kd-result-artifact { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-top: 6px; }
+.kd-result-name { font-weight: 600; }
+.kd-result-path { opacity: .75; overflow-wrap: anywhere; }
+.kd-result-btn { background: transparent; color: inherit; border: 1px solid var(--vscode-widget-border, rgba(128,128,128,.4)); border-radius: 4px; padding: 0 6px; cursor: pointer; font-size: 11px; }
+.kd-result-btn:hover, .kd-result-btn:focus-visible { background: var(--vscode-toolbar-hoverBackground, rgba(128,128,128,.2)); }
+.kd-result-details { margin-top: 6px; }
+.kd-result-detail-text { white-space: pre-wrap; margin: 4px 0 0; opacity: .85; }

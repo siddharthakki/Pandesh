@@ -1,0 +1,19 @@
+schemaVersion: 2
+id: same-profile-workspaces
+title: One profile isolates Workspace A and B and restores owned steering
+priority: P1
+suites: [workspace, full]
+driver: catalogue-contract
+profilePolicy: same
+requiresApprovals: true
+prompt: create workspace-owned.txt containing Workspace A
+lifecycle: [build conversations and tasks in Workspace A, close VS Code, open Workspace B, return to Workspace A]
+steps:
+  - use all three modes through the visible unified composer and visible Send control in Workspace A
+  - close VS Code, open Workspace B with the same profile, submit independent work, then return to A and approve through visible controls
+assertions:
+  - B has no A conversation, task, approval, Stop, steering, notification, or response projection
+  - A restores its exact state and steering revision without B messages or ordinary Baat Kar leakage
+result: { file: workspace-owned.txt, content: Workspace A, terminalState: completed }
+checks: { visibleUi: true, route: true, durableState: true, filesystem: true, git: true, restartResult: true }
+evidence: [both workspace identities, task and revision IDs, DOM, screenshots, files, Git, logs, and JUnit]

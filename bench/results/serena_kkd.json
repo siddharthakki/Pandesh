@@ -1,0 +1,61 @@
+{
+ "initMs": 4385,
+ "toolsExposed": 22,
+ "toolSchemaChars": 32155,
+ "firstFindSymbolMs": 40300,
+ "firstFindSymbolOut": "[{\"name_path\": \"kkd-repo-intel/src/context/RepositoryIndex\", \"kind\": \"File\", \"relative_path\": \"src\\\\context\\\\RepositoryIndex.ts\", \"body_location\": {\"start_line\": 0, \"end_line\": 1104}}, {\"name_path\": \"RepositoryIndex\", \"kind\": \"Class\", \"relative_path\": \"src\\\\context\\\\RepositoryIndex.ts\", \"body_locati",
+ "rssAfterFirstMb": 3220,
+ "queries": {
+  "K3 callers extractTsJsStructure": {
+   "p50": 300.6,
+   "p95": 89714.4,
+   "tokens": 277,
+   "out": "{\"src\\\\context\\\\RepositoryIndex.ts\": {\"Constant\": [{\"name_path\": \"RepositoryIndex/build/parsed\", \"bo",
+   "files": [
+    "src/autonomy/workspaceScan.ts",
+    "src/context/RepositoryIndex.ts"
+   ]
+  },
+  "K5 callers validateToolArguments": {
+   "p50": 293.3,
+   "p95": 1768.7,
+   "tokens": 369,
+   "out": "{\"src\\\\tools\\\\ToolRegistry.ts\": {\"File\": [{\"name_path\": \"ToolRegistry\", \"body_location\": {\"start_lin",
+   "files": [
+    "src/reliability/ToolCallReliability.ts",
+    "src/tools/ToolRegistry.ts"
+   ]
+  },
+  "K8 definition RepositoryIndex": {
+   "p50": 2479.3,
+   "p95": 3127.5,
+   "tokens": 86,
+   "out": "[{\"name_path\": \"kkd-repo-intel/src/context/RepositoryIndex\", \"kind\": \"File\", \"relative_path\": \"src\\\\",
+   "files": [
+    "src/context/RepositoryIndex.ts"
+   ]
+  },
+  "K2 symbol overview TaskStore": {
+   "p50": 102.1,
+   "p95": 2160.9,
+   "tokens": 92,
+   "out": "{\"Constant\": [\"ACTIVE_TASK_STATUSES\", \"INLINE_SECRET_PATTERNS\", \"LOCK_HEARTBEAT_STALE_MS\", \"MAX_TASK",
+   "files": []
+  },
+  "K6 pattern validate": {
+   "p50": 1212.6,
+   "p95": 1289.4,
+   "tokens": 588,
+   "out": "{\"bench\\\\serena_bench.py\": [\"  >  54:q[\\\"K5 callers validateToolArguments\\\"] = timed(\\\"find_referenc",
+   "files": [
+    "core/runtime/inlineToolCalls.ts",
+    "core/runtime/toolArgumentSchema.ts",
+    "src/reliability/ToolCallReliability.ts",
+    "src/test/suite/toolArgumentValidator.test.ts",
+    "src/tools/ToolArgumentValidator.ts",
+    "src/tools/ToolRegistry.ts"
+   ]
+  }
+ },
+ "rssFinalMb": 3556
+}

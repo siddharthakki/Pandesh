@@ -1,0 +1,20 @@
+schemaVersion: 2
+id: reload-approval-states
+title: Developer Reload preserves proposal mutation and delivery approvals
+priority: P1
+p1Index: 8
+suites: [p1, lifecycle, full]
+driver: p1-lifecycle
+profilePolicy: same
+requiresApprovals: true
+prompt: create reload-approvals.txt containing Reloaded
+lifecycle: [reload at proposal approval, reload at mutation approval, reload at delivery approval, complete]
+steps:
+  - select Karke Dikha and submit through the visible unified composer and visible Send control
+  - perform Developer Reload Window at every gate and approve each restored exact approval through visible controls
+assertions:
+  - task attempt and approval identities restore monotonically with exactly one actionable gate
+  - completion and exact file delivery occur once with no stale controls
+result: { file: reload-approvals.txt, content: Reloaded, terminalState: completed }
+checks: { visibleUi: true, route: true, durableState: true, filesystem: true, git: true, restartResult: true }
+evidence: [before and after reload identities, DOM, screenshots, task events, exact file hash, Git, logs, and JUnit]

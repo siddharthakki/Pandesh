@@ -1,0 +1,2027 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; font-src 'self'; img-src 'self' data: blob:; media-src 'self' blob:;">
+  <title>Pandesh</title>
+  <link rel="stylesheet" href="fonts/fonts.css">
+  <link rel="stylesheet" href="styles.css">
+  <link rel="stylesheet" href="workspace.css">
+</head>
+<body>
+  <!-- The Pandesh panda: one lightweight SVG, reused at every size. -->
+  <svg class="panda-sprite" width="0" height="0" aria-hidden="true" focusable="false">
+    <defs>
+      <filter id="panda-eye-glow" x="-80%" y="-80%" width="260%" height="260%">
+        <feGaussianBlur stdDeviation="4.5" result="blur" />
+        <feMerge>
+          <feMergeNode in="blur" />
+          <feMergeNode in="SourceGraphic" />
+        </feMerge>
+      </filter>
+    </defs>
+    <symbol id="panda-head" viewBox="0 0 220 220">
+      <circle cx="60" cy="50" r="31" fill="#0c1013" />
+      <circle cx="160" cy="50" r="31" fill="#0c1013" />
+      <ellipse cx="110" cy="116" rx="73" ry="69" fill="#f2f5f6" />
+      <ellipse cx="79" cy="109" rx="21" ry="26" fill="#0c1013" transform="rotate(-9 79 109)" />
+      <ellipse cx="141" cy="109" rx="21" ry="26" fill="#0c1013" transform="rotate(9 141 109)" />
+      <g filter="url(#panda-eye-glow)">
+        <circle cx="79" cy="111" r="9.5" fill="#2dd4bf" />
+        <circle cx="141" cy="111" r="9.5" fill="#2dd4bf" />
+      </g>
+      <ellipse cx="110" cy="138" rx="11" ry="8" fill="#0c1013" />
+      <path d="M 97 150 Q 110 162 123 150" fill="none" stroke="#0c1013" stroke-width="3.4" stroke-linecap="round" />
+    </symbol>
+    <symbol id="panda-hero" viewBox="0 0 260 260">
+      <circle cx="130" cy="138" r="95" fill="#142126" />
+      <path d="M 38 163 A 95 95 0 0 0 112 233" fill="none" stroke="#2dd4bf" stroke-width="3" stroke-linecap="round" opacity="0.9" />
+      <circle cx="214" cy="201" r="5" fill="#2dd4bf" opacity="0.9" />
+      <circle cx="72" cy="52" r="34" fill="#0c1013" />
+      <circle cx="188" cy="52" r="34" fill="#0c1013" />
+      <ellipse cx="130" cy="116" rx="75" ry="71" fill="#f2f5f6" />
+      <ellipse cx="99" cy="110" rx="21" ry="26" fill="#0c1013" transform="rotate(-9 99 110)" />
+      <ellipse cx="161" cy="110" rx="21" ry="26" fill="#0c1013" transform="rotate(9 161 110)" />
+      <g filter="url(#panda-eye-glow)">
+        <circle cx="99" cy="112" r="9.5" fill="#2dd4bf" />
+        <circle cx="161" cy="112" r="9.5" fill="#2dd4bf" />
+      </g>
+      <ellipse cx="130" cy="139" rx="11" ry="8" fill="#0c1013" />
+      <path d="M 117 151 Q 130 163 143 151" fill="none" stroke="#0c1013" stroke-width="3.4" stroke-linecap="round" />
+    </symbol>
+  </svg>
+
+  <div class="app panda-apex-experience apex-dark" data-ui="quiet-spatial" data-workspace="panda" data-jarvis-state="idle" data-active-surface="home" data-workbench-open="false">
+    <!-- Slim identity header -->
+    <header class="topbar apex-hud-top" aria-label="Pandesh">
+      <div class="brand-block">
+        <span class="brand font-hud" style="display:none;">J.A.R.V.I.S.</span>
+        <span class="brand-avatar" aria-hidden="true">
+          <svg class="panda-glyph" viewBox="0 0 220 220"><use href="#panda-head" /></svg>
+        </span>
+        <div class="brand-text">
+          <span class="brand-title">Pandesh</span>
+          <span class="brand-sub">
+            <span class="brand-status-dot" aria-hidden="true"></span>
+            <span id="brand-status-text">Local AI · Connecting</span>
+            <button id="core-retry" type="button" class="ws-chip core-retry-chip" hidden title="Reconnect to the local Core">Retry</button>
+          </span>
+        </div>
+        <button id="app-version-badge" class="brand-badge" type="button" hidden title="About Pandesh — version and build"></button>
+      </div>
+
+      <div class="topbar-clock-hud" hidden aria-hidden="true">
+        <span id="host-clock"></span><span id="host-date"></span><span id="host-timezone"></span>
+      </div>
+
+      <div class="topbar-status-controls">
+        <div class="status-item compact-chip-group">
+          <button id="pick-folder" type="button" class="apex-chip" title="Choose workspace folder">
+            <svg viewBox="0 0 24 24" width="13" height="13" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="2" d="M3 7v13h18V9H11L9 7H3z"/></svg>
+            <span id="folder-path">No folder selected</span>
+          </button>
+        </div>
+        <div class="status-item compact-chip-group">
+          <span id="model-label" class="apex-chip" hidden>resolving…</span>
+          <span id="core-state" class="pill-text sr-only">Connected</span>
+          <span id="jarvis-state-label" class="state-chip sr-only" data-state="idle">Ready</span>
+        </div>
+      </div>
+
+      <div class="topbar-actions">
+        <button id="btn-workspace-search" type="button" class="hud-text-btn hud-nav-top-btn" title="Search conversations" aria-label="Search conversations">
+          <svg viewBox="0 0 24 24" width="17" height="17" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" d="M11 19a8 8 0 1 0 0-16 8 8 0 0 0 0 16zM21 21l-4.35-4.35"/></svg>
+        </button>
+        <button id="btn-drawer-conversations-top" data-drawer="drawer-conversations" type="button" class="hud-text-btn hud-nav-top-btn hud-nav-tab" title="Recent conversations" aria-label="Recent conversations">
+          <svg viewBox="0 0 24 24" width="17" height="17" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" d="M3 3v5h5"/><path fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" d="M12 7v5l3.5 2"/></svg>
+        </button>
+        <button id="btn-drawer-tools" data-tab="tab-tools" data-drawer="drawer-tools" type="button" class="hud-text-btn hud-nav-top-btn hud-nav-tab" title="Notes, reminders, research and queued commands" aria-label="Tools">
+          <svg viewBox="0 0 24 24" width="17" height="17" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" d="M4 7h10M18 7h2M4 17h2M10 17h10"/><circle cx="16" cy="7" r="2.2" fill="none" stroke="currentColor" stroke-width="1.9"/><circle cx="8" cy="17" r="2.2" fill="none" stroke="currentColor" stroke-width="1.9"/></svg>
+        </button>
+
+        <div class="window-controls">
+          <button id="btn-win-min" type="button" class="win-btn win-min" title="Minimize window">―</button>
+          <button id="btn-win-max" type="button" class="win-btn win-max" title="Maximize window">□</button>
+          <button id="btn-win-close" type="button" class="win-btn win-close" title="Hide to tray">✕</button>
+        </div>
+      </div>
+    </header>
+
+    <!-- Compact navigation rail -->
+    <nav class="workspace-rail" aria-label="Workspace sections">
+      <div class="topbar-nav-tabs workspace-rail-nav" role="group" aria-label="Panda sections">
+        <button id="nav-assistant-btn" type="button" class="nav-tab sidebar-nav-item is-active" data-surface="assistant" title="Home" aria-label="Home">
+          <svg viewBox="0 0 24 24" width="19" height="19" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" d="M3 10.5 12 3l9 7.5"/><path fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" d="M5.5 9.5V20a1 1 0 0 0 1 1H10v-6h4v6h3.5a1 1 0 0 0 1-1V9.5"/></svg>
+        </button>
+        <button id="nav-tasks-btn" type="button" class="nav-tab sidebar-nav-item" data-surface="tasks" title="Tasks and missions" aria-label="Tasks and missions">
+          <svg viewBox="0 0 24 24" width="19" height="19" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" d="M4 7h3M4 12h3M4 17h3M10 7h10M10 12h10M10 17h10"/></svg>
+        </button>
+        <button id="nav-integrations-btn" type="button" class="nav-tab sidebar-nav-item" data-surface="integrations" title="Connections and settings" aria-label="Connections and settings">
+          <svg viewBox="0 0 24 24" width="19" height="19" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" d="M3 7.5A1.5 1.5 0 0 1 4.5 6h4.2l1.6 2h9.2A1.5 1.5 0 0 1 21 9.5v8A1.5 1.5 0 0 1 19.5 19h-15A1.5 1.5 0 0 1 3 17.5z"/></svg>
+        </button>
+      </div>
+
+      <div class="workspace-rail-secondary">
+        <button id="btn-drawer-activity" data-drawer="drawer-activity" type="button" class="hud-nav-tab rail-btn" title="Activity and diagnostics" aria-label="Activity and diagnostics">
+          <svg viewBox="0 0 24 24" width="19" height="19" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" d="M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18z"/><path fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" d="M12 7v5l3.5 2"/></svg>
+        </button>
+      </div>
+    </nav>
+
+    <!-- WebGL animated plasma waves background (APEX-UI adapted) -->
+    <canvas id="apex-shader-canvas" class="apex-shader-bg" aria-hidden="true"></canvas>
+    <div class="space-vignette" aria-hidden="true"></div>
+
+    <div id="drop-overlay" class="drop-overlay" hidden aria-hidden="true"><div class="drop-overlay-card">Drop files to attach them to your next message</div></div>
+
+    <div class="legacy-nav-hooks" hidden aria-hidden="true">
+      <button id="sidebar-new-btn" type="button"></button>
+      <button id="sidebar-toggle-btn" type="button"></button>
+      <button id="sidebar-convs-btn" type="button" data-drawer="drawer-conversations"></button>
+      <button id="sidebar-activity-btn" type="button" data-drawer="drawer-activity"></button>
+      <button id="sidebar-tools-btn" type="button" data-drawer="drawer-tools"></button>
+    </div>
+
+    <!-- MAIN WORKSPACE: one assistant surface (+ Tasks, Connections) -->
+    <main class="panda-constellation-viewport" id="viewport-main">
+      <div id="constellation-stage" class="constellation-stage" data-presence="idle">
+        <!-- SVG Reasoning Web (Spokes, PCB traces, orbit rings, flowing packets) -->
+        <div id="reasoning-web-container" class="reasoning-web-layer"></div>
+
+        <!-- EXPERIENCE C: CENTER IRIS / QUICK ANSWER CARD -->
+        <div id="center-iris-card" class="center-iris-card" hidden>
+          <div class="iris-header">
+            <div class="iris-badge-group">
+              <span class="iris-pulse-dot" aria-hidden="true"></span>
+              <span class="iris-title font-hud">PANDA QUICK ANSWER</span>
+              <span id="iris-model-badge" class="iris-model-badge font-mono">--</span>
+            </div>
+            <div class="iris-actions">
+              <button id="btn-iris-expand" type="button" class="iris-action-btn" title="Expand to Split Workbench">
+                <svg viewBox="0 0 24 24" width="13" height="13"><rect x="3" y="3" width="18" height="18" rx="3" fill="none" stroke="currentColor" stroke-width="2"/><path d="M9 3v18M3 9h18" stroke="currentColor" stroke-width="2"/></svg>
+                <span>Expand to Workbench</span>
+              </button>
+              <button id="btn-iris-close" type="button" class="iris-close-btn" title="Dismiss">✕</button>
+            </div>
+          </div>
+          <div id="iris-body" class="iris-body scroll-region selectable-text">
+            <div id="iris-content" class="iris-content"></div>
+          </div>
+          <div class="iris-footer font-mono">
+            <span class="iris-footer-status">✓ Continuous conversation preserved</span>
+          </div>
+        </div>
+
+        <!-- EXPERIENCE E: CONTEXTUAL CAPABILITY CARD -->
+        <div id="node-overview-card" class="node-overview-modal" hidden>
+          <div class="overview-header" id="overview-drag-handle">
+            <div class="overview-badge" id="overview-badge-dot"></div>
+            <div>
+              <div id="overview-title" class="overview-name">RESEARCH</div>
+              <div id="overview-role" class="overview-subtitle">Search · Read · Synthesize</div>
+            </div>
+            <button id="overview-close-btn" type="button" class="overview-close" title="Close card">✕</button>
+          </div>
+          <div class="overview-body">
+            <div class="overview-section" id="overview-live-section">
+              <div class="overview-section-label">LIVE STATUS & CONTEXT</div>
+              <div id="overview-live-state" class="overview-live-state font-mono">Standing by</div>
+            </div>
+            <div class="overview-section">
+              <div class="overview-section-label">CAPABILITIES</div>
+              <ul id="overview-caps-list" class="overview-caps-list"></ul>
+            </div>
+            <div class="overview-section">
+              <div class="overview-section-label">TRIGGER EXAMPLES</div>
+              <div id="overview-asks-list" class="overview-asks-list"></div>
+            </div>
+            <div class="overview-card-actions">
+              <button id="btn-card-expand" type="button" class="card-expand-btn">
+                <svg viewBox="0 0 24 24" width="13" height="13"><rect x="3" y="3" width="18" height="18" rx="3" fill="none" stroke="currentColor" stroke-width="2"/><path d="M9 3v18M3 9h18" stroke="currentColor" stroke-width="2"/></svg>
+                <span>Open in Workbench</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- 2. ASSISTANT WORKSPACE: home + conversations in one place -->
+      <section id="surface-conversations" class="karkedikha-surface-pane assistant-surface" hidden aria-label="Pandesh assistant">
+        <div class="assistant-layout" id="assistant-layout" data-history="closed">
+          <!-- The one sidebar: conversation history -->
+          <aside class="conversations-history-rail" id="surface-conversations-rail" aria-label="Conversation history">
+            <div class="conv-rail-head">
+              <span class="conv-rail-title">Conversations</span>
+              <button id="conversations-new" type="button" class="apex-chip btn-new-conv" title="Start a new conversation">+ New</button>
+            </div>
+            <div class="conv-search-box">
+              <input id="conversations-search" type="search" placeholder="Search conversations…" aria-label="Search conversations" />
+            </div>
+            <label class="conversations-archived-toggle">
+              <input id="conversations-show-archived" type="checkbox" />
+              <span>Show archived</span>
+            </label>
+            <div id="conversations-search-results" class="conversations-rail-groups" hidden></div>
+            <div id="conversations-rail-groups" class="conversations-rail-groups scroll-region"></div>
+            <p id="conversations-rail-empty" class="muted" hidden>No conversations yet.</p>
+          </aside>
+
+          <main class="conversation-active-main assistant-main" id="assistant-main" data-mode="idle" aria-label="Conversation">
+            <header class="conv-active-header">
+              <button id="btn-toggle-history" type="button" class="ghost-icon-btn" title="Show or hide conversation history" aria-label="Toggle conversation history" aria-pressed="true">
+                <svg viewBox="0 0 24 24" width="17" height="17" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="2" d="M3 5h18M3 12h18M3 19h18"/></svg>
+              </button>
+              <div id="assistant-mascot-slot" class="assistant-mascot-slot" aria-hidden="true">
+                <svg class="panda-glyph panda-glyph-sm" viewBox="0 0 220 220"><use href="#panda-head" /></svg>
+              </div>
+              <div class="conv-header-title-block">
+                <h2 id="conv-active-title" class="conv-active-title">New conversation</h2>
+                <span id="conv-model-badge" class="conv-model-pill" title="Model for this conversation">Model: resolving…</span>
+              </div>
+              <div id="panda-presence" class="panda-presence" data-state="idle" role="status" aria-live="polite">
+                <span class="panda-presence-mark" aria-hidden="true">
+                  <svg class="panda-glyph panda-glyph-xs" viewBox="0 0 220 220"><use href="#panda-head" /></svg>
+                  <img id="panda-action-badge" class="panda-action-overlay" alt="" hidden />
+                </span>
+                <span id="panda-presence-label" class="panda-presence-label">Ready</span>
+              </div>
+              <div class="conv-header-meta">
+                <button id="btn-open-mail" type="button" class="apex-chip" hidden title="Search, read and draft Gmail here (only shown while Google is connected and verified)" aria-expanded="false">Mail</button>
+                <button id="btn-new-chat-header" type="button" class="apex-chip" title="Start a new conversation">+ New</button>
+                <button id="conversation-export" type="button" class="apex-chip" title="Export transcript">Export</button>
+              </div>
+            </header>
+
+            <!-- Idle state: the large approved mascot. It moves into the header once a conversation is active. -->
+            <div id="assistant-empty" class="assistant-empty">
+              <div id="assistant-hero-slot" class="assistant-hero-slot">
+                    <div class="panda-hero-anchor" id="panda-hero-anchor">
+                      <div class="reactor-wrap" id="jarvis-core-reactor" data-core-state="idle" aria-label="Panda Core">
+                        <div class="orbit-ring ring-dashed spin-cw" aria-hidden="true"></div>
+                        <div class="orbit-ring ring-mid spin-ccw" aria-hidden="true"></div>
+                        <div class="orbit-ring ring-inner spin-fast-cw" aria-hidden="true"></div>
+                        <div class="orbit-ring ring-core-dash spin-ccw" aria-hidden="true"></div>
+
+                        <div class="panda-center-halo"></div>
+
+                        <!-- Approved Cyber Panda Artwork in Perfect Circular Luminous Core -->
+                      <div class="panda-mascot-frame">
+                          <img id="panda-avatar-img" class="panda-mascot-img" src="assets/pan-da-hero.png" alt="PAN-DA, the KarkeDikha cyber panda" />
+                          <div class="panda-eye-glow" aria-hidden="true"><span></span><span></span></div>
+                          <div class="panda-scan" aria-hidden="true"></div>
+                        </div>
+
+                        <!-- Central Click / Mic Hit Area -->
+                        <button
+                          id="mic-button"
+                          type="button"
+                          class="reactor-core mic mic-prominent core-breathe"
+                          aria-pressed="false"
+                          aria-label="Tap to speak with Pandesh"
+                          title="Click or hold Space to talk with Pandesh"
+                        >
+                          <span class="reactor-bloom" aria-hidden="true"></span>
+                          <svg class="mic-glyph" viewBox="0 0 24 24" width="28" height="28" aria-hidden="true">
+                            <path fill="currentColor" d="M12 14a3 3 0 0 0 3-3V6a3 3 0 0 0-6 0v5a3 3 0 0 0 3 3zm5-3a5 5 0 0 1-10 0H5a7 7 0 0 0 6 6.92V21h2v-3.08A7 7 0 0 0 19 11h-2z"/>
+                          </svg>
+                          <span id="mic-label" class="sr-only">Start listening</span>
+                        </button>
+                      </div>
+
+                      <!-- Hidden Core Reactor test hooks -->
+                      <div class="core-state-indicator" aria-live="polite" style="display:none;">
+                        <div class="core-state-pill">
+                          <span class="core-state-led" aria-hidden="true"></span>
+                          <span id="core-reactor-badge" class="core-state-badge font-hud">IDLE</span>
+                        </div>
+                        <span id="core-reactor-desc" class="core-state-desc font-mono">Kernel ready · Standing by</span>
+                      </div>
+                    </div>
+                    <svg class="panda-hero-art" viewBox="0 0 260 260" role="img" aria-label="Pandesh, your KarkeDikha assistant">
+                      <use href="#panda-hero" />
+                    </svg>
+              </div>
+              <h1 class="assistant-greeting">What shall I take care of?</h1>
+              <p id="assistant-subline" class="assistant-subline">Your assistant is ready when you are.</p>
+            </div>
+
+            <!-- Pandesh's attention: only what genuinely needs the operator, only
+                 when there is something real. Never a decorative card. It sits
+                 above the conversation so it is visible whenever it matters. -->
+            <section id="home-attention" class="ws-home-section" hidden aria-label="Needs your attention">
+              <header class="ws-home-section-head">
+                <h2 id="home-attention-title" class="ws-home-section-title">Needs you</h2>
+                <div class="ws-home-head-actions">
+                  <button id="home-attention-refresh" type="button" class="ws-home-refresh" title="Refresh from Core" aria-label="Refresh from Core">
+                    <svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" d="M20 11a8 8 0 1 0-2.3 5.7M20 5v6h-6"/></svg>
+                    <span>Refresh</span>
+                  </button>
+                </div>
+              </header>
+              <div id="home-attention-list" class="ws-attention-list"></div>
+            </section>
+
+            <!-- Recent: running and finished work, one quiet line each. Not "Needs you". -->
+            <section id="home-recent" class="ws-home-section ws-home-recent" hidden aria-label="Recent">
+              <header class="ws-home-section-head"><h2 class="ws-home-section-title">Recent</h2></header>
+              <div id="home-recent-list" class="ws-recent-list"></div>
+            </section>
+            <!-- Today: the same brief as text, straight from Core. -->
+            <section id="home-today" class="ws-home-section" hidden aria-label="Today">
+              <header class="ws-home-section-head">
+                <h2 id="home-today-title" class="ws-home-section-title">Today</h2>
+                <div class="ws-home-head-actions">
+                  <span id="home-today-stamp" class="ws-home-stamp"></span>
+                  <!-- Continuity: every task — running, stopped and finished —
+                       stays one click away. It opens the existing Tasks screen;
+                       nothing new is built. -->
+                  <button id="home-attention-tasks" type="button" class="ws-home-refresh" title="Open every task, running and finished" aria-label="Open every task, running and finished">All tasks</button>
+                </div>
+              </header>
+              <p id="home-services" class="ws-services-line" hidden></p>
+              <div id="home-today-list" class="ws-today-list"></div>
+            </section>
+
+            <!-- The one proactive routine: a daily brief the operator sets up
+                 themselves. It lives in Core's durable schedule, so it survives
+                 a restart, and it can be switched off at any time. -->
+            <section id="home-routine" class="ws-home-section" hidden aria-label="Daily brief routine">
+              <header class="ws-home-section-head">
+                <h2 class="ws-home-section-title">Daily brief</h2>
+                <span id="home-routine-state" class="ws-home-stamp"></span>
+              </header>
+              <div class="ws-routine-row">
+                <label class="ws-routine-time" for="home-routine-input">
+                  <span class="sr-only">Time of day</span>
+                  <input id="home-routine-input" type="time" value="08:00" aria-label="Time of day for the daily brief" />
+                </label>
+                <button id="home-routine-save" type="button" class="ws-chip">Turn on</button>
+                <button id="home-routine-disable" type="button" class="ws-chip is-reject" hidden>Turn off</button>
+                <span id="home-routine-note" class="ws-routine-note"></span>
+              </div>
+            </section>
+
+            <div id="assistant-suggestions" class="assistant-suggestions" aria-label="Suggested activities">
+              <button type="button" class="ws-suggestion-chip" data-prompt="Give me my daily brief for today.">My daily brief</button>
+              <button type="button" class="ws-suggestion-chip" data-prompt="Build a small app for me.">Build an app</button>
+              <button type="button" class="ws-suggestion-chip" data-prompt="Research a topic for me and summarize what you find.">Research something</button>
+            </div>
+
+            <p id="workstream-headline" class="workstream-headline" hidden>No active workstream</p>
+            <div id="result" class="conversation-turns-flow scroll-region selectable-text" role="region" aria-label="Conversation turns"></div>
+            <div id="result-outcome" class="outcome-pill-card" hidden></div>
+            <div id="result-blocked" class="blocked-card" hidden>
+              <div class="blocked-head"><strong id="result-blocked-reason">Needs Workspace</strong></div>
+              <p class="muted">A repository folder must be selected before file changes can be made.</p>
+              <button id="result-select-folder" type="button" class="dispatch">Choose Folder</button>
+            </div>
+
+            <!-- Prominent navigable notification if an approval is waiting elsewhere -->
+            <div id="cross-conversation-approval-banner" class="cross-conversation-approval-banner" hidden>
+              <div class="banner-icon" aria-hidden="true">
+                <svg viewBox="0 0 24 24" width="18" height="18"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" d="M12 3 20 6v6c0 4.5-3.2 7.8-8 9-4.8-1.2-8-4.5-8-9V6z"/><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M12 8v5M12 16h.01"/></svg>
+              </div>
+              <div class="banner-content">
+                <strong class="banner-title">Approval required in another conversation</strong>
+                <p id="cross-approval-summary" class="banner-summary">A background task is waiting for your approval.</p>
+              </div>
+              <button id="cross-approval-nav-btn" type="button" class="btn-navigate-approval">Go to task</button>
+            </div>
+
+            <!-- Fallback error card if approval fails to render -->
+            <div id="approval-render-error" class="approval-render-error-card" hidden>
+              <div class="error-icon" aria-hidden="true">⚠️</div>
+              <div class="error-content">
+                <strong>Approval details unavailable</strong>
+                <p id="approval-render-error-text">Failed to render approval card. Click below to view the task or retry.</p>
+              </div>
+              <button id="approval-retry-btn" type="button" class="btn-retry-approval">Retry approval</button>
+            </div>
+
+            <!-- The conversation's live cards: the delivered results, the running task
+                 and a pending approval. They sit below the thread, so a running task,
+                 a decision and a delivered file are always where the person is looking,
+                 and they scroll among themselves when they do not all fit. -->
+            <div id="conversation-cards" class="conversation-cards">
+
+            <!-- Results made in this conversation (images, video, documents): the result card -->
+            <section id="conversation-results" class="conversation-results" hidden aria-label="Results from this conversation">
+              <header class="result-card-head">
+                <span class="result-card-check" aria-hidden="true">
+                  <svg viewBox="0 0 24 24" width="15" height="15"><path fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" d="M5 12.5 10 17.5 19 7"/></svg>
+                </span>
+                <span id="conversation-results-title" class="result-card-title">Results</span>
+                <button id="conversation-results-open" type="button" class="result-card-open" title="All tasks and files" aria-label="All tasks and files">
+                  <svg viewBox="0 0 24 24" width="15" height="15" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" d="M14 4h6v6M20 4l-9 9M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5"/></svg>
+                </button>
+              </header>
+              <div class="result-card-preview" id="conversation-results-preview"></div>
+              <div id="conversation-results-list" class="conversation-results-list"></div>
+              <footer class="result-card-foot">
+                <span id="conversation-results-files" class="result-card-files">No files</span>
+                <button id="conversation-results-all" type="button" class="result-card-folder">Open workspace folder</button>
+              </footer>
+            </section>
+
+            <!-- Inline task card: the real state of the work, with Stop -->
+            <section id="workspace-task-card" class="panda-task-card" hidden aria-label="Current task">
+              <div class="task-card-head">
+                <span class="task-card-ring" aria-hidden="true"></span>
+                <span id="task-card-title" class="task-card-title">Working</span>
+                <span id="task-card-elapsed" class="task-card-elapsed" title="Elapsed time">0:00</span>
+              </div>
+              <ul id="task-card-steps" class="task-card-steps"></ul>
+              <div class="task-card-foot">
+                <span id="task-card-meta" class="task-card-meta">Local</span>
+                <button id="task-card-stop" type="button" class="task-card-stop" title="Stop the running task" aria-label="Stop the running task">
+                  <svg viewBox="0 0 24 24" width="13" height="13" aria-hidden="true"><rect x="6" y="6" width="12" height="12" rx="2" fill="none" stroke="currentColor" stroke-width="2.2"/></svg>
+                  <span>Stop</span>
+                </button>
+              </div>
+            </section>
+
+            <!-- Inline Governed Approval Panel (directly visible in Conversation!) -->
+            <div id="approval-panel" class="governed-approval-card" hidden>
+              <div class="approval-head">
+                <span class="approval-shield" aria-hidden="true">
+                  <svg viewBox="0 0 24 24" width="20" height="20"><path fill="none" stroke="currentColor" stroke-width="1.9" stroke-linejoin="round" d="M12 3 20 6v6c0 4.5-3.2 7.8-8 9-4.8-1.2-8-4.5-8-9V6z"/><path fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round" d="M8.8 12.2 11 14.4l4.4-4.4"/></svg>
+                </span>
+                <div class="approval-head-text">
+                  <h3 id="approval-heading" class="approval-heading">Your approval is needed</h3>
+                  <p class="approval-subline">
+                    <span id="approval-gate" class="gate-tag">MUTATION</span>
+                    <span id="approval-tool" class="approval-tool">—</span>
+                  </p>
+                </div>
+              </div>
+              <div class="approval-body">
+                <div class="approval-meta-row">
+                  <span class="appr-label">Scope:</span>
+                  <span id="approval-scope" class="font-mono">—</span>
+                </div>
+                <div class="approval-meta-row" id="approval-risk-row">
+                  <span class="appr-label">Risk:</span>
+                  <span id="approval-risk" class="risk-badge">Consequential action</span>
+                </div>
+                <div class="approval-paths-box">
+                  <span class="appr-label">Files affected:</span>
+                  <div id="approval-paths" class="paths-display font-mono">None</div>
+                </div>
+                <div class="approval-detail-box">
+                  <p id="approval-detail" class="approval-detail-text"></p>
+                </div>
+              </div>
+              <div class="approval-actions-bar">
+                <button id="reject" type="button" class="btn-reject">
+                  <svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="2.4" d="M6 18L18 6M6 6l12 12"/></svg>
+                  Reject
+                </button>
+                <button id="approve" type="button" class="btn-approve">
+                  <svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="2.4" d="M5 13l4 4L19 7"/></svg>
+                  Approve
+                </button>
+              </div>
+            </div>
+            </div>
+          </main>
+
+          <!-- Contextual mail workspace: only appears when opened, and only while Gmail is verified -->
+          <aside id="mail-workspace" class="mail-workspace" hidden aria-label="Mail workspace">
+            <header class="mail-workspace-head">
+              <strong>Mail</strong>
+              <button id="mail-workspace-close" type="button" class="ghost-icon-btn" aria-label="Close mail workspace" title="Close">×</button>
+            </header>
+            <div id="mail-workspace-body" class="mail-workspace-body scroll-region"></div>
+          </aside>
+
+          <!-- Contextual panel: delivered files, previews and results for this conversation -->
+          <aside id="workspace-context" class="workspace-context" hidden aria-label="Workspace context">
+            <header class="context-head">
+              <span class="context-title">Context</span>
+              <button id="workspace-context-close" type="button" class="ghost-icon-btn" title="Hide the context panel" aria-label="Hide the context panel">×</button>
+            </header>
+            <div class="context-body scroll-region">
+              <section class="context-section">
+                <h3 class="context-section-title">Delivered files</h3>
+                <ul id="context-delivered" class="context-file-list"></ul>
+                <p id="context-delivered-empty" class="context-empty">No files changed yet.</p>
+              </section>
+
+              <section class="context-section" id="context-preview-section" hidden>
+                <h3 class="context-section-title">Preview</h3>
+                <div id="context-preview" class="context-preview"></div>
+              </section>
+            </div>
+          </aside>
+        </div>
+      </section>
+
+      <!-- 3. SURFACE TASKS & MISSIONS -->
+      <section id="surface-tasks" class="karkedikha-surface-pane" hidden aria-label="Tasks & Missions">
+        <div class="tasks-container scroll-region">
+          <div class="tasks-head">
+            <div class="tasks-title-wrap">
+              <h2 class="tasks-main-title">Tasks &amp; results</h2>
+              <p class="muted">Everything Panda has made for you, and anything waiting for your approval.</p>
+            </div>
+            <div class="tasks-head-actions">
+              <div class="tasks-subnav-tabs" role="tablist" aria-label="Tasks and Results views">
+                <button id="btn-tasks-tab-tasks" type="button" class="apex-chip is-active" role="tab" aria-selected="true" data-tab="tasks">Tasks</button>
+                <button id="btn-tasks-tab-results" type="button" class="apex-chip" role="tab" aria-selected="false" data-tab="results">Results</button>
+              </div>
+              <button id="btn-refresh-tasks" type="button" class="apex-chip" title="Refresh missions">
+                <svg viewBox="0 0 24 24" width="13" height="13"><path fill="none" stroke="currentColor" stroke-width="2" d="M23 4v6h-6M1 20v-6h6M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>
+                <span>Refresh</span>
+              </button>
+            </div>
+          </div>
+
+          <!-- Pending Approvals Section in Tasks & Missions - always visible above both tabs -->
+          <div id="tasks-approvals-container" class="tasks-section" hidden>
+            <h3 class="tasks-section-title">Pending Approvals</h3>
+            <div id="tasks-approvals-list" class="tasks-cards-grid"></div>
+          </div>
+
+          <!-- Tasks Pane -->
+          <div id="tasks-pane-tasks" class="tasks-pane">
+            <!-- Real task records: every request Panda is working on or recently finished, with Stop -->
+            <div id="active-tasks-panel" class="tasks-section" hidden>
+              <h3 class="tasks-section-title" id="active-tasks-title">Work in progress</h3>
+              <p class="muted" id="active-tasks-note"></p>
+              <ul class="dev-stories-list" id="active-tasks-list"></ul>
+            </div>
+
+            <!-- Development stories executed by Kandev (shown only when some exist) -->
+            <div id="dev-stories-panel" class="tasks-section" hidden>
+              <div class="dev-stories-header">
+                <h3 class="tasks-section-title" id="dev-stories-title">Development stories</h3>
+                <button type="button" class="apex-chip dev-stories-stop" id="dev-stories-stop-all" hidden title="Stop every worker now; nothing restarts until you retry">Stop all</button>
+              </div>
+              <p class="muted dev-stories-counts" id="dev-stories-counts"></p>
+              <ul class="dev-stories-list" id="dev-stories-list"></ul>
+            </div>
+          </div>
+
+          <!-- Results Pane: directly accessible without scrolling past task history -->
+          <div id="tasks-pane-results" class="tasks-pane" hidden>
+            <div class="tasks-section" id="tasks-results-section">
+              <h3 class="tasks-section-title">Results</h3>
+              <div id="tasks-missions-grid" class="tasks-cards-grid">
+                <!-- Dynamic Missions List Container -->
+                <div id="dynamic-missions-list" class="results-grid"></div>
+                <p id="tasks-empty" class="muted" hidden>Nothing here yet. Images, videos and documents Panda creates will appear here.</p>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Legacy Workbench Compatibility Hooks (Keeps internal controllers and hidden elements safe) -->
+      <div id="floating-workbench" class="floating-workbench-vault" style="display:none;" aria-hidden="true">
+        <div id="wb-window-controls">
+          <button id="btn-wb-min" type="button"></button>
+          <button id="btn-wb-max" type="button"></button>
+          <button id="btn-wb-close" type="button"></button>
+        </div>
+        <button id="btn-wb-back-conv" type="button"></button>
+        <button id="btn-wb-back" type="button"></button>
+        <button id="btn-wb-fwd" type="button"></button>
+        <span id="workbench-title-bar"></span>
+        <button id="wb-tab-conv" type="button"></button>
+        <button id="wb-tab-research" type="button"></button>
+        <button id="wb-tab-fileops" type="button"></button>
+        <button id="wb-tab-code" type="button"></button>
+        <button id="btn-wb-popout" type="button"></button>
+        <div id="workbench-body">
+          <div id="wb-pane-conversation"></div>
+          <div id="wb-pane-research">
+            <div id="research-active-query"></div>
+            <div id="research-sources-list"></div>
+            <div id="research-report-title"></div>
+            <div id="research-report-content"></div>
+          </div>
+          <div id="wb-pane-fileops">
+            <div id="fileops-subtitle"></div>
+            <div id="fileops-source-root"></div>
+            <div id="fileops-target-root"></div>
+            <div id="fileops-items-container"></div>
+            <div id="fileops-items-list"></div>
+            <div id="fileops-impact-summary"></div>
+            <pre id="fileops-console-log"></pre>
+          </div>
+          <div id="wb-pane-code">
+            <div id="coding-status-pill"></div>
+            <div id="coding-diff-container"></div>
+            <pre id="coding-diff-pre"></pre>
+            <div id="coding-validation-status"></div>
+          </div>
+        </div>
+        <span id="wb-stream-status"></span>
+        <button id="wb-return-home" type="button"></button>
+        <button id="workbench-minimized-chip" type="button"></button>
+      </div>
+
+      <!-- 4. SURFACE INTEGRATIONS & SETTINGS -->
+      <section id="surface-integrations" class="karkedikha-surface-pane" hidden aria-label="Integrations & Settings">
+        <div class="integrations-container scroll-region">
+          <div class="integrations-head">
+            <div class="integrations-title-wrap">
+              <h2 class="integrations-main-title">Connections</h2>
+              <p class="muted">Accounts and engines Panda can use. Status here is checked live, not assumed.</p>
+            </div>
+            <button id="btn-refresh-integrations" type="button" class="apex-chip" title="Refresh statuses">
+              <svg viewBox="0 0 24 24" width="13" height="13"><path fill="none" stroke="currentColor" stroke-width="2" d="M23 4v6h-6M1 20v-6h6M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>
+              <span>Refresh Status</span>
+            </button>
+          </div>
+
+          <!-- AI Models & Providers: local by default, free cloud only for approved public text -->
+          <section id="cloud-providers-card" class="cloud-providers-card" aria-labelledby="cloud-providers-title">
+            <div class="cloud-head">
+              <div>
+                <h3 id="cloud-providers-title" class="int-card-title">AI Models &amp; Providers</h3>
+                <p class="muted cloud-subtitle">Ollama stays the default. Free cloud models are optional, public text only, and off until you choose one.</p>
+              </div>
+              <div class="cloud-head-actions">
+                <span id="cloud-state-badge" class="int-badge" role="status">Cloud off</span>
+                <button id="cloud-refresh" type="button" class="apex-chip">Refresh catalog</button>
+              </div>
+            </div>
+            <p class="cloud-privacy">
+              <strong>Nothing private ever leaves this PC.</strong> Cloud requests carry exactly two messages: a neutral instruction and the text you approve.
+              No Gmail, Calendar, files, repository, memory, screenshots, secrets, tool output or task context. No tools run in the cloud, and a failure never
+              falls back to a paid API.
+            </p>
+            <div id="cloud-provider-list" class="cloud-provider-list" aria-live="polite"></div>
+            <label class="cloud-fallback">
+              <input id="cloud-local-fallback" type="checkbox" checked />
+              <span>Keep a local model available as the fallback when a cloud call fails (a local retry is shown as local, never as the cloud answer).</span>
+            </label>
+            <p id="cloud-action-note" class="cloud-action-note" role="status"></p>
+          </section>
+
+          <div class="integrations-grid">
+            <!-- Google Services: real status, one-time setup, Connect, permissions, recovery -->
+            <div class="integration-card google-card is-wide" id="integ-card-google" data-state="checking">
+              <div class="int-card-head">
+                <div class="int-icon-wrap" aria-hidden="true">🌐</div>
+                <div>
+                  <h3 class="int-card-title">Google Services</h3>
+                  <span class="int-card-subtitle">Gmail &amp; Calendar</span>
+                </div>
+                <span id="integ-google-badge" class="int-badge" role="status">Checking…</span>
+              </div>
+              <p id="google-summary" class="int-card-desc">Let Panda read and draft email in your own Gmail account. Nothing is connected until Google confirms it.</p>
+
+              <div class="google-service-rows">
+                <div class="google-service-row" id="google-row-gmail">
+                  <span class="google-service-name">Gmail</span>
+                  <span id="google-gmail-chip" class="status-chip" data-tone="neutral">Checking…</span>
+                  <span id="google-gmail-detail" class="google-service-detail">—</span>
+                </div>
+                <div class="google-service-row" id="google-row-calendar">
+                  <span class="google-service-name">Calendar</span>
+                  <span id="google-calendar-chip" class="status-chip" data-tone="neutral">Not connected</span>
+                  <span id="google-calendar-detail" class="google-service-detail">Connect Google to let Panda read and manage your calendar events.</span>
+                </div>
+                <div class="google-service-row" id="google-row-organize">
+                  <span class="google-service-name">Inbox organization</span>
+                  <span id="google-organize-chip" class="status-chip" data-tone="neutral">Not allowed</span>
+                  <span id="google-organize-detail" class="google-service-detail">Optional. Lets Panda move mail to Promotions, label and archive it after you approve each change. It never deletes mail.</span>
+                </div>
+              </div>
+
+              <div id="google-recovery" class="google-recovery" role="alert" hidden>
+                <strong id="google-recovery-title"></strong>
+                <ul id="google-recovery-steps"></ul>
+                <button id="google-recovery-link" type="button" class="link-btn" hidden></button>
+              </div>
+
+              <div class="google-actions">
+                <button id="google-connect" type="button" class="dispatch">Connect Google</button>
+                <button id="google-cancel" type="button" class="apex-chip" hidden>Cancel sign-in</button>
+                <button id="google-organize-allow" type="button" class="apex-chip" hidden>Allow inbox organization</button>
+                <button id="google-check" type="button" class="apex-chip" hidden>Check again</button>
+                <button id="google-disconnect" type="button" class="apex-chip" hidden>Disconnect</button>
+                <span id="google-action-note" class="google-action-note" aria-live="polite"></span>
+              </div>
+
+              <details id="google-setup" class="google-disclosure" open>
+                <summary>One-time setup: your Google OAuth client</summary>
+                <p class="google-hint">Google requires every app to sign in with an OAuth client. Yours stays on this PC — Panda never sends it anywhere except Google.</p>
+                <ol class="google-steps">
+                  <li>Create or pick a Google Cloud project. <button type="button" class="link-btn" data-open-url="https://console.cloud.google.com/projectcreate">Open Google Cloud</button></li>
+                  <li>Enable the <strong>Gmail API</strong> and the <strong>Google Calendar API</strong> for that project. <button type="button" class="link-btn" data-open-url="https://console.cloud.google.com/apis/library/gmail.googleapis.com">Open Gmail API page</button> <button type="button" class="link-btn" data-open-url="https://console.cloud.google.com/apis/library/calendar-json.googleapis.com">Open Calendar API page</button></li>
+                  <li>Set up the <strong>OAuth consent screen</strong>: choose External, then add your own Google account under <strong>Test users</strong>. While the app is in Testing, Google signs you out every 7 days — just reconnect. <button type="button" class="link-btn" data-open-url="https://console.cloud.google.com/apis/credentials/consent">Open consent screen</button></li>
+                  <li>Create credentials → <strong>OAuth client ID</strong> → application type <strong>Desktop app</strong>. No redirect address is needed; Panda uses a temporary local one (127.0.0.1) for Google's reply. <button type="button" class="link-btn" data-open-url="https://console.cloud.google.com/apis/credentials">Open credentials</button></li>
+                  <li>On the OAuth client page press <strong>Download JSON</strong>, then import that file below. Or copy the <strong>Client ID</strong> (and the Client secret if Google shows one) and paste them. Either way they go straight into encrypted storage on this PC — never type or paste them into the chat.</li>
+                </ol>
+                <div class="google-import-row">
+                  <button id="google-client-import" type="button" class="apex-chip">Import the downloaded JSON file…</button>
+                  <span class="google-hint">Recommended: you pick the file; Panda reads it locally.</span>
+                </div>
+                <form id="google-client-form" class="google-client-form" autocomplete="off">
+                  <label>Client ID
+                    <input id="google-client-id" type="text" spellcheck="false" autocomplete="off" placeholder="1234567890-abcdefg.apps.googleusercontent.com" />
+                  </label>
+                  <label>Client secret <span class="google-optional">(optional)</span>
+                    <input id="google-client-secret" type="password" spellcheck="false" autocomplete="off" placeholder="GOCSPX-…" />
+                  </label>
+                  <div class="google-form-actions">
+                    <button id="google-client-save" type="submit" class="apex-chip">Save</button>
+                    <button id="google-client-clear" type="button" class="link-btn" hidden>Remove saved client</button>
+                    <span id="google-client-status" class="google-client-status" role="status"></span>
+                  </div>
+                </form>
+              </details>
+
+              <details class="google-disclosure">
+                <summary>What Panda asks Google for</summary>
+                <ul class="google-permissions">
+                  <li><strong>Your email address</strong> <span>So Panda can show which account is connected.</span></li>
+                  <li><strong>Read your email</strong> <span>Search and read messages so Panda can find and summarize mail. It cannot change or delete anything.</span></li>
+                  <li><strong>Write drafts and send mail</strong> <span>Create drafts for you. Sending always shows you the exact message first and waits for your approval.</span></li>
+                  <li><strong>Manage calendar events</strong> <span>See, create, change and delete events on your calendar (not calendar settings or sharing). Every change shows you the exact event first and waits for your approval.</span></li>
+                </ul>
+                <p class="google-hint">Your sign-in is stored encrypted on this PC. Disconnect here at any time, or remove Panda in your <button type="button" class="link-btn" data-open-url="https://myaccount.google.com/permissions">Google account permissions</button>.</p>
+              </details>
+            </div>
+
+            <!-- 1. KarkeDikha Mobile Card -->
+            <div class="integration-card" id="integ-card-mobile">
+              <div class="int-card-head">
+                <div class="int-icon-wrap">📱</div>
+                <div>
+                  <h3 class="int-card-title">KarkeDikha Mobile</h3>
+                  <span class="int-card-subtitle">Phone companion</span>
+                </div>
+                <span id="integ-mobile-badge" class="int-badge online">Active :3030</span>
+              </div>
+              <p class="int-card-desc">Connect your phone securely on local Wi-Fi to chat with Pandesh, run missions, and approve file actions.</p>
+              <div class="int-details-box">
+                <div class="int-detail-row">
+                  <span class="int-detail-label">PAIRING PIN:</span>
+                  <strong id="integ-mobile-pin" class="font-mono pin-highlight">----</strong>
+                </div>
+                <div class="int-detail-row">
+                  <span class="int-detail-label">ACCESS URL:</span>
+                  <span id="integ-mobile-url" class="font-mono text-cyan">http://192.168.2.66:3030/</span>
+                </div>
+                <div class="int-detail-row">
+                  <span class="int-detail-label">STATUS:</span>
+                  <span id="integ-mobile-status" class="int-state-text">Ready for pairing</span>
+                </div>
+              </div>
+              <div class="int-card-actions">
+                <button type="button" id="btn-copy-mobile-link" class="apex-chip">Copy Pairing Link</button>
+                <button type="button" id="btn-open-mobile-browser" class="apex-chip">Open in Browser</button>
+              </div>
+            </div>
+
+            <!-- 2. ImageGeneration Studio Card -->
+            <div class="integration-card" id="integ-card-studio">
+              <div class="int-card-head">
+                <div class="int-icon-wrap">🎨</div>
+                <div>
+                  <h3 class="int-card-title">ImageGeneration Studio</h3>
+                  <span class="int-card-subtitle">Local ComfyUI Backend</span>
+                </div>
+                <span id="integ-studio-badge" class="int-badge">Probing…</span>
+              </div>
+              <p class="int-card-desc">Existing image-generation software at <code>C:\Projects\ImageGeneration</code> with ComfyUI.</p>
+              <div class="int-details-box">
+                <div class="int-detail-row">
+                  <span class="int-detail-label">API SERVER:</span>
+                  <span class="font-mono">http://127.0.0.1:8989</span>
+                </div>
+                <div class="int-detail-row">
+                  <span class="int-detail-label">COMFYUI ENGINE:</span>
+                  <span class="font-mono">http://127.0.0.1:8188</span>
+                </div>
+                <div class="int-detail-row">
+                  <span class="int-detail-label">MODELS:</span>
+                  <span id="integ-studio-checkpoints" class="font-mono">Detecting checkpoints…</span>
+                </div>
+              </div>
+              <div class="int-card-actions">
+                <button type="button" id="btn-launch-image-studio" class="apex-chip">Open Studio Web UI</button>
+              </div>
+            </div>
+
+            <!-- 3. Local AI Models Card -->
+            <div class="integration-card" id="integ-card-models">
+              <div class="int-card-head">
+                <div class="int-icon-wrap">🧠</div>
+                <div>
+                  <h3 class="int-card-title">Local AI Models</h3>
+                  <span class="int-card-subtitle">Ollama Local Engine</span>
+                </div>
+                <span id="integ-models-badge" class="int-badge" role="status">Checking…</span>
+              </div>
+              <p class="int-card-desc">Local-first privacy policy: all conversational inference runs strictly on your GPU without cloud leaks.</p>
+              <div class="int-details-box">
+                <div class="int-detail-row">
+                  <span class="int-detail-label">ACTIVE MODEL:</span>
+                  <strong id="integ-model-active" class="font-mono">qwen3.8:27b-mtp-q4_K_M</strong>
+                </div>
+                <div class="int-detail-row">
+                  <span class="int-detail-label">ROUTING:</span>
+                  <span class="font-mono">local-only</span>
+                </div>
+              </div>
+            </div>
+
+            <!-- 4. Pandesh Voice & Speech Card -->
+            <div class="integration-card" id="integ-card-voice">
+              <div class="int-card-head">
+                <div class="int-icon-wrap">🎙️</div>
+                <div>
+                  <h3 class="int-card-title">Pandesh Voice & Speech</h3>
+                  <span class="int-card-subtitle">Whisper ASR & Piper TTS</span>
+                </div>
+                <span class="int-badge online">Ready</span>
+              </div>
+              <p class="int-card-desc">Local speech recognition with VAD and spoken voice responses. Wake name: <strong>Pandesh</strong>.</p>
+              <div class="int-details-box">
+                <div class="int-detail-row">
+                  <span class="int-detail-label">ASR MODEL:</span>
+                  <span class="font-mono">whisper-base.en</span>
+                </div>
+                <div class="int-detail-row">
+                  <span class="int-detail-label">WAKE WORD:</span>
+                  <span id="integ-wake-status" class="font-mono">Pandesh (Enabled)</span>
+                </div>
+              </div>
+            </div>
+
+            <!-- 6. Windows PC Hardware Card -->
+            <div class="integration-card" id="integ-card-hardware">
+              <div class="int-card-head">
+                <div class="int-icon-wrap">💻</div>
+                <div>
+                  <h3 class="int-card-title">PC Hardware Runtime</h3>
+                  <span class="int-card-subtitle">System Telemetry Probes</span>
+                </div>
+                <span class="int-badge online">Live</span>
+              </div>
+              <p class="int-card-desc">Observed Windows telemetry via native PowerShell and NVIDIA Management Library.</p>
+              <div class="int-details-box">
+                <div class="int-detail-row">
+                  <span class="int-detail-label">CPU:</span>
+                  <span id="integ-hw-cpu" class="font-mono">AMD Ryzen 9 5900X (12 cores)</span>
+                </div>
+                <div class="int-detail-row">
+                  <span class="int-detail-label">RAM:</span>
+                  <span id="integ-hw-ram" class="font-mono">64 GB Total</span>
+                </div>
+                <div class="int-detail-row">
+                  <span class="int-detail-label">GPU & VRAM:</span>
+                  <span id="integ-hw-gpu" class="font-mono">NVIDIA RTX 3090 (24 GB VRAM)</span>
+                </div>
+              </div>
+            </div>
+
+            <!-- About Pandesh: the build this app actually is. -->
+            <div class="integration-card" id="about-card">
+              <div class="int-card-head">
+                <div class="int-icon-wrap">ⓘ</div>
+                <div>
+                  <h3 class="int-card-title">About Pandesh</h3>
+                  <span class="int-card-subtitle">Version and build identity</span>
+                </div>
+                <span id="about-channel-badge" class="int-badge">—</span>
+              </div>
+              <div class="int-details-box" id="about-details">
+                <div class="int-detail-row">
+                  <span class="int-detail-label">Application version:</span>
+                  <span id="about-version" class="font-mono">—</span>
+                </div>
+                <div class="int-detail-row">
+                  <span class="int-detail-label">Build number:</span>
+                  <span id="about-build" class="font-mono">—</span>
+                </div>
+                <div class="int-detail-row">
+                  <span class="int-detail-label">Git commit:</span>
+                  <span id="about-commit" class="font-mono">—</span>
+                </div>
+                <div class="int-detail-row">
+                  <span class="int-detail-label">Built:</span>
+                  <span id="about-built" class="font-mono">—</span>
+                </div>
+                <div class="int-detail-row">
+                  <span class="int-detail-label">Release channel:</span>
+                  <span id="about-channel" class="font-mono">—</span>
+                </div>
+                <div class="int-detail-row">
+                  <span class="int-detail-label">Runtime / Core:</span>
+                  <span id="about-core" class="font-mono">—</span>
+                </div>
+                <div class="int-detail-row">
+                  <span class="int-detail-label">Installer version:</span>
+                  <span id="about-installer" class="font-mono">—</span>
+                </div>
+              </div>
+              <p id="about-core-mismatch" class="about-warning" hidden>
+                The running Core is a different version from this window. Restart Pandesh to pick up the matching Core.
+              </p>
+              <div class="advanced-row">
+                <button id="about-copy-diagnostics" type="button" class="apex-chip">Copy diagnostics</button>
+                <span id="about-copy-status" class="muted" role="status"></span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <!-- BOTTOM ACTIVITY BAR (APEX Equalizer & Status Cluster) -->
+    <footer class="apex-bottom-cluster" aria-label="Bottom status & composer">
+      <!-- THE ONE COMPOSER: typing and voice, on every screen -->
+      <p id="operation-error" class="composer-error" role="alert" title="Click to dismiss" hidden></p>
+      <p id="composer-status" class="composer-status" aria-live="polite">Ready</p>
+      <p id="live-telemetry" class="composer-status" role="status" hidden></p>
+      <div id="composer-attachments" class="composer-attachments" aria-label="Files attached to your next message" hidden></div>
+      <div class="composer-capsule-wrap" id="composer-capsule">
+        <label for="task-input" class="sr-only">Instruction or query for Pandesh</label>
+        <textarea
+          id="task-input"
+          class="composer-input font-hud"
+          placeholder="Message Pandesh…"
+          rows="1"
+        ></textarea>
+
+        <div class="composer-foot">
+          <div class="composer-tools">
+            <button id="composer-attach-plus-btn" type="button" class="composer-tool-btn composer-attach-plus" title="Attach files or images" aria-label="Attach files or images">
+              <svg viewBox="0 0 24 24" width="17" height="17" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" d="M12 5v14M5 12h14"/></svg>
+            </button>
+            <button id="composer-attach-btn" type="button" class="composer-tool-btn composer-attach-btn" title="Attach files or images (you can also drop or paste them)" aria-label="Attach files or images">
+              <svg viewBox="0 0 24 24" width="17" height="17" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>
+            </button>
+            <button id="composer-mic-btn" type="button" class="composer-tool-btn composer-mic-btn" title="Tap to speak" aria-label="Tap to speak">
+              <svg viewBox="0 0 24 24" width="17" height="17" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" d="M12 14a3 3 0 0 0 3-3V6a3 3 0 0 0-6 0v5a3 3 0 0 0 3 3z"/><path fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg>
+            </button>
+          </div>
+
+          <div class="composer-foot-right">
+            <select id="model-select" class="apex-chip apex-select composer-model-select" title="Active local model"></select>
+            <span id="composer-provider-name" class="composer-provider">Local</span>
+            <div class="composer-actions">
+              <button id="submit" type="button" class="composer-send-btn" title="Send message (Enter)" aria-label="Send message">
+                <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" d="M12 19V5M5 12l7-7 7 7"/></svg>
+              </button>
+              <button id="cancel" type="button" class="composer-cancel-btn" hidden title="Stop the running task" aria-label="Stop the running task">
+                <svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><rect x="5" y="5" width="14" height="14" rx="2" fill="currentColor"/></svg>
+                <span class="composer-cancel-label">Stop</span>
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <canvas id="waveform-canvas" width="200" height="24" hidden aria-hidden="true"></canvas>
+        <p id="voice-transcript" class="voice-transcript-inline" hidden aria-live="polite"></p>
+        <button type="button" id="stop-speaking" class="ghost-btn voice-stop-primary" hidden>Stop speaking</button>
+        <span id="mic-hint" class="sr-only">Tap the mic and speak.</span>
+      </div>
+    </footer>
+
+    <!-- TOPBAR CONTEXTUAL FLYOUT DRAWERS (Preserves tests and deep access) -->
+    <!-- Drawer 1: Conversations History -->
+    <aside id="drawer-conversations" class="hud-drawer drawer-left" hidden>
+      <div class="drawer-header">
+        <span class="drawer-title">Conversations</span>
+        <div class="drawer-header-actions">
+          <button id="drawer-conversations-new" type="button" class="btn-drawer-action">New</button>
+          <button type="button" class="btn-drawer-close" data-close="drawer-conversations">×</button>
+        </div>
+      </div>
+      <div class="drawer-body">
+        <div class="tools-form">
+          <input id="drawer-conversations-search" type="search" placeholder="Search conversations…" aria-label="Search conversations" />
+        </div>
+        <label class="conversations-archived-toggle">
+          <input id="drawer-conversations-show-archived" type="checkbox" />
+          <span>Show archived</span>
+        </label>
+        <div id="drawer-conversations-search-results" class="conversations-rail-groups" hidden></div>
+        <div id="drawer-conversations-rail-groups" class="conversations-rail-groups"></div>
+        <p id="drawer-conversations-rail-empty" class="muted" hidden>No conversations yet.</p>
+
+        <!-- Hidden hooks for test compatibility -->
+        
+        
+      </div>
+    </aside>
+
+    <!-- Drawer 2: Activity, Diagnostics & Mission Topology -->
+    <aside id="drawer-activity" class="hud-drawer drawer-right" hidden>
+      <div class="drawer-header">
+        <span class="drawer-title">Activity & Diagnostics</span>
+        <button type="button" class="btn-drawer-close" data-close="drawer-activity">×</button>
+      </div>
+      <div class="drawer-body">
+        <!-- Mission Focus Topology (Preserved for tests & architecture diagnostics) -->
+        <div id="mission-focus-topology" class="mission-focus-topology" aria-label="Mission Focus Topology">
+          <div class="topology-header">
+            <span class="topology-title font-hud">Mission Focus</span>
+            <span id="topology-runtime-badge" class="topology-badge badge-local">LOCAL</span>
+            <span id="topology-model-badge" class="topology-badge font-mono">--</span>
+          </div>
+          <div class="topology-nodes">
+            <div id="node-objective" class="topo-node"><span class="topo-node-label">OBJECTIVE</span><span id="topo-objective-text" class="topo-node-val">Ready</span></div>
+            <div id="edge-obj-model" class="topo-connector"></div>
+            <div id="node-model" class="topo-node"><span class="topo-node-label">MODEL</span><span id="topo-boundary-badge" class="boundary-pill local-pill">LOCAL</span><span id="topo-model-text" class="topo-node-val font-mono">--</span></div>
+            <div id="edge-model-tool" class="topo-connector"></div>
+            <div id="node-tool" class="topo-node"><span class="topo-node-label">TOOL</span><span id="topo-tool-text" class="topo-node-val font-mono">Idle</span></div>
+            <div id="edge-tool-val" class="topo-connector"></div>
+            <div id="node-validation" class="topo-node"><span class="topo-node-label">VALIDATION</span><span id="topo-val-text" class="topo-node-val font-mono">Not run</span></div>
+            <div id="edge-val-art" class="topo-connector"></div>
+            <div id="node-artifact" class="topo-node"><span class="topo-node-label">ARTIFACT</span><span id="topo-art-text" class="topo-node-val font-mono">None</span></div>
+          </div>
+          <div id="kkd-intelligence-strip" class="kkd-intelligence-strip" aria-label="KKD Runtime Intelligence">
+            <div class="intel-badge" id="intel-context-badge">
+              <span class="intel-label">CONTEXT BUDGET</span>
+              <span class="intel-val font-mono" id="intel-context-val">Nominal (16k)</span>
+            </div>
+            <div class="intel-badge" id="intel-governance-badge">
+              <span class="intel-label">GOVERNANCE</span>
+              <span class="intel-val font-mono" id="intel-governance-val">Fenced Lease · Local Only</span>
+            </div>
+            <div class="intel-badge" id="intel-recovery-badge">
+              <span class="intel-label">RECOVERY STATUS</span>
+              <span class="intel-val font-mono" id="intel-recovery-val">Zero faults</span>
+            </div>
+          </div>
+        </div>
+
+        <ol id="mission-timeline" class="execution-stepper" aria-label="Mission status" style="display:none;">
+          <li data-step="thinking" id="timeline-thinking" class="step">Thinking</li>
+          <li data-step="checking" id="timeline-checking" class="step">Checking</li>
+          <li data-step="verified" id="timeline-verified" class="step">Verified</li>
+          <li data-step="delivered" id="timeline-delivered" class="step">Delivered</li>
+        </ol>
+
+        <div class="checkpoint-pane scroll-region" id="checkpoint-pane">
+          <div id="activity" class="activity-log font-mono"></div>
+        </div>
+        <button id="jump-latest" type="button" class="jump-latest-btn" hidden>Jump to latest</button>
+        <div id="diagnostics-list" class="diagnostics-list font-mono"></div>
+
+        <!-- Advanced: engine and provider choices live here, not in the main window -->
+        <details id="advanced-settings" class="advanced-settings">
+          <summary>Advanced: engine, provider and routing</summary>
+          <p class="advanced-note">Most people never need these — Panda chooses the engine and model for each request. Changes apply to your next message.</p>
+          <label class="advanced-field">Engine
+            <select id="worker-select"></select>
+          </label>
+          <p id="worker-detail" class="advanced-note"></p>
+          <label class="advanced-field">Model provider
+            <select id="inference-provider"><option value="ollama">Ollama (local)</option><option value="openrouter">OpenRouter (cloud, explicit)</option></select>
+          </label>
+          <p class="advanced-note">Provider: <span id="provider-label">ollama</span> · Routing: <span id="routing-label">local-only</span></p>
+          <div class="advanced-field">
+            <span>OpenRouter key</span>
+            <p id="openrouter-status" class="advanced-note"></p>
+            <div class="advanced-row">
+              <input id="openrouter-key" type="password" autocomplete="off" spellcheck="false" placeholder="sk-or-…" />
+              <button id="openrouter-set-key" type="button" class="apex-chip">Save key</button>
+              <button id="openrouter-clear-key" type="button" class="apex-chip">Remove</button>
+            </div>
+          </div>
+        </details>
+
+        <!-- Hidden telemetry & control test compatibility anchors -->
+        <div style="display:none;">
+          <span id="telem-cpu"></span><span id="telem-cpu-detail"></span>
+          <span id="telem-gpu"></span><span id="telem-gpu-detail"></span>
+          <span id="telem-memory"></span>
+          <span id="telem-vram"></span><span id="telem-vram-detail"></span>
+          <span id="telem-disk"></span><span id="telem-disk-detail"></span>
+          <span id="telem-ollama-status"></span><span id="telem-ollama-model"></span><span id="telem-ollama-endpoint"></span>
+          <pre id="telem-hardware-detail"></pre>
+          <div id="cpu-bar"></div><div id="gpu-bar"></div><div id="ram-bar"></div><div id="disk-bar"></div><div id="vram-bar"></div>
+          <p id="operation-error" role="alert" hidden></p>
+          <details id="diagnostics" style="display:none;"><summary>Diagnostics</summary><ol id="diagnostics-list-legacy"></ol><span id="cockpit-prompt-tokens"></span><span id="cockpit-cost"></span></details>
+          <span id="cockpit-phase"></span>
+          <span id="cockpit-action"></span>
+          <span id="cockpit-elapsed"></span>
+          <span id="cockpit-remaining"></span>
+          <span id="cockpit-productive"></span>
+          <span id="cockpit-repair"></span>
+          <span id="cockpit-read"></span>
+          <span id="cockpit-changed"></span>
+          <span id="cockpit-allowance"></span>
+          <span id="cockpit-validation"></span>
+          <span id="cockpit-verification"></span>
+          <span id="mission-phase-brief"></span>
+          <span id="activity-summary"></span><span id="activity-details"></span><span id="result-state"></span>
+          <span id="current-task"></span><span id="ids"></span>
+          <details id="task-scope" class="auth-brief progressive hud-card">
+            <summary>
+              <span id="scope-state" class="scope-state-brief">Not authorized</span>
+              <span class="auth-expand">Mission settings</span>
+            </summary>
+            <div class="auth-body scroll-region">
+              <div id="scope-repo" class="path">No repository selected</div>
+              <div id="scope-actions" class="scope-actions">Select a repository to see permitted actions.</div>
+              <div id="scope-delivery" class="scope-delivery"></div>
+              <span id="scope-delivery-result"></span>
+            </div>
+          </details>
+          <details id="voice-settings" class="auth-brief progressive hud-card voice-settings">
+            <summary>
+              <span class="scope-state-brief">Voice settings</span>
+              <span id="wake-indicator" class="wake-indicator muted" aria-live="polite">Wake off</span>
+            </summary>
+            <div class="voice-controls" id="voice-controls">
+              <label class="voice-toggle">
+                <input type="checkbox" id="wake-enable" />
+                <span>Wake word</span>
+              </label>
+              <button type="button" id="wake-mute" class="ghost-btn" disabled>Mute wake</button>
+              <div class="wake-diag font-mono">Wake diagnostics</div>
+            </div>
+          </details>
+          <span id="approved-auth"></span><span id="approved-auth-detail"></span>
+        </div>
+      </div>
+    </aside>
+
+    <!-- Drawer 3: Everyday Tools (Notes, Reminders, Queue) -->
+    <aside id="drawer-tools" class="hud-drawer drawer-right" hidden>
+      <div class="drawer-header">
+        <span class="drawer-title">Everyday Tools & Queue</span>
+        <button type="button" class="btn-drawer-close" data-close="drawer-tools">×</button>
+      </div>
+      <div class="drawer-body">
+        <div id="tab-tools" class="tools-tab-content">
+          <div class="tools-workspace-head" style="display:flex; justify-content:space-between; margin-bottom:0.5rem;">
+            <button id="tools-open-workspace" type="button" class="apex-chip">Open workspace</button>
+            <button id="tools-refresh" type="button" class="apex-chip">Refresh</button>
+          </div>
+          <div class="tools-status-line muted" style="font-size:0.75rem; margin-bottom:0.75rem;">
+            <span id="tools-timezone">Timezone: —</span>
+            <span id="tools-alerts-policy"></span>
+          </div>
+
+          <section class="tool-card research-card" style="margin-bottom:1rem; border-bottom:1px solid rgba(255,255,255,0.08); padding-bottom:0.75rem;">
+            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:0.35rem;">
+              <h4 style="margin:0;">Research the web</h4>
+              <span class="tool-status font-mono" style="font-size:0.7rem; color:#00e5ff;">Approval before access</span>
+            </div>
+            <div style="display:flex; gap:0.5rem; margin-bottom:0.5rem;">
+              <input id="research-query" placeholder="What do you want to investigate?" style="flex:1;" />
+              <button id="research-start" type="button" class="apex-chip">Research</button>
+            </div>
+            <div id="research-approval" class="queue-confirm" hidden>
+              <span>Network approval required</span>
+              <p id="research-approval-query" class="selectable-text"></p>
+              <p id="research-approval-detail" class="muted"></p>
+              <div style="display:flex; gap:0.5rem;">
+                <button id="research-approve" type="button" class="apex-chip">Approve research</button>
+                <button id="research-reject" type="button" class="apex-chip">Reject</button>
+              </div>
+            </div>
+            <p id="research-status" class="muted" style="font-size:0.75rem;">No research running.</p>
+            <div id="research-result" class="selectable-text" hidden></div>
+            <ul id="research-sources" class="quiet-list"></ul>
+          </section>
+
+          <h4>Notes</h4>
+          <input id="note-title" placeholder="Note title…" />
+          <textarea id="note-body" placeholder="Note body…"></textarea>
+          <button id="note-save" type="button" class="apex-chip">Save note</button>
+          <ul id="notes-list" class="quiet-list"></ul>
+          <p id="notes-empty" class="muted" style="font-size:0.75rem;">No notes yet. Try: Remember that my printer uses A4</p>
+
+          <h4 style="margin-top:1rem;">Reminders</h4>
+          <input id="reminder-title" placeholder="Reminder…" />
+          <input id="reminder-due-minutes" type="number" placeholder="Due in minutes" value="15" />
+          <button id="reminder-save" type="button" class="apex-chip">Save reminder</button>
+          <ul id="reminders-list" class="quiet-list"></ul>
+          <p id="reminders-empty" class="muted" style="font-size:0.75rem;">No open reminders. Try: Remind me in two minutes to check the oven</p>
+
+          <section style="margin-top:1rem;">
+            <h4>Host Health</h4>
+            <div style="display:grid; grid-template-columns:1fr 1fr; gap:0.35rem; font-size:0.75rem;">
+              <div>CPU: <span id="tools-health-cpu">Unavailable</span></div>
+              <div>Memory: <span id="tools-health-memory">Unavailable</span></div>
+              <div>GPU: <span id="tools-health-gpu">Unavailable</span></div>
+              <div>Disk: <span id="tools-health-disk">Unavailable</span></div>
+            </div>
+          </section>
+
+          <section style="margin-top:1rem;">
+            <h4>Availability</h4>
+            <ul id="tools-catalog" class="connector-list"></ul>
+          </section>
+
+          <h4 style="margin-top:1rem;">Command Queue</h4>
+          <div style="display:flex; gap:0.5rem; margin-bottom:0.5rem;">
+            <input id="queue-instruction" placeholder="Queue instruction…" style="flex:1;" />
+            <button id="queue-add" type="button" class="apex-chip">Add to queue</button>
+          </div>
+          <div id="queue-confirm" hidden>
+            <strong id="queue-confirm-title"></strong>
+            <p id="queue-confirm-detail"></p>
+            <button id="queue-run" type="button">Run</button>
+            <button id="queue-edit" type="button">Edit</button>
+            <button id="queue-skip" type="button">Skip</button>
+            <button id="queue-postpone" type="button">Postpone</button>
+          </div>
+          <p id="queue-active" class="muted" hidden></p>
+          <ul id="queue-waiting" class="quiet-list"></ul>
+          <p id="queue-waiting-empty" class="muted" style="font-size:0.75rem;">No waiting commands. Try: Add to queue Remember that my printer uses A4</p>
+          <ul id="queue-recent" class="quiet-list"></ul>
+
+          <div style="display:none;">
+            <span id="today-summary"></span><div id="today-tasks"></div><p id="today-due-empty"></p><div id="today-due-list"></div>
+            <div id="recent-activity"></div><p id="recent-empty"></p>
+          </div>
+        </div>
+      </div>
+    </aside>
+  </div>
+
+  <div class="legacy-compatibility-vault" style="display:none;" aria-hidden="true">
+<main class="page three-col" id="page-scroll">
+      <!-- LEFT: Atmospherics + Hardware Runtime -->
+      <aside class="col col-left scroll-region" aria-label="Conversations and host telemetry">
+        <section class="hud-card panel compact-panel" id="conversations-rail" aria-label="Jarvis Conversations">
+          <div class="panel-head">
+            <span class="panel-title">
+              <svg class="panel-ico" viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="2" d="M4 4h16v12H7l-3 3z"/></svg>
+              Conversations
+            </span>
+            <button id="legacy-conversations-new" type="button" class="dispatch" title="Start a new conversation">New</button>
+          </div>
+          <div class="tools-form">
+            <input id="legacy-conversations-search" type="search" placeholder="Search conversations…" aria-label="Search conversations" />
+          </div>
+          <label class="conversations-archived-toggle">
+            <input id="legacy-conversations-show-archived" type="checkbox" />
+            Show archived
+          </label>
+          <div id="legacy-conversations-search-results" class="conversations-rail-groups" hidden></div>
+          <div id="legacy-conversations-rail-groups" class="conversations-rail-groups"></div>
+          <p id="legacy-conversations-rail-empty" class="muted" hidden>No conversations yet.</p>
+        </section>
+
+        <details class="hud-card panel compact-panel conversation-context" id="conversation-context-panel">
+          <summary>What Jarvis knows</summary>
+          <p id="conversation-context-empty" class="muted">Open a conversation to inspect its stored context.</p>
+          <div id="conversation-context-body" hidden>
+            <dl class="context-facts">
+              <div><dt>Objective</dt><dd id="context-objective">—</dd></div>
+              <div><dt>Latest request</dt><dd id="context-intent">—</dd></div>
+              <div><dt>Repository</dt><dd id="context-repository">—</dd></div>
+              <div><dt>Pending</dt><dd id="context-pending">None</dd></div>
+              <div><dt>Policy</dt><dd id="context-policy">—</dd></div>
+              <div><dt>Relevant files</dt><dd id="context-files">None recorded</dd></div>
+              <div><dt>Relevant symbols</dt><dd id="context-symbols">None recorded</dd></div>
+              <div><dt>Attachments</dt><dd id="context-attachments">None</dd></div>
+              <div><dt>Constraints</dt><dd id="context-constraints">None recorded</dd></div>
+              <div><dt>Latest findings</dt><dd id="context-findings">None recorded</dd></div>
+              <div><dt>Validation</dt><dd id="context-validation">None recorded</dd></div>
+              <div><dt>Conversation</dt><dd id="context-counts">—</dd></div>
+            </dl>
+            <p id="conversation-context-status" class="muted"></p>
+            <button id="conversation-export" type="button">Export transcript</button>
+            <p id="conversation-export-status" class="muted" aria-live="polite"></p>
+            <details class="context-retention">
+              <summary>Retention and exclusions</summary>
+              <ul>
+                <li>Transcript is durable in Core until a future governed hard-delete policy is implemented.</li>
+                <li>Working context is a bounded summary; repository files remain authoritative.</li>
+                <li>Audit evidence and artifacts have separate lifecycles.</li>
+                <li>Credentials, system prompts, hidden reasoning, raw tool output, and repository bytes are not shown here.</li>
+              </ul>
+            </details>
+          </div>
+        </details>
+
+        <section class="hud-card panel weather-panel compact-panel">
+          <div class="panel-head">
+            <span class="panel-title">
+              <svg class="panel-ico" viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="2" d="M7 16a4 4 0 1 1 1.2-7.8A5.5 5.5 0 0 1 20 11a3.5 3.5 0 0 1-1 6.8H7z"/></svg>
+              Atmospherics
+            </span>
+            <span class="panel-meta muted">Not connected</span>
+          </div>
+          <p class="not-connected">Weather connector is not connected. No forecast is shown.</p>
+        </section>
+
+        <section class="hud-card panel telem-panel">
+          <div class="panel-head">
+            <span class="panel-title">
+              <svg class="panel-ico" viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="2" d="M22 12h-4l-3 8L9 4l-3 8H2"/></svg>
+              Hardware runtime
+            </span>
+            <span id="telem-poll-badge" class="badge">Polling // 1000ms</span>
+          </div>
+
+          <div class="gauge-row" role="group" aria-label="Host resource gauges">
+            <div class="radial-gauge" data-gauge="cpu">
+              <div class="gauge-svg-wrap">
+                <svg viewBox="0 0 100 100" width="72" height="72" aria-hidden="true">
+                  <circle class="gauge-track" cx="50" cy="50" r="40" />
+                  <circle id="cpu-gauge-arc" class="gauge-arc" cx="50" cy="50" r="40" pathLength="100" />
+                </svg>
+                <strong id="telem-cpu" class="font-mono gauge-value">Unavailable</strong>
+              </div>
+              <span class="gauge-label">CPU load</span>
+              <span id="telem-cpu-detail" class="gauge-detail font-mono">—</span>
+            </div>
+            <div class="radial-gauge" data-gauge="gpu">
+              <div class="gauge-svg-wrap">
+                <svg viewBox="0 0 100 100" width="72" height="72" aria-hidden="true">
+                  <circle class="gauge-track" cx="50" cy="50" r="40" />
+                  <circle id="gpu-gauge-arc" class="gauge-arc gauge-arc-gpu" cx="50" cy="50" r="40" pathLength="100" />
+                </svg>
+                <strong id="telem-gpu" class="font-mono gauge-value">Unavailable</strong>
+              </div>
+              <span id="telem-gpu-label" class="gauge-label">GPU util</span>
+              <span id="telem-gpu-detail" class="gauge-detail font-mono">Unavailable</span>
+            </div>
+            <div class="radial-gauge" data-gauge="ram">
+              <div class="gauge-svg-wrap">
+                <svg viewBox="0 0 100 100" width="72" height="72" aria-hidden="true">
+                  <circle class="gauge-track" cx="50" cy="50" r="40" />
+                  <circle id="ram-gauge-arc" class="gauge-arc" cx="50" cy="50" r="40" pathLength="100" />
+                </svg>
+                <strong id="telem-memory" class="font-mono gauge-value">Unavailable</strong>
+              </div>
+              <span class="gauge-label">Sys RAM</span>
+              <span class="gauge-detail font-mono">Host memory</span>
+            </div>
+          </div>
+
+          <details class="hardware-more">
+            <summary>System and model details</summary>
+
+          <!-- Hidden legacy meter hooks for setMeter -->
+          <div class="meter" hidden><div id="cpu-bar" class="meter-fill" style="width:0%"></div></div>
+          <div class="meter" hidden><div id="gpu-bar" class="meter-fill" style="width:0%"></div></div>
+          <div class="meter" hidden><div id="ram-bar" class="meter-fill" style="width:0%"></div></div>
+          <div class="meter" hidden><div id="disk-bar" class="meter-fill" style="width:0%"></div></div>
+          <div class="meter" hidden><div id="vram-bar" class="meter-fill" style="width:0%"></div></div>
+
+          <div class="telem-bars">
+            <div class="metric-row">
+              <span class="metric-label">VRAM allocation</span>
+              <strong id="telem-vram" class="font-mono">Unavailable</strong>
+            </div>
+            <div class="meter meter-visible" aria-hidden="true">
+              <div id="vram-bar-visible" class="meter-fill meter-vram" style="width:0%"></div>
+            </div>
+            <p id="telem-vram-detail" class="metric-sub">Separate from GPU utilization.</p>
+
+            <div class="metric-row">
+              <span id="telem-disk-label" class="metric-label">Workspace storage</span>
+              <strong id="telem-disk" class="font-mono">Unavailable</strong>
+            </div>
+            <div class="meter meter-visible" aria-hidden="true">
+              <div id="disk-bar-visible" class="meter-fill meter-disk" style="width:0%"></div>
+            </div>
+            <p id="telem-disk-detail" class="metric-sub">—</p>
+          </div>
+
+          <div class="inference-card">
+            <div class="inference-title">
+              <svg class="panel-ico" viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><rect x="3" y="4" width="18" height="8" rx="1" fill="none" stroke="currentColor" stroke-width="2"/><rect x="3" y="14" width="18" height="6" rx="1" fill="none" stroke="currentColor" stroke-width="2"/><path fill="currentColor" d="M6 7h2v2H6zm0 8h2v2H6z"/></svg>
+              Local servers
+            </div>
+            <dl class="compact-dl">
+              <div><dt>Status</dt><dd id="telem-ollama-status">—</dd></div>
+              <div><dt>Model</dt><dd id="telem-ollama-model">—</dd></div>
+              <div><dt>Endpoint</dt><dd id="telem-ollama-endpoint">—</dd></div>
+            </dl>
+          </div>
+
+          <details class="tech-fold">
+            <summary>Hardware detail</summary>
+            <pre id="telem-hardware-detail" class="scroll-region tech-pre"></pre>
+          </details>
+          </details>
+        </section>
+
+        <section class="hud-card panel connectors-panel compact-panel">
+          <div class="panel-head"><span class="panel-title">Connectors</span></div>
+          <ul id="connector-list" class="connector-list">
+            <li data-connector="news"><span class="conn-label">News</span><span class="conn-state">Not connected</span></li>
+            <li data-connector="email"><span class="conn-label">Email</span><span class="conn-state">Not connected</span></li>
+            <li data-connector="calendar"><span class="conn-label">Calendar</span><span class="conn-state">Not connected</span></li>
+          </ul>
+        </section>
+      </aside>
+
+      <!-- CENTER: Arc Reactor + waveform + stepper + command -->
+      <section class="col col-center" aria-label="Talk to Jarvis">
+        <div class="hud-card neural-panel">
+          <div class="neural-head">
+            <span class="font-hud neural-label">Neural audio matrix</span>
+            <span id="neural-ready" class="neural-ready">Idle</span>
+          </div>
+
+          <div class="jarvis-hero">
+            <h1>Talk to Jarvis</h1>
+            <p>Your local assistant for conversations, tools, and governed work.</p>
+          </div>
+
+          <div class="reactor-wrap" id="jarvis-core-reactor" data-core-state="idle" aria-label="JARVIS Core Reactor">
+            <div class="orbit-ring ring-dashed spin-cw" aria-hidden="true"></div>
+            <div class="orbit-ring ring-mid spin-ccw" aria-hidden="true"></div>
+            <div class="orbit-ring ring-inner spin-fast-cw" aria-hidden="true"></div>
+            <div class="orbit-ring ring-core-dash spin-ccw" aria-hidden="true"></div>
+            <button
+              id="mic-button"
+              type="button"
+              class="reactor-core mic mic-prominent core-breathe"
+              aria-pressed="false"
+              aria-label="Start listening. Microphone stays off until pressed."
+              title="Start listening — hold Space or click; release Space to stop"
+            >
+              <span class="reactor-bloom" aria-hidden="true"></span>
+              <svg class="mic-glyph" viewBox="0 0 24 24" width="40" height="40" aria-hidden="true" focusable="false">
+                <path fill="currentColor" d="M12 14a3 3 0 0 0 3-3V6a3 3 0 0 0-6 0v5a3 3 0 0 0 3 3zm5-3a5 5 0 0 1-10 0H5a7 7 0 0 0 6 6.92V21h2v-3.08A7 7 0 0 0 19 11h-2z"/>
+              </svg>
+              <span id="mic-label" class="sr-only">Start listening</span>
+            </button>
+          </div>
+
+          <div class="core-state-indicator" aria-live="polite">
+            <div class="core-state-pill">
+              <span class="core-state-led" aria-hidden="true"></span>
+              <span id="core-reactor-badge" class="core-state-badge font-hud">IDLE</span>
+            </div>
+            <span id="core-reactor-desc" class="core-state-desc font-mono">Kernel ready · Standing by</span>
+          </div>
+
+          <div class="waveform-block">
+            <canvas id="waveform-canvas" width="500" height="48" aria-hidden="true"></canvas>
+            <p id="voice-transcript" class="voice-transcript selectable-text" hidden aria-live="polite"></p>
+            <button type="button" id="stop-speaking" class="ghost-btn voice-stop-primary" hidden>Stop speaking</button>
+            <p id="mic-hint" class="mic-hint muted">Tap the mic and speak.</p>
+          </div>
+
+          <!-- MISSION FOCUS TOPOLOGY (Part 2 & Part 5) -->
+          <div id="mission-focus-topology" class="mission-focus-topology" aria-label="Mission Focus Topology">
+            <div class="topology-header">
+              <div class="topology-title-block">
+                <svg class="panel-ico" viewBox="0 0 24 24" width="14" height="14" aria-hidden="true">
+                  <path fill="none" stroke="currentColor" stroke-width="2" d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/>
+                </svg>
+                <span class="font-hud topology-title">Mission Focus</span>
+              </div>
+              <div class="topology-meta">
+                <span id="topology-runtime-badge" class="topology-badge badge-local">LOCAL RUNTIME</span>
+                <span id="topology-model-badge" class="topology-badge font-mono">qwen2.5-coder:14b</span>
+              </div>
+            </div>
+
+            <div class="topology-nodes">
+              <!-- Node 1: Objective -->
+              <div id="node-objective" class="topo-node is-active" data-stage="objective">
+                <div class="topo-node-icon">
+                  <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="2"/><path d="M12 7v5l3 3" fill="none" stroke="currentColor" stroke-width="2"/></svg>
+                </div>
+                <div class="topo-node-content">
+                  <span class="topo-node-label">OBJECTIVE</span>
+                  <span id="topo-objective-text" class="topo-node-val">Ready</span>
+                </div>
+              </div>
+
+              <!-- Conductor 1 -->
+              <div class="topo-connector" id="edge-obj-model"><div class="topo-beam"></div></div>
+
+              <!-- Node 2: Model & Boundary -->
+              <div id="node-model" class="topo-node" data-stage="model">
+                <div class="topo-node-icon">
+                  <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><rect x="4" y="4" width="16" height="16" rx="2" fill="none" stroke="currentColor" stroke-width="2"/><path d="M9 9h6v6H9z" fill="none" stroke="currentColor" stroke-width="2"/></svg>
+                </div>
+                <div class="topo-node-content">
+                  <div class="topo-node-head">
+                    <span class="topo-node-label">MODEL</span>
+                    <span id="topo-boundary-badge" class="boundary-pill local-pill">LOCAL</span>
+                  </div>
+                  <span id="topo-model-text" class="topo-node-val font-mono">--</span>
+                </div>
+              </div>
+
+              <!-- Conductor 2 -->
+              <div class="topo-connector" id="edge-model-tool"><div class="topo-beam"></div></div>
+
+              <!-- Node 3: Capability / Tool -->
+              <div id="node-tool" class="topo-node" data-stage="tool">
+                <div class="topo-node-icon">
+                  <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z" fill="none" stroke="currentColor" stroke-width="2"/></svg>
+                </div>
+                <div class="topo-node-content">
+                  <span class="topo-node-label">CAPABILITY / TOOL</span>
+                  <span id="topo-tool-text" class="topo-node-val font-mono">Idle</span>
+                </div>
+              </div>
+
+              <!-- Conductor 3 -->
+              <div class="topo-connector" id="edge-tool-val"><div class="topo-beam"></div></div>
+
+              <!-- Node 4: Validation -->
+              <div id="node-validation" class="topo-node" data-stage="validation">
+                <div class="topo-node-icon">
+                  <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path d="M9 12l2 2 4-4m6 2a9 9 0 1 1-18 0 9 9 0 0 1 18 0z" fill="none" stroke="currentColor" stroke-width="2"/></svg>
+                </div>
+                <div class="topo-node-content">
+                  <span class="topo-node-label">VALIDATION</span>
+                  <span id="topo-val-text" class="topo-node-val font-mono">Not run</span>
+                </div>
+              </div>
+
+              <!-- Conductor 4 -->
+              <div class="topo-connector" id="edge-val-art"><div class="topo-beam"></div></div>
+
+              <!-- Node 5: Artifact / Delivery -->
+              <div id="node-artifact" class="topo-node" data-stage="artifact">
+                <div class="topo-node-icon">
+                  <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z" fill="none" stroke="currentColor" stroke-width="2"/></svg>
+                </div>
+                <div class="topo-node-content">
+                  <span class="topo-node-label">DELIVERY / ARTIFACT</span>
+                  <span id="topo-art-text" class="topo-node-val">Pending</span>
+                </div>
+              </div>
+            </div>
+
+            <!-- Bounded KKD Intelligence Badges (Part 3) -->
+            <div id="kkd-intelligence-strip" class="kkd-intelligence-strip" aria-label="KKD Runtime Intelligence">
+              <div class="intel-badge" id="intel-context-badge">
+                <span class="intel-label">CONTEXT BUDGET</span>
+                <span class="intel-val font-mono" id="intel-context-val">Nominal (16k)</span>
+              </div>
+              <div class="intel-badge" id="intel-governance-badge">
+                <span class="intel-label">GOVERNANCE</span>
+                <span class="intel-val font-mono" id="intel-governance-val">Fenced Lease · Local Only</span>
+              </div>
+              <div class="intel-badge" id="intel-recovery-badge">
+                <span class="intel-label">RECOVERY STATUS</span>
+                <span class="intel-val font-mono" id="intel-recovery-val">Zero faults</span>
+              </div>
+            </div>
+          </div>
+
+          <ol id="mission-timeline" class="execution-stepper" aria-label="Mission status">
+            <li data-step="thinking" id="timeline-thinking" class="step">
+              <span class="step-n">Stage 01</span>
+              <span class="step-label">Think</span>
+            </li>
+            <li data-step="checking" id="timeline-checking" class="step">
+              <span class="step-n">Stage 02</span>
+              <span class="step-label">Inspect</span>
+            </li>
+            <li data-step="verified" id="timeline-verified" class="step">
+              <span class="step-n">Stage 03</span>
+              <span class="step-label">Execute</span>
+            </li>
+            <li data-step="delivered" id="timeline-delivered" class="step">
+              <span class="step-n">Stage 04</span>
+              <span class="step-label">Verify</span>
+            </li>
+          </ol>
+        </div>
+
+        <div class="hud-card command-capsule composer sticky-composer" role="group" aria-label="Jarvis request">
+          <label for="legacy-task-input" class="sr-only">Message to Jarvis</label>
+          <textarea id="legacy-task-input" rows="2" placeholder="Type an objective or command for Jarvis…"></textarea>
+          <button id="legacy-submit" type="button" class="dispatch font-hud">Dispatch</button>
+          <button id="legacy-cancel" type="button" disabled>Cancel</button>
+        </div>
+
+        <p id="activity-summary" class="progress-sentence">Ready when you are.</p>
+        <div id="current-task" class="task muted">No task running</div>
+        <div id="ids" class="ids" hidden aria-hidden="true"></div>
+        <p id="operation-error" role="alert" hidden></p>
+
+        <details id="task-scope" class="auth-brief progressive hud-card">
+          <summary>
+            <span id="scope-state" class="scope-state-brief">Not authorized</span>
+            <span class="auth-expand">Mission settings</span>
+          </summary>
+          <div class="auth-body scroll-region">
+            <div id="scope-repo" class="path">No repository selected</div>
+            <div id="scope-actions" class="scope-actions">Select a repository to see permitted actions.</div>
+            <div id="scope-delivery" class="scope-delivery"></div>
+            <div class="meta-line">
+              Provider: <strong id="provider-label">ollama</strong>
+              · Policy: <strong id="routing-label">local-only</strong>
+            </div>
+            <label for="worker-select">Worker</label>
+            <select id="worker-select"></select>
+            <div id="worker-detail" class="scope-delivery"></div>
+            <label for="inference-provider">Inference</label>
+            <select id="inference-provider">
+              <option value="ollama">Ollama (local-only)</option>
+              <option value="openrouter" disabled>OpenRouter — not ready</option>
+            </select>
+            <section id="openrouter-config" class="nested-settings">
+              <div id="openrouter-status" class="scope-delivery">Status: not ready</div>
+              <div class="row">
+                <input id="openrouter-key" type="password" autocomplete="off" placeholder="API key" disabled>
+                <button id="openrouter-set-key" type="button" disabled>Store</button>
+                <button id="openrouter-clear-key" type="button" disabled>Clear</button>
+              </div>
+            </section>
+          </div>
+        </details>
+
+        <details id="voice-settings" class="auth-brief progressive hud-card voice-settings">
+          <summary>
+            <span class="scope-state-brief">Voice settings</span>
+            <span id="wake-indicator" class="wake-indicator muted" aria-live="polite">Wake off</span>
+          </summary>
+          <div class="voice-controls" id="voice-controls">
+            <label class="voice-toggle">
+              <input type="checkbox" id="wake-enable" />
+              <span>Wake word</span>
+            </label>
+            <button type="button" id="wake-mute" class="ghost-btn" disabled>Mute wake</button>
+            <label class="voice-toggle">
+              <input type="checkbox" id="voice-mode" checked />
+              <span>Voice replies</span>
+            </label>
+            <p id="wake-diagnostics" class="mic-hint muted" aria-live="polite">Wake diagnostics idle.</p>
+            <p id="interrupt-hint" class="mic-hint muted" hidden></p>
+          </div>
+        </details>
+
+        <section id="legacy-approval-panel" class="approval hud-card hidden" hidden>
+          <h2 id="legacy-approval-heading">Pending Core approval</h2>
+          <div class="approval-meta">
+            <div>Gate: <strong id="legacy-approval-gate">—</strong></div>
+            <div>Tool: <strong id="legacy-approval-tool">—</strong></div>
+          </div>
+          <div id="legacy-approval-scope" class="approval-scope"></div>
+          <div id="legacy-approval-paths" class="approval-paths"></div>
+          <pre id="legacy-approval-detail" class="scroll-region selectable-text"></pre>
+          <div class="row approval-actions">
+            <button id="legacy-approve" type="button" class="dispatch">Authorize</button>
+            <button id="legacy-reject" type="button">Revert</button>
+          </div>
+        </section>
+
+        <section id="approved-auth" class="approval collapsed" hidden>
+          <details>
+            <summary>Authorization approved — review envelope</summary>
+            <pre id="approved-auth-detail" class="scroll-region selectable-text"></pre>
+          </details>
+        </section>
+
+        <section id="weather-approval" class="approval hud-card hidden" hidden>
+          <h2>Confirm weather lookup</h2>
+          <p class="muted">Network access always requires approval, same as web research.</p>
+          <pre id="weather-approval-detail" class="scroll-region selectable-text"></pre>
+          <div class="row approval-actions">
+            <button id="weather-approve" type="button" class="dispatch">Approve and look up</button>
+            <button id="weather-reject" type="button">Reject</button>
+          </div>
+        </section>
+
+        <details id="mission-details" class="progressive panel-soft hud-card">
+          <summary>Mission Inspect</summary>
+          <div class="cockpit-status scroll-region">
+            <div>Request / attempt: <span id="mission-inspect-ids" class="font-mono muted">—</span></div>
+            <div>Phase: <strong id="cockpit-phase">—</strong></div>
+            <div>Now: <strong id="cockpit-action">Idle</strong> <span id="cockpit-action-timer"></span></div>
+            <div>Elapsed: <strong id="cockpit-elapsed">0:00</strong> · Remaining: <strong id="cockpit-remaining">20:00</strong></div>
+            <div>Observed actions: <strong id="cockpit-productive">0</strong> · Repair: <strong id="cockpit-repair">0</strong></div>
+            <div>Allowance: <strong id="cockpit-allowance">—</strong></div>
+            <div>Read: <span id="cockpit-read">none</span></div>
+            <div>Changed: <span id="cockpit-changed">none</span></div>
+            <div>Validation: <strong id="cockpit-validation">Not run</strong></div>
+            <div>Verification: <strong id="cockpit-verification">Not run</strong></div>
+            <div>Delivery: <span id="scope-delivery-result" class="muted">—</span></div>
+          </div>
+        </details>
+
+        <details id="diagnostics" class="progressive panel-soft hud-card">
+          <summary>Diagnostics, tokens &amp; cost</summary>
+          <div class="scroll-region diagnostics-scroll">
+            <div class="metrics-block">
+              <div>AI responses: <strong id="cockpit-responses">0</strong></div>
+              <div>Prompt tokens: <strong id="cockpit-prompt-tokens">unavailable</strong></div>
+              <div>Generated tokens: <strong id="cockpit-generated-tokens">unavailable</strong></div>
+              <div>Generation speed: <strong id="cockpit-token-rate">unavailable</strong></div>
+              <div>Estimated cloud cost avoided: <strong id="cockpit-cost">unavailable</strong></div>
+              <div>Actual cloud spend: <strong id="cockpit-actual-spend">unavailable</strong> · Cap: <strong id="cockpit-spend-cap">unavailable</strong></div>
+              <div id="cockpit-cost-basis" class="scope-delivery"></div>
+            </div>
+            <ol id="diagnostics-list"></ol>
+          </div>
+        </details>
+      </section>
+
+      <!-- RIGHT: Daily-use surfaces backed by existing Core data -->
+      <aside class="col col-right hud-card workstream" aria-label="Workstream" data-surface="today">
+        <div class="workstream-tabs">
+          <div class="tab-btns" role="tablist">
+            <button type="button" role="tab" id="btn-terminal" class="tab-btn active" aria-selected="true" data-tab="tab-terminal">Today</button>
+            <button type="button" role="tab" id="btn-tools" class="tab-btn" aria-selected="false" data-tab="tab-tools">Tools</button>
+            <button type="button" role="tab" id="btn-gmail" class="tab-btn" aria-selected="false" data-tab="tab-gmail">Gmail</button>
+            <button type="button" role="tab" id="btn-files" class="tab-btn" aria-selected="false" data-tab="tab-files">Files</button>
+            <button type="button" role="tab" id="btn-media" class="tab-btn" aria-selected="false" data-tab="tab-assets">Artifacts</button>
+          </div>
+          <div class="repo-git-chip font-mono">
+            <svg class="panel-ico" viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><circle cx="12" cy="12" r="3" fill="none" stroke="currentColor" stroke-width="2"/><path fill="none" stroke="currentColor" stroke-width="2" d="M12 3v6m0 6v6"/></svg>
+            <span id="repo-branch">—</span>
+            <span id="repo-dirty" class="repo-dirty">—</span>
+          </div>
+        </div>
+
+        <div class="workstream-body scroll-region">
+          <div id="tab-terminal" class="tab-pane" role="tabpanel">
+            <div class="surface-intro">
+              <span class="surface-eyebrow">Daily briefing</span>
+              <h2>Today</h2>
+              <p>Reminders and the latest governed work in one place.</p>
+            </div>
+            <section id="today-due" class="today-due daily-surface" aria-label="Due reminders">
+              <h3 class="today-due-title">Reminders</h3>
+              <p id="today-due-empty" class="muted">No due reminders.</p>
+              <ul id="today-due-list" class="quiet-list"></ul>
+            </section>
+            <ul id="today-tasks" class="quiet-list" hidden></ul>
+            <div class="surface-divider"><span>Mission</span></div>
+            <div class="workstream-meta">
+              <div><span class="label">Repository</span> <strong id="repo-name">—</strong></div>
+              <div><span class="label">Changed files</span> <strong id="repo-changed">—</strong></div>
+              <div><span class="label">Mission phase</span> <strong id="mission-phase-brief">—</strong></div>
+              <div><span class="label">Result</span> <span id="result-state" class="muted">Idle</span></div>
+            </div>
+            <p id="workstream-headline" class="workstream-headline">No active workstream</p>
+            <p id="today-summary" class="muted mission-blurb" hidden>No local mission yet today.</p>
+            <p id="result-outcome" class="muted result-outcome" hidden></p>
+            <div id="result-blocked" class="result-blocked" hidden>
+              <p id="result-blocked-reason"></p>
+              <button id="result-select-folder" type="button" class="dispatch">Select folder</button>
+            </div>
+            <div id="result" class="scroll-region result-text selectable-text" hidden></div>
+            <details id="activity-details" class="progressive workstream-events">
+              <summary>Full event stream</summary>
+              <div id="checkpoint-pane" class="activity-scroll scroll-region">
+                <button id="jump-latest" type="button" hidden>Jump to latest</button>
+                <ol id="activity" class="selectable-text"></ol>
+              </div>
+              <ol id="recent-activity" class="quiet-list" hidden></ol>
+              <p id="recent-empty" class="muted" hidden>Recent Core activity appears here.</p>
+            </details>
+            <details class="tech-fold">
+              <summary>Full repository path</summary>
+              <pre id="repo-full-path" class="scroll-region tech-pre selectable-text"></pre>
+            </details>
+          </div>
+
+          <div id="tab-tools" class="tab-pane hidden" role="tabpanel" hidden>
+            <div class="tools-panel tools-workspace">
+              <header class="tools-workspace-head">
+                <div><span class="surface-eyebrow">Daily capabilities</span><h2>Tools</h2></div>
+                <div class="row">
+                  <button id="tools-open-workspace" type="button">Open workspace</button>
+                  <button id="tools-refresh" type="button">Refresh</button>
+                </div>
+              </header>
+              <div class="tools-status-line">
+                <span id="tools-timezone" class="muted tools-meta">Timezone: —</span>
+                <span id="tools-alerts-policy" class="muted tools-meta"></span>
+              </div>
+
+              <section class="tool-card tool-card-wide research-card" aria-labelledby="research-title">
+                <div class="tool-card-head">
+                  <div><span class="surface-eyebrow">Core governed</span><h3 id="research-title">Research the web</h3></div>
+                  <span class="tool-status">Approval before access</span>
+                </div>
+                <p class="muted">Jarvis searches through Core, retrieves bounded sources, and cites the answer. Web content is treated as untrusted evidence.</p>
+                <div class="tools-form research-form">
+                  <input id="research-query" type="text" placeholder="What do you want Jarvis to investigate?" maxlength="1000" />
+                  <button id="research-start" type="button" class="dispatch">Prepare research</button>
+                </div>
+                <div id="research-approval" class="queue-confirm research-approval" hidden>
+                  <span class="surface-eyebrow">Network approval required</span>
+                  <p id="research-approval-query" class="tools-item-body selectable-text"></p>
+                  <p id="research-approval-detail" class="muted"></p>
+                  <div class="row tools-item-actions">
+                    <button id="research-approve" type="button" class="dispatch">Approve research</button>
+                    <button id="research-reject" type="button">Reject</button>
+                  </div>
+                </div>
+                <p id="research-status" class="muted" role="status">No research running.</p>
+                <div id="research-result" class="research-result selectable-text" hidden></div>
+                <ul id="research-sources" class="research-sources quiet-list"></ul>
+              </section>
+
+              <div class="tools-grid">
+                <section class="tool-card">
+                  <div class="tool-card-head"><div><span class="surface-eyebrow">Capture</span><h3>Notes</h3></div></div>
+                  <div class="tools-form">
+                    <input id="note-title" type="text" placeholder="Title (optional)" maxlength="200" />
+                    <textarea id="note-body" rows="2" placeholder="Write a note…" maxlength="8000"></textarea>
+                    <button id="note-save" type="button" class="dispatch">Save note</button>
+                  </div>
+                  <ul id="notes-list" class="quiet-list tools-list"></ul>
+                  <p id="notes-empty" class="muted">No notes yet. Try: Remember that my printer uses A4</p>
+                </section>
+
+                <section class="tool-card">
+                  <div class="tool-card-head"><div><span class="surface-eyebrow">Today</span><h3>Reminders</h3></div></div>
+                  <div class="tools-form reminder-form">
+                    <input id="reminder-title" type="text" placeholder="What should Jarvis remind you?" maxlength="200" />
+                    <label class="compact-field"><span>In minutes</span><input id="reminder-due-minutes" type="number" min="1" max="10080" value="2" /></label>
+                    <button id="reminder-save" type="button" class="dispatch">Set reminder</button>
+                  </div>
+                  <ul id="reminders-list" class="quiet-list tools-list"></ul>
+                  <p id="reminders-empty" class="muted">No open reminders. Try: Remind me in two minutes to check the oven</p>
+                </section>
+
+                <section class="tool-card">
+                  <div class="tool-card-head"><div><span class="surface-eyebrow">Host</span><h3>PC health</h3></div><span class="tool-status">Read only</span></div>
+                  <dl class="health-summary">
+                    <div><dt>CPU</dt><dd id="tools-health-cpu">Unavailable</dd></div>
+                    <div><dt>Memory</dt><dd id="tools-health-memory">Unavailable</dd></div>
+                    <div><dt>GPU</dt><dd id="tools-health-gpu">Unavailable</dd></div>
+                    <div><dt>Workspace disk</dt><dd id="tools-health-disk">Unavailable</dd></div>
+                  </dl>
+                  <p class="muted">Jarvis observes only. Cleanup, install, and deletion require separate governed actions.</p>
+                </section>
+
+                <section class="tool-card">
+                  <div class="tool-card-head"><div><span class="surface-eyebrow">Connections</span><h3>Availability</h3></div></div>
+                  <ul id="tools-catalog" class="connector-list"></ul>
+                </section>
+              </div>
+
+              <details class="tool-card queue-card">
+                <summary><span><span class="surface-eyebrow">Sequential work</span><strong>Command Queue</strong></span><span class="muted">Confirm every command</span></summary>
+                <p class="muted tools-meta">Silence leaves a command waiting. Jarvis never auto-executes a stale queued instruction.</p>
+                <div class="tools-form row">
+                  <input id="queue-instruction" type="text" placeholder="Add a command for later…" maxlength="4000" />
+                  <button id="queue-add" type="button" class="dispatch">Add to queue</button>
+                </div>
+                <div id="queue-confirm" class="queue-confirm" hidden>
+                  <p id="queue-confirm-title" class="tools-item-body selectable-text"></p>
+                  <p id="queue-confirm-detail" class="muted"></p>
+                  <div class="row tools-item-actions">
+                    <button id="queue-run" type="button" class="dispatch">Run</button>
+                    <button id="queue-edit" type="button">Edit</button>
+                    <button id="queue-skip" type="button">Skip</button>
+                    <button id="queue-postpone" type="button">Postpone 10m</button>
+                  </div>
+                </div>
+                <p id="queue-active" class="muted" hidden></p>
+                <ul id="queue-waiting" class="quiet-list tools-list"></ul>
+                <p id="queue-waiting-empty" class="muted">No waiting commands. Try: Add to queue Remember that my printer uses A4</p>
+                <ul id="queue-recent" class="quiet-list tools-list"></ul>
+              </details>
+            </div>
+          </div>
+
+          <div id="tab-files" class="tab-pane hidden" role="tabpanel" hidden>
+            <div class="text-dim">// Changed files from Core (not a fabricated tree)</div>
+            <ul id="files-list" class="files-list"></ul>
+            <p id="files-empty" class="muted">No changed files reported yet.</p>
+          </div>
+
+          <div id="tab-assets" class="tab-pane hidden" role="tabpanel" hidden>
+            <header class="artifact-head">
+              <div><span class="surface-eyebrow">Core-owned outputs</span><h2>Artifacts</h2></div>
+              <button id="artifacts-refresh" type="button">Refresh</button>
+            </header>
+            <p class="muted">Verified images and files remain available after restart. Missing or changed files are labelled honestly.</p>
+            <section class="image-studio-panel" aria-labelledby="image-studio-title">
+              <div class="artifact-head">
+                <div><span class="surface-eyebrow">Local generation</span><h3 id="image-studio-title">Image Studio</h3></div>
+                <span id="image-studio-health" class="muted">Checking services…</span>
+              </div>
+              <textarea id="image-prompt" rows="3" maxlength="4000" placeholder="Describe the image you want Jarvis to create…"></textarea>
+              <div class="image-settings-row">
+                <label>Size
+                  <select id="image-size">
+                    <option value="1024x1024">Square · 1024</option>
+                    <option value="1216x832">Landscape · 1216×832</option>
+                    <option value="832x1216">Portrait · 832×1216</option>
+                  </select>
+                </label>
+                <label>Model <select id="image-checkpoint"><option value="">Load live models first</option></select></label>
+                <label>Steps <input id="image-steps" type="number" min="1" max="150" value="20" /></label>
+              </div>
+              <div class="row">
+                <button id="image-generate" class="dispatch" type="button">Generate image</button>
+                <button id="image-cancel" type="button" hidden>Cancel generation</button>
+                <span id="image-status" class="muted" role="status"></span>
+              </div>
+              <section id="image-approval" class="image-approval" hidden>
+                <strong>Confirm local image generation</strong>
+                <pre id="image-approval-detail"></pre>
+                <div class="row">
+                  <button id="image-approve" class="dispatch" type="button">Approve and generate</button>
+                  <button id="image-reject" type="button">Reject</button>
+                </div>
+              </section>
+            </section>
+            <div class="artifact-layout">
+              <ul id="artifacts-list" class="artifact-list" aria-label="Saved artifacts"></ul>
+              <section id="artifact-preview" class="artifact-preview" aria-live="polite">
+                <p id="artifacts-empty" class="muted">No artifacts yet. Image Generation Studio will publish verified outputs here.</p>
+                <img id="artifact-preview-image" alt="" hidden />
+                <h3 id="artifact-preview-title" hidden></h3>
+                <p id="artifact-preview-meta" class="muted" hidden></p>
+                <div id="artifact-actions" class="row" hidden>
+                  <button id="artifact-save-copy" type="button">Save a copy</button>
+                  <button id="artifact-open-folder" type="button">Open folder</button>
+                  <button id="artifact-use-as-reference" type="button" title="Open Image Generation Studio with this image set as the reference for your next generation">Use as reference</button>
+                  <button id="artifact-open-in-studio" type="button" title="Open Image Generation Studio with this prompt prefilled">Open in Studio</button>
+                </div>
+              </section>
+            </div>
+          </div>
+
+          <div id="tab-gmail" class="tab-pane hidden" role="tabpanel" hidden>
+            <div class="gmail-panel gmail-workspace">
+              <header class="gmail-account-bar">
+                <div>
+                  <span class="surface-eyebrow">Google Workspace</span>
+                  <h2>Gmail</h2>
+                  <div id="gmail-status" class="scope-delivery">Gmail: not connected</div>
+                </div>
+                <div class="row gmail-account-actions">
+                  <button id="gmail-connect" type="button" class="dispatch">Connect Google</button>
+                  <button id="gmail-disconnect" type="button" hidden>Disconnect</button>
+                  <button id="gmail-retry-probe" type="button" hidden>Retry</button>
+                </div>
+              </header>
+              <p id="gmail-blocker" class="muted" hidden></p>
+              <p id="gmail-capability-blocker" class="not-connected" hidden></p>
+              <p id="gmail-error" class="not-connected" role="alert" hidden></p>
+
+              <div class="gmail-workspace-grid">
+                <section class="gmail-list-pane" aria-label="Gmail search and results">
+                  <div class="gmail-pane-head">
+                    <div><span class="surface-eyebrow">Mailbox</span><h3>Find mail</h3></div>
+                  </div>
+                  <div class="tools-form gmail-search-form">
+                    <input id="gmail-search-query" type="text" placeholder="Search mail, e.g. is:unread" maxlength="500" disabled />
+                    <button id="gmail-search-btn" type="button" class="dispatch" disabled>Search</button>
+                  </div>
+                  <ul id="gmail-results" class="gmail-results tools-list" aria-label="Gmail search results"></ul>
+                  <p id="gmail-results-empty" class="gmail-empty muted">Search results will appear here.</p>
+                </section>
+
+                <section class="gmail-reader-pane" aria-label="Selected Gmail thread">
+                  <div class="gmail-pane-head">
+                    <div><span class="surface-eyebrow">Conversation</span><h3>Thread</h3></div>
+                    <button id="gmail-summarize" type="button" hidden>Summarize locally</button>
+                  </div>
+                  <div id="gmail-thread" class="gmail-thread scroll-region">
+                    <p class="gmail-empty muted">Select a message to read its thread.</p>
+                  </div>
+                  <p id="gmail-summary" class="gmail-summary selectable-text" hidden></p>
+                </section>
+              </div>
+
+              <details class="gmail-compose" open>
+                <summary>Write a reply or new draft</summary>
+                <div class="tools-form gmail-compose-form">
+                  <input id="gmail-draft-to" type="text" placeholder="To (comma-separated)" maxlength="1000" disabled />
+                  <input id="gmail-draft-subject" type="text" placeholder="Subject" maxlength="500" disabled />
+                  <textarea id="gmail-draft-body" rows="5" placeholder="Write your message…" maxlength="20000" disabled></textarea>
+                  <div class="row">
+                    <button id="gmail-draft-create" type="button" class="dispatch" disabled>Save draft</button>
+                    <button id="gmail-draft-send" type="button" hidden>Review &amp; send</button>
+                  </div>
+                </div>
+                <p id="gmail-draft-result" class="muted" hidden></p>
+              </details>
+
+              <div id="gmail-approval" class="queue-confirm gmail-send-review" hidden>
+                <span class="surface-eyebrow">Approval required</span>
+                <h3 class="tools-heading">Review exact message</h3>
+                <p id="gmail-approval-to" class="tools-item-body selectable-text"></p>
+                <p id="gmail-approval-subject" class="tools-item-body selectable-text"></p>
+                <pre id="gmail-approval-body" class="scroll-region tech-pre selectable-text"></pre>
+                <div class="row tools-item-actions">
+                  <button id="gmail-approval-approve" type="button" class="dispatch">Approve &amp; send</button>
+                  <button id="gmail-approval-reject" type="button">Reject</button>
+                </div>
+              </div>
+              <p id="gmail-sent-result" class="gmail-sent-result" role="status" hidden></p>
+            </div>
+          </div>
+        </div>
+      </aside>
+    </main>
+</div>
+  <div id="dev-approvals-banner" class="dev-approvals-banner" role="alert" hidden></div>
+  <script src="voiceCapture.js"></script>
+  <script src="apex-shader-background.js"></script>
+  <script src="apex-reasoning-web.js"></script>
+  <script src="apex-status-bar.js"></script>
+  <script src="renderer.js"></script>
+</body>
+</html>

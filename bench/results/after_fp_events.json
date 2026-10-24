@@ -1,0 +1,68 @@
+[
+ {
+  "id": "E1 how app works",
+  "p50": 135,
+  "p95": 148,
+  "firstMs": 148,
+  "tokens": 3257,
+  "fileRecall": 1,
+  "textRecall": 1,
+  "type": "overview",
+  "grounded": true,
+  "files": [
+   "event_forms.html"
+  ]
+ },
+ {
+  "id": "E2 where persisted",
+  "p50": 175,
+  "p95": 188,
+  "firstMs": 181,
+  "tokens": 1030,
+  "fileRecall": 1,
+  "textRecall": 0,
+  "type": "conceptual",
+  "grounded": true,
+  "files": [
+   "event_forms.html"
+  ]
+ },
+ {
+  "id": "E3 who calls fn",
+  "p50": 181,
+  "p95": 329,
+  "firstMs": 179,
+  "tokens": 1386,
+  "fileRecall": 1,
+  "textRecall": 1,
+  "type": "usage",
+  "grounded": true,
+  "files": [
+   "event_forms.html"
+  ]
+ },
+ {
+  "id": "E4 validation logic",
+  "p50": 173,
+  "p95": 179,
+  "firstMs": 173,
+  "tokens": 0,
+  "fileRecall": 0,
+  "textRecall": 0,
+  "files": []
+ },
+ {
+  "id": "E5 break if modify",
+  "p50": 194,
+  "p95": 235,
+  "firstMs": 235,
+  "tokens": 2152,
+  "fileRecall": 1,
+  "textRecall": 1,
+  "type": "conceptual",
+  "grounded": true,
+  "files": [
+   "event_forms.html"
+  ]
+ }
+]

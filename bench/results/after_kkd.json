@@ -1,0 +1,213 @@
+{
+ "root": "C:\\Projects\\kkd-repo-intel",
+ "node": "v24.16.0",
+ "cold": {
+  "readyMs": 3428,
+  "firstUsableMs": 146,
+  "files": 1750,
+  "symbols": 14343,
+  "rssDeltaMb": 87
+ },
+ "warm": {
+  "readyMs": 345,
+  "restored": 1409,
+  "parsed": 0,
+  "skipped": 1409
+ },
+ "queries": [
+  {
+   "id": "K1 how does app work",
+   "kind": "map",
+   "engine": {
+    "p50": 3.5,
+    "p95": 7.4,
+    "tokens": 1198,
+    "fileRecall": 0.5,
+    "textRecall": 1,
+    "files": [
+     "core/shared/wireTypes.ts",
+     "src/context/RepositoryTypes.ts",
+     "src/context/RepositoryIndex.ts",
+     "src/config/Config.ts",
+     "src/tools/ToolTypes.ts",
+     "src/context/RepositoryContextService.ts"
+    ]
+   },
+   "rg": {
+    "p50": 100.9,
+    "tokens": 318665,
+    "fileRecall": 1,
+    "textRecall": 1
+   }
+  },
+  {
+   "id": "K2 where persisted",
+   "kind": "arch",
+   "engine": {
+    "p50": 4.1,
+    "p95": 16.3,
+    "tokens": 6000,
+    "fileRecall": 1,
+    "textRecall": 1,
+    "files": [
+     "package.json",
+     "scripts/acceptance/companion-driver/extension.js",
+     "core/index.ts",
+     "src/evals/cli.ts",
+     "src/agent/TaskStore.ts",
+     "src/remote/RemoteTaskService.ts"
+    ]
+   },
+   "rg": {
+    "p50": 89.8,
+    "tokens": 398767,
+    "fileRecall": 1,
+    "textRecall": 1
+   }
+  },
+  {
+   "id": "K3 who calls fn",
+   "kind": "refs",
+   "engine": {
+    "p50": 41.3,
+    "p95": 51.4,
+    "tokens": 100,
+    "fileRecall": 1,
+    "textRecall": 1,
+    "files": [
+     "src/context/RepositoryIndex.ts",
+     "src/autonomy/workspaceScan.ts",
+     "src/autonomy/workspaceScan.ts",
+     "src/context/RepositoryIndex.ts"
+    ]
+   },
+   "rg": {
+    "p50": 80.7,
+    "tokens": 1467,
+    "fileRecall": 1,
+    "textRecall": 1
+   }
+  },
+  {
+   "id": "K4 dependents",
+   "kind": "dependents",
+   "engine": {
+    "p50": 0,
+    "p95": 0.1,
+    "tokens": 135,
+    "fileRecall": 1,
+    "textRecall": 1,
+    "files": [
+     "src/autonomy/workspaceScan.ts",
+     "src/coding/ValidationFloor.ts",
+     "src/context/RepositoryContextService.ts",
+     "src/test/suite/contextGraphExpansionBounds.test.ts",
+     "src/test/suite/explicitFileGrounding.test.ts",
+     "src/test/suite/m12CompilerLifecycle.test.ts"
+    ]
+   },
+   "rg": {
+    "p50": 94.6,
+    "tokens": 56921,
+    "fileRecall": 0,
+    "textRecall": 1
+   }
+  },
+  {
+   "id": "K5 break if modify",
+   "kind": "impact",
+   "engine": {
+    "p50": 42.7,
+    "p95": 49,
+    "tokens": 473,
+    "fileRecall": 0.75,
+    "textRecall": 1,
+    "files": [
+     "core/runtime/inlineToolCalls.ts",
+     "src/reliability/ToolCallReliability.ts",
+     "src/tools/ToolRegistry.ts",
+     "src/test/suite/toolArgumentValidator.test.ts",
+     "core/test/inlineToolCalls.test.ts",
+     "core/test/toolProtocolText.test.ts"
+    ]
+   },
+   "rg": {
+    "p50": 85.6,
+    "tokens": 3148,
+    "fileRecall": 1,
+    "textRecall": 1
+   }
+  },
+  {
+   "id": "K6 validation logic",
+   "kind": "arch",
+   "engine": {
+    "p50": 4.6,
+    "p95": 6.5,
+    "tokens": 3417,
+    "fileRecall": 1,
+    "textRecall": 1,
+    "files": [
+     "core/test/fixtures/crossfile-validator/package.json",
+     "core/test/fixtures/validation-repair/package.json",
+     "src/tools/ToolArgumentValidator.ts",
+     "core/runtime/toolArgumentSchema.ts",
+     "core/runtime/inlineToolCalls.ts",
+     "core/shared/wireTypes.ts"
+    ]
+   },
+   "rg": {
+    "p50": 88.9,
+    "tokens": 116463,
+    "fileRecall": 0,
+    "textRecall": 1
+   }
+  },
+  {
+   "id": "K7 relevant tests",
+   "kind": "tests",
+   "engine": {
+    "p50": 0,
+    "p95": 0.1,
+    "tokens": 13,
+    "fileRecall": 1,
+    "textRecall": 1,
+    "files": [
+     "src/test/suite/toolArgumentValidator.test.ts"
+    ]
+   },
+   "rg": {
+    "p50": 87.1,
+    "tokens": 55115,
+    "fileRecall": 0,
+    "textRecall": 1
+   }
+  },
+  {
+   "id": "K8 definition",
+   "kind": "defs",
+   "engine": {
+    "p50": 0,
+    "p95": 0.1,
+    "tokens": 9,
+    "fileRecall": 1,
+    "textRecall": 1,
+    "files": [
+     "src/context/RepositoryIndex.ts"
+    ]
+   },
+   "rg": {
+    "p50": 85,
+    "tokens": 68680,
+    "fileRecall": 1,
+    "textRecall": 1
+   }
+  }
+ ],
+ "queryCpuMs": 1063,
+ "rssMb": 272,
+ "incremental": {
+  "refreshMs": 11.3,
+  "newSymbolVisibleImmediately": true
+ }
+}

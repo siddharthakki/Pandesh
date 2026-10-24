@@ -1,0 +1,864 @@
+/*
+ * KarkeDikha — governed neon visual system
+ *
+ * Presentation-only foundation for the legacy webview shell. Functional
+ * layout/state hardening remains in chat-layout-fixes.css, loaded after this
+ * file. Selectors here intentionally include `body` where the visual design
+ * must outrank the compact compatibility layer without changing DOM or JS.
+ */
+
+:root {
+  color-scheme: dark;
+  --bg-main: #071018;
+  --bg-deep: #04090f;
+  --bg-elevated: #0b151f;
+  --bg-elevated-2: #0e1a26;
+  --surface: rgba(13, 28, 40, 0.78);
+  --surface-strong: rgba(17, 36, 50, 0.92);
+  --surface-hover: rgba(24, 50, 67, 0.76);
+  --border: rgba(137, 177, 198, 0.14);
+  --border-bright: rgba(168, 209, 228, 0.23);
+  --accent: #47e5de;
+  --accent-strong: #75f3ec;
+  --accent-soft: rgba(71, 229, 222, 0.10);
+  --accent-border: rgba(71, 229, 222, 0.30);
+  --accent-glow: rgba(71, 229, 222, 0.22);
+  --warning: #d9a441;
+  --warning-soft: rgba(217, 164, 65, 0.10);
+  --warning-border: rgba(217, 164, 65, 0.34);
+  --danger: #e56570;
+  --danger-soft: rgba(229, 101, 112, 0.09);
+  --danger-border: rgba(229, 101, 112, 0.32);
+  --success: #65d49a;
+  --success-soft: rgba(101, 212, 154, 0.09);
+  --success-border: rgba(101, 212, 154, 0.32);
+  --text: #e7f0f5;
+  --text-soft: #adbfca;
+  --text-dim: #718694;
+  --shadow: 0 18px 48px rgba(0, 0, 0, 0.34);
+  --shadow-soft: 0 8px 26px rgba(0, 0, 0, 0.22);
+  --radius: 12px;
+  --radius-lg: 16px;
+  --font: -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, Roboto, Helvetica, Arial, sans-serif;
+  --mono: "Cascadia Code", "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+}
+
+* { box-sizing: border-box; }
+html, body { width: 100%; height: 100%; margin: 0; }
+html body {
+  color: var(--text);
+  background:
+    radial-gradient(ellipse at 18% -8%, rgba(71, 229, 222, 0.075), transparent 34%),
+    radial-gradient(ellipse at 96% 30%, rgba(42, 113, 146, 0.075), transparent 38%),
+    linear-gradient(152deg, var(--bg-main) 0%, var(--bg-deep) 68%, #050b12 100%);
+  font-family: var(--font);
+  font-size: 13px;
+  overflow: hidden;
+}
+
+button, select, textarea, input { font: inherit; }
+button:focus-visible, select:focus-visible, textarea:focus-visible, [tabindex]:focus-visible {
+  outline: 1px solid var(--accent) !important;
+  outline-offset: 2px;
+}
+
+body .app-shell {
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  background:
+    linear-gradient(180deg, rgba(6, 14, 21, 0.78), rgba(4, 9, 15, 0.96)),
+    radial-gradient(circle at 50% 8%, rgba(71, 229, 222, 0.04), transparent 44%);
+}
+
+/* Header: strong identity, still compact enough for a VS Code contributed view. */
+body .top-bar {
+  min-height: 54px;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border);
+  background: linear-gradient(180deg, rgba(13, 27, 38, 0.93), rgba(8, 18, 27, 0.88));
+  box-shadow: 0 7px 24px rgba(0, 0, 0, 0.14);
+  backdrop-filter: blur(14px);
+}
+body .top-bar-left { gap: 9px; }
+body .top-bar-left::after {
+  content: "KarkeDikha";
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 720;
+  letter-spacing: 0.01em;
+  white-space: nowrap;
+}
+body .brand-mark.kd-panda-icon {
+  width: 38px;
+  height: 38px;
+  padding: 3px;
+  border: 1px solid var(--accent-border);
+  border-radius: 11px;
+  color: var(--accent);
+  background: radial-gradient(circle at 50% 40%, rgba(71, 229, 222, 0.10), rgba(9, 22, 31, 0.78));
+  box-shadow: inset 0 0 22px rgba(71, 229, 222, 0.035), 0 0 20px rgba(71, 229, 222, 0.06);
+}
+body .top-bar-right { gap: 5px; }
+body .top-bar .btn {
+  min-height: 29px;
+  border-radius: 8px;
+}
+body #new-conversation-toolbar-btn {
+  color: #082026;
+  border-color: rgba(117, 243, 236, 0.45);
+  background: linear-gradient(180deg, var(--accent-strong), #4bdcd6);
+  box-shadow: 0 0 18px rgba(71, 229, 222, 0.09);
+}
+
+/* Status strip: runtime facts are present but visually subordinate. */
+body .status-row {
+  min-height: 34px;
+  padding: 5px 12px;
+  border-bottom: 1px solid rgba(137, 177, 198, 0.10);
+  background: rgba(7, 16, 24, 0.72);
+}
+body .status-row-summary {
+  color: var(--text-dim);
+  font-size: 10.5px;
+}
+body .permission-status-chip {
+  padding: 4px 8px;
+  border: 1px solid var(--border);
+  color: var(--text-soft);
+  background: rgba(17, 35, 48, 0.62);
+}
+body .status-details-popover {
+  border: 1px solid var(--border-bright);
+  border-radius: var(--radius-lg);
+  background: rgba(8, 18, 27, 0.98);
+  box-shadow: 0 18px 52px rgba(0, 0, 0, 0.46), 0 0 0 1px rgba(71, 229, 222, 0.035);
+  backdrop-filter: blur(18px);
+}
+
+/* Main conversational canvas. */
+body .workspace {
+  flex: 1;
+  min-height: 0;
+  background:
+    radial-gradient(ellipse at 50% 10%, rgba(38, 104, 132, 0.055), transparent 45%),
+    linear-gradient(180deg, rgba(6, 14, 21, 0.86), rgba(4, 10, 16, 0.98));
+}
+body .chat-window {
+  width: 100%;
+  height: 100%;
+  padding: 12px 16px 14px;
+  border: 0;
+  background: transparent;
+}
+body .chat-messages,
+body #messages {
+  width: min(100%, 940px);
+  max-width: 940px;
+  margin: 0 auto;
+  padding: 18px 12px 14px;
+  gap: 15px;
+}
+
+/* First-open home state. This is intentionally an operator welcome surface,
+   not a full-screen poster. The existing DOM text is restyled via pseudo
+   content so no runtime behaviour changes are required. */
+body .ambient-placeholder {
+  position: relative;
+  width: min(100%, 560px);
+  max-width: 560px;
+  margin: auto;
+  padding: 28px 26px 24px;
+  gap: 7px;
+  border: 1px solid rgba(137, 177, 198, 0.12);
+  border-radius: 20px;
+  color: var(--text-dim);
+  background:
+    radial-gradient(circle at 50% 18%, rgba(71, 229, 222, 0.075), transparent 38%),
+    linear-gradient(160deg, rgba(14, 30, 42, 0.74), rgba(8, 18, 27, 0.72));
+  box-shadow: 0 26px 80px rgba(0, 0, 0, 0.24), inset 0 1px 0 rgba(255,255,255,0.025);
+  overflow: hidden;
+}
+body .ambient-placeholder::before {
+  content: "KarkeDikha";
+  order: 1;
+  margin-top: 5px;
+  color: var(--text);
+  font-size: 23px;
+  font-weight: 760;
+  letter-spacing: -0.025em;
+}
+body .ambient-placeholder::after {
+  content: "Local-first · Governed changes · Repository-aware";
+  order: 4;
+  margin-top: 10px;
+  padding: 5px 10px;
+  border: 1px solid rgba(71, 229, 222, 0.12);
+  border-radius: 999px;
+  color: #78919d;
+  background: rgba(6, 16, 23, 0.54);
+  font-size: 9.5px;
+  letter-spacing: 0.025em;
+}
+body .ambient-placeholder .kd-panda-icon--welcome {
+  order: 0;
+  width: 112px;
+  height: 112px;
+  margin: 0 auto 2px;
+  padding: 8px;
+  border-radius: 50%;
+  filter: drop-shadow(0 8px 18px rgba(0,0,0,.28));
+  animation: kd-home-breathe 5.2s ease-in-out infinite;
+}
+body .ambient-placeholder .kd-panda-icon--welcome::after {
+  content: "";
+  position: absolute;
+  width: 118px;
+  height: 28px;
+  border-radius: 50%;
+  background: radial-gradient(ellipse, rgba(71,229,222,.16), transparent 68%);
+  transform: translateY(52px);
+  filter: blur(5px);
+  z-index: -1;
+}
+body .ambient-placeholder strong {
+  order: 2;
+  color: transparent;
+  font-size: 0;
+  font-weight: 500;
+}
+body .ambient-placeholder strong::before {
+  content: "What are we building today?";
+  color: var(--text-soft);
+  font-size: 13px;
+  font-weight: 520;
+}
+body .ambient-placeholder p {
+  order: 3;
+  margin: 0;
+  color: transparent;
+  font-size: 0;
+}
+body .ambient-placeholder p::before {
+  content: "Ask, inspect, or make a governed change.";
+  color: var(--text-dim);
+  font-size: 11px;
+}
+
+/* Pull the composer into the home composition when the welcome state is the
+   only conversation content. :has is supported by the extension's Chromium. */
+body .chat-window:has(#ambient-placeholder:not([hidden])) {
+  justify-content: center;
+}
+body .chat-window:has(#ambient-placeholder:not([hidden])) .chat-messages-shell {
+  flex: 0 1 auto;
+  width: 100%;
+  min-height: 300px;
+  max-height: 360px;
+}
+body .chat-window:has(#ambient-placeholder:not([hidden])) #input-area {
+  width: min(100%, 760px);
+  margin: 2px auto 0;
+}
+
+/* Composer: dark instrument surface with one clear cyan interaction edge. */
+body #input-area,
+body .input-area {
+  padding-top: 9px;
+  border-top: 0;
+  background: linear-gradient(180deg, rgba(4,10,16,0), rgba(4,10,16,.78) 28%, rgba(4,10,16,.94));
+}
+body .input-shell,
+body #input-row {
+  min-height: 54px;
+  align-items: center;
+  gap: 7px;
+  padding: 7px 8px;
+  border: 1px solid rgba(137, 177, 198, 0.17);
+  border-radius: 15px;
+  background: linear-gradient(180deg, rgba(18, 37, 50, 0.88), rgba(10, 23, 33, 0.92));
+  box-shadow: var(--shadow-soft), inset 0 1px 0 rgba(255,255,255,.025);
+  backdrop-filter: blur(15px);
+  transition: border-color 180ms ease, box-shadow 180ms ease, background 180ms ease;
+}
+body .input-shell:focus-within,
+body #input-row:focus-within {
+  border-color: rgba(71, 229, 222, 0.42);
+  background: linear-gradient(180deg, rgba(18, 39, 52, 0.94), rgba(10, 24, 34, 0.96));
+  box-shadow: 0 12px 34px rgba(0,0,0,.30), 0 0 0 2px rgba(71,229,222,.035), 0 0 22px rgba(71,229,222,.055);
+}
+body #user-input {
+  min-height: 38px;
+  max-height: 170px;
+  padding: 9px 5px;
+  border: 0;
+  outline: 0;
+  color: var(--text);
+  background: transparent;
+  line-height: 1.45;
+}
+body #user-input::placeholder { color: #637884; }
+body .compact-mode-btn {
+  height: 30px;
+  padding: 4px 9px;
+  border-color: rgba(137, 177, 198, 0.14);
+  border-radius: 8px;
+  color: var(--text-soft);
+  background: rgba(6, 17, 25, 0.62);
+}
+body .compact-mode-popover,
+body .overflow-menu {
+  border: 1px solid var(--border-bright);
+  border-radius: 12px;
+  color: var(--text);
+  background: rgba(8, 18, 27, 0.985);
+  box-shadow: 0 20px 50px rgba(0,0,0,.48);
+  backdrop-filter: blur(16px);
+}
+body .send-btn,
+body #send-btn {
+  min-width: 54px;
+  height: 36px;
+  min-height: 36px;
+  border: 1px solid rgba(71,229,222,.35);
+  border-radius: 10px;
+  color: #081a1e;
+  background: linear-gradient(180deg, #75f3ec, #49d8d2);
+  box-shadow: 0 0 20px rgba(71,229,222,.09);
+  font-size: 11px;
+  font-weight: 760;
+}
+body #send-btn:disabled { color: #668087; background: rgba(35,65,75,.34); box-shadow: none; }
+body .keyboard-hint { color: #586d78; }
+
+/* Base controls. */
+body .btn {
+  min-height: 28px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  padding: 5px 10px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  color: var(--text-soft);
+  background: transparent;
+  cursor: pointer;
+  font-size: 10.5px;
+  font-weight: 680;
+  transition: color 150ms ease, background 150ms ease, border-color 150ms ease, transform 150ms ease;
+}
+body .btn:hover:not(:disabled) { transform: translateY(-1px); }
+body .btn:disabled { opacity: .42; cursor: not-allowed; }
+body .btn-primary {
+  color: #092025;
+  border-color: rgba(71,229,222,.42);
+  background: linear-gradient(180deg, var(--accent-strong), #4cdad4);
+}
+body .btn-ghost {
+  border-color: var(--border);
+  color: var(--text-soft);
+  background: rgba(14,29,40,.50);
+}
+body .btn-ghost:hover:not(:disabled) { border-color: var(--border-bright); color: var(--text); background: var(--surface-hover); }
+body .btn-danger { border-color: var(--danger-border); color: #f3a5ac; background: var(--danger-soft); }
+body .btn-icon { width: 30px; min-width: 30px; padding: 0; }
+
+/* Conversation typography. */
+body .bubble.user {
+  align-self: flex-end;
+  max-width: min(82%, 680px);
+  padding: 10px 14px !important;
+  border: 1px solid rgba(71,229,222,.20) !important;
+  border-radius: 13px 13px 3px 13px !important;
+  color: #dff6f5;
+  background: linear-gradient(145deg, rgba(32, 91, 100, .48), rgba(20, 57, 67, .56)) !important;
+  box-shadow: 0 8px 24px rgba(0,0,0,.14) !important;
+}
+body .bubble.assistant {
+  color: var(--text);
+  line-height: 1.65;
+}
+body .bubble.error { color: #f4bbc0; }
+body .bubble pre,
+body .bubble code {
+  font-family: var(--mono);
+  border-radius: 7px;
+  background: rgba(1, 7, 11, .66);
+}
+
+/* Objective: full prompt stays intact; the animated perimeter communicates
+   the governed task boundary without making the card loud. */
+body .kd-objective-card {
+  position: relative;
+  isolation: isolate;
+  overflow: hidden;
+  margin: 10px 0 8px;
+  padding: 14px 15px;
+  border: 1px solid rgba(71,229,222,.18) !important;
+  border-left: 1px solid rgba(71,229,222,.18) !important;
+  border-radius: 15px;
+  background: transparent !important;
+  box-shadow: 0 14px 38px rgba(0,0,0,.18);
+}
+body .kd-objective-card::before {
+  content: "";
+  position: absolute;
+  z-index: -2;
+  inset: -135%;
+  background: conic-gradient(from 0deg,
+    transparent 0 37%,
+    rgba(71,229,222,.08) 43%,
+    rgba(117,243,236,.92) 49%,
+    rgba(71,229,222,.16) 55%,
+    transparent 62% 100%);
+  animation: kd-governed-perimeter 5.4s linear infinite;
+}
+body .kd-objective-card::after {
+  content: "";
+  position: absolute;
+  z-index: -1;
+  inset: 1px;
+  border-radius: 13px;
+  background:
+    radial-gradient(circle at 10% 0%, rgba(71,229,222,.055), transparent 34%),
+    linear-gradient(155deg, rgba(15,32,44,.96), rgba(8,19,28,.96));
+}
+body .kd-objective-card > * { position: relative; z-index: 1; }
+body .kd-objective-card .kd-objective-label {
+  margin-bottom: 6px;
+  color: #7f9ba7;
+  font-size: 9.5px;
+  letter-spacing: .12em;
+}
+body .kd-objective-card p { color: var(--text); line-height: 1.55; }
+body .kd-objective-constraints { color: var(--text-soft); }
+body .kd-autonomy-badge { color: #bba36e; border-color: rgba(217,164,65,.24); background: rgba(217,164,65,.055); }
+
+/* Autonomous task operator surface. */
+body .autonomous-status:not([hidden]) {
+  gap: 10px;
+  padding: 4px 0 12px;
+}
+body .autonomous-status-header {
+  min-height: 0;
+  max-width: 720px;
+  margin: 0 auto;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+}
+body .autonomous-status-header .kd-panda-icon--status {
+  width: 42px;
+  height: 42px;
+  flex: 0 0 42px;
+  position: relative;
+  padding: 2px;
+  filter: drop-shadow(0 6px 12px rgba(0,0,0,.20));
+  transform-origin: 50% 72%;
+  transition: filter 220ms ease, transform 220ms ease;
+}
+body .kd-panda-state-label {
+  color: #78919d;
+  font-size: 9.5px;
+  font-weight: 650;
+  letter-spacing: .08em;
+  line-height: 1;
+  text-transform: lowercase;
+}
+body .kd-task-line {
+  max-width: 720px;
+  margin: 0 auto 2px;
+  color: var(--text-soft);
+  font-size: 12px;
+  line-height: 1.5;
+  text-align: center;
+}
+
+/* Six-stage Kaam ka Dhaaga. */
+body .task-stage-tracker {
+  position: relative;
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 0;
+  margin: 10px 0 14px;
+  padding: 0 4px;
+  isolation: isolate;
+}
+body .task-stage-tracker::before {
+  content: "";
+  position: absolute;
+  z-index: -1;
+  top: 11px;
+  left: 8.5%;
+  right: 8.5%;
+  height: 1px;
+  background: linear-gradient(90deg, rgba(100,131,145,.18), rgba(100,131,145,.33), rgba(100,131,145,.18));
+}
+body .task-stage-tracker::after {
+  content: "";
+  position: absolute;
+  top: 10px;
+  left: 7.5%;
+  width: 16%;
+  height: 3px;
+  border-radius: 999px;
+  background: linear-gradient(90deg, transparent, rgba(71,229,222,.9), transparent);
+  filter: blur(.25px) drop-shadow(0 0 6px rgba(71,229,222,.55));
+  opacity: .72;
+  animation: kd-dhaaga-travel 3.2s ease-in-out infinite;
+}
+body .task-stage-tracker li {
+  position: relative;
+  min-width: 0;
+  padding: 29px 5px 0;
+  border: 0 !important;
+  color: #5f7480;
+  font-size: 9.5px;
+  line-height: 1.28;
+  text-align: center;
+  white-space: normal;
+  text-overflow: clip;
+  overflow: visible;
+}
+body .task-stage-tracker li::before {
+  content: "";
+  position: absolute;
+  top: 5px;
+  left: 50%;
+  width: 13px;
+  height: 13px;
+  border: 2px solid #304651;
+  border-radius: 50%;
+  background: #09151e;
+  box-shadow: 0 0 0 3px rgba(6,15,22,.92);
+  transform: translateX(-50%);
+  transition: border-color 180ms ease, background 180ms ease, box-shadow 180ms ease;
+}
+body .task-stage-tracker li.is-complete { color: #87a49f; }
+body .task-stage-tracker li.is-complete::before {
+  border-color: rgba(101,212,154,.66);
+  background: #377a5b;
+  box-shadow: 0 0 0 3px rgba(6,15,22,.92), 0 0 10px rgba(101,212,154,.14);
+}
+body .task-stage-tracker li.is-current { color: #cfe3e7; font-weight: 650; }
+body .task-stage-tracker li.is-current::before {
+  border-color: var(--accent-strong);
+  background: var(--accent);
+  box-shadow: 0 0 0 3px rgba(6,15,22,.94), 0 0 0 5px rgba(71,229,222,.08), 0 0 16px rgba(71,229,222,.45);
+  animation: kd-stage-pulse 1.9s ease-in-out infinite;
+}
+body .task-stage-tracker:has(li[data-stage="approval"].is-current)::after {
+  background: linear-gradient(90deg, transparent, rgba(217,164,65,.88), transparent);
+  filter: drop-shadow(0 0 5px rgba(217,164,65,.40));
+  animation-duration: 5.4s;
+  opacity: .45;
+}
+body .task-stage-tracker li[data-stage="approval"].is-current::before {
+  border-color: #e0b45e;
+  background: #b5812e;
+  box-shadow: 0 0 0 3px rgba(6,15,22,.94), 0 0 12px rgba(217,164,65,.30);
+  animation: kd-approval-pulse 2.8s ease-in-out infinite;
+}
+body .task-stage-tracker li[data-stage="validate"].is-current::before {
+  border-color: #85f4ef;
+  background: #4fdbd5;
+  box-shadow: 0 0 0 3px rgba(6,15,22,.94), 0 0 18px rgba(71,229,222,.52);
+}
+
+/* State-driven panda motion: small physical cues, not cartoon loops. */
+body .kd-panda-icon[data-state="thinking"],
+body .kd-panda-icon[data-state="reading"],
+body .kd-panda-icon[data-state="searching"],
+body .kd-panda-icon[data-state="planning"],
+body .kd-panda-icon[data-state="preparing"] {
+  color: var(--accent);
+  animation: kd-panda-investigate 3.4s ease-in-out infinite;
+}
+body .kd-panda-icon[data-state="delegating"] {
+  color: #9bc3d1;
+  animation: kd-panda-breathe 3s ease-in-out infinite;
+}
+body .kd-panda-icon[data-state="coding"],
+body .kd-panda-icon[data-state="building"] {
+  color: var(--accent);
+  animation: kd-panda-work 1.55s ease-in-out infinite;
+}
+body .kd-panda-icon[data-state="testing"],
+body .kd-panda-icon[data-state="reviewing"],
+body .kd-panda-icon[data-state="validating"] {
+  color: #79eee9;
+  animation: kd-panda-scan 2.1s ease-in-out infinite;
+}
+body .kd-panda-icon[data-state*="waiting"],
+body .kd-panda-icon[data-state*="approval"] {
+  color: var(--warning);
+  animation: kd-panda-attention 2.7s ease-in-out infinite;
+}
+body .kd-panda-icon[data-state="blocked"],
+body .kd-panda-icon[data-state="failed"] {
+  color: var(--danger);
+  animation: kd-panda-safe-stop 2.9s ease-in-out infinite;
+}
+body .kd-panda-icon[data-state="completed"] {
+  color: var(--success);
+  animation: kd-panda-complete 850ms cubic-bezier(.2,.75,.28,1.18) 1;
+}
+body .autonomous-status-header .kd-panda-icon--status[data-state="completed"]::before,
+body .autonomous-status-header .kd-panda-icon--status[data-state="completed"]::after {
+  content: "";
+  position: absolute;
+  inset: 2px;
+  pointer-events: none;
+  border-radius: 50%;
+  background:
+    radial-gradient(circle at 18% 30%, #65d49a 0 2px, transparent 2.4px),
+    radial-gradient(circle at 84% 26%, #47e5de 0 2px, transparent 2.4px),
+    radial-gradient(circle at 74% 82%, #8db8c5 0 1.6px, transparent 2px),
+    radial-gradient(circle at 30% 78%, #d9a441 0 1.6px, transparent 2px);
+  opacity: 0;
+  animation: kd-confetti-settle 1.05s ease-out 1;
+}
+body .autonomous-status-header .kd-panda-icon--status[data-state="completed"]::after {
+  transform: rotate(28deg) scale(.86);
+  animation-delay: 70ms;
+}
+
+/* Approval = amber, validation/work = teal, failure = restrained red. */
+body .delivery-approval-card:not([hidden]),
+body .everyday-approval-card:not([hidden]) {
+  padding: 12px 13px;
+  border: 1px solid var(--warning-border) !important;
+  border-radius: 13px;
+  color: var(--text);
+  background: linear-gradient(155deg, rgba(67,51,24,.24), rgba(14,25,31,.86)) !important;
+  box-shadow: 0 12px 34px rgba(0,0,0,.20);
+}
+body .kd-dhadkan[data-dhadkan-state*="waiting"] {
+  animation: kd-governed-amber 2.8s ease-in-out infinite !important;
+}
+body .proposal-card-status { color: #c6a76a; }
+body .everyday-outcome-card {
+  border: 1px solid var(--border) !important;
+  border-radius: 13px;
+  background: linear-gradient(155deg, rgba(14,29,39,.84), rgba(8,18,27,.90)) !important;
+  box-shadow: 0 12px 32px rgba(0,0,0,.16);
+}
+body .everyday-outcome-card.is-success {
+  border-color: var(--success-border) !important;
+  border-left: 3px solid var(--success) !important;
+  background: linear-gradient(155deg, rgba(18,50,39,.25), rgba(8,20,25,.90)) !important;
+}
+body .everyday-outcome-card.is-blocked {
+  border-color: var(--danger-border) !important;
+  border-left: 3px solid var(--danger) !important;
+  background: linear-gradient(155deg, rgba(57,24,30,.24), rgba(11,18,24,.90)) !important;
+}
+body .timeline-fact,
+body .conversational-progress-item { color: var(--text-soft); }
+body .conversational-progress-item.status-success { color: #86dcb0; }
+body .conversational-progress-item.status-failure { color: #ea818a; }
+body .conversational-progress-item.status-waiting { color: #dcb568; }
+body .conversational-progress-item.status-in-progress { color: #8ca2ad; }
+
+/* Task details and technical disclosure. */
+body .kd-task-details > summary,
+body .everyday-details summary,
+body .everyday-technical-details summary,
+body .runtime-log-details summary {
+  color: #708690;
+}
+body .autonomous-summary,
+body .context-panel,
+body .repository-intelligence-panel {
+  border-color: rgba(137,177,198,.10);
+  color: var(--text-soft);
+}
+body .context-panel,
+body .repository-intelligence-panel {
+  background: transparent;
+}
+body .repo-intel-chip,
+body .context-chip {
+  border-color: var(--border);
+  color: var(--text-soft);
+  background: rgba(12,28,38,.56);
+}
+
+/* Tool/activity cards use the same instrument-panel language. */
+body .tool-card,
+body .approval-card,
+body .task-control-card,
+body .engine-event-card,
+body .task-row,
+body .metric-card,
+body .everyday-history-item {
+  border: 1px solid var(--border);
+  color: var(--text);
+  background: linear-gradient(155deg, rgba(15,31,42,.78), rgba(8,18,27,.76));
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.018);
+}
+body .task-row:hover,
+body .everyday-history-header:hover {
+  border-color: var(--border-bright);
+  background: var(--surface-hover);
+}
+body .metric-card.active-run { border-left: 2px solid var(--accent); }
+body .metric-card.blocked-run { border-left: 2px solid var(--danger); }
+body .metric-card.active-run .metric-value { color: var(--accent); }
+body .metric-card.blocked-run .metric-value { color: var(--danger); }
+body .task-menu,
+body .message-overflow-popover {
+  border: 1px solid var(--border-bright);
+  background: #09151e;
+  box-shadow: 0 16px 38px rgba(0,0,0,.42);
+}
+
+/* History + Activity drawers — one language with the main canvas. */
+body .drawer-scrim { background: rgba(0, 5, 9, .58); backdrop-filter: blur(2px); }
+body .drawer {
+  width: min(380px, 92vw);
+  padding: 15px;
+  border-left: 1px solid rgba(71,229,222,.13);
+  background:
+    radial-gradient(circle at 100% 0%, rgba(71,229,222,.055), transparent 34%),
+    linear-gradient(180deg, rgba(10,22,31,.985), rgba(5,12,18,.99));
+  box-shadow: -20px 0 60px rgba(0,0,0,.42);
+}
+body .drawer .panel-header {
+  padding-bottom: 9px;
+  border-bottom: 1px solid rgba(137,177,198,.10);
+}
+body .drawer .panel-header h2 {
+  margin: 0;
+  color: var(--text);
+  font-size: 15px;
+  font-weight: 720;
+}
+body .section-heading {
+  color: #657c87;
+  font-size: 9.5px;
+  letter-spacing: .11em;
+}
+body .workbench-search-input {
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  color: var(--text);
+  background: rgba(11,27,37,.72);
+}
+body .everyday-history-header { color: var(--text); }
+body .everyday-history-request { color: #d8e7eb; }
+body .everyday-history-body { border-color: var(--border); }
+body .everyday-history-step { border-left-color: #304650; }
+body .everyday-history-step.is-approval { border-left-color: var(--warning); }
+body .everyday-history-step.is-completed { border-left-color: var(--success); }
+body .everyday-history-step.is-blocked,
+body .everyday-history-step.is-stopped { border-left-color: var(--danger); }
+
+/* Scrollbars stay nearly invisible until used. */
+::-webkit-scrollbar { width: 5px; height: 5px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { border-radius: 999px; background: rgba(144,180,196,.12); }
+::-webkit-scrollbar-thumb:hover { background: rgba(71,229,222,.25); }
+
+@keyframes kd-home-breathe {
+  0%,100% { transform: translateY(0) scale(1); filter: drop-shadow(0 8px 18px rgba(0,0,0,.28)); }
+  50% { transform: translateY(-2px) scale(1.008); filter: drop-shadow(0 10px 23px rgba(0,0,0,.31)) drop-shadow(0 0 8px rgba(71,229,222,.07)); }
+}
+@keyframes kd-governed-perimeter { to { transform: rotate(360deg); } }
+@keyframes kd-dhaaga-travel {
+  0% { transform: translateX(0); opacity: .12; }
+  25% { opacity: .72; }
+  75% { opacity: .72; }
+  100% { transform: translateX(430%); opacity: .10; }
+}
+@keyframes kd-stage-pulse {
+  0%,100% { box-shadow: 0 0 0 3px rgba(6,15,22,.94), 0 0 0 5px rgba(71,229,222,.07), 0 0 13px rgba(71,229,222,.34); }
+  50% { box-shadow: 0 0 0 3px rgba(6,15,22,.94), 0 0 0 7px rgba(71,229,222,.04), 0 0 20px rgba(71,229,222,.50); }
+}
+@keyframes kd-approval-pulse {
+  0%,100% { box-shadow: 0 0 0 3px rgba(6,15,22,.94), 0 0 9px rgba(217,164,65,.18); }
+  50% { box-shadow: 0 0 0 3px rgba(6,15,22,.94), 0 0 15px rgba(217,164,65,.34); }
+}
+@keyframes kd-panda-investigate {
+  0%,100% { transform: translateY(0) rotate(0); }
+  45% { transform: translateY(-1px) rotate(-1.2deg); }
+  65% { transform: translateY(-1px) rotate(1deg); }
+}
+@keyframes kd-panda-breathe {
+  0%,100% { transform: scale(1); }
+  50% { transform: scale(1.012); }
+}
+@keyframes kd-panda-work {
+  0%,100% { transform: translateY(0) rotate(0); }
+  50% { transform: translateY(-1.4px) rotate(.8deg); }
+}
+@keyframes kd-panda-scan {
+  0%,100% { transform: translateX(0); filter: drop-shadow(0 8px 18px rgba(0,0,0,.24)) drop-shadow(0 0 3px rgba(71,229,222,.06)); }
+  50% { transform: translateX(1.4px); filter: drop-shadow(0 8px 18px rgba(0,0,0,.24)) drop-shadow(0 0 10px rgba(71,229,222,.19)); }
+}
+@keyframes kd-panda-attention {
+  0%,100% { transform: scale(1); filter: drop-shadow(0 8px 18px rgba(0,0,0,.24)) drop-shadow(0 0 2px rgba(217,164,65,.05)); }
+  50% { transform: scale(1.01); filter: drop-shadow(0 8px 18px rgba(0,0,0,.24)) drop-shadow(0 0 9px rgba(217,164,65,.14)); }
+}
+@keyframes kd-panda-safe-stop {
+  0%,100% { filter: drop-shadow(0 8px 18px rgba(0,0,0,.24)) drop-shadow(0 0 3px rgba(229,101,112,.07)); }
+  50% { filter: drop-shadow(0 8px 18px rgba(0,0,0,.24)) drop-shadow(0 0 10px rgba(229,101,112,.18)); }
+}
+@keyframes kd-panda-complete {
+  0% { transform: translateY(0) scale(1); }
+  34% { transform: translateY(-6px) scale(1.018); }
+  68% { transform: translateY(1px) scale(.995); }
+  100% { transform: translateY(0) scale(1); }
+}
+@keyframes kd-confetti-settle {
+  0% { opacity: 0; transform: scale(.82) translateY(3px); }
+  22% { opacity: .92; }
+  100% { opacity: 0; transform: scale(1.22) translateY(12px); }
+}
+@keyframes kd-governed-amber {
+  0%,100% { box-shadow: 0 0 0 1px rgba(217,164,65,.12), 0 12px 34px rgba(0,0,0,.18); }
+  50% { box-shadow: 0 0 0 1px rgba(217,164,65,.24), 0 0 16px rgba(217,164,65,.08), 0 12px 34px rgba(0,0,0,.18); }
+}
+
+@media (max-width: 680px) {
+  body .top-bar-left::after { font-size: 12px; }
+  /* New Chat is never hidden: chat-responsive.css collapses it to a compact + instead. */
+  body .chat-window { padding-inline: 9px; }
+  body .chat-messages, body #messages { padding-inline: 4px; }
+  body .ambient-placeholder { width: min(100%, 470px); padding: 22px 16px 19px; border-radius: 16px; }
+  body .ambient-placeholder .kd-panda-icon--welcome { width: 94px; height: 94px; }
+  body .ambient-placeholder::before { font-size: 20px; }
+  body .task-stage-tracker li { padding-inline: 2px; font-size: 8.5px; }
+  body .autonomous-status-header .kd-panda-icon--status { width: 42px; height: 42px; flex-basis: 42px; }
+}
+
+@media (max-width: 480px) {
+  body .top-bar { padding-inline: 8px; }
+  body .brand-mark.kd-panda-icon { width: 34px; height: 34px; }
+  body .top-bar-left::after { display: none; }
+  body .ambient-placeholder::after { font-size: 8.5px; }
+  body .task-stage-tracker li { font-size: 0; }
+  body .task-stage-tracker li::after {
+    content: attr(data-stage);
+    font-size: 8px;
+    text-transform: capitalize;
+  }
+  body .drawer { width: 100vw; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  body .ambient-placeholder .kd-panda-icon--welcome,
+  body .kd-objective-card::before,
+  body .task-stage-tracker::after,
+  body .task-stage-tracker li.is-current::before,
+  body .kd-panda-icon,
+  body .kd-dhadkan,
+  body .autonomous-status-header .kd-panda-icon--status::before,
+  body .autonomous-status-header .kd-panda-icon--status::after {
+    animation: none !important;
+  }
+}

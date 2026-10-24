@@ -1,0 +1,8 @@
+{
+  "name": "crossfile-validator-fixture",
+  "private": true,
+  "type": "commonjs",
+  "scripts": {
+    "test": "node --test tests/validator.test.js"
+  }
+}

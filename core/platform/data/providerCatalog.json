@@ -1,0 +1,376 @@
+{
+  "schemaVersion": 1,
+  "catalogVersion": "2026.10.06.1",
+  "providers": [
+    {
+      "id": "custom-openai",
+      "displayName": "Your own server (OpenAI-compatible)",
+      "protocol": "openai-compatible",
+      "baseUrl": "https://localhost/v1",
+      "signupUrl": "https://github.com/ggml-org/llama.cpp/tree/master/tools/server",
+      "apiKeysUrl": "https://github.com/ggml-org/llama.cpp/tree/master/tools/server",
+      "docsUrl": "https://github.com/ggml-org/llama.cpp/tree/master/tools/server",
+      "modelsUrl": "https://localhost/v1/models",
+      "authType": "api-key",
+      "capabilities": ["streaming"],
+      "freeTier": {
+        "kind": "recurring",
+        "note": "Your own llama.cpp, vLLM or LM Studio server costs nothing per request. Only addresses on this PC or your own network are accepted; Pandesh cannot verify what a public endpoint costs."
+      },
+      "paymentMethodRequired": "doesNotRequirePaymentMethod",
+      "providerResidency": "Your own machine or network.",
+      "lastVerifiedAt": "2026-10-23",
+      "sourceUrl": "https://github.com/ggml-org/llama.cpp/tree/master/tools/server",
+      "requiresBaseUrlInput": true,
+      "privacyWarning": "Public text only, like every cloud model: this server sees exactly the two messages you approve.",
+      "modelRules": { "freeness": { "kind": "self-hosted" } },
+      "fallbackPriority": 90
+    },
+    {
+      "id": "ollama-cloud",
+      "displayName": "Ollama Cloud",
+      "protocol": "openai-compatible",
+      "baseUrl": "https://ollama.com/v1",
+      "signupUrl": "https://ollama.com/signup",
+      "apiKeysUrl": "https://ollama.com/settings/keys",
+      "docsUrl": "https://docs.ollama.com/cloud",
+      "modelsUrl": "https://ollama.com/v1/models",
+      "authType": "api-key",
+      "privacyUrl": "https://ollama.com/privacy",
+      "capabilities": [
+        "tools",
+        "streaming"
+      ],
+      "freeTier": {
+        "kind": "recurring",
+        "note": "Free plan with a usage allowance; limits are shown at ollama.com/settings/usage and may change."
+      },
+      "paymentMethodRequired": "doesNotRequirePaymentMethod",
+      "providerResidency": "Ollama-operated cloud. Prompts are processed remotely and, per Ollama docs, not used for training.",
+      "lastVerifiedAt": "2026-10-06",
+      "sourceUrl": "https://docs.ollama.com/cloud",
+      "modelRules": {
+        "freeness": {
+          "kind": "provider-tier"
+        }
+      },
+      "fallbackPriority": 40
+    },
+    {
+      "id": "openrouter",
+      "displayName": "OpenRouter",
+      "protocol": "openai-compatible",
+      "baseUrl": "https://openrouter.ai/api/v1",
+      "signupUrl": "https://openrouter.ai/sign-up",
+      "apiKeysUrl": "https://openrouter.ai/settings/keys",
+      "docsUrl": "https://openrouter.ai/docs/faq",
+      "modelsUrl": "https://openrouter.ai/api/v1/models",
+      "authType": "api-key",
+      "privacyUrl": "https://openrouter.ai/privacy",
+      "capabilities": [
+        "tools",
+        "vision",
+        "streaming",
+        "structured-output"
+      ],
+      "freeTier": {
+        "kind": "recurring",
+        "note": "':free' model variants only, 50 requests/day without purchased credits (1000/day with >= $10 credits). Paid models are billed."
+      },
+      "paymentMethodRequired": "doesNotRequirePaymentMethod",
+      "providerResidency": "Router: requests are forwarded to third-party model hosts; some free endpoints may log prompts.",
+      "lastVerifiedAt": "2026-10-06",
+      "sourceUrl": "https://openrouter.ai/docs/faq",
+      "modelRules": {
+        "freeness": {
+          "kind": "pricing-zero"
+        }
+      },
+      "fallbackPriority": 20
+    },
+    {
+      "id": "orcarouter",
+      "displayName": "OrcaRouter",
+      "protocol": "openai-compatible",
+      "baseUrl": "https://api.orcarouter.ai/v1",
+      "signupUrl": "https://orcarouter.ai",
+      "apiKeysUrl": "https://orcarouter.ai",
+      "docsUrl": "https://docs.orcarouter.ai",
+      "modelsUrl": "https://api.orcarouter.ai/v1/models",
+      "authType": "api-key",
+      "capabilities": [
+        "tools",
+        "streaming"
+      ],
+      "freeTier": {
+        "kind": "unknown",
+        "note": "OrcaRouter is a pay-per-use gateway; some models are advertised as free. The model list does not document free status, so only models matching the provider-specific suffix rule are treated as free."
+      },
+      "paymentMethodRequired": "unknown",
+      "providerResidency": "Gateway: requests are forwarded to upstream model providers.",
+      "lastVerifiedAt": "2026-10-06",
+      "sourceUrl": "https://docs.orcarouter.ai",
+      "modelRules": {
+        "freeness": {
+          "kind": "id-suffix",
+          "suffixes": [
+            "-free",
+            ":free"
+          ]
+        }
+      },
+      "fallbackPriority": 10
+    },
+    {
+      "id": "groq",
+      "displayName": "Groq",
+      "protocol": "openai-compatible",
+      "baseUrl": "https://api.groq.com/openai/v1",
+      "signupUrl": "https://console.groq.com/login",
+      "apiKeysUrl": "https://console.groq.com/keys",
+      "docsUrl": "https://console.groq.com/docs/rate-limits",
+      "modelsUrl": "https://api.groq.com/openai/v1/models",
+      "authType": "api-key",
+      "privacyUrl": "https://groq.com/privacy-policy",
+      "capabilities": [
+        "tools",
+        "streaming",
+        "structured-output"
+      ],
+      "freeTier": {
+        "kind": "recurring",
+        "note": "Free plan with per-model request/token rate limits (Groq documents a Free Plan rate-limit table)."
+      },
+      "paymentMethodRequired": "unknown",
+      "providerResidency": "Groq-operated cloud (United States).",
+      "lastVerifiedAt": "2026-10-06",
+      "sourceUrl": "https://console.groq.com/docs/rate-limits",
+      "modelRules": {
+        "freeness": {
+          "kind": "provider-tier"
+        }
+      },
+      "fallbackPriority": 30
+    },
+    {
+      "id": "gemini",
+      "displayName": "Google Gemini API",
+      "protocol": "openai-compatible",
+      "baseUrl": "https://generativelanguage.googleapis.com/v1beta/openai",
+      "signupUrl": "https://aistudio.google.com",
+      "apiKeysUrl": "https://aistudio.google.com/apikey",
+      "docsUrl": "https://ai.google.dev/gemini-api/docs/pricing",
+      "modelsUrl": "https://generativelanguage.googleapis.com/v1beta/openai/models",
+      "authType": "api-key",
+      "privacyUrl": "https://ai.google.dev/gemini-api/terms",
+      "capabilities": [
+        "tools",
+        "vision",
+        "streaming",
+        "structured-output",
+        "reasoning"
+      ],
+      "freeTier": {
+        "kind": "recurring",
+        "note": "Free tier with limited access to selected models. Content on the free tier may be used by Google to improve its products."
+      },
+      "paymentMethodRequired": "doesNotRequirePaymentMethod",
+      "providerResidency": "Google-operated cloud. Free-tier content may be used to improve Google products.",
+      "lastVerifiedAt": "2026-10-06",
+      "sourceUrl": "https://ai.google.dev/gemini-api/docs/pricing",
+      "modelRules": {
+        "freeness": {
+          "kind": "provider-tier",
+          "idPatterns": [
+            "flash",
+            "gemma"
+          ]
+        },
+        "vision": {
+          "kind": "all"
+        }
+      },
+      "fallbackPriority": 35,
+      "privacyWarning": "Free-tier prompts may be used by Google to improve its products."
+    },
+    {
+      "id": "mistral",
+      "displayName": "Mistral La Plateforme",
+      "protocol": "openai-compatible",
+      "baseUrl": "https://api.mistral.ai/v1",
+      "signupUrl": "https://console.mistral.ai",
+      "apiKeysUrl": "https://console.mistral.ai/api-keys",
+      "docsUrl": "https://docs.mistral.ai",
+      "modelsUrl": "https://api.mistral.ai/v1/models",
+      "authType": "api-key",
+      "privacyUrl": "https://mistral.ai/terms",
+      "capabilities": [
+        "tools",
+        "streaming",
+        "structured-output"
+      ],
+      "freeTier": {
+        "kind": "unknown",
+        "note": "Mistral has offered an evaluation ('Experiment') plan; current terms could not be confirmed from official docs on the verification date."
+      },
+      "paymentMethodRequired": "unknown",
+      "providerResidency": "Mistral AI (EU).",
+      "lastVerifiedAt": "2026-10-06",
+      "sourceUrl": "https://docs.mistral.ai",
+      "modelRules": {
+        "freeness": {
+          "kind": "provider-tier"
+        }
+      },
+      "fallbackPriority": 60
+    },
+    {
+      "id": "cloudflare",
+      "displayName": "Cloudflare Workers AI",
+      "protocol": "openai-compatible",
+      "baseUrl": "https://api.cloudflare.com/client/v4/accounts/{accountId}/ai/v1",
+      "signupUrl": "https://dash.cloudflare.com/sign-up",
+      "apiKeysUrl": "https://dash.cloudflare.com/profile/api-tokens",
+      "docsUrl": "https://developers.cloudflare.com/workers-ai/platform/pricing/",
+      "modelsUrl": "https://api.cloudflare.com/client/v4/accounts/{accountId}/ai/v1/models",
+      "authType": "api-key",
+      "privacyUrl": "https://www.cloudflare.com/privacypolicy/",
+      "capabilities": [
+        "streaming"
+      ],
+      "freeTier": {
+        "kind": "recurring",
+        "note": "10,000 Neurons/day at no charge on Free and Paid Workers plans; beyond that the Paid plan bills per 1,000 Neurons."
+      },
+      "paymentMethodRequired": "doesNotRequirePaymentMethod",
+      "providerResidency": "Cloudflare global network.",
+      "lastVerifiedAt": "2026-10-06",
+      "sourceUrl": "https://developers.cloudflare.com/workers-ai/platform/pricing/",
+      "requiresBaseUrlInput": true,
+      "modelRules": {
+        "freeness": {
+          "kind": "provider-tier"
+        }
+      },
+      "fallbackPriority": 70
+    },
+    {
+      "id": "huggingface",
+      "displayName": "Hugging Face Inference Providers",
+      "protocol": "openai-compatible",
+      "baseUrl": "https://router.huggingface.co/v1",
+      "signupUrl": "https://huggingface.co/join",
+      "apiKeysUrl": "https://huggingface.co/settings/tokens",
+      "docsUrl": "https://huggingface.co/docs/inference-providers/pricing",
+      "modelsUrl": "https://router.huggingface.co/v1/models",
+      "authType": "api-key",
+      "privacyUrl": "https://huggingface.co/privacy",
+      "capabilities": [
+        "tools",
+        "streaming"
+      ],
+      "freeTier": {
+        "kind": "promotional",
+        "note": "Free accounts receive a small monthly credit ($0.10, subject to change); beyond it usage is pay-as-you-go. This is a credit allowance, not an unlimited free service."
+      },
+      "paymentMethodRequired": "doesNotRequirePaymentMethod",
+      "providerResidency": "Routed to third-party inference providers.",
+      "lastVerifiedAt": "2026-10-06",
+      "sourceUrl": "https://huggingface.co/docs/inference-providers/pricing",
+      "modelRules": {
+        "freeness": {
+          "kind": "provider-tier"
+        }
+      },
+      "fallbackPriority": 80
+    },
+    {
+      "id": "cohere",
+      "displayName": "Cohere (trial key)",
+      "protocol": "openai-compatible",
+      "baseUrl": "https://api.cohere.ai/compatibility/v1",
+      "signupUrl": "https://dashboard.cohere.com/welcome/register",
+      "apiKeysUrl": "https://dashboard.cohere.com/api-keys",
+      "docsUrl": "https://docs.cohere.com/docs/rate-limits",
+      "modelsUrl": "https://api.cohere.ai/compatibility/v1/models",
+      "authType": "api-key",
+      "privacyUrl": "https://cohere.com/privacy",
+      "capabilities": [
+        "tools",
+        "streaming"
+      ],
+      "freeTier": {
+        "kind": "trial",
+        "note": "Free trial keys are for evaluation only (not production): about 1,000 API calls/month, 20 chat requests/minute."
+      },
+      "paymentMethodRequired": "doesNotRequirePaymentMethod",
+      "providerResidency": "Cohere-operated cloud.",
+      "lastVerifiedAt": "2026-10-06",
+      "sourceUrl": "https://docs.cohere.com/docs/rate-limits",
+      "modelRules": {
+        "freeness": {
+          "kind": "provider-tier"
+        }
+      },
+      "fallbackPriority": 90
+    },
+    {
+      "id": "cerebras",
+      "displayName": "Cerebras",
+      "protocol": "openai-compatible",
+      "baseUrl": "https://api.cerebras.ai/v1",
+      "signupUrl": "https://cloud.cerebras.ai",
+      "apiKeysUrl": "https://cloud.cerebras.ai/platform",
+      "docsUrl": "https://inference-docs.cerebras.ai/support/rate-limits",
+      "modelsUrl": "https://api.cerebras.ai/v1/models",
+      "authType": "api-key",
+      "capabilities": [
+        "tools",
+        "streaming"
+      ],
+      "freeTier": {
+        "kind": "promotional",
+        "note": "Free Trial is time- and credit-bounded: $5 in credits that expire 30 days after they are granted. It is not a recurring free tier."
+      },
+      "paymentMethodRequired": "unknown",
+      "providerResidency": "Cerebras-operated cloud.",
+      "lastVerifiedAt": "2026-10-06",
+      "sourceUrl": "https://inference-docs.cerebras.ai/support/rate-limits",
+      "modelRules": {
+        "freeness": {
+          "kind": "provider-tier"
+        }
+      },
+      "fallbackPriority": 85
+    },
+    {
+      "id": "nvidia",
+      "displayName": "NVIDIA API Catalog",
+      "protocol": "openai-compatible",
+      "baseUrl": "https://integrate.api.nvidia.com/v1",
+      "signupUrl": "https://build.nvidia.com",
+      "apiKeysUrl": "https://build.nvidia.com/settings/api-keys",
+      "docsUrl": "https://docs.api.nvidia.com",
+      "modelsUrl": "https://integrate.api.nvidia.com/v1/models",
+      "authType": "api-key",
+      "capabilities": [
+        "tools",
+        "streaming"
+      ],
+      "freeTier": {
+        "kind": "unknown",
+        "note": "NVIDIA-hosted endpoints are offered for development/evaluation to NVIDIA Developer Program members; current credit and rate terms could not be confirmed from official docs on the verification date."
+      },
+      "paymentMethodRequired": "unknown",
+      "providerResidency": "NVIDIA-hosted.",
+      "lastVerifiedAt": "2026-10-06",
+      "sourceUrl": "https://build.nvidia.com",
+      "modelRules": {
+        "freeness": {
+          "kind": "never"
+        }
+      },
+      "fallbackPriority": 95
+    }
+  ]
+}

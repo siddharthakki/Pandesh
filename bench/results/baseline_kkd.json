@@ -1,0 +1,208 @@
+{
+ "root": "C:\\Projects\\kkd-repo-intel",
+ "node": "v24.16.0",
+ "cold": {
+  "readyMs": 2425,
+  "firstUsableMs": 133,
+  "files": 1731,
+  "symbols": 14277,
+  "rssDeltaMb": 83
+ },
+ "warm": {
+  "readyMs": 256,
+  "restored": 1394,
+  "parsed": 0,
+  "skipped": 1394
+ },
+ "queries": [
+  {
+   "id": "K1 how does app work",
+   "kind": "arch",
+   "engine": {
+    "p50": 4.4,
+    "p95": 9.2,
+    "tokens": 6000,
+    "fileRecall": 0.5,
+    "textRecall": 1,
+    "files": [
+     "package.json",
+     "scripts/acceptance/companion-driver/extension.js",
+     "core/index.ts",
+     "src/evals/cli.ts",
+     "src/context/RepositoryTypes.ts",
+     "src/context/RepositoryContextBudget.ts"
+    ]
+   },
+   "rg": {
+    "p50": 105.3,
+    "tokens": 317542,
+    "fileRecall": 1,
+    "textRecall": 1
+   }
+  },
+  {
+   "id": "K2 where persisted",
+   "kind": "arch",
+   "engine": {
+    "p50": 4.8,
+    "p95": 9.1,
+    "tokens": 6000,
+    "fileRecall": 0,
+    "textRecall": 1,
+    "files": [
+     "package.json",
+     "scripts/acceptance/companion-driver/extension.js",
+     "core/index.ts",
+     "src/evals/cli.ts",
+     "src/shared/webviewProtocol.ts",
+     "src/autonomous/M15AutonomousWork.ts"
+    ]
+   },
+   "rg": {
+    "p50": 106.9,
+    "tokens": 397498,
+    "fileRecall": 1,
+    "textRecall": 1
+   }
+  },
+  {
+   "id": "K3 who calls fn",
+   "kind": "trace",
+   "engine": {
+    "p50": 37.4,
+    "p95": 47.2,
+    "tokens": 2818,
+    "fileRecall": 0.5,
+    "textRecall": 1,
+    "files": [
+     "src/context/RepositoryIndex.ts",
+     "src/test/suite/contextGraphExpansionBounds.test.ts"
+    ]
+   },
+   "rg": {
+    "p50": 99.5,
+    "tokens": 934,
+    "fileRecall": 1,
+    "textRecall": 1
+   }
+  },
+  {
+   "id": "K4 dependents",
+   "kind": "dependents",
+   "engine": {
+    "p50": 0,
+    "p95": 0.1,
+    "tokens": 135,
+    "fileRecall": 1,
+    "textRecall": 1,
+    "files": [
+     "src/autonomy/workspaceScan.ts",
+     "src/coding/ValidationFloor.ts",
+     "src/context/RepositoryContextService.ts",
+     "src/test/suite/contextGraphExpansionBounds.test.ts",
+     "src/test/suite/explicitFileGrounding.test.ts",
+     "src/test/suite/m12CompilerLifecycle.test.ts"
+    ]
+   },
+   "rg": {
+    "p50": 103.4,
+    "tokens": 55224,
+    "fileRecall": 0,
+    "textRecall": 1
+   }
+  },
+  {
+   "id": "K5 break if modify",
+   "kind": "trace",
+   "engine": {
+    "p50": 36.9,
+    "p95": 42.4,
+    "tokens": 562,
+    "fileRecall": 0.3333333333333333,
+    "textRecall": 1,
+    "files": [
+     "core/runtime/toolArgumentSchema.ts",
+     "src/tools/ToolArgumentValidator.ts",
+     "src/test/suite/toolArgumentValidator.test.ts"
+    ]
+   },
+   "rg": {
+    "p50": 101.6,
+    "tokens": 2517,
+    "fileRecall": 1,
+    "textRecall": 1
+   }
+  },
+  {
+   "id": "K6 validation logic",
+   "kind": "arch",
+   "engine": {
+    "p50": 6.5,
+    "p95": 8.1,
+    "tokens": 6000,
+    "fileRecall": 0,
+    "textRecall": 1,
+    "files": [
+     "package.json",
+     "scripts/acceptance/companion-driver/extension.js",
+     "core/index.ts",
+     "src/evals/cli.ts",
+     "src/reliability/ToolCallReliability.ts",
+     "src/agent/ForgeInvocationAdapter.ts"
+    ]
+   },
+   "rg": {
+    "p50": 106.4,
+    "tokens": 115265,
+    "fileRecall": 0,
+    "textRecall": 1
+   }
+  },
+  {
+   "id": "K7 relevant tests",
+   "kind": "tests",
+   "engine": {
+    "p50": 0,
+    "p95": 0.1,
+    "tokens": 13,
+    "fileRecall": 1,
+    "textRecall": 1,
+    "files": [
+     "src/test/suite/toolArgumentValidator.test.ts"
+    ]
+   },
+   "rg": {
+    "p50": 105.9,
+    "tokens": 54452,
+    "fileRecall": 0,
+    "textRecall": 1
+   }
+  },
+  {
+   "id": "K8 definition",
+   "kind": "defs",
+   "engine": {
+    "p50": 0,
+    "p95": 0.1,
+    "tokens": 9,
+    "fileRecall": 1,
+    "textRecall": 1,
+    "files": [
+     "src/context/RepositoryIndex.ts"
+    ]
+   },
+   "rg": {
+    "p50": 118.7,
+    "tokens": 66311,
+    "fileRecall": 1,
+    "textRecall": 1
+   }
+  }
+ ],
+ "queryCpuMs": 765,
+ "rssMb": 255,
+ "incremental": {
+  "refreshMs": 13,
+  "newSymbolVisibleImmediately": true
+ }
+}

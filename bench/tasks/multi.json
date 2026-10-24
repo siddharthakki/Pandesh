@@ -1,0 +1,7 @@
+[
+ {"id":"M1 who calls fn (py)","question":"Who calls fetch_github_trending?","kind":"refs","arg":"fetch_github_trending","expect":["devpulse_ai/adapters/github.py","devpulse_ai/main.py","devpulse_ai/streamlit_app.py","devpulse_ai/verify.py"]},
+ {"id":"M2 definition (py)","question":"Where is fetch_arxiv_papers defined?","kind":"defs","arg":"fetch_arxiv_papers","expect":["devpulse_ai/adapters/arxiv.py"]},
+ {"id":"M3 break if modify","question":"What might break if I modify add_document?","kind":"impact","arg":"add_document","expect":["agentic_typed_rag_pydanticai/rag.py","agentic_typed_rag_pydanticai/app.py","agentic_typed_rag_pydanticai/test_typed_rag.py","autonomous_rag/autorag.py"]},
+ {"id":"M4 where is X (arch)","question":"Where does the app fetch huggingface models?","kind":"arch","arg":["huggingface","fetch","models"],"expect":["devpulse_ai/adapters/huggingface.py"]},
+ {"id":"M5 how app works (map)","question":"How does devpulse work?","kind":"map","arg":["devpulse"],"expect":["devpulse_ai/main.py","devpulse_ai/streamlit_app.py"]}
+]
