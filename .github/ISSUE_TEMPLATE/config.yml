@@ -1,0 +1,11 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Windows alpha — report a product bug
+    url: https://github.com/siddharthakki/Pandesh_Releases/issues/new/choose
+    about: For installer, local Ollama, conversation, task, approval and Windows bugs, use the distribution repository.
+  - name: Installation and model setup
+    url: https://github.com/siddharthakki/Pandesh_Releases/blob/main/docs/GETTING_STARTED.md
+    about: Read the first-run and troubleshooting guides before opening an issue.
+  - name: Vulnerability reporting
+    url: https://github.com/siddharthakki/Pandesh/blob/main/SECURITY.md
+    about: Do not post exploits or secrets in a public issue.
