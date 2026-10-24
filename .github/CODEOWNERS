@@ -1,0 +1,11 @@
+# Pandesh code owners
+# This is a review routing aid. CODEOWNERS alone does NOT enforce approval:
+# the repository owner must enable code-owner reviews in the main branch ruleset.
+* @siddharthakki
+
+# Especially sensitive trust boundaries (explicit for maintainer visibility)
+/.github/ @siddharthakki
+/scripts/ @siddharthakki
+/SECURITY.md @siddharthakki
+/CODE_OF_CONDUCT.md @siddharthakki
+/LICENSE @siddharthakki
