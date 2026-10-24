@@ -1,0 +1,23 @@
+name: Feature request
+description: Suggest a useful improvement to Pandesh
+title: "feature: "
+labels: []
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Real user problem
+      description: "What task should Pandesh reliably complete?"
+    validations:
+      required: true
+  - type: textarea
+    id: outcome
+    attributes:
+      label: Successful outcome
+      description: "Describe the observable result and how it can be verified."
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Existing options or workarounds
