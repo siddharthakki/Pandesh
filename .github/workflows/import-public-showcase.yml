@@ -1,0 +1,53 @@
+# A single trusted-hosted import of the already-public, labeled preview screenshots.
+# No pull_request trigger; untrusted PR code never receives write permission.
+name: Import approved Pandesh preview screenshots
+
+on:
+  push:
+    paths:
+      - ".github/workflows/import-public-showcase.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  import:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: true
+      - name: Download only known public screenshot assets and verify Git hashes
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p assets/screenshots
+          download_and_verify() {
+            local name="$1" expected="$2"
+            local url="https://raw.githubusercontent.com/siddharthakki/Pandesh_Releases/main/assets/screenshots/${name}"
+            curl --fail --location --silent --show-error --retry 3 "$url" -o "assets/screenshots/$name"
+            local actual
+            actual="$(git hash-object "assets/screenshots/$name")"
+            if [[ "$actual" != "$expected" ]]; then
+              echo "Checksum mismatch for $name; refusing to publish." >&2
+              exit 1
+            fi
+          }
+          download_and_verify '01-welcome-chat.png' '237050936b44621c072498e4e080139233421a71'
+          download_and_verify '02-local-model-connected.png' '63919ac3371c84fad5f4b7dd7ce04936bc9cbfe7'
+          download_and_verify '03-real-chat.png' '8cc345a3232f010e811563160f8fbe8df6b1f314'
+          download_and_verify '04-read-only-diagnostics.png' 'd1d28d12e0300b5d0ed468f2130dc74380de50f5'
+          download_and_verify '05-real-approval-request.png' 'fd26542c8e28219d5c737fe23f7d1f3966f1b4d1'
+          download_and_verify '06-completed-tasks-and-results.png' '058ad98ab81d65cb9307a82a367cbcfb82b38621'
+          git add -- assets/screenshots/
+          if git diff --cached --quiet; then
+            echo "Screenshots already match the published release-gallery originals."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "docs(media): import verified public development-preview screenshots"
+          git push origin HEAD:main
