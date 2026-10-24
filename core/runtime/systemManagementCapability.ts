@@ -599,7 +599,7 @@ export function createSystemManagementCapabilityAdapter(options: SystemManagemen
     ],
     classify: (toolName) => (READ_ONLY_TOOLS.has(toolName) ? 'read_only' : 'consequential'),
     prepare: prepareKillArguments,
-    health: () => ({ state: process.platform === 'win32' ? 'available' : 'unavailable', reason: process.platform === 'win32' ? undefined : 'system management is Windows-only', checkedAt: new Date().toISOString() }),
+    health: () => ({ state: process.platform === 'win32' || Boolean(options.runScript) ? 'available' : 'unavailable', reason: (process.platform === 'win32' || Boolean(options.runScript)) ? undefined : 'system management is Windows-only', checkedAt: new Date().toISOString() }),
     run: (call) => {
       switch (call.name) {
         case 'system_list_processes': return listProcesses();
