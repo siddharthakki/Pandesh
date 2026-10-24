@@ -70,6 +70,18 @@ Our immediate focus is **reliable conversations, correct model detection, approv
 
 [View source-publication gates](docs/OPEN_SOURCE_STATUS.md) · [MIT LICENSE](LICENSE) · [CONTRIBUTING](CONTRIBUTING.md) · [SECURITY](SECURITY.md).
 
+## Help build Pandesh
+
+**You can contribute today**, even before the complete Core source is published.
+
+- **[Start contributing](docs/CONTRIBUTOR_START_HERE.md):** fork the project, improve public guides or report real Windows/Ollama behavior.
+- **[Good first issue #2](https://github.com/siddharthakki/Pandesh/issues/2):** make first-run Ollama instructions clearer and reproducible.
+- **[Good first issue #3](https://github.com/siddharthakki/Pandesh/issues/3):** document actual model compatibility, including what fails.
+- **[Support and community](SUPPORT.md):** know where to ask questions, report bugs or help test.
+- **[Community launch plan](docs/COMMUNITY_GROWTH.md):** public promotion priorities and honest release messaging.
+
+**Core code contributions start when the complete, reviewed and buildable source snapshot is public.** We will not advertise a documentation-only repository as a finished code release.
+
 ## Community and credits
 
 Found a bug or got Pandesh working with your favorite local model? [Open an issue](https://github.com/siddharthakki/Pandesh_Releases/issues) with the app build and reproducible behavior—never raw private logs.
