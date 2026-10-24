@@ -1,0 +1,41 @@
+name: Bug report
+description: Report a reproducible Pandesh issue (do not include secrets or private data)
+title: "bug: "
+labels: []
+body:
+  - type: markdown
+    attributes:
+      value: "Please use synthetic/redacted data. If this is a security vulnerability, follow SECURITY.md instead of posting exploit details."
+  - type: input
+    id: build
+    attributes:
+      label: Pandesh version/build
+      placeholder: "v0.1.1 alpha, Build 142"
+    validations:
+      required: true
+  - type: input
+    id: environment
+    attributes:
+      label: Windows and local model
+      placeholder: "Windows 11 x64; Ollama, model name"
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Steps to reproduce
+      description: "Use test data and remove personal paths."
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+    validations:
+      required: true
