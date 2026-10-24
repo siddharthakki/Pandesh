@@ -129,13 +129,13 @@ if ((Test-Path -LiteralPath $openCode) -and
 }
 
 $directoryReport = Join-Path $reportDir 'gitleaks-staged-redacted.json'
-& gitleaks dir --source $staged --redact --report-format json --report-path $directoryReport --exit-code 1
+& gitleaks dir $staged --redact --report-format json --report-path $directoryReport --exit-code 1
 Assert-ExitCode 'Gitleaks staged source scan'
 
 # Historical findings are reviewed locally, even though the new source snapshot
 # never imports Git history. Do not upload historical audit reports.
 $historyReport = Join-Path $reportDir 'gitleaks-private-history-redacted.json'
-& gitleaks git --source $sourceResolved --log-opts '--all' --redact --report-format json --report-path $historyReport --exit-code 1
+& gitleaks git $sourceResolved --log-opts '--all' --redact --report-format json --report-path $historyReport --exit-code 1
 Assert-ExitCode 'Gitleaks private repository history scan'
 
 Write-Host ''
