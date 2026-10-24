@@ -1,0 +1,26 @@
+name: Documentation or onboarding improvement
+description: Make the public getting-started, contributor or architecture documentation clearer
+title: "docs: "
+body:
+  - type: markdown
+    attributes:
+      value: "Thanks! The full Core source is not public yet; documentation fixes are welcome immediately. Never attach secrets or private data."
+  - type: input
+    id: location
+    attributes:
+      label: Page or file
+      placeholder: "e.g. docs/CONTRIBUTOR_START_HERE.md"
+    validations:
+      required: true
+  - type: textarea
+    id: problem
+    attributes:
+      label: What is confusing, missing or inaccurate?
+    validations:
+      required: true
+  - type: textarea
+    id: fix
+    attributes:
+      label: What should change?
+    validations:
+      required: true
