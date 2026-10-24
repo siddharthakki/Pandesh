@@ -1,0 +1,99 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="theme-color" content="#090f11">
+<title>Pandesh — Local AI Personal Assistant for Windows | Ollama &amp; Open Source</title>
+<meta name="description" content="Meet Pandesh, a local-first AI personal assistant for Windows. Chat with Ollama models, review approved actions, manage tasks, reminders, and daily workflows. Free alpha download.">
+<meta name="keywords" content="local AI assistant, personal AI assistant, Windows AI assistant, Ollama desktop assistant, self-hosted AI assistant, Jarvis-like AI, open source AI agent, desktop AI agent, Pandesh">
+<meta name="robots" content="index,follow">
+<link rel="canonical" href="https://siddharthakki.github.io/Pandesh/">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="Pandesh">
+<meta property="og:title" content="Pandesh — Your Local AI Personal Assistant">
+<meta property="og:description" content="A local-first, Jarvis-inspired Windows AI assistant powered by Ollama. Chat, execute governed tasks and stay in control.">
+<meta property="og:url" content="https://siddharthakki.github.io/Pandesh/">
+<meta property="og:image" content="https://raw.githubusercontent.com/siddharthakki/Pandesh_Releases/main/assets/screenshots/01-welcome-chat.png">
+<meta property="og:image:alt" content="Dark Pandesh desktop with Panda assistant and a pinned local AI chat composer">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="Pandesh — Local AI Assistant for Windows">
+<meta name="twitter:description" content="A self-hosted personal AI assistant powered by Ollama. Get the free Windows alpha.">
+<meta name="twitter:image" content="https://raw.githubusercontent.com/siddharthakki/Pandesh_Releases/main/assets/screenshots/01-welcome-chat.png">
+<script type="application/ld+json">
+{
+  "@context":"https://schema.org",
+  "@type":"SoftwareApplication",
+  "name":"Pandesh",
+  "applicationCategory":"ProductivityApplication",
+  "applicationSubCategory":"Local AI assistant",
+  "operatingSystem":"Windows 10, Windows 11",
+  "softwareVersion":"0.1.1-alpha",
+  "description":"Pandesh is a local-first AI personal assistant for Windows that connects to Ollama models and supports governed task workflows.",
+  "url":"https://github.com/siddharthakki/Pandesh",
+  "downloadUrl":"https://github.com/siddharthakki/Pandesh_Releases/releases/tag/v0.1.1-pandesh-alpha",
+  "image":"https://raw.githubusercontent.com/siddharthakki/Pandesh_Releases/main/assets/screenshots/01-welcome-chat.png",
+  "isAccessibleForFree":true,
+  "offers":{"@type":"Offer","price":"0","priceCurrency":"EUR"},
+  "softwareRequirements":"Windows 10/11 x64; Ollama and a compatible locally installed model for local inference"
+}
+</script>
+<style>
+:root{color-scheme:dark;--bg:#090f11;--panel:#121b1e;--line:#283539;--text:#f0f6f4;--muted:#a9b9b6;--accent:#35dfc1;--accent2:#8cead7}*{box-sizing:border-box}html{scroll-behavior:smooth}body{margin:0;background:radial-gradient(ellipse at 65% 0%,#17332f 0%,var(--bg) 43%);font:16px/1.62 system-ui,-apple-system,"Segoe UI",sans-serif;color:var(--text)}a{color:var(--accent2);text-decoration-thickness:1px;text-underline-offset:3px}a:hover{color:#fff}nav,main,footer{max-width:1100px;margin:auto;padding:0 24px}nav{display:flex;justify-content:space-between;gap:18px;align-items:center;padding-top:24px;padding-bottom:24px}nav .brand{display:flex;align-items:center;gap:12px;font-size:20px;font-weight:800;color:white;text-decoration:none}nav .brand span{background:var(--panel);border:1px solid var(--line);border-radius:50%;padding:3px 9px}nav .links{display:flex;gap:20px;flex-wrap:wrap}nav .links a{color:var(--muted)}.hero{padding:64px 0 18px;max-width:860px}.eyebrow{color:var(--accent);font-weight:700;letter-spacing:.12em;text-transform:uppercase;font-size:12px}h1{font-size:clamp(40px,6vw,70px);line-height:1.08;letter-spacing:-.047em;margin:18px 0}h2{font-size:clamp(28px,4vw,38px);letter-spacing:-.035em;line-height:1.2}h3{font-size:19px;line-height:1.3}.intro{font-size:20px;color:#c2d0cd;max-width:710px;margin:0 0 28px}.actions{display:flex;gap:14px;flex-wrap:wrap}.btn{display:inline-flex;align-items:center;justify-content:center;padding:12px 20px;border:1px solid var(--line);border-radius:13px;color:white;text-decoration:none;font-weight:700;background:var(--panel)}.btn.primary{background:var(--accent);border-color:var(--accent);color:#073b32}.btn:hover{background:#27403d;color:white}.btn.primary:hover{background:#87ffea;color:#0e3935}.fine{color:var(--muted);font-size:13px;margin-top:18px}.preview{margin:30px 0 74px}.preview img{display:block;width:100%;height:auto;border:1px solid #29413f;border-radius:18px;box-shadow:0 25px 65px #0009}.preview figcaption{color:var(--muted);font-size:13px;margin-top:12px}section{padding:18px 0 56px}.cards{display:grid;grid-template-columns:repeat(3,1fr);gap:18px}.card{border:1px solid var(--line);background:linear-gradient(145deg,#142020,#0e1518);border-radius:18px;padding:22px}.card p{color:var(--muted)}.tag{font-size:12px;color:var(--accent);border:1px solid #345d56;border-radius:100px;padding:4px 10px}.steps{list-style:none;counter-reset:step;display:grid;grid-template-columns:repeat(3,1fr);gap:18px;padding:0}.steps li{counter-increment:step;border-top:1px solid var(--line);padding:16px 10px 0 0;color:var(--muted)}.steps li::before{content:counter(step,decimal-leading-zero);display:block;color:var(--accent);font-size:27px;font-weight:750;margin-bottom:10px}code{background:#1b2a2a;border:1px solid var(--line);border-radius:6px;padding:2px 6px;color:#b6f5e6}.screens{display:grid;grid-template-columns:1fr 1fr;gap:18px}.screens a{display:block}.screens img{width:100%;height:auto;border:1px solid var(--line);border-radius:14px}.notice{background:#122322;border-left:3px solid var(--accent);padding:18px 22px;color:#bcd2cd;border-radius:8px}footer{padding-top:20px;padding-bottom:42px;color:var(--muted);border-top:1px solid var(--line);font-size:14px}footer p{margin:6px 0}@media(max-width:740px){.cards,.steps,.screens{grid-template-columns:1fr}nav{align-items:flex-start}nav .links{justify-content:flex-end;gap:10px}.hero{padding-top:38px}.intro{font-size:18px}}
+</style>
+</head>
+<body>
+<nav aria-label="Main navigation">
+ <a class="brand" href="#top"><span aria-hidden="true">🐼</span>Pandesh</a>
+ <div class="links"><a href="#features">Features</a><a href="#install">Get started</a><a href="#preview">Screenshots</a><a href="https://github.com/siddharthakki/Pandesh">GitHub</a></div>
+</nav>
+<main id="top">
+ <header class="hero">
+  <div class="eyebrow">Local-first AI · Windows · Public alpha</div>
+  <h1>Meet your personal AI assistant. <span style="color:var(--accent)">On your PC.</span></h1>
+  <p class="intro">Pandesh is a Jarvis-inspired AI desktop companion powered by local Ollama models. Chat, review actions, organize tasks and build reliable everyday workflows—with you in control.</p>
+  <div class="actions">
+   <a class="btn primary" href="https://github.com/siddharthakki/Pandesh_Releases/releases/tag/v0.1.1-pandesh-alpha">Download for Windows ↗</a>
+   <a class="btn" href="https://github.com/siddharthakki/Pandesh_Releases/blob/main/docs/GETTING_STARTED.md">Getting started</a>
+  </div>
+  <p class="fine">Free public alpha v0.1.1 · Windows 10/11 x64 · Requires Ollama for local inference</p>
+ </header>
+ <figure class="preview">
+  <img width="1440" height="900" decoding="async" fetchpriority="high" src="https://raw.githubusercontent.com/siddharthakki/Pandesh_Releases/main/assets/screenshots/01-welcome-chat.png" alt="Pandesh dark desktop app featuring the Panda mascot, local AI status and conversation composer">
+  <figcaption>Shown: later v0.1.2 Build 143 development UI with demo content. The current public installer is Build 142.</figcaption>
+ </figure>
+ <section id="features">
+  <span class="tag">A practical AI companion</span>
+  <h2>More than a chatbot. Built for useful work.</h2>
+  <div class="cards">
+   <article class="card"><h3>🧠 Local AI conversations</h3><p>Connect to supported Ollama models on your Windows computer. No paid cloud subscription is required for basic local inference.</p></article>
+   <article class="card"><h3>✅ Governed tasks</h3><p>Review consequential operations, inspect visible approvals and keep task outcomes evidence-backed.</p></article>
+   <article class="card"><h3>📅 Everyday assistance</h3><p>Reminders, scheduled briefings and connector-based workflows where services are configured and authorized.</p></article>
+  </div>
+ </section>
+ <section id="install">
+  <h2>Get started in three steps.</h2>
+  <ol class="steps">
+   <li><strong style="color:white">Install Ollama.</strong> Get the local model runtime from <a href="https://ollama.com/download">ollama.com</a>.</li>
+   <li><strong style="color:white">Download a model.</strong> For example, run <code>ollama pull qwen2.5-coder:3b</code> in PowerShell.</li>
+   <li><strong style="color:white">Install Pandesh.</strong> Download the <a href="https://github.com/siddharthakki/Pandesh_Releases/releases/tag/v0.1.1-pandesh-alpha">official alpha</a>, verify SHA-256 and start a chat.</li>
+  </ol>
+  <div class="notice"><strong>Know before you install:</strong> Pandesh is experimental and unsigned. Not all agent tools are ready on every model or PC. External services require separate permissions. Local-first does not mean connected services are offline.</div>
+ </section>
+ <section id="preview">
+  <h2>Explore the Panda interface.</h2>
+  <p style="color:var(--muted)">These later-build screenshots contain illustrative demo data, not independent proof of tool execution.</p>
+  <div class="screens">
+   <a href="https://github.com/siddharthakki/Pandesh_Releases/blob/main/docs/SHOWCASE.md"><img loading="lazy" width="1440" height="900" src="https://raw.githubusercontent.com/siddharthakki/Pandesh_Releases/main/assets/screenshots/05-real-approval-request.png" alt="Pandesh AI assistant file edit approval dialog, development preview"></a>
+   <a href="https://github.com/siddharthakki/Pandesh_Releases/blob/main/docs/SHOWCASE.md"><img loading="lazy" width="1440" height="900" src="https://raw.githubusercontent.com/siddharthakki/Pandesh_Releases/main/assets/screenshots/06-completed-tasks-and-results.png" alt="Pandesh Tasks and Results UI preview with artifact cards"></a>
+  </div>
+  <p><a href="https://github.com/siddharthakki/Pandesh_Releases/blob/main/docs/SHOWCASE.md">View all screenshots →</a></p>
+ </section>
+ <section>
+  <h2>Open-source development, with safety first.</h2>
+  <p style="color:var(--muted);max-width:760px">Pandesh is preparing a complete MIT-licensed Core and desktop source release. The current public source repository contains architecture documentation, roadmap, contribution guidelines and safety gates. The full source snapshot has not yet been published; the original development history remains private while publication checks finish.</p>
+  <p><a href="https://github.com/siddharthakki/Pandesh/blob/main/docs/ARCHITECTURE.md">Architecture diagram</a> · <a href="https://github.com/siddharthakki/Pandesh/blob/main/docs/ROADMAP.md">Roadmap</a> · <a href="https://github.com/siddharthakki/Pandesh/blob/main/docs/PRIVACY.md">Privacy & safety</a></p>
+ </section>
+</main>
+<footer><p>© 2026 Pandesh contributors · Independent project · <a href="https://github.com/siddharthakki/Pandesh/blob/main/LICENSE">MIT license</a> for Pandesh-owned code.</p><p>“Jarvis-inspired” describes the assistant concept and implies no affiliation with Marvel or other products. Ollama, model weights and external integrations retain their own terms.</p></footer>
+</body></html>
