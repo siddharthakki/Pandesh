@@ -70,6 +70,12 @@ Our immediate focus is **reliable conversations, correct model detection, approv
 
 [View source-publication gates](docs/OPEN_SOURCE_STATUS.md) · [MIT LICENSE](LICENSE) · [CONTRIBUTING](CONTRIBUTING.md) · [SECURITY](SECURITY.md).
 
+## Trust and contribution safety
+
+Outside developers are welcome to fork and propose improvements, but **unreviewed pull requests are not executed on the maintainer's Windows PC**. The obsolete write-capable screenshot import workflow has been removed and all files are assigned a maintainer in [CODEOWNERS](.github/CODEOWNERS). The repository currently has no PR-triggered build workflow. GitHub branch ruleset and account security controls still require owner activation before this can be considered a fully hardened contribution process.
+
+[Security policy](SECURITY.md) · [Maintainer protection checklist](docs/MAINTAINER_SECURITY_SETUP.md) · [How contributions work](CONTRIBUTING.md)
+
 ## Help build Pandesh
 
 **You can contribute today**, even before the complete Core source is published.
