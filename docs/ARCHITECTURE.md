@@ -30,17 +30,17 @@ flowchart TB
   end
   W <--> API
   V <--> API
-  M <-. "When connected" .-> API
+  M -.->|"When connected"| API
   API <--> CONTEXT
   CONTEXT <--> MODEL
   CONTEXT --> TASK
   MODEL <--> OLLAMA
-  MODEL <-.-> OPENAI
-  MODEL <-. "Opt-in" .-> CLOUD
+  MODEL -.-> OPENAI
+  MODEL -.->|"Opt-in"| CLOUD
   TASK --> POLICY
-  POLICY --> |"Authorized operation"| TOOLS
+  POLICY -->|"Authorized operation"| TOOLS
   TOOLS <--> AGENTS
-  TOOLS <-. "Permissioned connector" .-> CONNECT
+  TOOLS -.->|"Permissioned connector"| CONNECT
   CONTEXT <--> RECORDS
   TASK <--> RECORDS
   TASK --> EVENTS
