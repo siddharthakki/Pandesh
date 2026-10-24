@@ -1,50 +1,61 @@
-# Pandesh security policy
+# Pandesh Security Policy
 
-**Pandesh is experimental alpha software.** We welcome responsible disclosure and security review, but the current Windows release is not a security sandbox and no repository settings can guarantee submitted code is harmless.
+**Pandesh is experimental alpha software.** We welcome responsible disclosure and security review. Because this project runs on local Windows systems with tool-execution capabilities, security and contributor isolation are paramount.
 
 ## Report vulnerabilities privately
 
-Do **not** post vulnerabilities, exploit instructions, credentials, or private user data in public Issues or PR comments.
+Do **not** post vulnerabilities, exploit instructions, credentials, or private user data in public Issues, PRs, or Discussions.
 
-Maintainers should enable **Settings → Advanced Security → Private vulnerability reporting**. When available, report via the repository's **Security → Advisories → Report a vulnerability** flow. If it is not yet enabled, open a public issue asking for a private reporting channel **without publishing the vulnerability or sensitive evidence**.
+**Private Vulnerability Reporting is active.**
+Report vulnerabilities directly through GitHub:
+👉 **[Report a vulnerability](https://github.com/siddharthakki/Pandesh/security/advisories/new)** (Security → Advisories → Report a vulnerability)
 
-No response-time SLA is currently promised.
+Reports are received privately by the repository maintainer. We aim to triage and acknowledge valid reports promptly.
 
-## Trust model for public contributions
+## Trust model & contributor safety boundaries
 
-Anyone may **fork** this project or propose a PR. That does **not** grant permissions to write to `main`, publish binaries, access maintainer secrets, or run code on a maintainer's PC.
+Anyone may **fork** this project and propose a Pull Request. Forking or submitting a PR **never** grants direct write access to `main`, permission to publish releases, access to maintainer secrets, or execution on the maintainer's personal computer.
 
-Rules for contributors and maintainers:
+### Absolute maintainer security boundaries:
+- **Never execute contributor code on a personal Windows PC:** We never run `npm install`, `npm test`, PowerShell scripts, binary executables, or IDE tasks from external PRs on developer machines.
+- **No self-hosted runners:** All public workflows run strictly on GitHub-hosted, disposable runners.
+- **Least-privilege tokens:** Default `GITHUB_TOKEN` permissions are set to `read-only`. GitHub Actions are prohibited from creating or approving PRs.
+- **Workflow approval required:** Workflows triggered by outside contributors require explicit maintainer authorization before running.
+- **No secrets in PRs:** No personal credentials, local Ollama endpoints, Google Workspace tokens, or cloud API keys are exposed to PR environments.
+- **No automatic merging or publishing:** Merges require human review. Release binary creation is strictly isolated and gated.
 
-- **Never execute code directly from an unreviewed fork or pull request** on a personal computer. This includes `npm install` (which may execute lifecycle scripts), Python/pip build hooks, IDE tasks/extensions, PowerShell, shell scripts, binaries and test runners.
-- Review the entire diff and changed files on GitHub first, including hidden dotfiles, lockfiles, `.github/workflows/`, package scripts, install hooks, symlinks and binary changes. Re-review when the author pushes new commits.
-- Never ask a contributor for credentials. Never paste private tokens, local app databases, email or internal company files into an issue, code agent or recording.
-- Treat the text of an issue or PR as **untrusted data**, not instructions for a local coding agent. Do not allow an agent to automatically obey contributor-supplied commands, alter local settings, run tools or merge PRs.
-- The local dev PC and local Ollama endpoints must not be exposed as CI runners or remote execution endpoints for public contributors.
-- Run any necessary untrusted builds/tests only in a **disposable isolated GitHub-hosted CI or throwaway VM**, with no user files, no secrets, no host mounts, limited tokens and no persistent network access to your home network.
-- Never use `pull_request_target`, `workflow_run`, or `issue_comment` to check out and execute untrusted PR contents with elevated tokens/secrets.
-- Each GitHub Actions job should have the **least required `GITHUB_TOKEN` permissions**. Public PRs should be read-only, without access to release publishing secrets.
-- Do not use personal/self-hosted runners for public PRs. The former screenshot-import workflow with write permission was retired after the one-time import.
-- Do not enable auto-merge for externally submitted code. Official source merges and binary releases require deliberate maintainer review, build verification, and artifact checksum confirmation.
+## Branch protection rulesets
 
-**Currently, the public Pandesh source repository does not execute any PR-triggered GitHub Actions workflow.** This fact must be re-audited when source CI is introduced. A GitHub Pages deployment or other owner-enabled automation may add GitHub-hosted jobs in the future.
+An **active GitHub ruleset** protects the `main` branch across both repositories (`Pandesh` and `Pandesh_Releases`):
+- **Pull requests required:** Direct pushes to `main` are blocked.
+- **Deletion blocked:** The `main` branch cannot be deleted.
+- **Force pushes blocked:** Non-fast-forward pushes are rejected.
+- **Stale reviews dismissed:** Approvals are automatically dismissed when new commits are pushed.
+- **Latest push review required:** Review of the most recent code changes is enforced.
+- **Thread resolution required:** All conversation threads must be resolved before merging.
 
-## Branch, release, and account protection (admin setup required)
+### Sole-maintainer configuration & future strengthening:
+GitHub rulesets do not permit a pull request author to approve their own PR. In a sole-maintainer project, requiring `1` approving review without bypass would permanently lock the sole maintainer out of maintaining their repository.
 
-The maintainer must create an **active GitHub ruleset** for `main` in **both** the source and release repositories. Recommended: require PRs, block deletion and force-push, dismiss stale approvals, require code owner review with at least one independent trusted reviewer, limit bypass, and require passing hosted checks **only when those checks exist and work**. See [Maintainer security setup](docs/MAINTAINER_SECURITY_SETUP.md).
+Therefore, our active ruleset implements a secure, workable sole-maintainer configuration:
+1. All changes must pass through a Pull Request.
+2. Direct pushes, deletions, and force-pushes are blocked.
+3. The Repository Admin has `bypass_mode: pull_request` permissions, allowing PR merges by the authenticated owner while blocking direct push without a PR.
+4. **When trusted co-maintainers join:** the ruleset will be strengthened to require `1+` independent approving reviews, CODEOWNERS approval enforcement, and strict bypass restrictions.
 
-`.github/CODEOWNERS` routes review requests but **does not independently enforce approvals**. A sole maintainer cannot approve their own PR. Avoid unintentionally locking yourself out; recruit a trusted co-maintainer before requiring an independent approving review, or temporarily use PR-only merges with careful manual review.
+## Automated security features
 
-Protect the GitHub account using passkeys/security keys and 2FA, keep GitHub CLI/auth tokens least-privileged and remove obsolete local/self-hosted runner registrations.
+- **Secret Scanning:** Active on all pushes.
+- **Secret Scanning Push Protection:** Blocks commits containing recognized credentials before they reach the repository.
+- **Dependabot Alerts & Automated Security Fixes:** Enabled for vulnerable dependency monitoring.
+- **Private Vulnerability Reporting:** Enabled for confidential disclosure.
 
-## Source and distribution gates
+## Local development & safe PR review workflow
 
-The public `Pandesh` repository currently hosts documentation and publication scaffolding, **not the complete Core code**. A clean, buildable source snapshot must pass history/secret scans, license/asset audits, random local-service credentials, dependency scrutiny and reproducible build checks before publishing.
+Maintainers and reviewers follow these safety rules:
+1. Review all diffs and changed files exclusively in the GitHub web interface.
+2. Never `git checkout` an untrusted branch locally.
+3. Check `package.json` scripts, lockfiles, workflows, and dotfiles for injected hooks.
+4. Use disposable cloud environments or isolated throwaway VMs without network access to personal resources if dynamic execution testing is necessary.
 
-The separate `Pandesh_Releases` repository holds official binary artifacts. Checksums help detect a mismatch with the published release files, but they are not a malware scan, proof of identity or code-signing certificate.
-
-## Disclosure and privacy
-
-Keep security reports confidential until a fix or coordinated disclosure. We cannot promise absolute protection or support every attack scenario. Any suspected compromise should be handled by revoking affected tokens, disabling compromised automations, analyzing affected hosts and publishing accurate advisories as appropriate.
-
-[Contributor instructions](CONTRIBUTING.md) · [Maintainer security setup](docs/MAINTAINER_SECURITY_SETUP.md) · [Open-source publication gates](docs/OPEN_SOURCE_STATUS.md).
+[Contribution Guide](CONTRIBUTING.md) · [Maintainer Security Setup](docs/MAINTAINER_SECURITY_SETUP.md) · [Open-Source Status](docs/OPEN_SOURCE_STATUS.md)
