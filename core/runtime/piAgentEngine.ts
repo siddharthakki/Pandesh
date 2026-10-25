@@ -35,6 +35,7 @@ import { transitionAttempt, failAttempt, getAttempt, settleCancelledAttempt } fr
 import { createApproval, getApproval, listApprovalsForAttempt, expireApproval } from '../domain/approvals';
 import { recordExecutionQuality } from '../domain/executionQuality';
 import { NON_WORKSPACE_MARKERS } from '../domain/taskToolSurface';
+import { synthesizeContractInventory } from '../domain/contractInventory';
 import { OpenCodeEngine } from './opencodeEngine';
 import { approveDevStoryReview, devStoryStatus, dispatchDevStories, planDevStories, reassignDevStory, retryDevStory, stopAllDevStories } from './kandev/devStories';
 import { KandevClient } from './kandev/kandevClient';
@@ -2233,10 +2234,12 @@ export class PiAgentEngine implements EngineAdapter {
     }
 
     const priorTaskOutcomes = conversationId ? listTaskOutcomes(db, { conversationId }) : [];
-    const activeTask = priorTaskOutcomes.find((t) => t.status === 'in_progress' || t.status === 'partial');
-
-    const promptMentionsNonWorkspace = NON_WORKSPACE_MARKERS.some(([, pattern]: readonly [string, RegExp]) => pattern.test(prompt));
+    let activeTask = priorTaskOutcomes.find((t) => t.status === 'in_progress' || t.status === 'partial');
     const isContinuation = /\b(?:continue|resume|proceed|status|updates?|what happened|next steps?)\b/i.test(prompt);
+    if (!activeTask && conversationId && isContinuation) {
+      activeTask = priorTaskOutcomes.find((t) => /contract|extract|agreement|inventory/i.test(t.objective));
+    }
+    const promptMentionsNonWorkspace = NON_WORKSPACE_MARKERS.some(([, pattern]: readonly [string, RegExp]) => pattern.test(prompt));
     const needsTools = promptMentionsNonWorkspace || Boolean(activeTask) || (isContinuation && priorTaskOutcomes.length > 0);
     const simpleInteractive = !needsTools && prompt.trim().length < 200;
 
@@ -2359,12 +2362,14 @@ TRUTHFULNESS & BEHAVIORAL PROTOCOL:
    - Email and calendar: use the gmail_* and calendar_* tools (they appear only as connected services allow). Current local time: ${new Date().toLocaleString('en-GB', { timeZone: localTimeZone, dateStyle: 'full', timeStyle: 'short' })} (${localTimeZone}) — resolve "tomorrow", "next Friday" etc. ONLY with 'resolve_time' and pass its 'iso' value. Email timestamps: quote 'receivedLocal' (already in the user's zone), never re-derive from raw header text; report counts exactly as the tool gives them (matched vs shown).
    - Gmail tools: gmail_search, gmail_read_thread, gmail_read_attachment, gmail_create_draft, gmail_send_draft, and inbox organization: gmail_analyze_inbox (read-only counts by sender/category/class), gmail_plan_changes (bulk PREVIEW, changes nothing), gmail_apply_plan and gmail_undo_plan (approval card, verified, reversible). There is no delete or trash tool: never delete, trash or mark spam, and say it is not supported if asked.
    - Gmail contract extraction & inventory:
+     - You have active, verified access to the Gmail connector ('gmail_search', 'gmail_read_thread', 'gmail_read_attachment'). NEVER claim you have no Gmail tool, that Gmail is not connected, or offer to set up an MCP server when Gmail tools are available or when a search has been performed.
      - Search relevant contract categories using 'gmail_search': queries like "contract", "agreement", "lease OR Mietvertrag OR rental", "employment OR offer letter", "service agreement OR terms of service", "NDA", and "has:attachment".
      - Deduplicate across searches: multiple queries will return the same thread or message. Always deduplicate by threadId/messageId.
      - Inspect actual content before classifying: call 'gmail_read_thread' to inspect thread messages and 'gmail_read_attachment' to read and extract text from attachments (e.g. PDFs, documents). Never classify an email as a contract without inspecting its body or attachment evidence.
      - When attachments are present (e.g. PDF rental agreements, signed contracts), call 'gmail_read_attachment' with messageId and attachmentId to extract and verify the text locally.
      - Maintain durable task state: call 'update_task_outcome' with objective, status ('in_progress' while scanning/reading, 'satisfied' when complete), evidence (tool invocations, verified contracts), and summary of verified vs candidate contracts.
      - Resuming after an interruption: If resuming contract extraction (e.g. 'continue extracting my contracts', 'updates?'), check existing task outcomes and prior turn evidence, resume reading remaining candidates, and do NOT claim Gmail is disconnected when gmail tools are available.
+     - ALWAYS complete your extraction within the turn and output the full markdown Contract Inventory Table. NEVER stop to output intermediate progress like "I found a lead, running more searches". Perform your searches and thread reads, then IMMEDIATELY output the final table and coverage summary.
      - Deliver an honest Contract Inventory Table:
        | Contract Type | Company / Counterparty | Date | Email / Thread Reference | Attachment | Extraction Status |
      - Clearly report coverage:
@@ -2372,6 +2377,7 @@ TRUTHFULNESS & BEHAVIORAL PROTOCOL:
        - Candidates: identified by search but not yet fully inspected.
        - Inaccessible attachments: attachments that could not be read or extracted.
        - Remaining unsearched: estimated remaining matching messages from search counts.
+     - If no confirmed contracts were found in the examined messages, present the inventory table showing the candidates / non-contract notifications found, report 0 confirmed contracts, and state what was checked truthfully. Never fabricate fictional contracts (such as 5 car-rental contracts) and never claim Gmail isn't connected.
      - NEVER fabricate contract details, counterparty names, dates, or terms. Quote only what the tools returned.
    - Mailbox analysis: ALWAYS state coverage.statement from gmail_analyze_inbox. If coverage.complete is false it is a PARTIAL sample: say how many were examined and of how many, never call it the whole mailbox or the whole period (80 emails is not "30 days"). Report counts exactly as returned.
    - Organizing mail (move to Promotions, archive, label): first gmail_plan_changes, show the user the preview (count, senders, sample, what will change), and only when they asked for the change call gmail_apply_plan with the planId and planDigest. Report the verification line from the result; if it says unverified or partial, say so. Offer gmail_undo_plan to revert. If a tool says Google needs the gmail.modify permission, tell the user to open Connections, Google, Allow inbox organization.
@@ -2413,6 +2419,21 @@ TRUTHFULNESS & BEHAVIORAL PROTOCOL:
         // Exclude current user prompt if already appended by submission.ts so agent.prompt(prompt) doesn't duplicate it
         if (turns.length > 0 && turns[turns.length - 1].role === 'user' && turns[turns.length - 1].content === (ctx.currentMessage ?? prompt)) {
           turns = turns.slice(0, -1);
+        }
+        const hasGmailTools = tools.some(t => t.name.startsWith('gmail_'));
+        if (hasGmailTools) {
+          // Do not poison the agent's context with previous hallucinated disclaimers about missing Gmail tools or fake contract claims
+          turns = turns.filter(m => {
+            if (m.role === 'assistant') {
+              if (/\b(?:no gmail tool connected|gmail (?:is not|wasn't) connected|can't search or read your email|Option A.*?Gmail MCP server)\b/i.test(m.content)) {
+                return false;
+              }
+              if (/\ball car rental contracts\b/i.test(m.content)) {
+                return false;
+              }
+            }
+            return true;
+          });
         }
         priorTurnsTotal = turns.length;
         const keptTurns = turns.slice(-10);
@@ -2639,9 +2660,9 @@ TRUTHFULNESS & BEHAVIORAL PROTOCOL:
     if (signal?.aborted) return settleCancelled();
 
     // Extract assistant response
-    const lastAssistantText = (): string => {
+    const lastAssistantTextFrom = (floorIndex: number): string => {
       const messages = agent.state.messages;
-      for (let i = messages.length - 1; i >= replyFloor; i--) {
+      for (let i = messages.length - 1; i >= floorIndex; i--) {
         const msg = messages[i];
         if (msg.role !== 'assistant') continue;
         const text = (msg.content || []).filter((c: any) => c.type === 'text').map((c: any) => c.text).join('\n').trim();
@@ -2649,6 +2670,7 @@ TRUTHFULNESS & BEHAVIORAL PROTOCOL:
       }
       return '';
     };
+    const lastAssistantText = (): string => lastAssistantTextFrom(replyFloor);
     let finalReply = lastAssistantText();
 
     // Fallback: a configured local model may not always emit valid function
@@ -2749,6 +2771,52 @@ TRUTHFULNESS & BEHAVIORAL PROTOCOL:
         finalReply = lastAssistantText() || finalReply;
       } catch (err: any) {
         console.warn('[piAgentEngine] unbacked-claim follow-up failed:', err?.message);
+      }
+    }
+
+    // Anti-hallucination check for Gmail: if Gmail tools were executed successfully,
+    // the reply must never claim that Gmail is not connected or that no Gmail tool is available.
+    if (toolCallsRecorded.some(t => t.tool.startsWith('gmail_') && t.status === 'completed') &&
+        /\b(?:have no gmail tool|gmail (?:is not|wasn't) connected|no gmail connector|can't search or read your email|Option A.*?Gmail MCP server)\b/i.test(finalReply) &&
+        !signal?.aborted) {
+      safeRecordRuntimeEvent(db, broadcaster, attemptId, 'hallucinated_gmail_disconnect_detected', { replyPreview: finalReply.slice(0, 200) }, actor);
+      try {
+        const followUpFloor = agent.state.messages.length;
+        await agent.prompt('Correction: You DO have active Gmail access and your gmail tools ran successfully in this turn. Do NOT claim you have no Gmail tool or that Gmail is not connected. Present the real findings from the gmail tool results in the required Contract Inventory Table (| Contract Type | Company / Counterparty | Date | Email / Thread Reference | Attachment | Extraction Status |).');
+        await agent.waitForIdle();
+        const followUpReply = lastAssistantTextFrom(followUpFloor);
+        if (followUpReply) finalReply = followUpReply;
+      } catch (err: any) {
+        console.warn('[piAgentEngine] gmail hallucination follow-up failed:', err?.message);
+      }
+    }
+
+    // Ensure Contract Inventory Table delivery when contract extraction was performed
+    if ((/\b(?:contracts?|agreement)\b/i.test(prompt) || (isContinuation && Boolean(activeTask))) &&
+        toolCallsRecorded.some(t => t.tool.startsWith('gmail_') && t.status === 'completed') &&
+        !finalReply.includes('| Contract Type') &&
+        !signal?.aborted) {
+      safeRecordRuntimeEvent(db, broadcaster, attemptId, 'contract_inventory_table_requested', { replyPreview: finalReply.slice(0, 200) }, actor);
+      try {
+        const followUpFloor = agent.state.messages.length;
+        await agent.prompt('Do NOT call any more tools. Output the markdown Contract Inventory Table and coverage summary immediately based on the search and thread results already retrieved. Format as:\n| Contract Type | Company / Counterparty | Date | Email / Thread Reference | Attachment | Extraction Status |\nInclude all examined messages/candidates, distinguish confirmed contracts vs candidate notifications, report coverage honestly, and do not repeat previous unrelated answers.');
+        await agent.waitForIdle();
+        const followUpReply = lastAssistantTextFrom(followUpFloor);
+        if (followUpReply && followUpReply.includes('| Contract Type')) {
+          finalReply = followUpReply;
+        }
+      } catch (err: any) {
+        console.warn('[piAgentEngine] contract table prompt follow-up failed:', err?.message);
+      }
+
+      // Deterministic synthesis backup: if the model still failed to format the table,
+      // synthesize it directly from the recorded tool evidence so progress is never lost.
+      if (!finalReply.includes('| Contract Type')) {
+        const synthesized = synthesizeContractInventory(toolCallsRecorded);
+        if (synthesized) {
+          finalReply = synthesized;
+          safeRecordRuntimeEvent(db, broadcaster, attemptId, 'contract_inventory_table_synthesized', { replyLength: finalReply.length }, actor);
+        }
       }
     }
 

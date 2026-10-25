@@ -6,6 +6,7 @@ import * as crypto from 'node:crypto';
 import { NON_WORKSPACE_MARKERS } from '../domain/taskToolSurface';
 import { summarizeGmailMessage, type GmailApiMessage } from '../runtime/connectors/gmailMime';
 import { createGwsGmailExecutor, type GwsGmailAdapterConfig } from '../runtime/connectors/gwsGmailAdapter';
+import { synthesizeContractInventory } from '../domain/contractInventory';
 import type { CapabilityExecutionContext } from '../runtime/connectors/connectorCapability';
 
 describe('Gmail Contract Extraction & Resumption Regression Suite', () => {
@@ -120,4 +121,108 @@ describe('Gmail Contract Extraction & Resumption Regression Suite', () => {
     expect(parsedOutput.size).toBe(contractText.length);
     expect(parsedOutput.messageId).toBe('msg-rental-1');
   });
+
+  it('synthesizes grounded contract inventory table from tool calls with deduplication and coverage', () => {
+    const mockToolCalls = [
+      {
+        tool: 'gmail_search',
+        status: 'completed',
+        result: {
+          content: [{
+            type: 'text',
+            text: JSON.stringify({
+              matched: 120,
+              listed: 2,
+              results: [
+                {
+                  id: 'msg-ent-1',
+                  threadId: 'thread-ent-1',
+                  subject: 'Enterprise Rental Agreement 4W742D',
+                  from: 'Enterprise Rent-A-Car <DoNotReply@enterprise.com>',
+                  date: 'Thu, 3 Sep 2026 14:22:00 +0200',
+                  receivedLocal: 'Thu, 3 Sept 2026, 14:22 (Europe/Berlin)',
+                  snippet: 'Your rental agreement 4W742D is attached.',
+                },
+                {
+                  id: 'msg-advisory-1',
+                  threadId: 'thread-adv-1',
+                  subject: 'Preparation for our meeting on real estate investment',
+                  from: 'wirberaten.berlin <e.kalinka@wirberaten.berlin>',
+                  date: 'Tue, 29 Sep 2026 11:36:00 +0200',
+                  receivedLocal: 'Tue, 29 Sept 2026, 11:36 (Europe/Berlin)',
+                  snippet: 'Meeting preparation guide for real estate.',
+                },
+              ],
+            }),
+          }],
+        },
+      },
+      // Duplicate search result from a second query
+      {
+        tool: 'gmail_search',
+        status: 'completed',
+        result: {
+          content: [{
+            type: 'text',
+            text: JSON.stringify({
+              matched: 120,
+              listed: 1,
+              results: [
+                {
+                  id: 'msg-ent-1',
+                  threadId: 'thread-ent-1',
+                  subject: 'Enterprise Rental Agreement 4W742D',
+                  from: 'Enterprise Rent-A-Car <DoNotReply@enterprise.com>',
+                  date: 'Thu, 3 Sep 2026 14:22:00 +0200',
+                  receivedLocal: 'Thu, 3 Sept 2026, 14:22 (Europe/Berlin)',
+                  snippet: 'Your rental agreement 4W742D is attached.',
+                },
+              ],
+            }),
+          }],
+        },
+      },
+      // Thread inspection with attachment
+      {
+        tool: 'gmail_read_thread',
+        status: 'completed',
+        result: {
+          content: [{
+            type: 'text',
+            text: JSON.stringify({
+              threadId: 'thread-ent-1',
+              messages: [
+                {
+                  id: 'msg-ent-1',
+                  threadId: 'thread-ent-1',
+                  subject: 'Enterprise Rental Agreement 4W742D',
+                  from: 'Enterprise Rent-A-Car <DoNotReply@enterprise.com>',
+                  snippet: 'Your rental agreement 4W742D is attached.',
+                  attachments: [
+                    { id: 'att-1', filename: 'Rental Agreement 4W742D.pdf', mimeType: 'application/pdf', size: 104200 },
+                  ],
+                },
+              ],
+            }),
+          }],
+        },
+      },
+    ];
+
+    const inventory = synthesizeContractInventory(mockToolCalls);
+    expect(inventory).not.toBeNull();
+    expect(inventory).toContain('| Contract Type | Company / Counterparty | Date | Email / Thread Reference | Attachment | Extraction Status |');
+    expect(inventory).toContain('Car Rental Agreement');
+    expect(inventory).toContain('Enterprise Rent-A-Car');
+    expect(inventory).toContain('Confirmed contract');
+    expect(inventory).toContain('Yes (Rental Agreement 4W742D.pdf)');
+    expect(inventory).toContain('Candidate (Consultation / Guide)');
+    expect(inventory).toContain('### Contract Extraction Coverage');
+    expect(inventory).toContain('Confirmed contracts:** 1');
+
+    // Deduplication check: 'thread-ent-1' appears exactly once in the table lines
+    const occurrences = (inventory!.match(/thread-ent-1/g) || []).length;
+    expect(occurrences).toBe(1);
+  });
 });
+
