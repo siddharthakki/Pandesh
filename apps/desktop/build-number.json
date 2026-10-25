@@ -1,4 +1,4 @@
 {
-  "buildNumber": 143,
+  "buildNumber": 144,
   "note": "Monotonic build number for official Pandesh builds. Bump it with `npm run desktop:build-number:bump` in apps/desktop. Local development builds are labelled 'dev' and never claim an official build number."
 }

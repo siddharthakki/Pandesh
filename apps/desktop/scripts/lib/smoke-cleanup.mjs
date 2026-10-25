@@ -18,7 +18,13 @@ export function assertSmokeRoot(scratch) {
 export function stopSmokeProcesses(scratch) {
   const install = path.join(assertSmokeRoot(scratch), 'install') + path.sep;
   const script = `$ErrorActionPreference = 'Stop'
-$prefix = $env.PANDESH_SMOKE_INSTALL
+$prefix = $env:PANDESH_SMOKE_INSTALL
+if ([string]::IsNullOrWhiteSpace($prefix) -or $prefix.Length -lt 15) {
+  throw "Refusing process sweep: PANDESH_SMOKE_INSTALL prefix is missing or too short: '$prefix'"
+}
+if (-not (Test-Path -LiteralPath $prefix)) {
+  exit 0
+}
 $owned = @(Get-CimInstance Win32_Process | Where-Object { $_.ExecutablePath -and $_.ExecutablePath.StartsWith($prefix, [StringComparison]::OrdinalIgnoreCase) })
 foreach ($entry in $owned) {
   $current = Get-CimInstance Win32_Process -Filter ("ProcessId=" + $entry.ProcessId)
@@ -40,7 +46,7 @@ export function uninstallSmoke(scratch, env) {
   stopSmokeProcesses(scratch);
   const uninstaller = path.join(assertSmokeRoot(scratch), 'install', 'unins000.exe');
   if (fs.existsSync(uninstaller)) {
-    const result = spawnSync(uninstaller, ['/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART'], { env, windowsHide: true });
+    const result = spawnSync(uninstaller, ['/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/NOCLOSEAPPLICATIONS'], { env, windowsHide: true });
     if (result.status !== 0) throw new Error('Smoke uninstall failed: ' + result.status);
   }
   fs.rmSync(assertSmokeRoot(scratch), { recursive: true, force: true });
