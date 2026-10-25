@@ -3,6 +3,7 @@ import { expireApproval, getApproval, listApprovalsForAttempt } from './approval
 import { loadLoopContinuation } from './attemptLoopContinuation';
 import { failAttempt, listAttempts, transitionAttempt } from './attempts';
 import { classifyAttemptRecovery, type RecoveryClassification } from './recovery';
+import { isBackgroundTaskAttempt } from './backgroundTasks';
 
 const EXECUTOR_OWNER = /^core:executor:(\d+)$/;
 
@@ -35,6 +36,7 @@ export function failDeadExecutorAttemptsOnBoot(
   const settled: Array<{ attemptId: string; status: string; outcome: 'failed' | 'cancelled' }> = [];
   for (const attempt of listAttempts(db, { activeOnly: true, limit: 500, offset: 0 })) {
     if (!['running', 'validating', 'cancelling', 'waiting_for_approval'].includes(attempt.status)) continue;
+    if (isBackgroundTaskAttempt(db, attempt.id)) continue;
     const owner = EXECUTOR_OWNER.exec(attempt.claimOwner ?? '');
     if (!owner) continue;
     const pid = Number(owner[1]);

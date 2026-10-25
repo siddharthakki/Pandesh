@@ -570,6 +570,13 @@ function showImageGenerationNotification(title: string, body: string): void {
   notification.show();
 }
 
+function showBackgroundTaskNotification(title: string, body: string): void {
+  if (!Notification.isSupported()) return;
+  const notification = new Notification({ title, body, silent: false });
+  notification.on('click', () => showJarvisWindow());
+  notification.show();
+}
+
 async function ensureMainWindow(): Promise<BrowserWindow> {
   if (window && !window.isDestroyed()) return window;
   window = new BrowserWindow({
@@ -703,6 +710,11 @@ async function createWindow(): Promise<void> {
         title: event.summary || 'Your daily brief is ready',
         body: event.text || 'Open KarkeDikha to read it.',
       });
+    } else if (event.eventType === 'background_task_completed') {
+      showBackgroundTaskNotification(
+        String((event as any).title || event.summary || 'Gmail Contract Extraction Completed'),
+        String((event as any).text || 'Contract inventory table generated and delivered to conversation.'),
+      );
     }
     if (
       event.kind === 'status'

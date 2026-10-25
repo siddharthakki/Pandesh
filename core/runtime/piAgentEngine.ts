@@ -48,6 +48,23 @@ import {
   type EngineExecutionResult,
   EngineRegistry
 } from './adapters/EngineAdapter';
+import {
+  isGmailContractExtractionRequest,
+  isTaskStatusRequest,
+  isShowResultsRequest,
+  isCancelTaskRequest,
+  isContinueTaskRequest,
+  routeBackgroundTaskIntent,
+  startGmailContractExtractionTask,
+  cancelBackgroundTaskWorker,
+  resumeBackgroundTask,
+  runBackgroundTask,
+} from './backgroundWorker';
+import {
+  getActiveBackgroundTask,
+  getLatestBackgroundTask,
+  updateBackgroundTask,
+} from '../domain/backgroundTasks';
 
 const dynamicImport = new Function('specifier', 'return import(specifier)');
 
@@ -358,6 +375,127 @@ export class PiAgentEngine implements EngineAdapter {
       appInstallDir,
       processCwd,
     }, actor);
+
+    const requestText = ctx.currentMessage ?? prompt;
+
+    // Fast nonblocking delegation for long-running Gmail contract extraction or control queries
+    const routing = routeBackgroundTaskIntent(db, conversationId, requestText);
+
+    if (routing.shouldRoute) {
+      let delegationReply = '';
+      if (routing.intent === 'start') {
+        startGmailContractExtractionTask(
+          db,
+          broadcaster,
+          {
+            conversationId,
+            objective: requestText,
+          },
+          {
+            connectors: ctx.connectors,
+            cwd: selectedWorkspace || process.cwd(),
+          },
+        );
+        delegationReply = "I've started your Gmail contract extraction. It may take some time. I'll notify you when it's finished. You can continue chatting.";
+      } else if (routing.intent === 'status') {
+        const active = routing.activeTask;
+        const latest = routing.latestTask;
+        if (!latest) {
+          delegationReply = 'There are no background extraction tasks for this conversation.';
+        } else if (latest.status === 'in_progress' || latest.status === 'queued') {
+          const lastCp = latest.checkpoints[latest.checkpoints.length - 1];
+          delegationReply = `Gmail contract extraction is in progress (${latest.status}). Current checkpoint: ${lastCp?.summary || 'Working...'}. You can continue chatting or ask for results when finished.`;
+        } else if (latest.status === 'completed') {
+          delegationReply = 'Your Gmail contract extraction has finished! Say "Show my results" to view the inventory table.';
+        } else if (latest.status === 'cancelled') {
+          delegationReply = 'Your Gmail contract extraction was cancelled. Say "Continue" to resume.';
+        } else if (latest.status === 'failed') {
+          delegationReply = `Your Gmail contract extraction stopped with status: failed (${latest.error || 'unknown error'}). Say "Continue" to retry.`;
+        } else {
+          delegationReply = `Your Gmail contract extraction stopped with status: ${latest.status} (${latest.error || 'unknown error'}). Say "Continue" to retry or resume.`;
+        }
+      } else if (routing.intent === 'results') {
+        const latest = routing.latestTask;
+        if (!latest) {
+          delegationReply = 'No background extraction results are available yet. Say "Extract all contracts from my Gmail" to start.';
+        } else if (latest.resultData) {
+          delegationReply = latest.resultData;
+        } else if (latest.status === 'in_progress' || latest.status === 'queued') {
+          const lastCp = latest.checkpoints[latest.checkpoints.length - 1];
+          delegationReply = `Gmail contract extraction is still in progress (${lastCp?.summary || 'Working...'}). I'll automatically deliver the inventory table when it finishes.`;
+        } else if (latest.status === 'failed') {
+          delegationReply = `No contract results are available because extraction failed: ${latest.error || 'unknown error'}. Say "Continue" to retry.`;
+        } else {
+          delegationReply = latest.resultSummary || `Extraction task is in state: ${latest.status}.`;
+        }
+      } else if (routing.intent === 'cancel') {
+        const active = routing.activeTask;
+        if (active) {
+          cancelBackgroundTaskWorker(db, broadcaster, active.id);
+          delegationReply = 'Your Gmail contract extraction has been cancelled.';
+        } else {
+          delegationReply = 'There are no running background tasks to cancel.';
+        }
+      } else if (routing.intent === 'continue') {
+        const latest = routing.latestTask;
+        if (!latest) {
+          delegationReply = 'No background extraction task was found to continue. Say "Extract all contracts from my Gmail" to start.';
+        } else if (latest.status === 'in_progress' || latest.status === 'queued') {
+          const lastCp = latest.checkpoints[latest.checkpoints.length - 1];
+          delegationReply = `Your Gmail contract extraction is already running. Checkpoint: ${lastCp?.summary || 'Working...'}.`;
+        } else if (latest.status === 'completed') {
+          delegationReply = 'Your Gmail contract extraction has already completed! Say "Show my results" to view the inventory table.';
+        } else {
+          resumeBackgroundTask(db, broadcaster, latest.id, {
+            connectors: ctx.connectors,
+            cwd: selectedWorkspace || process.cwd(),
+          });
+          delegationReply = "Resuming your Gmail contract extraction from the last saved checkpoint. I'll notify you when it's finished.";
+        }
+      }
+
+      let assistantMessageRecord: any = null;
+      if (conversationId) {
+        try {
+          mutateWithBroadcast(db, broadcaster, () => {
+            assistantMessageRecord = appendMessage(db, conversationId, {
+              role: 'assistant',
+              content: delegationReply,
+              actor,
+            });
+          });
+        } catch {}
+      }
+
+      try {
+        mutateWithBroadcast(db, broadcaster, () => {
+          finalizeTaskOutcome(db, attemptId, {
+            verdict: 'verified',
+            reason: 'Interactive delegation request handled',
+            performed: ['background_delegation'],
+            refused: [],
+            failed: [],
+          }, {
+            answerMessageId: assistantMessageRecord?.id ?? null,
+          });
+        });
+      } catch {}
+
+      try {
+        mutateWithBroadcast(db, broadcaster, () => {
+          transitionAttempt(db, attemptId, { toStatus: 'completed', fenceToken, actor });
+        });
+      } catch {}
+
+      safeRecordRuntimeEvent(db, broadcaster, attemptId, 'step_finish', {
+        step: 1,
+        engine: 'pi',
+        durationMs: Date.now() - startTime,
+        outcome: 'completed',
+      }, actor);
+
+      return { success: true, reply: delegationReply };
+    }
 
     const { Agent, createProvider, createModels, openAICompletionsApi } = await getPiModules();
     // Pi uses Ollama's /v1 endpoint; pin the model natively so a turn does not pay a cold load.
@@ -2269,7 +2407,7 @@ export class PiAgentEngine implements EngineAdapter {
     const apiBase = (process.env.KARKEDIKHA_OLLAMA_URL || 'http://127.0.0.1:11434').replace(/\/$/, '');
     const simpleSystemPrompt = `You are Pandesh, the personal AI assistant for KarkeDikha (KKD). Assistant Name: Pandesh. Active model: ${selectedModel} via local Ollama provider (${apiBase}). Running on ${process.platform}. Current local time: ${new Date().toLocaleString('en-GB', { timeZone: localTimeZone, weekday: 'long', year: 'numeric', month: 'long', day: 'numeric', hour: '2-digit', minute: '2-digit' })} in time zone ${localTimeZone}. Answer simple conversational questions directly and concisely. When asked what model you are running or what model is active, state that you are running on '${selectedModel}' via local Ollama. If the user asks you to perform an action, search emails or files, or access tools, offer to do so directly. Never expose secrets or perform destructive actions.`;
 
-    const systemPrompt = simpleInteractive ? simpleSystemPrompt : `You are Pandesh, the personal AI assistant for KarkeDikha (KKD).
+    let systemPrompt = simpleInteractive ? simpleSystemPrompt : `You are Pandesh, the personal AI assistant for KarkeDikha (KKD).
 Product: KarkeDikha (KKD).
 Assistant Name: Pandesh. (You are Pandesh; the user is the human operator. The user is NOT Pandesh. When the user addresses you as Pandesh, acknowledge that you are Pandesh).
 Visual Mascot: Cyber Panda (the approved futuristic mascot of KarkeDikha).

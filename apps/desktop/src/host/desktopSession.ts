@@ -1138,6 +1138,9 @@ export class DesktopSession {
       const helper = this.googleHelperPath();
       if (helper) env.KARKEDIKHA_GWS_BIN = helper;
     }
+    if (process.env.KARKEDIKHA_TEST_GMAIL_FIXTURE_PATH) {
+      env.KARKEDIKHA_TEST_GMAIL_FIXTURE_PATH = process.env.KARKEDIKHA_TEST_GMAIL_FIXTURE_PATH;
+    }
     env.KARKEDIKHA_HOST_TOKEN = getOrCreateHostToken(this.dataDir);
     const confirmMs = process.env.KARKEDIKHA_COMMAND_QUEUE_CONFIRM_MS?.trim();
     if (confirmMs) env.KARKEDIKHA_COMMAND_QUEUE_CONFIRM_MS = confirmMs;
@@ -4206,6 +4209,19 @@ export class DesktopSession {
     if (event.domain === 'conversation' && event.eventType === 'message_appended' && !(this.active && !this.active.terminal)) {
       // A message Core posted on its own (development-story progress/final report): let the open chat refetch.
       this.emit({ kind: 'conversation_message', at: event.createdAt, conversationId: event.entityId, domain: event.domain, eventType: event.eventType, summary: 'message appended' });
+      return;
+    }
+    if (event.domain === 'background_task' && event.eventType === 'background_task_completed') {
+      this.emit({
+        kind: 'activity',
+        at: event.createdAt,
+        eventType: event.eventType,
+        domain: event.domain,
+        summary: String(event.metadata?.['summary'] ?? 'Background task completed'),
+        title: String(event.metadata?.['title'] ?? 'Task Completed'),
+        text: String(event.metadata?.['text'] ?? ''),
+        metadata: event.metadata,
+      } as any);
       return;
     }
     const attemptId = event.domain === 'attempt' || event.domain === 'execution_quality'

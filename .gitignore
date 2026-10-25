@@ -34,6 +34,6 @@ secrets.json
 Thumbs.db
 
 # Staged runtime assets and local downloads
-models/
-runtime/
+/models/
+/runtime/
 .tools/

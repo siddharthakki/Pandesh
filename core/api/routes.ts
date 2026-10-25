@@ -52,6 +52,8 @@ import * as checkpoints from '../domain/checkpoints';
 import * as everydayTools from '../domain/everydayTools';
 import * as commandQueue from '../domain/commandQueue';
 import * as karkeDikha from '../domain/karkeDikhaLifecycle';
+import * as backgroundTasks from '../domain/backgroundTasks';
+import { cancelBackgroundTaskWorker, resumeBackgroundTask } from '../runtime/backgroundWorker';
 import { latestRuntimeSequence, listRuntimeEventsAfter, recordRuntimeEvent } from '../domain/runtimeEvents';
 import { isTerminalAttemptStatus } from '../domain/attemptTransitions';
 import { steerPiAttempt } from '../runtime/piAgentEngine';
@@ -1448,6 +1450,47 @@ export function buildRouter(
         leaseMs: body.leaseMs as number | undefined,
       }),
     }));
+  });
+
+  // --- Background Tasks (Nonblocking delegation) ---
+  router.get('/v1/background-tasks', (ctx) => {
+    const conversationId = ctx.query?.get('conversationId') || undefined;
+    const status = ctx.query?.get('status') || undefined;
+    const taskType = ctx.query?.get('taskType') || undefined;
+    const limit = ctx.query?.get('limit') ? Number(ctx.query.get('limit')) : undefined;
+    const tasks = backgroundTasks.listBackgroundTasks(ctx.db, { conversationId, status, taskType, limit });
+    return { status: 200, body: { tasks } };
+  });
+
+  router.get('/v1/background-tasks/:id', (ctx, match) => {
+    const task = backgroundTasks.getBackgroundTask(ctx.db, match.params.id);
+    if (!task) throw new CoreError('not_found', `background task '${match.params.id}' not found`);
+    return { status: 200, body: task };
+  });
+
+  router.post('/v1/background-tasks/:id/cancel', (ctx, match) => {
+    const key = requireIdempotencyKey(ctx);
+    return withIdempotency(ctx.db, { key, clientId: ctx.clientId, routeId: `backgroundTasks.cancel:${match.params.id}` }, ctx.body, () =>
+      withRuntimeBroadcast(ctx, broadcaster, () => {
+        const body = asRecord(ctx.body);
+        const reason = typeof body.reason === 'string' ? body.reason : 'Cancelled by user';
+        const cancelled = cancelBackgroundTaskWorker(ctx.db, broadcaster, match.params.id, reason);
+        return { status: 200, body: cancelled };
+      }),
+    );
+  });
+
+  router.post('/v1/background-tasks/:id/continue', (ctx, match) => {
+    const key = requireIdempotencyKey(ctx);
+    return withIdempotency(ctx.db, { key, clientId: ctx.clientId, routeId: `backgroundTasks.continue:${match.params.id}` }, ctx.body, () =>
+      withRuntimeBroadcast(ctx, broadcaster, () => {
+        const result = resumeBackgroundTask(ctx.db, broadcaster, match.params.id, {
+          connectorRegistry: connectors,
+          cwd: process.cwd(),
+        });
+        return { status: 200, body: result.task };
+      }),
+    );
   });
 
   router.post('/v1/karke-dikha/attempts/:id/execution-quality', (ctx, match) => {

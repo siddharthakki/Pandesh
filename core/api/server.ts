@@ -18,6 +18,7 @@ import type { IntelligenceScout } from '../runtime/intelligenceScout';
 import { startCancellationRecoveryLoop } from '../runtime/cancellationRecovery';
 import { startDevStoryLoop } from '../runtime/kandev/devStories';
 import { startFollowUpCheckLoop } from '../runtime/followUpRoutine';
+import { startBackgroundTaskLoop } from '../runtime/backgroundWorker';
 import { matchAttachmentUploadRoute, handleAttachmentUpload } from './attachmentUpload';
 import { GovernedCapabilityRegistry, createWorkspaceCapabilityAdapter } from '../runtime/governedCapability';
 import { createMemoryCapabilityAdapter } from '../runtime/memoryCapability';
@@ -239,6 +240,10 @@ export function startApiServer(options: StartApiServerOptions): Promise<RunningA
     // checked against live mail. It runs in Core, so it keeps working while
     // the desktop window is closed, and it only ever reads.
     startFollowUpCheckLoop(options.db, options.broadcaster, 60_000, {
+      connectorRegistry,
+      cwd: options.dataDir,
+    });
+    startBackgroundTaskLoop(options.db, options.broadcaster, 5_000, {
       connectorRegistry,
       cwd: options.dataDir,
     });
