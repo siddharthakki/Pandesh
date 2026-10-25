@@ -49,6 +49,7 @@ const WORKER_LABELS: Array<[string, string]> = [
   ['karkedikha:opencode', 'OpenCode coding worker'],
   ['karkedikha:hermes', 'Hermes specialist'],
   ['karkedikha:pi', 'Pi assistant'],
+  ['core:background_worker', 'Background extraction worker'],
 ];
 
 const TOP_LEVEL_KINDS = ['baat_kar', 'saath_kar', 'karke_dikha'];

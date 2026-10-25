@@ -48,6 +48,21 @@ import {
   type EngineExecutionResult,
   EngineRegistry
 } from './adapters/EngineAdapter';
+import {
+  isGmailContractExtractionRequest,
+  isTaskStatusRequest,
+  isShowResultsRequest,
+  isCancelTaskRequest,
+  isContinueTaskRequest,
+  startGmailContractExtractionTask,
+  cancelBackgroundTaskWorker,
+  runBackgroundTask,
+} from './backgroundWorker';
+import {
+  getActiveBackgroundTask,
+  getLatestBackgroundTask,
+  updateBackgroundTask,
+} from '../domain/backgroundTasks';
 
 const dynamicImport = new Function('specifier', 'return import(specifier)');
 
@@ -358,6 +373,128 @@ export class PiAgentEngine implements EngineAdapter {
       appInstallDir,
       processCwd,
     }, actor);
+
+    const requestText = ctx.currentMessage ?? prompt;
+
+    // Fast nonblocking delegation for long-running Gmail contract extraction or control queries
+    if (
+      isGmailContractExtractionRequest(requestText) ||
+      isTaskStatusRequest(requestText) ||
+      isShowResultsRequest(requestText) ||
+      isCancelTaskRequest(requestText) ||
+      isContinueTaskRequest(requestText)
+    ) {
+      let delegationReply = '';
+      if (isGmailContractExtractionRequest(requestText)) {
+        startGmailContractExtractionTask(
+          db,
+          broadcaster,
+          {
+            conversationId,
+            objective: requestText,
+          },
+          {
+            connectors: ctx.connectors,
+            cwd: selectedWorkspace || process.cwd(),
+          },
+        );
+        delegationReply = "I've started your Gmail contract extraction. It may take some time. I'll notify you when it's finished. You can continue chatting.";
+      } else if (isTaskStatusRequest(requestText)) {
+        const active = getActiveBackgroundTask(db, { conversationId, taskType: 'gmail_contract_extraction' });
+        const latest = active ?? getLatestBackgroundTask(db, { conversationId, taskType: 'gmail_contract_extraction' });
+        if (!latest) {
+          delegationReply = 'There are no background extraction tasks for this conversation.';
+        } else if (latest.status === 'in_progress' || latest.status === 'queued') {
+          const lastCp = latest.checkpoints[latest.checkpoints.length - 1];
+          delegationReply = `Gmail contract extraction is in progress (${latest.status}). Current checkpoint: ${lastCp?.summary || 'Working...'}. You can continue chatting or ask for results when finished.`;
+        } else if (latest.status === 'completed') {
+          delegationReply = 'Your Gmail contract extraction has finished! Say "Show my results" to view the inventory table.';
+        } else if (latest.status === 'cancelled') {
+          delegationReply = 'Your Gmail contract extraction was cancelled. Say "Continue" to resume.';
+        } else {
+          delegationReply = `Your Gmail contract extraction stopped with status: ${latest.status} (${latest.error || 'unknown error'}). Say "Continue" to retry or resume.`;
+        }
+      } else if (isShowResultsRequest(requestText)) {
+        const latest = getLatestBackgroundTask(db, { conversationId, taskType: 'gmail_contract_extraction' });
+        if (!latest) {
+          delegationReply = 'No background extraction results are available yet. Say "Extract all contracts from my Gmail" to start.';
+        } else if (latest.resultData) {
+          delegationReply = latest.resultData;
+        } else if (latest.status === 'in_progress' || latest.status === 'queued') {
+          const lastCp = latest.checkpoints[latest.checkpoints.length - 1];
+          delegationReply = `Gmail contract extraction is still in progress (${lastCp?.summary || 'Working...'}). I'll automatically deliver the inventory table when it finishes.`;
+        } else {
+          delegationReply = latest.resultSummary || `Extraction task is in state: ${latest.status}.`;
+        }
+      } else if (isCancelTaskRequest(requestText)) {
+        const active = getActiveBackgroundTask(db, { conversationId, taskType: 'gmail_contract_extraction' });
+        if (active) {
+          cancelBackgroundTaskWorker(db, broadcaster, active.id);
+          delegationReply = 'Your Gmail contract extraction has been cancelled.';
+        } else {
+          delegationReply = 'There are no running background tasks to cancel.';
+        }
+      } else if (isContinueTaskRequest(requestText)) {
+        const latest = getLatestBackgroundTask(db, { conversationId, taskType: 'gmail_contract_extraction' });
+        if (!latest) {
+          delegationReply = 'No background extraction task was found to continue. Say "Extract all contracts from my Gmail" to start.';
+        } else if (latest.status === 'in_progress' || latest.status === 'queued') {
+          const lastCp = latest.checkpoints[latest.checkpoints.length - 1];
+          delegationReply = `Your Gmail contract extraction is already running. Checkpoint: ${lastCp?.summary || 'Working...'}.`;
+        } else if (latest.status === 'completed') {
+          delegationReply = 'Your Gmail contract extraction has already completed! Say "Show my results" to view the inventory table.';
+        } else {
+          updateBackgroundTask(db, latest.id, { status: 'in_progress', error: null });
+          void runBackgroundTask(db, broadcaster, latest.id, {
+            connectors: ctx.connectors,
+            cwd: selectedWorkspace || process.cwd(),
+          });
+          delegationReply = "Resuming your Gmail contract extraction from the last saved checkpoint. I'll notify you when it's finished.";
+        }
+      }
+
+      let assistantMessageRecord: any = null;
+      if (conversationId) {
+        try {
+          mutateWithBroadcast(db, broadcaster, () => {
+            assistantMessageRecord = appendMessage(db, conversationId, {
+              role: 'assistant',
+              content: delegationReply,
+              actor,
+            });
+          });
+        } catch {}
+      }
+
+      try {
+        mutateWithBroadcast(db, broadcaster, () => {
+          finalizeTaskOutcome(db, attemptId, {
+            verdict: 'verified',
+            reason: 'Interactive delegation request handled',
+            performed: ['background_delegation'],
+            refused: [],
+            failed: [],
+          }, {
+            answerMessageId: assistantMessageRecord?.id ?? null,
+          });
+        });
+      } catch {}
+
+      try {
+        mutateWithBroadcast(db, broadcaster, () => {
+          transitionAttempt(db, attemptId, { toStatus: 'completed', fenceToken, actor });
+        });
+      } catch {}
+
+      safeRecordRuntimeEvent(db, broadcaster, attemptId, 'step_finish', {
+        step: 1,
+        engine: 'pi',
+        durationMs: Date.now() - startTime,
+        outcome: 'completed',
+      }, actor);
+
+      return { success: true, reply: delegationReply };
+    }
 
     const { Agent, createProvider, createModels, openAICompletionsApi } = await getPiModules();
     // Pi uses Ollama's /v1 endpoint; pin the model natively so a turn does not pay a cold load.

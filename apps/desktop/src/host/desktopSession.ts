@@ -4208,6 +4208,19 @@ export class DesktopSession {
       this.emit({ kind: 'conversation_message', at: event.createdAt, conversationId: event.entityId, domain: event.domain, eventType: event.eventType, summary: 'message appended' });
       return;
     }
+    if (event.domain === 'background_task' && event.eventType === 'background_task_completed') {
+      this.emit({
+        kind: 'activity',
+        at: event.createdAt,
+        eventType: event.eventType,
+        domain: event.domain,
+        summary: String(event.metadata?.['summary'] ?? 'Background task completed'),
+        title: String(event.metadata?.['title'] ?? 'Task Completed'),
+        text: String(event.metadata?.['text'] ?? ''),
+        metadata: event.metadata,
+      } as any);
+      return;
+    }
     const attemptId = event.domain === 'attempt' || event.domain === 'execution_quality'
       ? event.entityId
       : String(event.metadata?.['attemptId'] ?? '');

@@ -1214,6 +1214,29 @@ CREATE TABLE IF NOT EXISTS gmail_change_plans (
 CREATE INDEX IF NOT EXISTS idx_gmail_change_plans_account ON gmail_change_plans(accountEmail, createdAt);
 `;
 
+const MIGRATION_36_BACKGROUND_TASKS = `
+CREATE TABLE IF NOT EXISTS background_tasks (
+  id TEXT PRIMARY KEY,
+  attemptId TEXT NOT NULL UNIQUE REFERENCES attempts(id),
+  conversationId TEXT NOT NULL REFERENCES conversations(id),
+  taskType TEXT NOT NULL,
+  objective TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'queued',
+  completionCriteria TEXT NOT NULL DEFAULT '[]',
+  checkpoints TEXT NOT NULL DEFAULT '[]',
+  payload TEXT NOT NULL DEFAULT '{}',
+  resultSummary TEXT,
+  resultData TEXT,
+  error TEXT,
+  notificationSent INTEGER NOT NULL DEFAULT 0,
+  createdAt TEXT NOT NULL,
+  updatedAt TEXT NOT NULL,
+  completedAt TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_background_tasks_status ON background_tasks(status);
+CREATE INDEX IF NOT EXISTS idx_background_tasks_conversation ON background_tasks(conversationId);
+`;
+
 export const MIGRATIONS: Migration[] = [
   { version: 1, description: 'bootstrap core_metadata and schema_migrations', sql: MIGRATION_1_BOOTSTRAP },
   { version: 2, description: 'M31 domain schema (projects/repositories/stories/events/etc.)', sql: MIGRATION_2_DOMAIN },
@@ -1222,7 +1245,7 @@ export const MIGRATIONS: Migration[] = [
   { version: 5, description: 'M32 correction: frozen attempt context and Core-validated approval envelope', sql: MIGRATION_5_ATTEMPT_CONTEXT_APPROVAL_ENVELOPE },
   { version: 6, description: 'M34 immutable model-selection and retry-guidance context', sql: MIGRATION_6_EXECUTION_QUALITY_CONTEXT },
   { version: 7, description: 'M36 durable attachment vertical slice (attachments/message_attachments/frozen attachment context)', sql: MIGRATION_7_ATTACHMENTS },
-  { version: 8, description: 'M36 pass 2 â€” document extraction and audio transcription evidence columns', sql: MIGRATION_8_DOCUMENT_AUDIO_PROCESSING },
+  { version: 8, description: 'M36 pass 2 — document extraction and audio transcription evidence columns', sql: MIGRATION_8_DOCUMENT_AUDIO_PROCESSING },
   { version: 9, description: 'M36 governed SearXNG research, approvals, sources, and citations', sql: MIGRATION_9_GOVERNED_RESEARCH },
   { version: 10, description: 'M36 workbench search/export/branch/regeneration projections', sql: MIGRATION_10_WORKBENCH },
   { version: 11, description: 'M37 Core-owned engineering organization lifecycle and CI-repair evidence', sql: MIGRATION_11_ENGINEERING_ORGANIZATION },
@@ -1250,6 +1273,7 @@ export const MIGRATIONS: Migration[] = [
   { version: 33, description: 'Pandesh durable commitments: the promises the user made, their condition and their state', sql: MIGRATION_33_COMMITMENTS },
   { version: 34, description: 'Pandesh task outcomes: the objective, success conditions, evidence, blocker and next action of a task', sql: MIGRATION_34_TASK_OUTCOMES },
   { version: 35, description: 'Gmail inbox organization: durable change plans with the prior label state of every message', sql: MIGRATION_35_GMAIL_CHANGE_PLANS },
+  { version: 36, description: 'Pandesh background delegated tasks: durable background worker execution, checkpoints and delivery ledger', sql: MIGRATION_36_BACKGROUND_TASKS },
 ];
 
 
