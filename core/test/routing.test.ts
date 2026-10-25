@@ -44,6 +44,16 @@ describe('Auto-mode router: classifies current request text only', () => {
     expect(needsTools('What is the weather in Paris?')).toBe(true);
   });
 
+  it('keeps tools required for contract extraction and continuation follow-ups', () => {
+    const needsTools = (text: string) => NON_WORKSPACE_MARKERS.some(([, pattern]) => pattern.test(text));
+    expect(needsTools('extract contracts from my gmail')).toBe(true);
+    expect(needsTools('continue extracting my contracts')).toBe(true);
+    expect(needsTools('resume contract extraction')).toBe(true);
+    expect(needsTools('what happened to my contracts')).toBe(true);
+    expect(needsTools('updates?')).toBe(true);
+    expect(needsTools('inventory our agreements')).toBe(true);
+  });
+
   it('routes a bounded repository-inspection request to Saath Kar', () => {
     const decision = classifyRequest('Can you review the file src/index.ts and explain what it does?');
     expect(decision.resolvedMode).toBe('saath_kar');

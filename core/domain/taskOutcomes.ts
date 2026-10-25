@@ -346,7 +346,7 @@ export function finalizeTaskOutcome(
     }
     return updateTaskOutcome(db, {
       attemptId,
-      status: existing.status === 'in_progress' ? 'satisfied' : existing.status,
+      status: existing.status,
       evidence,
       summary: existing.summary ?? outcome.reason,
     });

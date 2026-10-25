@@ -61,6 +61,9 @@ describe('gmailMime: parses the Gmail API JSON payload tree, never raw MIME text
     });
     expect(summary.bodyText).toBe('see attached');
     expect(summary.hasAttachments).toBe(true);
+    expect(summary.attachments).toEqual([
+      { id: 'att-1', filename: 'report.pdf', mimeType: 'application/pdf', size: 1234 },
+    ]);
   });
 
   it('bounds an oversized body and marks it truncated', () => {

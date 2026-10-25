@@ -2427,7 +2427,7 @@ export class DesktopSession {
         requiredCapabilities: {
           readOnlyExplanation: true,
           repositoryExploration: false,
-          toolCalling: false,
+          toolCalling: true,
           fileModification: false,
           codingComplexity: 'low',
           contextRequirement: 'small',

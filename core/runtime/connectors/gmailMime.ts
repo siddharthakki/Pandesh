@@ -43,6 +43,13 @@ export interface GmailApiThread {
   messages?: GmailApiMessage[];
 }
 
+export interface GmailAttachmentSummary {
+  id: string;
+  filename: string;
+  mimeType: string;
+  size: number;
+}
+
 export interface ThreadMessageSummary {
   id: string;
   threadId: string;
@@ -62,6 +69,7 @@ export interface ThreadMessageSummary {
   bodyTextTruncated: boolean;
   bodyHtmlTruncated: boolean;
   hasAttachments: boolean;
+  attachments: GmailAttachmentSummary[];
 }
 
 function headerValue(headers: Array<{ name?: string; value?: string }> | undefined, name: string): string {
@@ -87,21 +95,31 @@ function bound(text: string, max: number): { text: string; truncated: boolean } 
 
 /**
  * Walks a message's `parts` tree (bounded in depth and part count) collecting
- * the first `text/plain` and `text/html` leaf bodies, and whether any part
- * looks like an attachment (has a filename or an `attachmentId`).
+ * the first `text/plain` and `text/html` leaf bodies, and attachment summaries.
  */
-function collectBodies(payload: GmailMessagePart | undefined): { plain: string; html: string; hasAttachments: boolean } {
+function collectBodies(payload: GmailMessagePart | undefined): { plain: string; html: string; hasAttachments: boolean; attachments: GmailAttachmentSummary[] } {
   let plain = '';
   let html = '';
   let hasAttachments = false;
+  const attachments: GmailAttachmentSummary[] = [];
   let visited = 0;
 
   function visit(part: GmailMessagePart | undefined, depth: number): void {
     if (!part || visited >= MAX_PARTS_VISITED || depth > MAX_PART_DEPTH) return;
     visited++;
     const mimeType = (part.mimeType ?? '').toLowerCase();
-    if (part.filename && part.filename.trim()) hasAttachments = true;
-    if (part.body?.attachmentId) hasAttachments = true;
+    const filename = part.filename?.trim() || '';
+    const attachmentId = part.body?.attachmentId || '';
+    const size = typeof part.body?.size === 'number' ? part.body.size : 0;
+    if (filename || attachmentId) {
+      hasAttachments = true;
+      attachments.push({
+        id: attachmentId,
+        filename: filename || 'attachment',
+        mimeType: mimeType || 'application/octet-stream',
+        size,
+      });
+    }
 
     if (mimeType === 'text/plain' && !plain && part.body?.data) {
       plain = decodeBase64Url(part.body.data);
@@ -119,7 +137,7 @@ function collectBodies(payload: GmailMessagePart | undefined): { plain: string; 
   }
 
   visit(payload, 0);
-  return { plain, html, hasAttachments };
+  return { plain, html, hasAttachments, attachments };
 }
 
 /** Summarizes one Gmail API message into bounded, display-ready fields. */
@@ -132,7 +150,7 @@ export function summarizeGmailMessage(message: GmailApiMessage, timeZone?: strin
     try { receivedLocal = `${new Date(internalMs).toLocaleString('en-GB', { timeZone: zone, weekday: 'short', day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' })} (${zone})`; } catch { receivedLocal = receivedAt; }
   }
   const headers = message.payload?.headers;
-  const { plain, html, hasAttachments } = collectBodies(message.payload);
+  const { plain, html, hasAttachments, attachments } = collectBodies(message.payload);
   const boundedText = bound(plain, MAX_BODY_CHARS);
   const boundedHtml = bound(html, MAX_BODY_CHARS);
   return {
@@ -151,6 +169,7 @@ export function summarizeGmailMessage(message: GmailApiMessage, timeZone?: strin
     bodyTextTruncated: boundedText.truncated,
     bodyHtmlTruncated: boundedHtml.truncated,
     hasAttachments,
+    attachments,
   };
 }
 

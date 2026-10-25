@@ -483,6 +483,82 @@ describe('gmail_send_draft: draft-bound send safety', () => {
   });
 });
 
+describe('gmail_read_attachment', () => {
+  beforeEach(() => {
+    accessToken = 'token';
+    accountEmail = 'me@example.com';
+  });
+
+  it('validates messageId and attachmentId are required', async () => {
+    const executor = createGwsGmailExecutor(baseConfig({ runGwsFn: stubRunGws({}) }));
+    const result1 = await executor('gmail_read_attachment', { attachmentId: 'att1' }, ctx);
+    expect(result1.status).toBe('failed');
+    expect(result1.resultCategory).toBe('gws_invalid_arguments');
+
+    const result2 = await executor('gmail_read_attachment', { messageId: 'msg1' }, ctx);
+    expect(result2.status).toBe('failed');
+    expect(result2.resultCategory).toBe('gws_invalid_arguments');
+  });
+
+  it('reads and decodes a text attachment', async () => {
+    let capturedArgs: string[] = [];
+    const textContent = 'Contract Agreement Terms\n1. Scope of work\n2. Payment terms';
+    const b64 = Buffer.from(textContent, 'utf8').toString('base64url');
+    const runGwsFn = async (input: { args: string[] }) => {
+      capturedArgs = input.args;
+      return { exitCode: 0, stdout: JSON.stringify({ size: textContent.length, data: b64 }), stderr: '', timedOut: false, aborted: false };
+    };
+    const executor = createGwsGmailExecutor(baseConfig({ runGwsFn: runGwsFn as any }));
+    const result = await executor('gmail_read_attachment', {
+      messageId: 'msg-100',
+      attachmentId: 'att-200',
+      filename: 'contract.txt',
+      mimeType: 'text/plain',
+    }, ctx);
+    expect(result.status).toBe('succeeded');
+    expect(capturedArgs).toContain('attachments');
+    expect(capturedArgs).toContain('get');
+    const paramsIdx = capturedArgs.indexOf('--params');
+    const params = JSON.parse(capturedArgs[paramsIdx + 1]);
+    expect(params).toEqual({ userId: 'me', messageId: 'msg-100', id: 'att-200' });
+
+    const parsed = JSON.parse(result.output);
+    expect(parsed.extractedText).toBe(textContent);
+    expect(parsed.status).toBe('extracted');
+    expect(parsed.filename).toBe('contract.txt');
+  });
+
+  it('handles empty attachment data gracefully', async () => {
+    const runGwsFn = async () => ({ exitCode: 0, stdout: JSON.stringify({ size: 0 }), stderr: '', timedOut: false, aborted: false });
+    const executor = createGwsGmailExecutor(baseConfig({ runGwsFn: runGwsFn as any }));
+    const result = await executor('gmail_read_attachment', {
+      messageId: 'msg-100',
+      attachmentId: 'att-empty',
+      filename: 'empty.pdf',
+    }, ctx);
+    expect(result.status).toBe('succeeded');
+    const parsed = JSON.parse(result.output);
+    expect(parsed.status).toBe('empty_attachment');
+    expect(parsed.extractedText).toBeNull();
+  });
+
+  it('handles unsupported binary formats without error', async () => {
+    const b64 = Buffer.from([0x00, 0x01, 0x02]).toString('base64url');
+    const runGwsFn = async () => ({ exitCode: 0, stdout: JSON.stringify({ size: 3, data: b64 }), stderr: '', timedOut: false, aborted: false });
+    const executor = createGwsGmailExecutor(baseConfig({ runGwsFn: runGwsFn as any }));
+    const result = await executor('gmail_read_attachment', {
+      messageId: 'msg-100',
+      attachmentId: 'att-bin',
+      filename: 'data.zip',
+      mimeType: 'application/zip',
+    }, ctx);
+    expect(result.status).toBe('succeeded');
+    const parsed = JSON.parse(result.output);
+    expect(parsed.status).toBe('unsupported_format');
+    expect(parsed.extractedText).toBeNull();
+  });
+});
+
 describe('createGwsGmailProbe', () => {
   it('reports not-ok with no token, without attempting to run gws', async () => {
     const probe = createGwsGmailProbe(baseConfig({ runGwsFn: stubRunGws({}) }));
