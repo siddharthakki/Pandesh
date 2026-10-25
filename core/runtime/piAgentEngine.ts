@@ -2365,7 +2365,8 @@ TRUTHFULNESS & BEHAVIORAL PROTOCOL:
      - You have active, verified access to the Gmail connector ('gmail_search', 'gmail_read_thread', 'gmail_read_attachment'). NEVER claim you have no Gmail tool, that Gmail is not connected, or offer to set up an MCP server when Gmail tools are available or when a search has been performed.
      - Search relevant contract categories using 'gmail_search': queries like "contract", "agreement", "lease OR Mietvertrag OR rental", "employment OR offer letter", "service agreement OR terms of service", "NDA", and "has:attachment".
      - Deduplicate across searches: multiple queries will return the same thread or message. Always deduplicate by threadId/messageId.
-     - Inspect actual content before classifying: call 'gmail_read_thread' to inspect thread messages and 'gmail_read_attachment' to read and extract text from attachments (e.g. PDFs, documents). Never classify an email as a contract without inspecting its body or attachment evidence.
+     - Inspect actual content before classifying: call 'gmail_read_thread' to inspect thread messages and 'gmail_read_attachment' to read and extract text from attachments (e.g. PDFs, documents). NEVER mark a contract confirmed using only a subject, snippet, sender or filename. Require successful body or attachment inspection and record the supporting evidence.
+     - Never invent PDF attachments: Distinguish attachment discovered, downloaded, text extracted, unsupported and failed. If no attachment exists, state None.
      - When attachments are present (e.g. PDF rental agreements, signed contracts), call 'gmail_read_attachment' with messageId and attachmentId to extract and verify the text locally.
      - Maintain durable task state: call 'update_task_outcome' with objective, status ('in_progress' while scanning/reading, 'satisfied' when complete), evidence (tool invocations, verified contracts), and summary of verified vs candidate contracts.
      - Resuming after an interruption: If resuming contract extraction (e.g. 'continue extracting my contracts', 'updates?'), check existing task outcomes and prior turn evidence, resume reading remaining candidates, and do NOT claim Gmail is disconnected when gmail tools are available.
@@ -2373,10 +2374,12 @@ TRUTHFULNESS & BEHAVIORAL PROTOCOL:
      - Deliver an honest Contract Inventory Table:
        | Contract Type | Company / Counterparty | Date | Email / Thread Reference | Attachment | Extraction Status |
      - Clearly report coverage:
-       - Confirmed contracts: verified from email body/attachment.
-       - Candidates: identified by search but not yet fully inspected.
-       - Inaccessible attachments: attachments that could not be read or extracted.
-       - Remaining unsearched: estimated remaining matching messages from search counts.
+       - Confirmed contracts: verified from email body/attachment with recorded supporting evidence.
+       - Candidate emails examined: candidate thread(s) inspected vs total candidates identified.
+       - Actual pages read: search page(s) and PDF page(s) extracted.
+       - Inaccessible / failed lookups: count of failed thread reads, attachment extractions, and search lookups.
+       - Search truncation: whether more messages exist beyond retrieved search pages.
+       - Remaining unsearched coverage: use Gmail's 'counts.matched', actual pages read, truncated results and failed lookups. Unknown remaining coverage must say UNKNOWN, not zero.
      - If no confirmed contracts were found in the examined messages, present the inventory table showing the candidates / non-contract notifications found, report 0 confirmed contracts, and state what was checked truthfully. Never fabricate fictional contracts (such as 5 car-rental contracts) and never claim Gmail isn't connected.
      - NEVER fabricate contract details, counterparty names, dates, or terms. Quote only what the tools returned.
    - Mailbox analysis: ALWAYS state coverage.statement from gmail_analyze_inbox. If coverage.complete is false it is a PARTIAL sample: say how many were examined and of how many, never call it the whole mailbox or the whole period (80 emails is not "30 days"). Report counts exactly as returned.
@@ -2420,20 +2423,20 @@ TRUTHFULNESS & BEHAVIORAL PROTOCOL:
         if (turns.length > 0 && turns[turns.length - 1].role === 'user' && turns[turns.length - 1].content === (ctx.currentMessage ?? prompt)) {
           turns = turns.slice(0, -1);
         }
+        // Rule 4: Preserve historical conversation messages. Supply current, verified connector
+        // availability and tool evidence rather than removing inconvenient prior assistant responses.
         const hasGmailTools = tools.some(t => t.name.startsWith('gmail_'));
         if (hasGmailTools) {
-          // Do not poison the agent's context with previous hallucinated disclaimers about missing Gmail tools or fake contract claims
-          turns = turns.filter(m => {
-            if (m.role === 'assistant') {
-              if (/\b(?:no gmail tool connected|gmail (?:is not|wasn't) connected|can't search or read your email|Option A.*?Gmail MCP server)\b/i.test(m.content)) {
-                return false;
-              }
-              if (/\ball car rental contracts\b/i.test(m.content)) {
-                return false;
-              }
+          const gmailToolNames = tools.filter(t => t.name.startsWith('gmail_')).map(t => t.name).join(', ');
+          systemPrompt += `\n\nCURRENT VERIFIED CONNECTOR AVAILABILITY & EVIDENCE:
+- Gmail Connector: CONNECTED AND ACTIVE. Verified available tools: ${gmailToolNames}.
+- Conversation History Note: All historical messages above are preserved verbatim for conversational continuity. If earlier assistant turns claimed that Gmail was not connected, that no Gmail tools were available, or claimed unverified findings, those statements reflected prior tool stripping or intermediate confusion and are superseded by your current, live, verified tool availability. You HAVE active Gmail tools right now; use them to inspect real threads and attachments rather than claiming disconnection.`;
+          if (activeTask) {
+            systemPrompt += `\n- Active Task Objective: "${activeTask.objective}" (Status: ${activeTask.status})`;
+            if (activeTask.evidence) {
+              systemPrompt += `\n- Active Task Verified Evidence: ${typeof activeTask.evidence === 'string' ? activeTask.evidence : JSON.stringify(activeTask.evidence)}`;
             }
-            return true;
-          });
+          }
         }
         priorTurnsTotal = turns.length;
         const keptTurns = turns.slice(-10);
@@ -2538,7 +2541,9 @@ TRUTHFULNESS & BEHAVIORAL PROTOCOL:
           output: output?.content?.[0]?.text?.slice(0, 300),
         }, actor);
 
-        toolCallsRecorded.push({ tool: toolName, result: output, status: 'completed' });
+        const toolStatus = afterCtx.result?.isError || output?.isError || output?.status === 'failed' ? 'failed' : 'completed';
+        const toolArgs = afterCtx.toolCall?.arguments ?? afterCtx.toolCall?.args;
+        toolCallsRecorded.push({ tool: toolName, args: toolArgs, result: output, status: toolStatus });
         return undefined;
       },
     });
