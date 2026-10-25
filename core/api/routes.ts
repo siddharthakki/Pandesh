@@ -49,6 +49,8 @@ import * as modelInvocations from '../domain/modelInvocations';
 import * as toolInvocations from '../domain/toolInvocations';
 import * as approvals from '../domain/approvals';
 import * as checkpoints from '../domain/checkpoints';
+import * as intents from '../domain/intents';
+import { resumeAndExecute } from '../runtime/intentRecovery';
 import * as everydayTools from '../domain/everydayTools';
 import * as commandQueue from '../domain/commandQueue';
 import * as karkeDikha from '../domain/karkeDikhaLifecycle';
@@ -1229,6 +1231,47 @@ export function buildRouter(
       // Do not await — execution runs in-process independently of this request.
       void executor.execute(match.params.id, { workingDirectory }).catch((err) => { console.error('[karkedikha-core EXECUTION FAILED]', err); });
       return { status: 202, body: { status: 'accepted', attemptId: attempt.id } };
+    });
+  });
+
+  // --- Intent kernel: a durable objective with deterministic completion checks ---
+  // Declare the checks BEFORE executing the request's attempt: the checks, not the model, decide "done",
+  // and an interrupted run can be continued on another model from a Core-built checkpoint.
+  router.post('/v1/intents', (ctx) => {
+    const key = requireIdempotencyKey(ctx);
+    const body = asRecord(ctx.body);
+    return withIdempotency(ctx.db, { key, clientId: ctx.clientId, routeId: 'intents.create' }, ctx.body, () =>
+      withRuntimeBroadcast(ctx, broadcaster, () => ({
+        status: 201,
+        body: intents.createIntent(ctx.db, {
+          requestId: requireString(body, 'requestId'),
+          checks: body.checks,
+          objective: typeof body.objective === 'string' ? body.objective : undefined,
+          maxResumes: typeof body.maxResumes === 'number' ? body.maxResumes : undefined,
+          actor: 'core:intent-kernel',
+        }),
+      })),
+    );
+  });
+
+  // Live view: the intent, its attempt chain, what the tool ledger says ran, and the checks evaluated right now.
+  router.get('/v1/intents/:id', (ctx, match) => ({ status: 200, body: intents.snapshotIntent(ctx.db, match.params.id) }));
+
+  router.post('/v1/intents/:id/resume', (ctx, match) => {
+    const key = requireIdempotencyKey(ctx);
+    const body = asRecord(ctx.body);
+    return withIdempotency(ctx.db, { key, clientId: ctx.clientId, routeId: `intents.resume:${match.params.id}` }, ctx.body, () => {
+      if (!executor) throw new CoreError('internal_error', 'no runtime executor is configured on this Core');
+      const outcome = resumeAndExecute(
+        { db: ctx.db, broadcaster, executor, log: (m) => console.log(`[karkedikha-core ${new Date().toISOString()}] ${m}`) },
+        match.params.id,
+        requireString(body, 'model'),
+        typeof body.reason === 'string' ? body.reason : undefined,
+      );
+      if (outcome.kind === 'resumed') {
+        return { status: 202, body: { outcome: 'resumed', intent: outcome.intent, successorAttemptId: outcome.successor.id, checkpointId: outcome.checkpointId } };
+      }
+      return { status: 200, body: outcome };
     });
   });
 

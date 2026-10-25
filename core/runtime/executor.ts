@@ -37,6 +37,7 @@ import { startToolInvocation, completeToolInvocation } from '../domain/toolInvoc
 import { latestRuntimeSequence, listRuntimeEventsAfter, recordRuntimeEvent } from '../domain/runtimeEvents';
 import { recordExecutionQuality, MAX_VALIDATION_REPAIR_CYCLES } from '../domain/executionQuality';
 import { isTerminalAttemptStatus } from '../domain/attemptTransitions';
+import { getIntentByRequest, resumeBriefForAttempt, settleIntentAfterAttempt } from '../domain/intents';
 import type { ModelBackend, ModelChatMessage, ModelChatRequest, ModelChatResult, ModelToolCall, ModelToolDefinition } from './modelBackend';
 import { projectAssistantText } from './toolProtocolText';
 import { LocalAutonomySecurityKernel } from '../security/kernel';
@@ -549,6 +550,24 @@ export class RuntimeExecutor {
   }
 
   /**
+   * If this attempt belongs to an intent, lets the intent's deterministic
+   * workspace checks — not the model's own report — decide whether the work
+   * counts as done. Read-only against the workspace; never throws.
+   */
+  private settleIntent(attemptId: string): void {
+    try {
+      const sequenceBefore = latestRuntimeSequence(this.db);
+      settleIntentAfterAttempt(this.db, attemptId, CORE_ACTOR);
+      for (const event of listRuntimeEventsAfter(this.db, sequenceBefore, 200)) this.broadcaster.publishRuntime(event);
+    } catch (err) {
+      console.log(
+        `[karkedikha-core ${new Date().toISOString()}] intent settlement skipped for ${attemptId}: `
+        + `${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+  }
+
+  /**
    * Runs an attempt to a terminal state. Intended to be called fire-and-forget
    * from the execute route (it resolves only once the attempt is terminal).
    * Runtime failures are recorded on the attempt. A missing or mismatched
@@ -673,10 +692,13 @@ export class RuntimeExecutor {
       // Skipping this leaves the attempt in `cancelling` forever and every client
       // behind it waits on a "Working" state that never ends.
       this.settleRequestedCancellation(attemptId, fence.token);
+      this.settleIntent(attemptId);
       clearInterval(heartbeat);
       releaseLane?.();
       this.active.delete(attemptId);
     }
+    // The workspace already satisfies the intent: a run that finished the work before failing is not rerouted or re-run.
+    if (getIntentByRequest(this.db, attempt.requestId)?.status === 'verified') return;
     // Live Auto recovery: the fence is released, so a bounded successor on another model may continue the objective.
     const sequenceBefore = latestRuntimeSequence(this.db);
     const successor = await maybeAutoReroute({
@@ -4265,6 +4287,11 @@ export class RuntimeExecutor {
         images = sent.images.map((data, index) => ({ type: 'image' as const, data, mimeType: sent.imageMimeTypes?.[index] ?? 'image/png' }));
       }
     }
+
+    // A successor created by an intent resume starts from Core's checkpoint note (ledger + workspace inspection),
+    // never from the predecessor's transcript. The stored user message and permissions are unchanged.
+    const resumeBrief = resumeBriefForAttempt(this.db, attemptId);
+    if (resumeBrief) prompt = `${resumeBrief}\n\n${prompt}`;
 
     await piAgentEngine.executeAssistantTurn({
       db: this.db,

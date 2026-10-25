@@ -10,6 +10,7 @@ import type { AuthenticatedPrincipal, PrincipalRole } from '../security/types';
 import type { EventBroadcaster } from '../ws/broadcaster';
 import { newId } from '../domain/ids';
 import { RuntimeExecutor, type RuntimeExecutorOptions } from '../runtime/executor';
+import { recoverIntentsOnBoot } from '../runtime/intentRecovery';
 import { hashCoreBundle } from '../runtime/coreBundle';
 import { hasInFlightCapabilityExecutions } from '../domain/capabilityDispatch';
 import { GovernedResearchRunner, type GovernedResearchRunnerOptions } from '../runtime/researchRunner';
@@ -47,6 +48,8 @@ export interface StartApiServerOptions {
    * a RuntimeExecutor wired to the real Ollama backend. */
   executor?: RuntimeExecutor;
   executorOptions?: RuntimeExecutorOptions;
+  /** Resume open intents interrupted by a restart (default on; only affects intents a client created). */
+  intentRecovery?: boolean;
   researchRunner?: GovernedResearchRunner;
   researchRunnerOptions?: Partial<GovernedResearchRunnerOptions>;
   /** Run durable scheduled tasks from this server (production Core only). */
@@ -246,6 +249,17 @@ export function startApiServer(options: StartApiServerOptions): Promise<RunningA
   // A cancellation whose owner stopped heart-beating must still reach a terminal
   // state, even when no client is watching at the time.
   startCancellationRecoveryLoop(options.db, options.broadcaster, executor);
+  // An open intent whose run was cut off (e.g. Core restarted) is checked against its workspace and, if the work is
+  // not done, continued on a different model from a checkpoint. Only intents a client explicitly created are touched.
+  if (options.intentRecovery !== false) {
+    void recoverIntentsOnBoot({
+      db: options.db,
+      broadcaster: options.broadcaster,
+      executor,
+      environment: options.executorOptions?.rerouteEnvironment,
+      log: (message) => console.log(`[karkedikha-core ${new Date().toISOString()}] ${message}`),
+    }).catch(() => { /* recovery is best-effort; each intent's outcome is durable */ });
+  }
   const router = buildRouter(options.broadcaster, coreInfo, options.onShutdown, executor, researchRunner, capabilityRegistry, connectorRegistry, options.gmailSummaryBackend);
 
   const server = http.createServer(async (req, res) => {

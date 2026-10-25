@@ -1214,6 +1214,35 @@ CREATE TABLE IF NOT EXISTS gmail_change_plans (
 CREATE INDEX IF NOT EXISTS idx_gmail_change_plans_account ON gmail_change_plans(accountEmail, createdAt);
 `;
 
+/**
+ * Intent kernel: a durable statement of what a task must achieve and the
+ * deterministic checks that prove it, independent of which attempt or model is
+ * running it.
+ *
+ * Deliberately thin. An intent holds only what no existing table owns: the typed
+ * completion checks, the workspace those checks are confined to, and the
+ * recovery bookkeeping. Attempts (and their model/permission context) are
+ * reached through `requestId` + `attempts.predecessorAttemptId`; approvals,
+ * authorizations and grants stay keyed by `attemptId`; the task outcome stays in
+ * `task_outcomes`. Nothing is copied from them.
+ */
+const MIGRATION_36_INTENTS = `
+CREATE TABLE IF NOT EXISTS intents (
+  id TEXT PRIMARY KEY,
+  requestId TEXT NOT NULL UNIQUE REFERENCES requests(id),
+  objective TEXT NOT NULL,
+  workspaceRoot TEXT NOT NULL,
+  checksJson TEXT NOT NULL,
+  status TEXT NOT NULL,
+  resumeCount INTEGER NOT NULL DEFAULT 0,
+  maxResumes INTEGER NOT NULL DEFAULT 2,
+  verifiedAt TEXT,
+  createdAt TEXT NOT NULL,
+  updatedAt TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_intents_status ON intents(status);
+`;
+
 export const MIGRATIONS: Migration[] = [
   { version: 1, description: 'bootstrap core_metadata and schema_migrations', sql: MIGRATION_1_BOOTSTRAP },
   { version: 2, description: 'M31 domain schema (projects/repositories/stories/events/etc.)', sql: MIGRATION_2_DOMAIN },
@@ -1250,6 +1279,7 @@ export const MIGRATIONS: Migration[] = [
   { version: 33, description: 'Pandesh durable commitments: the promises the user made, their condition and their state', sql: MIGRATION_33_COMMITMENTS },
   { version: 34, description: 'Pandesh task outcomes: the objective, success conditions, evidence, blocker and next action of a task', sql: MIGRATION_34_TASK_OUTCOMES },
   { version: 35, description: 'Gmail inbox organization: durable change plans with the prior label state of every message', sql: MIGRATION_35_GMAIL_CHANGE_PLANS },
+  { version: 36, description: 'Pandesh intent kernel: durable intent with deterministic completion checks, linked to attempts by request', sql: MIGRATION_36_INTENTS },
 ];
 
 
