@@ -52,6 +52,7 @@ export interface CreateBackgroundTaskInput {
 }
 
 export interface UpdateBackgroundTaskInput {
+  attemptId?: string;
   status?: BackgroundTaskStatus;
   completionCriteria?: string[];
   payload?: Record<string, unknown>;
@@ -209,6 +210,10 @@ export function updateBackgroundTask(db: CoreDatabase, id: string, updates: Upda
   const setClauses: string[] = ['updatedAt = ?'];
   const params: unknown[] = [nowIso()];
 
+  if (updates.attemptId !== undefined) {
+    setClauses.push('attemptId = ?');
+    params.push(updates.attemptId);
+  }
   if (updates.status !== undefined) {
     setClauses.push('status = ?');
     params.push(updates.status);

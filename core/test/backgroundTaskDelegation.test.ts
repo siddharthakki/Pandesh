@@ -16,12 +16,16 @@ import {
   runBackgroundTask,
   recoverBackgroundTasks,
   resetActiveWorkersForTesting,
+  routeBackgroundTaskIntent,
+  resumeBackgroundTask,
+  cancelBackgroundTaskWorker,
   isGmailContractExtractionRequest,
   isTaskStatusRequest,
   isShowResultsRequest,
   isCancelTaskRequest,
   isContinueTaskRequest,
 } from '../runtime/backgroundWorker';
+import { getTaskOutcome } from '../domain/taskOutcomes';
 import {
   getActiveBackgroundTask,
   getLatestBackgroundTask,
@@ -269,18 +273,31 @@ describe('Pandesh P0 — Nonblocking Background Task Delegation Suite', () => {
   it('handles user queries: status, cancel, continue, and show results', async () => {
     const conv = createConversation(db, { mode: 'baat_kar', actor: 'user', title: 'Control Queries Test' });
 
-    // 1. Check status when no task exists
-    let req = makeRequest(conv.id, "What's the status?");
+    // 1. Check extraction status when no task exists
+    let req = makeRequest(conv.id, "What's the extraction status?");
     let att = createAttempt(db, { requestId: req.id, kind: 'baat_kar', actor: 'client:desktop' });
     let fence = acquireFence(db, att.id, { owner: 'test', actor: 'test' });
     let res = await piAgentEngine.executeAssistantTurn({
       db, broadcaster, attemptId: att.id, requestId: req.id, conversationId: conv.id,
-      prompt: "What's the status?", fenceToken: fence.token,
+      prompt: "What's the extraction status?", fenceToken: fence.token,
     });
     expect(res.reply).toContain('no background extraction tasks');
 
-    // 2. Start a background task
-    const { task } = startGmailContractExtractionTask(db, broadcaster, { conversationId: conv.id });
+    // 2. Start a background task with controlled execution
+    let taskRunning = true;
+    const { task } = startGmailContractExtractionTask(
+      db,
+      broadcaster,
+      { conversationId: conv.id },
+      {
+        toolExecutor: async (toolName) => {
+          while (taskRunning) {
+            await new Promise((r) => setTimeout(r, 50));
+          }
+          return { status: 'succeeded', output: JSON.stringify({ results: [] }) };
+        },
+      },
+    );
 
     // 3. Check status when task is running
     req = makeRequest(conv.id, "What's the status?");
@@ -496,4 +513,251 @@ describe('Pandesh P0 — Nonblocking Background Task Delegation Suite', () => {
     expect(allowedTools).not.toContain('gmail_create_draft');
     expect(allowedTools).not.toContain('gmail_trash');
   });
+
+  it('regression 1: failed or unauthorized Gmail search fails truthfully without false success, and partial coverage is explicitly declared', async () => {
+    const conv = createConversation(db, { mode: 'baat_kar', actor: 'user', title: 'Search Failure & Truthfulness' });
+
+    // A: Test failed/unauthorized Gmail search
+    const { task: taskFail } = startGmailContractExtractionTask(
+      db,
+      broadcaster,
+      {
+        conversationId: conv.id,
+        objective: 'Extract contracts',
+      },
+      { autoStart: false },
+    );
+
+    const failExecutor = {
+      toolExecutor: async (toolName: string) => {
+        if (toolName === 'gmail_search') {
+          return {
+            status: 'failed',
+            output: JSON.stringify({ error: 'Gmail connector is disconnected or unauthorized' }),
+          };
+        }
+        return { status: 'succeeded', output: JSON.stringify({}) };
+      },
+    };
+
+    await runBackgroundTask(db, broadcaster, taskFail.id, failExecutor);
+
+    const failedTask = getBackgroundTask(db, taskFail.id)!;
+    expect(failedTask.status).toBe('failed');
+    expect(failedTask.error).toContain('Gmail connector is disconnected or unauthorized');
+    expect(failedTask.resultSummary).toContain('Gmail search failed');
+
+    // Attempt must also be failed
+    const failedAttempt = getAttempt(db, taskFail.attemptId);
+    expect(failedAttempt.status).toBe('failed');
+    expect(failedAttempt.failureReason).toContain('Gmail connector is disconnected or unauthorized');
+
+    // Task outcome must be unverified and blocked
+    const outcome = getTaskOutcome(db, taskFail.attemptId);
+    expect(outcome?.status).toBe('blocked');
+
+    // Message delivered must report the blocker/failure, NEVER "no contracts found" or completed inventory
+    const messages = listMessages(db, conv.id);
+    const failureMsg = messages.find(
+      (m) => m.role === 'assistant' && m.content.includes('Gmail contract extraction because the search failed'),
+    );
+    expect(failureMsg).toBeDefined();
+    expect(failureMsg?.content).toContain('Gmail connector is disconnected or unauthorized');
+    expect(failureMsg?.content).not.toContain('No contract documents were found');
+    expect(failureMsg?.content).not.toContain('finished your Gmail contract extraction');
+
+    // B: Test partial search coverage is not presented as a complete Gmail inventory
+    const convPartial = createConversation(db, { mode: 'baat_kar', actor: 'user', title: 'Partial Coverage' });
+    const { task: taskPartial } = startGmailContractExtractionTask(
+      db,
+      broadcaster,
+      {
+        conversationId: convPartial.id,
+        objective: 'Extract contracts',
+      },
+      { autoStart: false },
+    );
+
+    const pdfBytes = buildMinimalPdf('OFFICE LEASE AGREEMENT RA # 9999');
+    const pdfBase64 = pdfBytes.toString('base64url');
+
+    const partialExecutor = {
+      toolExecutor: async (toolName: string) => {
+        if (toolName === 'gmail_search') {
+          return {
+            status: 'succeeded',
+            output: JSON.stringify({
+              messages: [{ id: 'msg-p1', threadId: 'thread-p1', subject: 'Lease Agreement' }],
+              counts: { matched: 50, returned: 1, moreAvailable: true },
+            }),
+          };
+        }
+        if (toolName === 'gmail_read_thread') {
+          return {
+            status: 'succeeded',
+            output: JSON.stringify({
+              id: 'thread-p1',
+              messages: [
+                {
+                  id: 'msg-p1',
+                  subject: 'Lease Agreement',
+                  from: 'landlord@example.com',
+                  date: 'Tue, 20 Oct 2026 12:00:00 +0000',
+                  bodyText: 'Attached is the lease agreement.',
+                  hasAttachments: true,
+                  attachments: [{ id: 'att-1', filename: 'Lease.pdf', mimeType: 'application/pdf', size: pdfBytes.length }],
+                },
+              ],
+            }),
+          };
+        }
+        if (toolName === 'gmail_read_attachment') {
+          return {
+            status: 'succeeded',
+            output: JSON.stringify({
+              filename: 'Lease.pdf',
+              mimeType: 'application/pdf',
+              data: pdfBase64,
+              size: pdfBytes.length,
+            }),
+          };
+        }
+        return { status: 'succeeded', output: JSON.stringify({}) };
+      },
+    };
+
+    await runBackgroundTask(db, broadcaster, taskPartial.id, partialExecutor);
+
+    const partialTask = getBackgroundTask(db, taskPartial.id)!;
+    expect(partialTask.status).toBe('completed');
+    expect(partialTask.resultSummary).toContain('partial coverage');
+
+    const partialMessages = listMessages(db, convPartial.id);
+    const partialDelivery = partialMessages.find(
+      (m) => m.role === 'assistant' && m.content.includes('partial inventory'),
+    );
+    expect(partialDelivery).toBeDefined();
+    expect(partialDelivery?.content).toContain('additional matching messages or candidates exist in your mailbox');
+    expect(partialDelivery?.content).not.toContain("I've finished your Gmail contract extraction.\n\n");
+  });
+
+  it('regression 2: generic prompts do not hijack unrelated conversations without active tasks', async () => {
+    // Conversation A: Has an active extraction task
+    const convA = createConversation(db, { mode: 'baat_kar', actor: 'user', title: 'Active Extraction Chat' });
+    const { task: taskA } = startGmailContractExtractionTask(
+      db,
+      broadcaster,
+      {
+        conversationId: convA.id,
+        objective: 'Extract contracts',
+      },
+      { autoStart: false },
+    );
+
+    // Conversation B: Completely unrelated conversation (e.g. creative writing, travel, coding)
+    const convB = createConversation(db, { mode: 'baat_kar', actor: 'user', title: 'Unrelated Chat' });
+
+    // In unrelated conversation B, generic prompts must NOT route to background task handler
+    const unrelatedPrompts = [
+      "What's the status?",
+      'Continue',
+      'Cancel',
+      'Show my results',
+      'continue writing the story',
+      'cancel my flight reservation',
+      'what is the status of PR 12?',
+    ];
+
+    for (const prompt of unrelatedPrompts) {
+      const routingB = routeBackgroundTaskIntent(db, convB.id, prompt);
+      expect(routingB.shouldRoute).toBe(false);
+    }
+
+    // However, if the user explicitly asks about extraction in convB, it SHOULD route (and report no task)
+    const explicitStatusB = routeBackgroundTaskIntent(db, convB.id, "What's the extraction status?");
+    expect(explicitStatusB.shouldRoute).toBe(true);
+    expect(explicitStatusB.intent).toBe('status');
+
+    // In conversation A with the active task, generic prompts DO route
+    const statusA = routeBackgroundTaskIntent(db, convA.id, "What's the status?");
+    expect(statusA.shouldRoute).toBe(true);
+    expect(statusA.intent).toBe('status');
+    expect(statusA.activeTask?.id).toBe(taskA.id);
+
+    const cancelA = routeBackgroundTaskIntent(db, convA.id, 'Cancel');
+    expect(cancelA.shouldRoute).toBe(true);
+    expect(cancelA.intent).toBe('cancel');
+  });
+
+  it('regression 3: cancel followed by continue allocates a valid new attempt and syncs ledger and task', async () => {
+    const conv = createConversation(db, { mode: 'baat_kar', actor: 'user', title: 'Cancel-Continue Ledger Sync' });
+
+    // 1. Start extraction task
+    const { task } = startGmailContractExtractionTask(
+      db,
+      broadcaster,
+      {
+        conversationId: conv.id,
+        objective: 'Extract contracts',
+      },
+      { autoStart: false },
+    );
+
+    const attempt1Id = task.attemptId;
+    transitionAttempt(db, attempt1Id, { toStatus: 'running', actor: 'core:background_worker' });
+    const attempt1 = getAttempt(db, attempt1Id);
+    expect(attempt1.status).toBe('running');
+
+    // 2. Cancel the background task
+    cancelBackgroundTaskWorker(db, broadcaster, task.id, 'User requested cancel');
+
+    const cancelledTask = getBackgroundTask(db, task.id)!;
+    expect(cancelledTask.status).toBe('cancelled');
+
+    const cancelledAttempt1 = getAttempt(db, attempt1Id);
+    expect(cancelledAttempt1.status).toBe('cancelled');
+
+    // 3. Continue the task via resumeBackgroundTask
+    const options = {
+      toolExecutor: async (toolName: string) => {
+        if (toolName === 'gmail_search') {
+          return {
+            status: 'succeeded',
+            output: JSON.stringify({ messages: [] }),
+          };
+        }
+        return { status: 'succeeded', output: JSON.stringify({}) };
+      },
+    };
+
+    const { task: resumedTask } = resumeBackgroundTask(db, broadcaster, task.id, options);
+    expect(resumedTask).toBeDefined();
+
+    // 4. Verify attempt ledger and background task agreement
+    const newAttemptId = resumedTask.attemptId;
+    expect(newAttemptId).not.toBe(attempt1Id);
+
+    // Old attempt remains cancelled in immutable ledger
+    const checkAttempt1 = getAttempt(db, attempt1Id);
+    expect(checkAttempt1.status).toBe('cancelled');
+
+    // New attempt is running / active
+    const newAttempt = getAttempt(db, newAttemptId);
+    expect(['running', 'completed']).toContain(newAttempt.status);
+
+    // Wait for the background worker to finish
+    let currentTask = getBackgroundTask(db, task.id)!;
+    const deadline = Date.now() + 5000;
+    while (currentTask.status === 'in_progress' && Date.now() < deadline) {
+      await new Promise((r) => setTimeout(r, 100));
+      currentTask = getBackgroundTask(db, task.id)!;
+    }
+
+    // Both final task and new attempt agree on completed status
+    expect(currentTask.status).toBe('completed');
+    expect(currentTask.attemptId).toBe(newAttemptId);
+    expect(getAttempt(db, newAttemptId).status).toBe('completed');
+    expect(getAttempt(db, attempt1Id).status).toBe('cancelled');
+  });
 });
+

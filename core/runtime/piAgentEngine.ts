@@ -54,8 +54,10 @@ import {
   isShowResultsRequest,
   isCancelTaskRequest,
   isContinueTaskRequest,
+  routeBackgroundTaskIntent,
   startGmailContractExtractionTask,
   cancelBackgroundTaskWorker,
+  resumeBackgroundTask,
   runBackgroundTask,
 } from './backgroundWorker';
 import {
@@ -377,15 +379,11 @@ export class PiAgentEngine implements EngineAdapter {
     const requestText = ctx.currentMessage ?? prompt;
 
     // Fast nonblocking delegation for long-running Gmail contract extraction or control queries
-    if (
-      isGmailContractExtractionRequest(requestText) ||
-      isTaskStatusRequest(requestText) ||
-      isShowResultsRequest(requestText) ||
-      isCancelTaskRequest(requestText) ||
-      isContinueTaskRequest(requestText)
-    ) {
+    const routing = routeBackgroundTaskIntent(db, conversationId, requestText);
+
+    if (routing.shouldRoute) {
       let delegationReply = '';
-      if (isGmailContractExtractionRequest(requestText)) {
+      if (routing.intent === 'start') {
         startGmailContractExtractionTask(
           db,
           broadcaster,
@@ -399,9 +397,9 @@ export class PiAgentEngine implements EngineAdapter {
           },
         );
         delegationReply = "I've started your Gmail contract extraction. It may take some time. I'll notify you when it's finished. You can continue chatting.";
-      } else if (isTaskStatusRequest(requestText)) {
-        const active = getActiveBackgroundTask(db, { conversationId, taskType: 'gmail_contract_extraction' });
-        const latest = active ?? getLatestBackgroundTask(db, { conversationId, taskType: 'gmail_contract_extraction' });
+      } else if (routing.intent === 'status') {
+        const active = routing.activeTask;
+        const latest = routing.latestTask;
         if (!latest) {
           delegationReply = 'There are no background extraction tasks for this conversation.';
         } else if (latest.status === 'in_progress' || latest.status === 'queued') {
@@ -411,11 +409,13 @@ export class PiAgentEngine implements EngineAdapter {
           delegationReply = 'Your Gmail contract extraction has finished! Say "Show my results" to view the inventory table.';
         } else if (latest.status === 'cancelled') {
           delegationReply = 'Your Gmail contract extraction was cancelled. Say "Continue" to resume.';
+        } else if (latest.status === 'failed') {
+          delegationReply = `Your Gmail contract extraction stopped with status: failed (${latest.error || 'unknown error'}). Say "Continue" to retry.`;
         } else {
           delegationReply = `Your Gmail contract extraction stopped with status: ${latest.status} (${latest.error || 'unknown error'}). Say "Continue" to retry or resume.`;
         }
-      } else if (isShowResultsRequest(requestText)) {
-        const latest = getLatestBackgroundTask(db, { conversationId, taskType: 'gmail_contract_extraction' });
+      } else if (routing.intent === 'results') {
+        const latest = routing.latestTask;
         if (!latest) {
           delegationReply = 'No background extraction results are available yet. Say "Extract all contracts from my Gmail" to start.';
         } else if (latest.resultData) {
@@ -423,19 +423,21 @@ export class PiAgentEngine implements EngineAdapter {
         } else if (latest.status === 'in_progress' || latest.status === 'queued') {
           const lastCp = latest.checkpoints[latest.checkpoints.length - 1];
           delegationReply = `Gmail contract extraction is still in progress (${lastCp?.summary || 'Working...'}). I'll automatically deliver the inventory table when it finishes.`;
+        } else if (latest.status === 'failed') {
+          delegationReply = `No contract results are available because extraction failed: ${latest.error || 'unknown error'}. Say "Continue" to retry.`;
         } else {
           delegationReply = latest.resultSummary || `Extraction task is in state: ${latest.status}.`;
         }
-      } else if (isCancelTaskRequest(requestText)) {
-        const active = getActiveBackgroundTask(db, { conversationId, taskType: 'gmail_contract_extraction' });
+      } else if (routing.intent === 'cancel') {
+        const active = routing.activeTask;
         if (active) {
           cancelBackgroundTaskWorker(db, broadcaster, active.id);
           delegationReply = 'Your Gmail contract extraction has been cancelled.';
         } else {
           delegationReply = 'There are no running background tasks to cancel.';
         }
-      } else if (isContinueTaskRequest(requestText)) {
-        const latest = getLatestBackgroundTask(db, { conversationId, taskType: 'gmail_contract_extraction' });
+      } else if (routing.intent === 'continue') {
+        const latest = routing.latestTask;
         if (!latest) {
           delegationReply = 'No background extraction task was found to continue. Say "Extract all contracts from my Gmail" to start.';
         } else if (latest.status === 'in_progress' || latest.status === 'queued') {
@@ -444,8 +446,7 @@ export class PiAgentEngine implements EngineAdapter {
         } else if (latest.status === 'completed') {
           delegationReply = 'Your Gmail contract extraction has already completed! Say "Show my results" to view the inventory table.';
         } else {
-          updateBackgroundTask(db, latest.id, { status: 'in_progress', error: null });
-          void runBackgroundTask(db, broadcaster, latest.id, {
+          resumeBackgroundTask(db, broadcaster, latest.id, {
             connectors: ctx.connectors,
             cwd: selectedWorkspace || process.cwd(),
           });

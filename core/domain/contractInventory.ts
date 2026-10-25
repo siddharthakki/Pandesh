@@ -644,8 +644,12 @@ export function synthesizeContractInventory(toolCalls: Array<{ tool: string; res
   // Present confirmed contracts plus top candidate threads (up to 10 rows) for a concise, useful inventory
   const displayItems = candidateList.slice(0, 10);
 
+  const intro = isExhaustive
+    ? 'I have searched and inspected your Gmail account for contracts, agreements, and candidate messages. Here is the verified Contract Inventory Table:\n'
+    : 'I have searched and inspected candidate messages in your Gmail account. Note: This is a partial contract inventory because additional matching messages or uninspected candidates exist in Gmail. Here is the verified Contract Inventory Table:\n';
+
   const lines: string[] = [
-    'I have searched and inspected your Gmail account for contracts, agreements, and candidate messages. Here is the verified Contract Inventory Table:\n',
+    intro,
     '| Contract Type | Company / Counterparty | Date | Email / Thread Reference | Attachment | Extraction Status |',
     '| --- | --- | --- | --- | --- | --- |',
   ];

@@ -10,6 +10,7 @@ import type { CoreDatabase } from '../db/connection';
 import type { EventBroadcaster } from '../ws/broadcaster';
 import {
   getBackgroundTask,
+  getLatestBackgroundTask,
   updateBackgroundTask,
   recordBackgroundTaskCheckpoint,
   getActiveBackgroundTask,
@@ -30,6 +31,7 @@ import { synthesizeContractInventory } from '../domain/contractInventory';
 import { readConnector } from './assistantBrief';
 import type { ConnectorAdapter } from './connectors/connectorCapability';
 import type { ConnectorId } from '../shared/wireTypes';
+import { CoreError } from '../domain/errors';
 import { nowIso } from '../domain/ids';
 
 export const BACKGROUND_WORKER_ACTOR = 'core:background_worker';
@@ -67,6 +69,9 @@ export function isGmailContractExtractionRequest(text: string): boolean {
  */
 export function isTaskStatusRequest(text: string): boolean {
   const norm = text.trim().toLowerCase();
+  if (/\b(?:pr|pull request|git|branch|server|deploy|deployment|flight|order|build)\b/i.test(norm)) {
+    return false;
+  }
   return /\b(?:what(?:'s| is) (?:the )?status|task status|status\??|check status|how(?:'s| is) (?:the )?(?:task|extraction|it) going)\b/i.test(norm);
 }
 
@@ -75,6 +80,9 @@ export function isTaskStatusRequest(text: string): boolean {
  */
 export function isShowResultsRequest(text: string): boolean {
   const norm = text.trim().toLowerCase();
+  if (/\b(?:test|tests|benchmark|benchmarks|sql|query|build)\b/i.test(norm)) {
+    return false;
+  }
   return /\b(?:show (?:my |the )?results?|view results?|see results?|display results?|contract inventory|show contracts?)\b/i.test(norm);
 }
 
@@ -83,6 +91,9 @@ export function isShowResultsRequest(text: string): boolean {
  */
 export function isCancelTaskRequest(text: string): boolean {
   const norm = text.trim().toLowerCase();
+  if (/\b(?:flight|ticket|subscription|order|booking|reservation|event|meeting)\b/i.test(norm)) {
+    return false;
+  }
   return /\b(?:cancel(?: the task| extraction| my extraction)?|stop(?: the task| extraction)?|abort(?: the task| extraction)?)\b/i.test(norm);
 }
 
@@ -91,7 +102,67 @@ export function isCancelTaskRequest(text: string): boolean {
  */
 export function isContinueTaskRequest(text: string): boolean {
   const norm = text.trim().toLowerCase();
+  if (/\b(?:story|writing|essay|code|script|chapter|poem)\b/i.test(norm)) {
+    return false;
+  }
   return /\b(?:continue(?: the task| extraction)?|resume(?: the task| extraction)?)\b/i.test(norm);
+}
+
+export interface BackgroundTaskRoutingDecision {
+  shouldRoute: boolean;
+  intent: 'start' | 'status' | 'cancel' | 'continue' | 'results' | null;
+  activeTask?: BackgroundTaskRecord;
+  latestTask?: BackgroundTaskRecord;
+}
+
+/**
+ * Context-aware routing for background tasks.
+ * Prevents generic prompts ("Continue", "Cancel", "What's the status?", "Show my results")
+ * from hijacking unrelated conversations where no active task or matching context exists.
+ */
+export function routeBackgroundTaskIntent(
+  db: CoreDatabase,
+  conversationId: string | undefined,
+  requestText: string,
+): BackgroundTaskRoutingDecision {
+  if (isGmailContractExtractionRequest(requestText)) {
+    return { shouldRoute: true, intent: 'start' };
+  }
+
+  const activeTask = conversationId
+    ? getActiveBackgroundTask(db, { conversationId, taskType: 'gmail_contract_extraction' })
+    : undefined;
+  const latestTask = activeTask ?? (conversationId
+    ? getLatestBackgroundTask(db, { conversationId, taskType: 'gmail_contract_extraction' })
+    : undefined);
+
+  const mentionsExtraction = /\b(?:extraction|contracts?|agreements?)\b/i.test(requestText);
+
+  if (isTaskStatusRequest(requestText)) {
+    if (activeTask || mentionsExtraction) {
+      return { shouldRoute: true, intent: 'status', activeTask, latestTask };
+    }
+  }
+
+  if (isCancelTaskRequest(requestText)) {
+    if (activeTask || mentionsExtraction) {
+      return { shouldRoute: true, intent: 'cancel', activeTask, latestTask };
+    }
+  }
+
+  if (isContinueTaskRequest(requestText)) {
+    if ((latestTask && (latestTask.status === 'cancelled' || latestTask.status === 'failed')) || mentionsExtraction) {
+      return { shouldRoute: true, intent: 'continue', activeTask, latestTask };
+    }
+  }
+
+  if (isShowResultsRequest(requestText)) {
+    if (mentionsExtraction || Boolean(latestTask?.resultData) || Boolean(activeTask)) {
+      return { shouldRoute: true, intent: 'results', activeTask, latestTask };
+    }
+  }
+
+  return { shouldRoute: false, intent: null, activeTask, latestTask };
 }
 
 /**
@@ -319,6 +390,107 @@ function settleCancelledTask(db: CoreDatabase, broadcaster: EventBroadcaster | u
 }
 
 /**
+ * Resumes a background task from a paused, cancelled, or failed state.
+ * Allocates a valid new execution attempt so the attempt ledger and task state agree.
+ */
+export function resumeBackgroundTask(
+  db: CoreDatabase,
+  broadcaster: EventBroadcaster | undefined,
+  taskId: string,
+  options: BackgroundWorkerOptions = {},
+): { resumed: boolean; task: BackgroundTaskRecord } {
+  let task = getBackgroundTask(db, taskId);
+  if (!task) {
+    throw new CoreError('not_found', `Background task ${taskId} not found`);
+  }
+
+  // If already active or queued, ensure worker process is active
+  if (task.status === 'in_progress' || task.status === 'queued') {
+    if (!activeWorkerControllers.has(taskId)) {
+      void runBackgroundTask(db, broadcaster, taskId, options).catch((err) => {
+        console.error(`[backgroundWorker] Task ${taskId} resumption failed:`, err);
+      });
+    }
+    return { resumed: false, task };
+  }
+
+  // Previous attempt is in a terminal state (cancelled or failed).
+  // Create a brand new execution attempt to maintain ledger integrity and ensure task & ledger agree.
+  const prevAttempt = getAttempt(db, task.attemptId);
+  const resumeReq = createRequest(db, {
+    clientId: BACKGROUND_WORKER_CLIENT_ID,
+    conversationId: task.conversationId,
+    currentMessage: `Resume: ${task.objective}`,
+    requestedMode: 'saath_kar',
+    resolvedMode: 'saath_kar',
+    routeReason: 'background_task_resumption',
+    contextPolicy: {
+      includeConversationHistory: true,
+      includeProjectContext: false,
+      includeRepositoryContext: false,
+      includeGlobalStoryContext: false,
+    },
+    correlationId: `corr_bg_resume_${Date.now()}`,
+  });
+  const newAttempt = createAttempt(db, {
+    requestId: resumeReq.id,
+    kind: 'saath_kar',
+    actor: BACKGROUND_WORKER_ACTOR,
+    clientId: BACKGROUND_WORKER_CLIENT_ID,
+    context: {
+      workspaceRoot: options.cwd ?? prevAttempt.context?.workspaceRoot ?? null,
+      allowedTools: ['gmail_search', 'gmail_read_thread', 'gmail_read_attachment'],
+    },
+  });
+
+  ensureTaskOutcome(db, {
+    attemptId: newAttempt.id,
+    conversationId: task.conversationId,
+    requestId: resumeReq.id,
+    objective: task.objective,
+  });
+
+  updateTaskOutcome(db, {
+    attemptId: newAttempt.id,
+    successCriteria: task.completionCriteria,
+    capabilities: ['gmail'],
+    status: 'in_progress',
+    nextAction: 'Resume Gmail contract extraction from last checkpoint',
+  });
+
+  createCheckpoint(db, {
+    attemptId: newAttempt.id,
+    kind: 'task_resumed',
+    metadata: {
+      taskId: task.id,
+      previousAttemptId: prevAttempt.id,
+      stage: task.payload?.stage,
+    },
+    actor: BACKGROUND_WORKER_ACTOR,
+  });
+
+  task = updateBackgroundTask(db, task.id, {
+    attemptId: newAttempt.id,
+    status: 'in_progress',
+    error: null,
+    completedAt: null,
+  });
+
+  recordBackgroundTaskCheckpoint(db, task.id, {
+    kind: 'task_resumed',
+    summary: `Gmail contract extraction resumed under new attempt ${newAttempt.id}`,
+    timestamp: nowIso(),
+    metadata: { attemptId: newAttempt.id, previousAttemptId: prevAttempt.id },
+  });
+
+  void runBackgroundTask(db, broadcaster, task.id, options).catch((err) => {
+    console.error(`[backgroundWorker] Task ${task.id} execution failed:`, err);
+  });
+
+  return { resumed: true, task };
+}
+
+/**
  * Invokes a tool either via caller-injected toolExecutor, connectors bridge, or Core connector registry.
  */
 async function invokeTool(
@@ -390,11 +562,47 @@ async function executeGmailContractExtraction(
   signal: AbortSignal,
 ): Promise<void> {
   let task = initialTask;
-  const attemptId = task.attemptId;
+  let attemptId = task.attemptId;
 
   // Mark attempt running with claim owner if not already
   try {
-    const attempt = getAttempt(db, attemptId);
+    let attempt = getAttempt(db, attemptId);
+    if (attempt.status === 'cancelled' || attempt.status === 'failed') {
+      const resumeReq = createRequest(db, {
+        clientId: BACKGROUND_WORKER_CLIENT_ID,
+        conversationId: task.conversationId,
+        currentMessage: `Resume: ${task.objective}`,
+        requestedMode: 'saath_kar',
+        resolvedMode: 'saath_kar',
+        routeReason: 'background_task_resumption',
+        contextPolicy: {
+          includeConversationHistory: true,
+          includeProjectContext: false,
+          includeRepositoryContext: false,
+          includeGlobalStoryContext: false,
+        },
+        correlationId: `corr_bg_resume_${Date.now()}`,
+      });
+      const newAttempt = createAttempt(db, {
+        requestId: resumeReq.id,
+        kind: 'saath_kar',
+        actor: BACKGROUND_WORKER_ACTOR,
+        clientId: BACKGROUND_WORKER_CLIENT_ID,
+        context: {
+          workspaceRoot: options.cwd ?? attempt.context?.workspaceRoot ?? null,
+          allowedTools: ['gmail_search', 'gmail_read_thread', 'gmail_read_attachment'],
+        },
+      });
+      task = updateBackgroundTask(db, task.id, { attemptId: newAttempt.id });
+      attemptId = newAttempt.id;
+      ensureTaskOutcome(db, {
+        attemptId: newAttempt.id,
+        conversationId: task.conversationId,
+        requestId: resumeReq.id,
+        objective: task.objective,
+      });
+      attempt = newAttempt;
+    }
     if (attempt.status === 'created' || attempt.status === 'queued') {
       transitionAttempt(db, attemptId, {
         toStatus: 'running',
@@ -415,6 +623,8 @@ async function executeGmailContractExtraction(
   let candidateThreadIds: string[] = Array.isArray(payload.candidateThreadIds) ? [...payload.candidateThreadIds] : [];
   const processedThreadIds: string[] = Array.isArray(payload.processedThreadIds) ? [...payload.processedThreadIds] : [];
 
+  let parsedSearch: any = {};
+
   // Stage 1: Search Gmail for contracts if not already done
   if (payload.stage === 'search' || !payload.candidateThreadIds) {
     if (signal.aborted || getBackgroundTask(db, task.id)?.status === 'cancelled') {
@@ -427,14 +637,105 @@ async function executeGmailContractExtraction(
     const searchArgs = { query: 'contract OR agreement OR lease OR rental OR "terms of service" OR NDA' };
     const searchRes = await invokeTool(db, attemptId, 'gmail_search', searchArgs, options, signal);
 
-    let parsedSearch: any = {};
     try { parsedSearch = JSON.parse(searchRes.output); } catch {}
-    const results: any[] = Array.isArray(parsedSearch.results) ? parsedSearch.results : [];
+
+    const isSearchFailed =
+      searchRes.status !== 'succeeded' ||
+      Boolean(parsedSearch?.error) ||
+      Boolean(parsedSearch?.status === 'failed') ||
+      Boolean(parsedSearch?.ok === false);
+
+    if (isSearchFailed) {
+      const failureReason =
+        parsedSearch?.error ||
+        parsedSearch?.reason ||
+        (parsedSearch?.status === 'failed' ? (parsedSearch?.output || 'Gmail search failed') : null) ||
+        (searchRes.status !== 'succeeded' ? searchRes.output : null) ||
+        'Gmail search failed or was unauthorized';
+
+      toolCallsRecorded.push({
+        tool: 'gmail_search',
+        args: searchArgs,
+        status: 'failed',
+        result: { content: [{ type: 'text', text: searchRes.output }] },
+      });
+
+      recordBackgroundTaskCheckpoint(db, task.id, {
+        kind: 'search_failed',
+        summary: `Gmail search failed: ${failureReason}`,
+        timestamp: nowIso(),
+        metadata: { error: failureReason },
+      });
+
+      updateTaskOutcome(db, {
+        attemptId,
+        status: 'blocked',
+        blocker: failureReason,
+        nextAction: 'Ensure Gmail is connected and authorized, then say "Continue" to retry.',
+        summary: `Gmail search failed: ${failureReason}`,
+      });
+
+      finalizeTaskOutcome(db, attemptId, {
+        verdict: 'unverified',
+        reason: `Gmail search failed: ${failureReason}`,
+        performed: [],
+        refused: [],
+        failed: ['gmail_search'],
+      });
+
+      try {
+        failAttempt(db, attemptId, {
+          failureReason,
+          actor: BACKGROUND_WORKER_ACTOR,
+        });
+      } catch {}
+
+      updateBackgroundTask(db, task.id, {
+        status: 'failed',
+        error: failureReason,
+        resultSummary: `Gmail search failed: ${failureReason}`,
+        completedAt: nowIso(),
+      });
+
+      appendMessage(db, task.conversationId, {
+        role: 'assistant',
+        content: `I could not complete your Gmail contract extraction because the search failed or was unauthorized: ${failureReason}.\n\nPlease ensure your Gmail account is connected and authorized, then say "Continue" to retry.`,
+        actor: BACKGROUND_WORKER_ACTOR,
+        clientId: BACKGROUND_WORKER_CLIENT_ID,
+      });
+
+      const failEvent = recordRuntimeEvent(db, {
+        domain: 'background_task',
+        entityId: task.id,
+        eventType: 'background_task_failed',
+        actor: BACKGROUND_WORKER_ACTOR,
+        clientId: BACKGROUND_WORKER_CLIENT_ID,
+        idempotencyKey: `bg_failed:${task.id}`,
+        metadata: {
+          taskId: task.id,
+          attemptId,
+          conversationId: task.conversationId,
+          taskType: task.taskType,
+          title: 'Gmail Contract Extraction Blocked',
+          summary: `Gmail search failed: ${failureReason}`,
+          error: failureReason,
+        },
+      });
+      if (broadcaster && typeof broadcaster.publishRuntime === 'function') {
+        broadcaster.publishRuntime(failEvent);
+      }
+
+      return;
+    }
+
+    const results: any[] = Array.isArray(parsedSearch.results)
+      ? parsedSearch.results
+      : (Array.isArray(parsedSearch.messages) ? parsedSearch.messages : []);
 
     toolCallsRecorded.push({
       tool: 'gmail_search',
       args: searchArgs,
-      status: searchRes.status === 'succeeded' ? 'completed' : 'failed',
+      status: 'completed',
       result: { content: [{ type: 'text', text: searchRes.output }] },
     });
 
@@ -560,9 +861,28 @@ async function executeGmailContractExtraction(
   const inventoryMarkdown = synthesizeContractInventory(toolCallsRecorded) ||
     '### Contract Extraction Summary\nNo contract documents were found in the examined messages.';
 
+  const isPartial =
+    inventoryMarkdown.includes('Remaining unsearched coverage: UNKNOWN') ||
+    inventoryMarkdown.includes('partial contract inventory') ||
+    inventoryMarkdown.includes('[truncated]') ||
+    toolCallsRecorded.some((t) => t.status === 'failed') ||
+    Boolean(parsedSearch?.counts?.moreAvailable) ||
+    Boolean(parsedSearch?.truncated) ||
+    (typeof parsedSearch?.counts?.matched === 'number' && parsedSearch.counts.matched > candidateThreadIds.length);
+
+  const deliveryHeader = isPartial
+    ? "I've completed extraction for the examined Gmail messages (partial inventory — additional matching messages or candidates exist in your mailbox).\n\n"
+    : "I've finished your Gmail contract extraction.\n\n";
+
+  const resultSummary = isPartial
+    ? 'Gmail contract extraction completed with partial coverage (additional candidate messages exist in Gmail).'
+    : 'Gmail contract extraction completed with verified inventory table.';
+
   finalizeTaskOutcome(db, attemptId, {
     verdict: 'verified',
-    reason: 'Gmail contract extraction completed with verified evidence',
+    reason: isPartial
+      ? 'Gmail contract extraction completed with partial coverage verified from inspected messages'
+      : 'Gmail contract extraction completed with verified evidence',
     performed: toolCallsRecorded.map((t) => t.tool),
     refused: [],
     failed: toolCallsRecorded.filter((t) => t.status === 'failed').map((t) => t.tool),
@@ -574,15 +894,18 @@ async function executeGmailContractExtraction(
     metadata: {
       candidatesInspected: candidateThreadIds.length,
       toolCalls: toolCallsRecorded.length,
+      partialCoverage: isPartial,
     },
     actor: BACKGROUND_WORKER_ACTOR,
   });
 
   recordBackgroundTaskCheckpoint(db, task.id, {
     kind: 'task_completed',
-    summary: 'Gmail contract extraction successfully completed',
+    summary: isPartial
+      ? 'Gmail contract extraction completed with partial coverage'
+      : 'Gmail contract extraction successfully completed',
     timestamp: nowIso(),
-    metadata: { threadsExamined: candidateThreadIds.length },
+    metadata: { threadsExamined: candidateThreadIds.length, partial: isPartial },
   });
 
   try {
@@ -593,7 +916,6 @@ async function executeGmailContractExtraction(
     });
   } catch {}
 
-  const resultSummary = 'Gmail contract extraction completed with verified inventory table.';
   updateBackgroundTask(db, task.id, {
     status: 'completed',
     resultSummary,
@@ -604,7 +926,7 @@ async function executeGmailContractExtraction(
   // Deliver the final evidence-backed result automatically into Pandesh conversation
   appendMessage(db, task.conversationId, {
     role: 'assistant',
-    content: `I've finished your Gmail contract extraction.\n\n${inventoryMarkdown}`,
+    content: `${deliveryHeader}${inventoryMarkdown}`,
     actor: BACKGROUND_WORKER_ACTOR,
     clientId: BACKGROUND_WORKER_CLIENT_ID,
   });
@@ -622,9 +944,13 @@ async function executeGmailContractExtraction(
       attemptId,
       conversationId: task.conversationId,
       taskType: task.taskType,
-      title: 'Gmail Contract Extraction Completed',
-      summary: 'Your Gmail contract extraction is finished.',
-      text: 'Contract inventory table generated and delivered to conversation.',
+      title: isPartial ? 'Partial Gmail Contract Inventory Ready' : 'Gmail Contract Extraction Completed',
+      summary: isPartial
+        ? 'Partial Gmail contract inventory ready (additional messages exist in Gmail).'
+        : 'Your Gmail contract extraction is finished.',
+      text: isPartial
+        ? 'Partial contract inventory table generated and delivered to conversation.'
+        : 'Contract inventory table generated and delivered to conversation.',
     },
   });
 

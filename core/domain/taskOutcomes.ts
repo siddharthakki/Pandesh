@@ -367,7 +367,7 @@ export function finalizeTaskOutcome(
   // the task is not satisfied, and the reason says exactly which step.
   return updateTaskOutcome(db, {
     attemptId,
-    status: 'partial',
+    status: existing.status === 'blocked' ? 'blocked' : 'partial',
     evidence: existing.evidence,
     blocker: outcome.reason,
     nextAction: existing.nextAction ?? 'Retry the step that did not run, or tell the user what is needed to unblock it.',
