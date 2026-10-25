@@ -1,10 +1,10 @@
-﻿# Pandesh 🐼 — Local AI Personal Assistant for Windows
+# Pandesh 🐼 — Local AI Personal Assistant for Windows
 
 **An open-source, local-first AI assistant inspired by the idea of a Jarvis-style desktop companion — powered by Ollama, with explicit controls for real-world actions.**
 
 Looking for a **personal AI assistant for Windows**, an **Ollama desktop assistant**, or a **self-hosted alternative to cloud-only AI assistants**? Pandesh aims to combine local AI conversations, reusable tools, tasks, reminders, and governed automation in one approachable Panda interface.
 
-[**⬇ Download Windows Alpha (Build 143)**](https://github.com/siddharthakki/Pandesh_Releases/releases/tag/v0.1.2-pandesh-alpha) • [**📖 Start here**](https://github.com/siddharthakki/Pandesh_Releases/blob/main/docs/GETTING_STARTED.md) • [**🏗️ Architecture**](docs/ARCHITECTURE.md) • [**🗺️ Roadmap**](docs/ROADMAP.md) • [**🐞 Report an issue**](https://github.com/siddharthakki/Pandesh_Releases/issues)
+[**⬇ Download Windows Alpha (Build 144)**](https://github.com/siddharthakki/Pandesh_Releases/releases/tag/v0.1.3-pandesh-alpha) • [**📖 Start here**](https://github.com/siddharthakki/Pandesh_Releases/blob/main/docs/GETTING_STARTED.md) • [**🏗️ Architecture**](docs/ARCHITECTURE.md) • [**🗺️ Roadmap**](docs/ROADMAP.md) • [**🐞 Report an issue**](https://github.com/siddharthakki/Pandesh_Releases/issues)
 
 ![Pandesh v0.1.2 Build 143 Panda desktop assistant — updated conversation interface](assets/screenshots/01-welcome-chat.png)
 
@@ -35,7 +35,7 @@ Pandesh is an experimental **local AI agent and personal assistant** for Windows
    ollama list
    ```
 
-3. Install [Pandesh v0.1.2 Alpha (Build 143)](https://github.com/siddharthakki/Pandesh_Releases/releases/tag/v0.1.2-pandesh-alpha) or extract the portable ZIP and run its launcher.
+3. Install [Pandesh v0.1.3 Alpha (Build 144)](https://github.com/siddharthakki/Pandesh_Releases/releases/tag/v0.1.3-pandesh-alpha) or extract the portable ZIP and run its launcher.
 4. Start with **"Hi Pandesh. What can you do?"**, then try a specific read-only request.
 
 For verified download checksums, permissions, troubleshooting and the full installation flow, use the [getting-started guide](https://github.com/siddharthakki/Pandesh_Releases/blob/main/docs/GETTING_STARTED.md).

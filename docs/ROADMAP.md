@@ -7,7 +7,8 @@ Pandesh is a **local-first AI personal assistant**: useful everyday outcomes fir
 | Stage | State | Real user outcome |
 | --- | --- | --- |
 | **v0.1.1 Alpha · Build 142** | **Public download available** | Install on Windows, talk to local Ollama, use supported governed workflows |
-| **v0.1.2 Alpha · Build 143** | **Development / acceptance reported; not a public binary here yet** | More reliable New Conversation actions, direct Tasks/Results navigation |
+| **v0.1.2 Alpha · Build 143** | **Public download available** | More reliable New Conversation actions, direct Tasks/Results navigation |
+| **v0.1.3 Alpha · Build 144** | **Public download available** | Non-blocking background task delegation with verified recovery, durable Gmail extraction |
 | **Next stabilization release** | **Planned, no committed date** | Correct model self-awareness, trustworthy task outcomes, reliable day-to-day routines |
 | **Broader open-source source distribution** | **Blocked by publication checks** | Reproducible build of reviewed Core, Desktop and supporting code |
 
