@@ -13,6 +13,7 @@
  */
 import { execFile } from 'node:child_process';
 import * as crypto from 'node:crypto';
+import * as fs from 'node:fs';
 import { resolveDataDir, resolvePaths } from './env/dataDir';
 import { openCoreDatabase } from './db/openCore';
 import { CoreDatabaseFailedError } from './db/preflight';
@@ -45,7 +46,7 @@ import { createMemoryCapabilityAdapter } from './runtime/memoryCapability';
 import { createBrowserCapabilityAdapter } from './runtime/browserCapability';
 import { createImageStudioCapabilityAdapter } from './runtime/imageStudioCapability';
 import { resolveHostBrowserBin } from './runtime/hostBrowserBin';
-import { buildConnectorAdapters } from './runtime/connectors/connectorDefinitions';
+import { buildConnectorAdapters, CONNECTOR_CREDENTIAL_ENV } from './runtime/connectors/connectorDefinitions';
 import type { ConnectorAdapter } from './runtime/connectors/connectorCapability';
 import { createGwsGmailProbe, createGwsGmailExecutor, createGwsGmailPrepare, defaultGwsGmailConfigDir, type GwsGmailAdapterConfig, type GwsGmailDraftBindingStore } from './runtime/connectors/gwsGmailAdapter';
 import { getGmailAccessToken, getGmailAccountEmail, googleScopeGranted } from './runtime/connectors/gmailAccessTokenStore';
@@ -57,6 +58,8 @@ import { recordRuntimeEvent } from './domain/runtimeEvents';
 import { configureDailyBriefRoutine, getDailyBriefRoutine } from './domain/assistantRoutine';
 import type { ConnectorId } from './shared/wireTypes';
 import { localRerouteEnvironment } from './runtime/autoRerouteRuntime';
+import { hasConnectorPermission, setConnectorPermission } from './domain/connectors';
+import type { ToolExecutionResult } from './runtime/toolRunner';
 
 /**
  * Acceptance-only escape hatch: when set, the GitHub capability shells out
@@ -136,6 +139,69 @@ function testGithubExecutorOverride(): GithubCommandExecutor | undefined {
  * a real adapter behind this same seam.
  */
 function buildConnectorRegistry(dataDir: string, db: CoreDatabase): Map<ConnectorId, ConnectorAdapter> {
+  const fixturePath = process.env.KARKEDIKHA_TEST_GMAIL_FIXTURE_PATH;
+  let testGmailOverride: {
+    isConnected: () => boolean;
+    probe: () => Promise<{ ok: boolean }>;
+    executor: (toolName: string, args: Record<string, unknown>) => Promise<ToolExecutionResult>;
+  } | undefined;
+
+  if (fixturePath && fs.existsSync(fixturePath)) {
+    try {
+      const fixtureData = JSON.parse(fs.readFileSync(fixturePath, 'utf8'));
+      testGmailOverride = {
+        isConnected: () => true,
+        probe: async () => ({ ok: true }),
+        executor: async (toolName: string, args: Record<string, unknown>): Promise<ToolExecutionResult> => {
+          if (fixtureData.delayMs && typeof fixtureData.delayMs === 'number') {
+            await new Promise((r) => setTimeout(r, fixtureData.delayMs));
+          }
+          if (toolName === 'gmail_search') {
+            return {
+              status: 'succeeded',
+              exitCode: 0,
+              output: JSON.stringify(fixtureData.search ?? { results: [] }),
+            };
+          }
+          if (toolName === 'gmail_read_thread') {
+            const threadId = String(args.threadId || '');
+            const thread = fixtureData.threads?.[threadId] ?? fixtureData.threads?.default ?? { id: threadId, messages: [] };
+            return {
+              status: 'succeeded',
+              exitCode: 0,
+              output: JSON.stringify(thread),
+            };
+          }
+          if (toolName === 'gmail_read_attachment') {
+            const attId = String(args.attachmentId || '');
+            const att = fixtureData.attachments?.[attId] ?? fixtureData.attachments?.default ?? {
+              filename: String(args.filename || 'contract.pdf'),
+              mimeType: 'application/pdf',
+              extractedText: 'Contract terms and agreement details.',
+            };
+            return {
+              status: 'succeeded',
+              exitCode: 0,
+              output: JSON.stringify(att),
+            };
+          }
+          return { status: 'failed', exitCode: 1, output: `Tool ${toolName} not supported in read-only test fixture` };
+        },
+      };
+      if (!hasConnectorPermission(db, 'gmail', 'read')) {
+        setConnectorPermission(db, {
+          connectorId: 'gmail',
+          tier: 'read',
+          granted: true,
+          actor: 'test:fixture',
+        });
+      }
+      process.env[CONNECTOR_CREDENTIAL_ENV.gmail] = 'test-fixture';
+    } catch (e) {
+      console.error('[core] Failed to load KARKEDIKHA_TEST_GMAIL_FIXTURE_PATH:', e);
+    }
+  }
+
   const bindings: GwsGmailDraftBindingStore = {
     record: (content) => recordGmailDraftBinding(db, { content }),
     get: (draftId) => getGmailDraftBinding(db, draftId),
@@ -164,11 +230,11 @@ function buildConnectorRegistry(dataDir: string, db: CoreDatabase): Map<Connecto
     hasCalendarScope: () => googleScopeGranted(CALENDAR_EVENTS_SCOPE),
     configDir: defaultGwsCalendarConfigDir(dataDir),
   };
-  return buildConnectorAdapters({
+  const registry = buildConnectorAdapters({
     gmail: {
-      isConnected: () => getGmailAccountEmail() !== null,
-      probe: createGwsGmailProbe(gmailAdapterConfig),
-      executor: createGwsGmailExecutor(gmailAdapterConfig),
+      isConnected: testGmailOverride?.isConnected ?? (() => getGmailAccountEmail() !== null),
+      probe: testGmailOverride?.probe ?? createGwsGmailProbe(gmailAdapterConfig),
+      executor: (testGmailOverride?.executor as any) ?? createGwsGmailExecutor(gmailAdapterConfig),
       prepare: createGwsGmailPrepare(gmailAdapterConfig),
     },
     google_calendar: {
@@ -181,6 +247,10 @@ function buildConnectorRegistry(dataDir: string, db: CoreDatabase): Map<Connecto
       prepare: createGwsCalendarPrepare(calendarAdapterConfig),
     },
   });
+  if (testGmailOverride) {
+    registry.get('gmail')?.probeHealth().catch(() => {});
+  }
+  return registry;
 }
 
 function buildCapabilityRegistry(dataDir: string, db: CoreDatabase, connectors: Map<ConnectorId, ConnectorAdapter>, scout: IntelligenceScout): GovernedCapabilityRegistry {
@@ -287,6 +357,9 @@ async function main(): Promise<void> {
   const broadcaster = new EventBroadcaster();
   const requestedPort = process.env.KARKEDIKHA_CORE_PORT ? Number(process.env.KARKEDIKHA_CORE_PORT) : undefined;
   const connectorRegistry = buildConnectorRegistry(dataDir, db);
+  if (process.env.KARKEDIKHA_TEST_GMAIL_FIXTURE_PATH) {
+    await connectorRegistry.get('gmail')?.probeHealth().catch(() => {});
+  }
   // One Intelligence Scout instance is shared by the capability the model
   // reaches and the scheduler that fires a watch, so both see the same
   // durable watch list and the same last-seen versions.

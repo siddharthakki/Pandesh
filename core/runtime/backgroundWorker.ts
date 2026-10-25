@@ -404,8 +404,15 @@ export function resumeBackgroundTask(
     throw new CoreError('not_found', `Background task ${taskId} not found`);
   }
 
-  // If already active or queued, ensure worker process is active
-  if (task.status === 'in_progress' || task.status === 'queued') {
+  if (task.status === 'completed') {
+    return { resumed: false, task };
+  }
+
+  const prevAttempt = getAttempt(db, task.attemptId);
+  const isTerminalAttempt = !prevAttempt || ['completed', 'failed', 'cancelled'].includes(prevAttempt.status);
+
+  // If already active or queued and the attempt is NOT terminal, ensure worker process is active
+  if ((task.status === 'in_progress' || task.status === 'queued') && !isTerminalAttempt) {
     if (!activeWorkerControllers.has(taskId)) {
       void runBackgroundTask(db, broadcaster, taskId, options).catch((err) => {
         console.error(`[backgroundWorker] Task ${taskId} resumption failed:`, err);
@@ -414,9 +421,8 @@ export function resumeBackgroundTask(
     return { resumed: false, task };
   }
 
-  // Previous attempt is in a terminal state (cancelled or failed).
+  // Previous attempt is in a terminal state (cancelled, failed, or completed) or task was paused/cancelled/failed.
   // Create a brand new execution attempt to maintain ledger integrity and ensure task & ledger agree.
-  const prevAttempt = getAttempt(db, task.attemptId);
   const resumeReq = createRequest(db, {
     clientId: BACKGROUND_WORKER_CLIENT_ID,
     conversationId: task.conversationId,
@@ -438,7 +444,7 @@ export function resumeBackgroundTask(
     actor: BACKGROUND_WORKER_ACTOR,
     clientId: BACKGROUND_WORKER_CLIENT_ID,
     context: {
-      workspaceRoot: options.cwd ?? prevAttempt.context?.workspaceRoot ?? null,
+      workspaceRoot: options.cwd ?? prevAttempt?.context?.workspaceRoot ?? null,
       allowedTools: ['gmail_search', 'gmail_read_thread', 'gmail_read_attachment'],
     },
   });
@@ -463,7 +469,7 @@ export function resumeBackgroundTask(
     kind: 'task_resumed',
     metadata: {
       taskId: task.id,
-      previousAttemptId: prevAttempt.id,
+      previousAttemptId: prevAttempt?.id ?? task.attemptId,
       stage: task.payload?.stage,
     },
     actor: BACKGROUND_WORKER_ACTOR,
@@ -480,7 +486,7 @@ export function resumeBackgroundTask(
     kind: 'task_resumed',
     summary: `Gmail contract extraction resumed under new attempt ${newAttempt.id}`,
     timestamp: nowIso(),
-    metadata: { attemptId: newAttempt.id, previousAttemptId: prevAttempt.id },
+    metadata: { attemptId: newAttempt.id, previousAttemptId: prevAttempt?.id ?? task.attemptId },
   });
 
   void runBackgroundTask(db, broadcaster, task.id, options).catch((err) => {
@@ -974,10 +980,18 @@ export async function recoverBackgroundTasks(
 
   for (const task of pending) {
     if (activeWorkerControllers.has(task.id)) continue;
-    recovered.push(task);
-    void runBackgroundTask(db, broadcaster, task.id, options).catch((err) => {
-      console.error(`[backgroundWorker] Recovery of task ${task.id} failed:`, err);
-    });
+    const attempt = getAttempt(db, task.attemptId);
+    if (!attempt || ['completed', 'failed', 'cancelled'].includes(attempt.status)) {
+      const res = resumeBackgroundTask(db, broadcaster, task.id, options);
+      if (res.resumed) {
+        recovered.push(res.task);
+      }
+    } else {
+      recovered.push(task);
+      void runBackgroundTask(db, broadcaster, task.id, options).catch((err) => {
+        console.error(`[backgroundWorker] Recovery of task ${task.id} failed:`, err);
+      });
+    }
   }
 
   return recovered;

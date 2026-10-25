@@ -1138,6 +1138,9 @@ export class DesktopSession {
       const helper = this.googleHelperPath();
       if (helper) env.KARKEDIKHA_GWS_BIN = helper;
     }
+    if (process.env.KARKEDIKHA_TEST_GMAIL_FIXTURE_PATH) {
+      env.KARKEDIKHA_TEST_GMAIL_FIXTURE_PATH = process.env.KARKEDIKHA_TEST_GMAIL_FIXTURE_PATH;
+    }
     env.KARKEDIKHA_HOST_TOKEN = getOrCreateHostToken(this.dataDir);
     const confirmMs = process.env.KARKEDIKHA_COMMAND_QUEUE_CONFIRM_MS?.trim();
     if (confirmMs) env.KARKEDIKHA_COMMAND_QUEUE_CONFIRM_MS = confirmMs;

@@ -37,6 +37,8 @@ import {
 import { failDeadExecutorAttemptsOnBoot } from '../domain/bootReconciliation';
 import { interactiveLane, classifyAttemptLane } from '../runtime/interactiveLane';
 import { buildMinimalPdf } from './fixtures/documentFixtures';
+import { buildRouter } from '../api/routes';
+import { setConnectorPermission } from '../domain/connectors';
 
 describe('Pandesh P0 — Nonblocking Background Task Delegation Suite', () => {
   let db: CoreDatabase;
@@ -758,6 +760,87 @@ describe('Pandesh P0 — Nonblocking Background Task Delegation Suite', () => {
     expect(currentTask.attemptId).toBe(newAttemptId);
     expect(getAttempt(db, newAttemptId).status).toBe('completed');
     expect(getAttempt(db, attempt1Id).status).toBe('cancelled');
+  });
+
+  it('Continue API route (/v1/background-tasks/:id/continue) allocates a new attempt when the previous attempt is terminal and uses configured connector registry', async () => {
+    const conv = createConversation(db, { mode: 'baat_kar', actor: 'user', title: 'Continue API Test' });
+
+    // 1. Start extraction task
+    const { task } = startGmailContractExtractionTask(
+      db,
+      broadcaster,
+      { conversationId: conv.id, objective: 'Extract contracts' },
+      { autoStart: false },
+    );
+    const attempt1Id = task.attemptId;
+    transitionAttempt(db, attempt1Id, { toStatus: 'running', actor: 'core:background_worker' });
+
+    // 2. Cancel the task
+    cancelBackgroundTaskWorker(db, broadcaster, task.id, 'Cancelled');
+    expect(getBackgroundTask(db, task.id)!.status).toBe('cancelled');
+    expect(getAttempt(db, attempt1Id).status).toBe('cancelled');
+
+    // 3. Build a router with mock connectorRegistry
+    let connectorSearchCalled = false;
+    const fakeGmailAdapter = {
+      id: 'gmail' as const,
+      connectorId: 'gmail' as const,
+      definitions: () => [],
+      tier: () => 'read' as const,
+      classify: () => 'read_only' as const,
+      isConfigured: () => true,
+      health: () => ({ state: 'available' as const, checkedAt: new Date().toISOString() }),
+      probeHealth: async () => ({ state: 'available' as const, checkedAt: new Date().toISOString() }),
+      redactArguments: (_n: string, a: any) => a,
+      run: async (call: any) => {
+        if (call.name === 'gmail_search') {
+          connectorSearchCalled = true;
+          return { status: 'succeeded' as const, exitCode: 0, output: JSON.stringify({ results: [] }) };
+        }
+        return { status: 'succeeded' as const, exitCode: 0, output: JSON.stringify({}) };
+      },
+    };
+    const mockConnectorRegistry = new Map<any, any>([['gmail', fakeGmailAdapter]]);
+    setConnectorPermission(db, { connectorId: 'gmail', tier: 'read', granted: true, actor: 'test' });
+
+    const router = buildRouter(
+      broadcaster,
+      () => ({ version: '1.0.0', apiVersion: 'v1' } as any),
+      () => {},
+      undefined,
+      undefined,
+      undefined,
+      mockConnectorRegistry,
+    );
+
+    const route = router.match('POST', `/v1/background-tasks/${task.id}/continue`);
+    expect(route).not.toBeNull();
+
+    const apiCtx = {
+      db,
+      body: {},
+      query: new URLSearchParams(),
+      actor: 'user',
+      clientId: 'desktop',
+      idempotencyKey: 'idem_continue_test_1',
+    };
+
+    const res = await route!.handler(apiCtx as any, route!.match);
+    expect(res.status).toBe(200);
+    const body = res.body as any;
+    expect(body.id).toBe(task.id);
+    expect(body.attemptId).not.toBe(attempt1Id);
+
+    // Old attempt remains cancelled
+    expect(getAttempt(db, attempt1Id).status).toBe('cancelled');
+
+    // Wait for worker to run with connectorRegistry
+    const deadline = Date.now() + 4000;
+    while (Date.now() < deadline) {
+      if (connectorSearchCalled) break;
+      await new Promise((r) => setTimeout(r, 50));
+    }
+    expect(connectorSearchCalled).toBe(true);
   });
 });
 

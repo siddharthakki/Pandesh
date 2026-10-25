@@ -53,7 +53,7 @@ import * as everydayTools from '../domain/everydayTools';
 import * as commandQueue from '../domain/commandQueue';
 import * as karkeDikha from '../domain/karkeDikhaLifecycle';
 import * as backgroundTasks from '../domain/backgroundTasks';
-import { cancelBackgroundTaskWorker, runBackgroundTask } from '../runtime/backgroundWorker';
+import { cancelBackgroundTaskWorker, resumeBackgroundTask } from '../runtime/backgroundWorker';
 import { latestRuntimeSequence, listRuntimeEventsAfter, recordRuntimeEvent } from '../domain/runtimeEvents';
 import { isTerminalAttemptStatus } from '../domain/attemptTransitions';
 import { steerPiAttempt } from '../runtime/piAgentEngine';
@@ -1484,13 +1484,11 @@ export function buildRouter(
     const key = requireIdempotencyKey(ctx);
     return withIdempotency(ctx.db, { key, clientId: ctx.clientId, routeId: `backgroundTasks.continue:${match.params.id}` }, ctx.body, () =>
       withRuntimeBroadcast(ctx, broadcaster, () => {
-        const task = backgroundTasks.getBackgroundTask(ctx.db, match.params.id);
-        if (!task) throw new CoreError('not_found', `background task '${match.params.id}' not found`);
-        if (task.status !== 'in_progress' && task.status !== 'queued') {
-          backgroundTasks.updateBackgroundTask(ctx.db, task.id, { status: 'in_progress', error: null });
-          void runBackgroundTask(ctx.db, broadcaster, task.id);
-        }
-        return { status: 200, body: backgroundTasks.getBackgroundTask(ctx.db, task.id)! };
+        const result = resumeBackgroundTask(ctx.db, broadcaster, match.params.id, {
+          connectorRegistry: connectors,
+          cwd: process.cwd(),
+        });
+        return { status: 200, body: result.task };
       }),
     );
   });
