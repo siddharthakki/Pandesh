@@ -130,10 +130,23 @@ export function cleanDate(dateStr: string): string {
 }
 
 /**
+ * Patterns for actual contract-specific terms (agreements, legal clauses, covenants).
+ * Generic words like "vehicle", "total", "car", "amount", "reservation" must NEVER match!
+ */
+export const CONTRACT_SPECIFIC_PATTERNS = /\b(?:rental agreement|lease agreement|mietvertrag|employment agreement|employment contract|offer letter|non-disclosure agreement|confidentiality agreement|master services agreement|service agreement|statement of work|license agreement|terms of service agreement|sublease agreement|severance agreement|independent contractor agreement|consulting agreement|terms and conditions|governing law|parties agree|covenants|hereby agrees|in witness whereof|representations and warranties|obligations of the parties|scope of work|ra\s*#\s*[\w\d]+|agreement\s*#\s*[\w\d]+|contract\s*#\s*[\w\d]+)\b/i;
+
+/**
+ * Patterns for verified signature/execution evidence.
+ * Distinguishes a verified signed/executed agreement from an unexecuted contract document.
+ */
+export const EXECUTED_AGREEMENT_PATTERNS = /\b(?:signed by|signature|electronically signed|docusign|signnow|adobe sign|countersigned|duly executed|fully executed|executed on|date of execution|renter signature|employee signature|authorized signature|ra\s*#\s*[\w\d]+|contract confirmed|executed agreement)\b/i;
+
+/**
  * Classifies contract candidate status with strict evidence requirements.
  *
- * RULE 1: Never mark a contract confirmed using only a subject, snippet, sender or filename.
- * Require successful body/attachment inspection and record the supporting evidence.
+ * RULE 1: Require actual contract-specific evidence from an inspected body or extracted document.
+ * Generic words such as "vehicle", "total", or metadata from the subject must never establish confirmation.
+ * Distinguishes a contract document from a verified signed/executed agreement.
  */
 export function classifyContract(
   subject: string,
@@ -160,8 +173,9 @@ export function classifyContract(
   // 1. If attachment text was successfully parsed, verify actual contract content from text
   if (options?.attachmentExtracted && typeof options.extractedText === 'string') {
     const text = options.extractedText;
-    const isContract = /\b(?:rental agreement|agreement|contract|lease agreement|mietvertrag|terms and conditions|parties|total\b|reservation\s*#|ra\s*#|vehicle|employment|offer letter|nda|confidentiality agreement|master services agreement)\b/i.test(text);
-    if (isContract) {
+    const hasContractTerms = CONTRACT_SPECIFIC_PATTERNS.test(text);
+
+    if (hasContractTerms) {
       let type = 'Contract Agreement';
       if (/\b(?:rental|vehicle|car rental|ra\s*#)\b/i.test(text) || from.toLowerCase().includes('enterprise')) {
         type = 'Car Rental Agreement';
@@ -173,26 +187,33 @@ export function classifyContract(
         type = 'Service Agreement';
       }
 
-      // Extract a concrete, readable evidence excerpt (up to 160 characters)
+      const hasExecutionProof = EXECUTED_AGREEMENT_PATTERNS.test(text);
       const cleanedExcerpt = text.replace(/\s+/g, ' ').trim().slice(0, 160);
-      const evidence = `Extracted from ${options.attachmentFilename || 'PDF'}: "${cleanedExcerpt}..."`;
-      return { type, status: 'Confirmed contract', evidence };
+
+      if (hasExecutionProof) {
+        const evidence = `Extracted from ${options.attachmentFilename || 'PDF'}: "${cleanedExcerpt}..."`;
+        return { type, status: 'Confirmed contract (Verified executed agreement)', evidence };
+      } else {
+        const evidence = `Extracted from ${options.attachmentFilename || 'PDF'}: contract terms present ("${cleanedExcerpt}..."), but no execution/signature record found.`;
+        return { type, status: 'Contract document (Unexecuted / terms extracted)', evidence };
+      }
     } else {
       return {
         type: 'Document (Non-contract content)',
         status: 'Candidate (Extracted text contains no contract terms)',
-        evidence: `Attachment parsed (${options.attachmentFilename || 'file'}): text does not contain executed contract terms.`,
+        evidence: `Attachment parsed (${options.attachmentFilename || 'file'}): text does not contain contract-specific terms.`,
       };
     }
   }
 
-  // 2. If thread was inspected (bodyText loaded), check whether it is marketing/advisory vs confirmed agreement
+  // 2. If thread was inspected (bodyText loaded), check whether it is marketing/advisory vs contract agreement
   if (options?.inspected) {
-    const combined = `${subject} ${snippet} ${from} ${options.bodyText || ''}`.toLowerCase();
+    const bodyOnly = (options.bodyText || '').trim();
+    const fromOnly = from.toLowerCase();
 
     // Check for misleading marketing emails, promotional digests, market circulars, or general policy updates
     const isMarketingOrNotice =
-      /\b(?:exclusive (?:car rental )?rates|special offers?|discounts?|deals?|promo code|promotional advertisement|newsletter|digest|roundup|unsubscribe|opt-out|exclusion of futures and options|market circular|circular no|updates to (?:our )?terms of service|privacy policy update|no action required)\b/i.test(combined);
+      /\b(?:exclusive (?:car rental )?rates|special offers?|discounts?|deals?|promo code|promotional advertisement|newsletter|digest|roundup|unsubscribe|opt-out|exclusion of futures and options|market circular|circular no|updates to (?:our )?terms of service|privacy policy update|no action required)\b/i.test(`${fromOnly} ${bodyOnly}`);
 
     if (isMarketingOrNotice) {
       return {
@@ -206,9 +227,10 @@ export function classifyContract(
     if (attachments && attachments.length > 0) {
       const attName = attachments[0].filename || 'agreement file';
       let type = 'Contract Candidate';
-      if (/\b(?:rental|vehicle|enterprise)\b/i.test(combined)) type = 'Car Rental Agreement';
-      else if (/\b(?:employment|offer)\b/i.test(combined)) type = 'Employment Contract';
-      else if (/\b(?:nda|confidentiality)\b/i.test(combined)) type = 'Non-Disclosure Agreement (NDA)';
+      const searchContext = `${subject} ${from}`.toLowerCase();
+      if (/\b(?:rental|vehicle|enterprise)\b/i.test(searchContext)) type = 'Car Rental Agreement';
+      else if (/\b(?:employment|offer)\b/i.test(searchContext)) type = 'Employment Contract';
+      else if (/\b(?:nda|confidentiality)\b/i.test(searchContext)) type = 'Non-Disclosure Agreement (NDA)';
       return {
         type,
         status: 'Candidate (Attachment discovered - pending text extraction)',
@@ -216,30 +238,39 @@ export function classifyContract(
       };
     }
 
-    // Check if the email body itself explicitly contains executed contract terms
-    const isExplicitExecutedAgreement =
-      /\b(?:rental agreement|signed agreement|contract confirmed|executed agreement)\b/i.test(combined) &&
-      /\b(?:ra\s*#?|agreement\s*#?|contract\s*#?|confirmation\s*#?)\s*[:#\d\w]+/i.test(combined);
-
-    if (isExplicitExecutedAgreement) {
+    // Check if the email body itself explicitly contains contract-specific terms
+    // RULE 1: Subject metadata must NEVER establish confirmation; evidence must come from inspected body.
+    if (bodyOnly && CONTRACT_SPECIFIC_PATTERNS.test(bodyOnly)) {
       let type = 'Contract Agreement';
-      if (/\b(?:rental|vehicle|enterprise)\b/i.test(combined)) type = 'Car Rental Agreement';
-      return {
-        type,
-        status: 'Confirmed contract',
-        evidence: 'Body inspected: confirmed agreement terms in email message body.',
-      };
+      if (/\b(?:rental|vehicle|enterprise)\b/i.test(bodyOnly) || fromOnly.includes('enterprise')) type = 'Car Rental Agreement';
+      else if (/\b(?:employment|offer)\b/i.test(bodyOnly)) type = 'Employment Contract';
+      else if (/\b(?:nda|confidentiality)\b/i.test(bodyOnly)) type = 'Non-Disclosure Agreement (NDA)';
+
+      const hasExecutionProof = EXECUTED_AGREEMENT_PATTERNS.test(bodyOnly);
+      if (hasExecutionProof) {
+        return {
+          type,
+          status: 'Confirmed contract (Verified executed agreement)',
+          evidence: 'Body inspected: verified executed agreement terms in email message body.',
+        };
+      } else {
+        return {
+          type,
+          status: 'Contract document (Unexecuted / terms in body)',
+          evidence: 'Body inspected: contract terms present in message body, but no signature or execution record.',
+        };
+      }
     }
 
     // Other non-marketing inspected correspondence
-    if (/\b(?:booking|ticket|reservation)\b/i.test(combined)) {
+    if (/\b(?:booking|ticket|reservation)\b/i.test(bodyOnly)) {
       return {
         type: 'Booking Confirmation',
         status: 'Candidate (Booking)',
-        evidence: 'Body inspected: travel or booking confirmation without full contract terms.',
+        evidence: 'Body inspected: travel or booking confirmation without contract terms.',
       };
     }
-    if (/\b(?:advisory|consultation|meeting|call|preparation)\b/i.test(combined)) {
+    if (/\b(?:advisory|consultation|meeting|call|preparation)\b/i.test(bodyOnly)) {
       return {
         type: 'Advisory / Consultation',
         status: 'Candidate (Consultation / Guide)',
@@ -249,8 +280,8 @@ export function classifyContract(
 
     return {
       type: 'Contract Candidate',
-      status: 'Candidate (Body inspected - no executed contract terms)',
-      evidence: 'Body inspected: correspondence only, no executed agreement terms found.',
+      status: 'Candidate (Body inspected - no contract terms)',
+      evidence: 'Body inspected: correspondence only, no contract-specific terms found.',
     };
   }
 
@@ -285,8 +316,18 @@ export function classifyContract(
   return { type: 'Contract Candidate', status: 'Candidate (Search match)' };
 }
 
+export interface SearchCoverageRecord {
+  query: string;
+  matched: number;
+  matchedIsExact: boolean;
+  listed: number;
+  truncated: boolean;
+  failedLookups: number;
+}
+
 export function synthesizeContractInventory(toolCalls: Array<{ tool: string; result?: any; status: string; args?: any }>): string | null {
   const candidates = new Map<string, ContractCandidate>();
+  const searchRecords: SearchCoverageRecord[] = [];
   let highestMatched = 0;
   let allMatchedExact = true;
   let searchTruncated = false;
@@ -313,9 +354,21 @@ export function synthesizeContractInventory(toolCalls: Array<{ tool: string; res
       const matched = typeof counts.matched === 'number' ? counts.matched : (typeof data.matched === 'number' ? data.matched : 0);
       if (matched > highestMatched) highestMatched = matched;
       if (counts.matchedIsExact === false) allMatchedExact = false;
-      if (data.truncated || (typeof counts.listed === 'number' && counts.listed < matched && Boolean(counts.moreAvailable))) {
+      const isTruncated = Boolean(data.truncated || (typeof counts.listed === 'number' && counts.listed < matched && Boolean(counts.moreAvailable)));
+      if (isTruncated) {
         searchTruncated = true;
       }
+      const query = call.args?.q || call.args?.query || call.args?.params?.q || data.query || `query_${searchRecords.length + 1}`;
+      const listedCount = typeof counts.listed === 'number' ? counts.listed : (Array.isArray(data.results) ? data.results.length : 0);
+      searchRecords.push({
+        query,
+        matched,
+        matchedIsExact: counts.matchedIsExact !== false,
+        listed: listedCount,
+        truncated: isTruncated,
+        failedLookups: typeof counts.failedLookups === 'number' ? counts.failedLookups : 0,
+      });
+
       if (typeof counts.failedLookups === 'number') failedLookupsFromSearch += counts.failedLookups;
       if (typeof counts.listed === 'number') totalMessagesListed += counts.listed;
       else if (Array.isArray(data.results)) totalMessagesListed += data.results.length;
@@ -384,12 +437,17 @@ export function synthesizeContractInventory(toolCalls: Array<{ tool: string; res
       }
 
       if (data && Array.isArray(data.messages)) {
+        const threadIdFromCall = call.args?.threadId || data?.threadId || call.args?.id;
         for (const msg of data.messages) {
-          const id = msg.threadId || msg.id;
-          if (!id) continue;
-          const existing = candidates.get(id) || {
-            id: msg.id || id,
-            threadId: id,
+          const effectiveThreadId = msg.threadId || threadIdFromCall || msg.id;
+          if (!effectiveThreadId) continue;
+          const key = (threadIdFromCall && candidates.has(threadIdFromCall))
+            ? threadIdFromCall
+            : (candidates.has(effectiveThreadId) ? effectiveThreadId : (candidates.has(msg.id) ? msg.id : effectiveThreadId));
+
+          const existing = candidates.get(key) || {
+            id: msg.id || key,
+            threadId: effectiveThreadId,
             subject: msg.subject || '(no subject)',
             from: msg.from || '',
             date: cleanDate(msg.receivedLocal || msg.date || ''),
@@ -437,7 +495,7 @@ export function synthesizeContractInventory(toolCalls: Array<{ tool: string; res
           existing.contractType = classification.type;
           existing.status = classification.status;
           existing.supportingEvidence = classification.evidence;
-          candidates.set(id, existing);
+          candidates.set(key, existing);
         }
       }
     }
@@ -521,39 +579,65 @@ export function synthesizeContractInventory(toolCalls: Array<{ tool: string; res
 
   if (candidates.size === 0) return null;
 
-  // Sort candidates: Confirmed contracts first, then pending candidates, then marketing, then inaccessible
+  // Sort candidates: Confirmed contracts first, then contract documents, then pending candidates, then marketing, then inaccessible
   const candidateList = Array.from(candidates.values()).sort((a, b) => {
     const score = (c: ContractCandidate): number => {
-      if (c.status.startsWith('Confirmed')) return 0;
-      if (c.status.includes('Attachment discovered')) return 1;
-      if (c.status.includes('Search match')) return 2;
-      if (c.status.includes('Candidate (')) return 3;
-      if (c.status.includes('Inaccessible')) return 4;
-      return 5;
+      if (c.status.startsWith('Confirmed contract')) return 0;
+      if (c.status.startsWith('Contract document')) return 1;
+      if (c.status.includes('Attachment discovered')) return 2;
+      if (c.status.includes('Search match')) return 3;
+      if (c.status.includes('Candidate (')) return 4;
+      if (c.status.includes('Inaccessible')) return 5;
+      return 6;
     };
     const sDiff = score(a) - score(b);
     if (sDiff !== 0) return sDiff;
     return b.date.localeCompare(a.date);
   });
 
-  const confirmedCount = candidateList.filter((c) => c.status.startsWith('Confirmed')).length;
+  const confirmedCount = candidateList.filter((c) => c.status.startsWith('Confirmed contract')).length;
+  const contractDocCount = candidateList.filter((c) => c.status.startsWith('Contract document')).length;
   const inspectedCount = candidateList.filter((c) => c.inspected || c.inaccessible).length;
+  const uninspectedCount = candidateList.filter((c) => !c.inspected && !c.inaccessible).length;
   const totalFailedLookups = failedLookupsFromSearch + failedThreadLookups + failedAttachmentLookups;
 
-  // Rule 3: Correct coverage accounting using Gmail's counts.matched, actual pages read,
-  // truncated results and failed lookups. Unknown remaining coverage must say UNKNOWN, not zero.
+  // Rule 2: Track searches separately and distinguish identified, inspected and uninspected threads.
+  // Never report zero remaining unless coverage is actually exhaustive. Otherwise report UNKNOWN.
+  const hasSearches = searchRecords.length > 0;
+  const anySearchTruncated = searchTruncated || searchRecords.some((s) => s.truncated);
+  const anySearchNotExact = !allMatchedExact || searchRecords.some((s) => !s.matchedIsExact);
+  const anyUnlistedMatches = searchRecords.some((s) => s.matched > s.listed);
+  const anyFailedLookups = totalFailedLookups > 0;
+  const anyUninspectedThreads = uninspectedCount > 0;
+
+  const isExhaustive =
+    hasSearches &&
+    !anySearchTruncated &&
+    !anySearchNotExact &&
+    !anyUnlistedMatches &&
+    !anyFailedLookups &&
+    !anyUninspectedThreads;
+
   const remainingEstimate = Math.max(0, highestMatched - candidateList.length);
   let remainingCoverageText: string;
-  if (searchTruncated || !allMatchedExact || remainingEstimate > 0 || searchPagesRead === 0) {
-    if (remainingEstimate > 0) {
-      remainingCoverageText = `UNKNOWN (~${remainingEstimate} estimated matching messages remaining across unread search pages)`;
-    } else if (searchTruncated) {
-      remainingCoverageText = 'UNKNOWN (search truncated; more matching messages exist in Gmail)';
-    } else {
-      remainingCoverageText = 'UNKNOWN (broad query estimates with uninspected messages)';
-    }
-  } else {
+  if (isExhaustive) {
     remainingCoverageText = '0 matching messages remaining';
+  } else {
+    if (anyUninspectedThreads && remainingEstimate > 0) {
+      remainingCoverageText = `UNKNOWN (~${remainingEstimate} estimated matching messages remaining across unread search pages; ${uninspectedCount} identified candidate thread(s) remain uninspected)`;
+    } else if (remainingEstimate > 0) {
+      remainingCoverageText = `UNKNOWN (~${remainingEstimate} estimated matching messages remaining across unread search pages)`;
+    } else if (anyUninspectedThreads) {
+      remainingCoverageText = `UNKNOWN (${uninspectedCount} identified candidate thread(s) remain uninspected)`;
+    } else if (anySearchTruncated) {
+      remainingCoverageText = 'UNKNOWN (search truncated; more matching messages exist in Gmail)';
+    } else if (anySearchNotExact) {
+      remainingCoverageText = 'UNKNOWN (broad query estimates with uninspected messages)';
+    } else if (anyFailedLookups) {
+      remainingCoverageText = `UNKNOWN (${totalFailedLookups} lookup(s) failed or inaccessible)`;
+    } else {
+      remainingCoverageText = 'UNKNOWN (unverified coverage)';
+    }
   }
 
   // Present confirmed contracts plus top candidate threads (up to 10 rows) for a concise, useful inventory
@@ -581,8 +665,16 @@ export function synthesizeContractInventory(toolCalls: Array<{ tool: string; res
 
   lines.push('\n### Contract Extraction Coverage');
   lines.push(`- **Confirmed contracts:** ${confirmedCount} verified contract(s)`);
+  if (contractDocCount > 0) {
+    lines.push(`- **Contract documents:** ${contractDocCount} document(s) with contract terms (pending execution verification)`);
+  }
   lines.push(`- **Candidate emails examined:** ${inspectedCount} candidate thread(s) inspected (${candidateList.length} total candidate(s) identified)`);
+  lines.push(`- **Thread inspection breakdown:** ${inspectedCount} inspected, ${uninspectedCount} uninspected (${candidateList.length} total identified)`);
   lines.push(`- **Actual pages read:** ${searchPagesRead} search page(s) (${totalMessagesListed} messages listed), ${pdfPagesRead} PDF page(s) extracted`);
+  if (searchRecords.length > 0) {
+    const searchSummaries = searchRecords.map((s) => `"${s.query}": ${s.listed}/${s.matched} listed${s.truncated ? ' [truncated]' : ''}`).join('; ');
+    lines.push(`- **Searches tracked:** ${searchRecords.length} search(es) (${searchSummaries})`);
+  }
   lines.push(`- **Inaccessible / failed lookups:** ${totalFailedLookups} (${failedThreadLookups} thread lookups failed, ${failedAttachmentLookups} attachment extractions failed, ${failedLookupsFromSearch} search lookups failed)`);
   lines.push(`- **Search truncation:** ${searchTruncated ? 'Yes (truncated results; more matching messages exist in Gmail)' : 'No'}`);
   lines.push(`- **Remaining unsearched coverage:** ${remainingCoverageText}`);

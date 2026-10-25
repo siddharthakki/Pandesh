@@ -7,6 +7,7 @@ import { NON_WORKSPACE_MARKERS } from '../domain/taskToolSurface';
 import { summarizeGmailMessage, type GmailApiMessage } from '../runtime/connectors/gmailMime';
 import { createGwsGmailExecutor, type GwsGmailAdapterConfig } from '../runtime/connectors/gwsGmailAdapter';
 import { classifyContract, synthesizeContractInventory } from '../domain/contractInventory';
+import { evaluateConnectorTruth, formatConnectorTruthPrompt } from '../domain/connectorTruth';
 import { buildMinimalPdf } from './fixtures/documentFixtures';
 import type { CapabilityExecutionContext } from '../runtime/connectors/connectorCapability';
 
@@ -468,7 +469,7 @@ describe('Gmail Contract Extraction & Resumption Regression Suite', () => {
     expect(inventory).toContain('Inaccessible / failed lookups:** 2');
   });
 
-  it('preserves historical conversation messages and supplies current verified connector availability', () => {
+  it('preserves historical conversation messages and supplies current connector tool availability', () => {
     // Rule 4: Preserve historical conversation messages rather than removing inconvenient prior assistant responses.
     const historicalMessages = [
       { id: '1', role: 'user', content: 'extract contracts from my gmail' },
@@ -485,24 +486,259 @@ describe('Gmail Contract Extraction & Resumption Regression Suite', () => {
     expect(preservedTurns).toHaveLength(7);
     expect(preservedTurns.some(m => m.content.includes("I don't actually have a Gmail tool connected"))).toBe(true);
 
-    // Verify current verified connector availability can be constructed
+    // Verify connector truth state distinguishes tool availability from verified access
     const tools = [
       { name: 'gmail_search' },
       { name: 'gmail_read_thread' },
       { name: 'gmail_read_attachment' },
     ];
-    const hasGmailTools = tools.some(t => t.name.startsWith('gmail_'));
-    expect(hasGmailTools).toBe(true);
+    const connectorState = evaluateConnectorTruth(tools);
+    expect(connectorState.hasTools).toBe(true);
 
-    const gmailToolNames = tools.filter(t => t.name.startsWith('gmail_')).map(t => t.name).join(', ');
-    let systemPrompt = 'Base prompt';
-    systemPrompt += `\n\nCURRENT VERIFIED CONNECTOR AVAILABILITY & EVIDENCE:
-- Gmail Connector: CONNECTED AND ACTIVE. Verified available tools: ${gmailToolNames}.
-- Conversation History Note: All historical messages above are preserved verbatim for conversational continuity. If earlier assistant turns claimed that Gmail was not connected, that no Gmail tools were available, or claimed unverified findings, those statements reflected prior tool stripping or intermediate confusion and are superseded by your current, live, verified tool availability. You HAVE active Gmail tools right now; use them to inspect real threads and attachments rather than claiming disconnection.`;
-
-    expect(systemPrompt).toContain('Gmail Connector: CONNECTED AND ACTIVE');
+    const systemPrompt = 'Base prompt' + formatConnectorTruthPrompt(connectorState);
+    expect(systemPrompt).toContain('Tool Availability: Available (gmail_search, gmail_read_thread, gmail_read_attachment)');
+    expect(systemPrompt).toContain('Authentication Status: untested');
     expect(systemPrompt).toContain('All historical messages above are preserved verbatim');
-    expect(systemPrompt).toContain('superseded by your current, live, verified tool availability');
+    expect(systemPrompt).toContain('note that Gmail tools are currently available in your tool list');
+    expect(systemPrompt).not.toContain('CONNECTED AND ACTIVE');
+  });
+
+  it('Regression 1: Contract confirmation requires contract-specific evidence and distinguishes contract documents from executed agreements', () => {
+    // 1. Generic words ("vehicle", "total") in extracted attachment text MUST NOT confirm a contract
+    const genericReceipt = classifyContract(
+      'Receipt for Service',
+      'Here is your receipt',
+      'Service Center <service@auto.example>',
+      [],
+      {
+        inspected: true,
+        attachmentExtracted: true,
+        extractedText: 'VEHICLE SERVICE RECEIPT\nVehicle: Tesla Model 3\nService: Tire Rotation\nTotal: $350.00\nPayment Method: Visa',
+        attachmentFilename: 'receipt.pdf',
+      }
+    );
+    expect(genericReceipt.status).not.toContain('Confirmed');
+    expect(genericReceipt.status).toBe('Candidate (Extracted text contains no contract terms)');
+
+    // 2. Metadata from subject MUST NOT establish confirmation when body text lacks contract terms
+    const subjectMetadataOnly = classifyContract(
+      'Confirmed Executed Lease Agreement #998877',
+      'Agreement notice',
+      'Landlord <landlord@rental.example>',
+      [],
+      {
+        inspected: true,
+        bodyText: 'Hi, here are the parking instructions and directions for your visit.',
+      }
+    );
+    expect(subjectMetadataOnly.status).not.toContain('Confirmed');
+    expect(subjectMetadataOnly.status).toBe('Candidate (Body inspected - no contract terms)');
+
+    // 3. Contract document with contract terms but lacking signature/execution MUST NOT be marked confirmed contract
+    const unexecutedNda = classifyContract(
+      'Mutual Non-Disclosure Agreement',
+      'Please find NDA draft attached',
+      'Partner <partner@collab.example>',
+      [],
+      {
+        inspected: true,
+        attachmentExtracted: true,
+        extractedText: 'MUTUAL NON-DISCLOSURE AGREEMENT\nThis Agreement is made by and between the parties. The parties agree to hold proprietary information in confidence. Governing Law: State of New York.',
+        attachmentFilename: 'NDA_Draft.pdf',
+      }
+    );
+    expect(unexecutedNda.status).not.toContain('Confirmed');
+    expect(unexecutedNda.status).toBe('Contract document (Unexecuted / terms extracted)');
+    expect(unexecutedNda.type).toBe('Non-Disclosure Agreement (NDA)');
+
+    // 4. Agreement with contract terms AND verified signature/execution evidence IS confirmed
+    const executedAgreement = classifyContract(
+      'Enterprise Rental Agreement',
+      'Rental Agreement summary',
+      'Enterprise Rent-A-Car <DoNotReply@enterprise.com>',
+      [],
+      {
+        inspected: true,
+        attachmentExtracted: true,
+        extractedText: 'ENTERPRISE RENT-A-CAR RENTAL AGREEMENT RA # 4W742D Vehicle Tesla Model 3 Total $350.00 Renter Signature: Verified',
+        attachmentFilename: 'Rental_Agreement_4W742D.pdf',
+      }
+    );
+    expect(executedAgreement.status).toContain('Confirmed contract (Verified executed agreement)');
+  });
+
+  it('Regression 2: Coverage tracks searches separately, distinguishes thread inspection states, and never reports zero remaining unless exhaustive', () => {
+    // Two separate searches with different queries and candidate threads
+    const searchCalls = [
+      {
+        tool: 'gmail_search',
+        args: { q: 'rental agreement' },
+        status: 'completed',
+        result: {
+          content: [{
+            type: 'text',
+            text: JSON.stringify({
+              counts: { matched: 3, matchedIsExact: true, listed: 3, shown: 3, failedLookups: 0 },
+              truncated: false,
+              results: [
+                { id: 'm1', threadId: 't1', subject: 'Rental Agreement 1', from: 'rent1@example.com', date: '2026-10-01', snippet: 'Agreement 1' },
+                { id: 'm2', threadId: 't2', subject: 'Rental Agreement 2', from: 'rent2@example.com', date: '2026-10-02', snippet: 'Agreement 2' },
+                { id: 'm3', threadId: 't3', subject: 'Rental Agreement 3', from: 'rent3@example.com', date: '2026-10-03', snippet: 'Agreement 3' },
+              ],
+            }),
+          }],
+        },
+      },
+      {
+        tool: 'gmail_search',
+        args: { q: 'employment contract' },
+        status: 'completed',
+        result: {
+          content: [{
+            type: 'text',
+            text: JSON.stringify({
+              counts: { matched: 2, matchedIsExact: true, listed: 2, shown: 2, failedLookups: 0 },
+              truncated: false,
+              results: [
+                { id: 'm4', threadId: 't4', subject: 'Offer Letter', from: 'hr@example.com', date: '2026-10-04', snippet: 'Offer' },
+                { id: 'm5', threadId: 't5', subject: 'Consulting Contract', from: 'hr@example.com', date: '2026-10-05', snippet: 'Consulting' },
+              ],
+            }),
+          }],
+        },
+      },
+      // Only thread t1 and t2 are inspected. Threads t3, t4, t5 remain UNINSPECTED!
+      {
+        tool: 'gmail_read_thread',
+        args: { threadId: 't1' },
+        status: 'completed',
+        result: {
+          content: [{
+            type: 'text',
+            text: JSON.stringify({
+              threadId: 't1',
+              messages: [{
+                id: 'm1',
+                subject: 'Rental Agreement 1',
+                from: 'rent1@example.com',
+                bodyText: 'ENTERPRISE RENT-A-CAR RENTAL AGREEMENT RA # 112233',
+                attachments: [],
+              }],
+            }),
+          }],
+        },
+      },
+      {
+        tool: 'gmail_read_thread',
+        args: { threadId: 't2' },
+        status: 'completed',
+        result: {
+          content: [{
+            type: 'text',
+            text: JSON.stringify({
+              threadId: 't2',
+              messages: [{
+                id: 'm2',
+                subject: 'Rental Agreement 2',
+                from: 'rent2@example.com',
+                bodyText: 'Discussion regarding schedule',
+                attachments: [],
+              }],
+            }),
+          }],
+        },
+      },
+    ];
+
+    const partialInventory = synthesizeContractInventory(searchCalls);
+    expect(partialInventory).not.toBeNull();
+
+    // 1. Searches tracked separately
+    expect(partialInventory).toContain('- **Searches tracked:** 2 search(es)');
+    expect(partialInventory).toContain('"rental agreement": 3/3 listed');
+    expect(partialInventory).toContain('"employment contract": 2/2 listed');
+
+    // 2. Thread inspection breakdown: 2 inspected, 3 uninspected (5 total identified)
+    expect(partialInventory).toContain('- **Thread inspection breakdown:** 2 inspected, 3 uninspected (5 total identified)');
+
+    // 3. Must NEVER report 0 remaining when coverage is not exhaustive!
+    expect(partialInventory).toContain('- **Remaining unsearched coverage:** UNKNOWN (3 identified candidate thread(s) remain uninspected)');
+    expect(partialInventory).not.toContain('Remaining unsearched coverage:** 0');
+
+    // 4. When all remaining threads are inspected, coverage becomes exhaustive and reports 0
+    const exhaustiveCalls = [
+      ...searchCalls,
+      {
+        tool: 'gmail_read_thread',
+        args: { threadId: 't3' },
+        status: 'completed',
+        result: { content: [{ type: 'text', text: JSON.stringify({ threadId: 't3', messages: [{ id: 'm3', bodyText: 'Just an invoice', attachments: [] }] }) }] },
+      },
+      {
+        tool: 'gmail_read_thread',
+        args: { threadId: 't4' },
+        status: 'completed',
+        result: { content: [{ type: 'text', text: JSON.stringify({ threadId: 't4', messages: [{ id: 'm4', bodyText: 'Offer letter details', attachments: [] }] }) }] },
+      },
+      {
+        tool: 'gmail_read_thread',
+        args: { threadId: 't5' },
+        status: 'completed',
+        result: { content: [{ type: 'text', text: JSON.stringify({ threadId: 't5', messages: [{ id: 'm5', bodyText: 'Consulting agreement details', attachments: [] }] }) }] },
+      },
+    ];
+
+    const fullInventory = synthesizeContractInventory(exhaustiveCalls);
+    expect(fullInventory).not.toBeNull();
+    expect(fullInventory).toContain('- **Thread inspection breakdown:** 5 inspected, 0 uninspected (5 total identified)');
+    expect(fullInventory).toContain('- **Remaining unsearched coverage:** 0 matching messages remaining');
+  });
+
+  it('Regression 3: Connector truth distinguishes tool availability from successful authentication and completed execution', () => {
+    const tools = [
+      { name: 'gmail_search' },
+      { name: 'gmail_read_thread' },
+      { name: 'gmail_read_attachment' },
+    ];
+
+    // 1. Tool availability alone MUST NOT claim "verified access" or "CONNECTED AND ACTIVE"
+    const uninvokedState = evaluateConnectorTruth(tools);
+    expect(uninvokedState.hasTools).toBe(true);
+    expect(uninvokedState.toolAvailability).toBe('available');
+    expect(uninvokedState.authenticationStatus).toBe('untested');
+    expect(uninvokedState.executionStatus).toBe('not_invoked');
+    expect(uninvokedState.completedExecutions).toBe(0);
+
+    const promptUninvoked = formatConnectorTruthPrompt(uninvokedState);
+    expect(promptUninvoked).not.toContain('CONNECTED AND ACTIVE');
+    expect(promptUninvoked).not.toContain('verified access');
+    expect(promptUninvoked).toContain('Tool Availability: Available (gmail_search, gmail_read_thread, gmail_read_attachment)');
+    expect(promptUninvoked).toContain('Authentication Status: untested');
+    expect(promptUninvoked).toContain('Execution Status: not invoked in this turn/session');
+
+    // 2. Distinguishes failed/unauthenticated execution
+    const failedState = evaluateConnectorTruth(tools, {
+      toolCalls: [{ tool: 'gmail_search', status: 'failed' }],
+    });
+    expect(failedState.authenticationStatus).toBe('unauthenticated');
+    expect(failedState.executionStatus).toBe('failed');
+    const promptFailed = formatConnectorTruthPrompt(failedState);
+    expect(promptFailed).toContain('Authentication Status: unauthenticated or failed');
+    expect(promptFailed).toContain('Execution Status: failed (1 failed invocation(s))');
+
+    // 3. Successful authentication and completed execution verified ONLY when tools succeed
+    const completedState = evaluateConnectorTruth(tools, {
+      toolCalls: [
+        { tool: 'gmail_search', status: 'completed' },
+        { tool: 'gmail_read_thread', status: 'completed' },
+      ],
+    });
+    expect(completedState.authenticationStatus).toBe('verified');
+    expect(completedState.executionStatus).toBe('completed');
+    expect(completedState.completedExecutions).toBe(2);
+    const promptCompleted = formatConnectorTruthPrompt(completedState);
+    expect(promptCompleted).toContain('Authentication Status: verified (2 completed execution(s))');
+    expect(promptCompleted).toContain('Execution Status: completed (2 successful invocation(s))');
   });
 });
 

@@ -36,6 +36,7 @@ import { createApproval, getApproval, listApprovalsForAttempt, expireApproval } 
 import { recordExecutionQuality } from '../domain/executionQuality';
 import { NON_WORKSPACE_MARKERS } from '../domain/taskToolSurface';
 import { synthesizeContractInventory } from '../domain/contractInventory';
+import { evaluateConnectorTruth, formatConnectorTruthPrompt } from '../domain/connectorTruth';
 import { OpenCodeEngine } from './opencodeEngine';
 import { approveDevStoryReview, devStoryStatus, dispatchDevStories, planDevStories, reassignDevStory, retryDevStory, stopAllDevStories } from './kandev/devStories';
 import { KandevClient } from './kandev/kandevClient';
@@ -2362,7 +2363,7 @@ TRUTHFULNESS & BEHAVIORAL PROTOCOL:
    - Email and calendar: use the gmail_* and calendar_* tools (they appear only as connected services allow). Current local time: ${new Date().toLocaleString('en-GB', { timeZone: localTimeZone, dateStyle: 'full', timeStyle: 'short' })} (${localTimeZone}) — resolve "tomorrow", "next Friday" etc. ONLY with 'resolve_time' and pass its 'iso' value. Email timestamps: quote 'receivedLocal' (already in the user's zone), never re-derive from raw header text; report counts exactly as the tool gives them (matched vs shown).
    - Gmail tools: gmail_search, gmail_read_thread, gmail_read_attachment, gmail_create_draft, gmail_send_draft, and inbox organization: gmail_analyze_inbox (read-only counts by sender/category/class), gmail_plan_changes (bulk PREVIEW, changes nothing), gmail_apply_plan and gmail_undo_plan (approval card, verified, reversible). There is no delete or trash tool: never delete, trash or mark spam, and say it is not supported if asked.
    - Gmail contract extraction & inventory:
-     - You have active, verified access to the Gmail connector ('gmail_search', 'gmail_read_thread', 'gmail_read_attachment'). NEVER claim you have no Gmail tool, that Gmail is not connected, or offer to set up an MCP server when Gmail tools are available or when a search has been performed.
+     - Gmail connector tools ('gmail_search', 'gmail_read_thread', 'gmail_read_attachment') are available when present in your tool list. Distinguish tool availability from verified authentication and completed execution: tool availability means the connector tools are registered and callable, but verified access is established only when tool invocations successfully execute. Do not claim tools are missing or offer to set up an MCP server when Gmail tools are exposed in your tool list; invoke the available tools to search and read content.
      - Search relevant contract categories using 'gmail_search': queries like "contract", "agreement", "lease OR Mietvertrag OR rental", "employment OR offer letter", "service agreement OR terms of service", "NDA", and "has:attachment".
      - Deduplicate across searches: multiple queries will return the same thread or message. Always deduplicate by threadId/messageId.
      - Inspect actual content before classifying: call 'gmail_read_thread' to inspect thread messages and 'gmail_read_attachment' to read and extract text from attachments (e.g. PDFs, documents). NEVER mark a contract confirmed using only a subject, snippet, sender or filename. Require successful body or attachment inspection and record the supporting evidence.
@@ -2423,20 +2424,13 @@ TRUTHFULNESS & BEHAVIORAL PROTOCOL:
         if (turns.length > 0 && turns[turns.length - 1].role === 'user' && turns[turns.length - 1].content === (ctx.currentMessage ?? prompt)) {
           turns = turns.slice(0, -1);
         }
-        // Rule 4: Preserve historical conversation messages. Supply current, verified connector
-        // availability and tool evidence rather than removing inconvenient prior assistant responses.
-        const hasGmailTools = tools.some(t => t.name.startsWith('gmail_'));
-        if (hasGmailTools) {
-          const gmailToolNames = tools.filter(t => t.name.startsWith('gmail_')).map(t => t.name).join(', ');
-          systemPrompt += `\n\nCURRENT VERIFIED CONNECTOR AVAILABILITY & EVIDENCE:
-- Gmail Connector: CONNECTED AND ACTIVE. Verified available tools: ${gmailToolNames}.
-- Conversation History Note: All historical messages above are preserved verbatim for conversational continuity. If earlier assistant turns claimed that Gmail was not connected, that no Gmail tools were available, or claimed unverified findings, those statements reflected prior tool stripping or intermediate confusion and are superseded by your current, live, verified tool availability. You HAVE active Gmail tools right now; use them to inspect real threads and attachments rather than claiming disconnection.`;
-          if (activeTask) {
-            systemPrompt += `\n- Active Task Objective: "${activeTask.objective}" (Status: ${activeTask.status})`;
-            if (activeTask.evidence) {
-              systemPrompt += `\n- Active Task Verified Evidence: ${typeof activeTask.evidence === 'string' ? activeTask.evidence : JSON.stringify(activeTask.evidence)}`;
-            }
-          }
+        // Rule 4: Preserve historical conversation messages. Supply truthful connector
+        // status, distinguishing tool availability from authentication and execution.
+        const connectorState = evaluateConnectorTruth(tools, {
+          toolCalls: toolCallsRecorded,
+        });
+        if (connectorState.hasTools) {
+          systemPrompt += formatConnectorTruthPrompt(connectorState, { activeTask });
         }
         priorTurnsTotal = turns.length;
         const keptTurns = turns.slice(-10);
