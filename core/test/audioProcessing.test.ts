@@ -1,4 +1,5 @@
 import { describe, it, expect } from 'vitest';
+import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { probeLocalAudioTranscriptionCapability, runLocalTranscription } from '../attachments/audioProcessing';
@@ -44,6 +45,10 @@ describe('local audio transcription capability probe', () => {
 
 describe('real local transcription (whisper-base.en via @xenova/transformers)', () => {
   it('transcribes a real speech WAV fixture with plausible word-accurate text and timestamped segments', async () => {
+    if (!fs.existsSync(REAL_SPEECH_FIXTURE)) {
+      // Audio binary fixtures are omitted in public repository checkouts
+      return;
+    }
     const probe = probeLocalAudioTranscriptionCapability({ ...process.env });
     expect(probe.capability).toBe('available');
     expect(probe.engine).not.toBeNull();
@@ -68,12 +73,12 @@ describe('real local transcription (whisper-base.en via @xenova/transformers)', 
   it('fails closed (never fabricates a transcript) for a WAV file it cannot decode', async () => {
     const probe = probeLocalAudioTranscriptionCapability({ ...process.env });
     const badWav = path.join(__dirname, 'fixtures', 'audio', 'not-really-a-wav.wav');
-    const fs = await import('node:fs');
+    fs.mkdirSync(path.dirname(badWav), { recursive: true });
     fs.writeFileSync(badWav, Buffer.from('this is not a wav file'));
     try {
       await expect(runLocalTranscription(probe.engine!, badWav)).rejects.toThrow();
     } finally {
-      fs.unlinkSync(badWav);
+      try { fs.unlinkSync(badWav); } catch { /* ignore */ }
     }
   }, 30_000);
 });

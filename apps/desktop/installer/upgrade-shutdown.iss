@@ -84,6 +84,8 @@ begin
   TargetPrefix := Uppercase(TargetDir);
   if (Length(TargetPrefix) > 0) and (TargetPrefix[Length(TargetPrefix)] <> '\') then
     TargetPrefix := TargetPrefix + '\';
+  if Length(TargetPrefix) < 5 then
+    Exit;
 
   Snapshot := CreateToolhelp32Snapshot(2, 0); // TH32CS_SNAPPROCESS = 2
   if Snapshot <> THandle(-1) then

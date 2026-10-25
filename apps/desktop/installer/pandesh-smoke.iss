@@ -60,9 +60,8 @@ Name: "english"; MessagesFile: "compiler:Default.isl"
 [Files]
 Source: "{#SourceDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 
-[Icons]
-Name: "{group}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; Parameters: {#MyAppParams}; WorkingDir: "{app}"; Comment: "Pandesh (local AI assistant)"
-Name: "{userdesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; Parameters: {#MyAppParams}; WorkingDir: "{app}"; Comment: "Pandesh (local AI assistant)"
+; Smoke test build: do not create desktop or Start Menu shortcuts to avoid polluting
+; the host environment or triggering explorer.exe file locks.
 
 [Run]
 Filename: "{app}\{#MyAppExeName}"; Parameters: {#MyAppParams}; Description: "Launch {#MyAppName}"; Flags: nowait postinstall skipifsilent

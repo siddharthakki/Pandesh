@@ -259,7 +259,7 @@ async function main() {
 
   const unins = path.join(installDir, 'unins000.exe');
   if (!fs.existsSync(unins)) throw new Error(`smoke uninstaller missing: ${unins}`);
-  runSilent(unins, ['/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART'], env);
+  runSilent(unins, ['/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/NOCLOSEAPPLICATIONS'], env);
   await sleep(1500);
   step('smoke_uninstalled', fs.existsSync(path.join(installDir, 'electron', 'Pandesh.exe')) ? 'FAIL' : 'PASS', installDir);
 

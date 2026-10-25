@@ -448,7 +448,7 @@ try {
     $uninstaller = Join-Path $installDir 'unins000.exe'
     if (Test-Path -LiteralPath $uninstaller) {
         Unblock-File -LiteralPath $uninstaller -ErrorAction SilentlyContinue
-        $uninstallArgs = '/VERYSILENT /SUPPRESSMSGBOXES /NORESTART'
+        $uninstallArgs = '/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /NOCLOSEAPPLICATIONS'
         Start-Process -FilePath $uninstaller -ArgumentList $uninstallArgs -Wait | Out-Null
         $deadline = (Get-Date).AddSeconds(90)
         while ((Test-Path -LiteralPath (Join-Path $installDir 'electron\Pandesh.exe')) -and ((Get-Date) -lt $deadline)) { Start-Sleep -Seconds 1 }
