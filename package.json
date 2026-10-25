@@ -899,7 +899,7 @@
     "mocha": "^11.7.6",
     "mocha-junit-reporter": "^2.2.1",
     "pdfjs-dist": "^6.1.200",
-    "vitest": "^4.1.9",
+    "vitest": "^4.1.12",
     "vscode-extension-tester": "^8.23.0",
     "ws": "^8.21.1",
     "yaml": "^2.9.0"
