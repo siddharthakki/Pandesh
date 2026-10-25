@@ -163,7 +163,7 @@ describe('Gmail Contract Extraction & Resumption Regression Suite', () => {
 
   it('verifies against the actual failure scenario: 1 misleading marketing email, 1 inaccessible thread, and 1 successfully extracted PDF', () => {
     // Real PDF parsed text
-    const realPdfText = 'ENTERPRISE RENT-A-CAR RENTAL AGREEMENT RA # 4W742D Vehicle: Tesla Model 3 Total: $350.00';
+    const realPdfText = 'ENTERPRISE RENT-A-CAR RENTAL AGREEMENT RA # 4W742D Vehicle: Tesla Model 3 Total: $350.00 Renter Signature: Verified';
 
     const mockToolCalls = [
       // 1. Initial Gmail search returning 3 candidate threads
@@ -551,7 +551,39 @@ describe('Gmail Contract Extraction & Resumption Regression Suite', () => {
     expect(unexecutedNda.status).toBe('Contract document (Unexecuted / terms extracted)');
     expect(unexecutedNda.type).toBe('Non-Disclosure Agreement (NDA)');
 
-    // 4. Agreement with contract terms AND verified signature/execution evidence IS confirmed
+    // 4. A rental agreement number (RA #) alone MUST NOT count as proof of a signed/executed agreement
+    const raNumberOnlyAttachment = classifyContract(
+      'Enterprise Rental Agreement 4W742D',
+      'Rental Agreement summary',
+      'Enterprise Rent-A-Car <DoNotReply@enterprise.com>',
+      [],
+      {
+        inspected: true,
+        attachmentExtracted: true,
+        extractedText: 'ENTERPRISE RENT-A-CAR RENTAL AGREEMENT RA # 4W742D Vehicle Tesla Model 3 Total $350.00',
+        attachmentFilename: 'Rental_Agreement_4W742D.pdf',
+      }
+    );
+    expect(raNumberOnlyAttachment.status).not.toContain('Confirmed');
+    expect(raNumberOnlyAttachment.status).toBe('Contract document (Unexecuted / terms extracted)');
+    expect(raNumberOnlyAttachment.evidence).toContain('contract terms present');
+    expect(raNumberOnlyAttachment.evidence).toContain('no execution/signature record found');
+
+    const raNumberOnlyBody = classifyContract(
+      'Enterprise Rental Agreement 4W742D',
+      'Your rental agreement summary',
+      'Enterprise Rent-A-Car <DoNotReply@enterprise.com>',
+      [],
+      {
+        inspected: true,
+        bodyText: 'ENTERPRISE RENT-A-CAR RENTAL AGREEMENT RA # 4W742D Vehicle Tesla Model 3 Total $350.00',
+      }
+    );
+    expect(raNumberOnlyBody.status).not.toContain('Confirmed');
+    expect(raNumberOnlyBody.status).toBe('Contract document (Unexecuted / terms in body)');
+    expect(raNumberOnlyBody.evidence).toContain('contract terms present in message body, but no signature or execution record');
+
+    // 5. Agreement with contract terms AND verified signature/execution evidence IS confirmed
     const executedAgreement = classifyContract(
       'Enterprise Rental Agreement',
       'Rental Agreement summary',

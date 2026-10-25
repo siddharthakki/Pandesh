@@ -138,8 +138,9 @@ export const CONTRACT_SPECIFIC_PATTERNS = /\b(?:rental agreement|lease agreement
 /**
  * Patterns for verified signature/execution evidence.
  * Distinguishes a verified signed/executed agreement from an unexecuted contract document.
+ * Note: A rental agreement number (RA #) alone is an identifier/term, NOT proof of signature or execution.
  */
-export const EXECUTED_AGREEMENT_PATTERNS = /\b(?:signed by|signature|electronically signed|docusign|signnow|adobe sign|countersigned|duly executed|fully executed|executed on|date of execution|renter signature|employee signature|authorized signature|ra\s*#\s*[\w\d]+|contract confirmed|executed agreement)\b/i;
+export const EXECUTED_AGREEMENT_PATTERNS = /\b(?:signed by|signature|electronically signed|docusign|signnow|adobe sign|countersigned|duly executed|fully executed|executed on|date of execution|renter signature|employee signature|authorized signature|contract confirmed|executed agreement)\b/i;
 
 /**
  * Classifies contract candidate status with strict evidence requirements.
