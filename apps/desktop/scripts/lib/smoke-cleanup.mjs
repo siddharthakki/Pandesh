@@ -18,7 +18,7 @@ export function assertSmokeRoot(scratch) {
 export function stopSmokeProcesses(scratch) {
   const install = path.join(assertSmokeRoot(scratch), 'install') + path.sep;
   const script = `$ErrorActionPreference = 'Stop'
-$prefix = $env.PANDESH_SMOKE_INSTALL
+$prefix = $env:PANDESH_SMOKE_INSTALL
 if ([string]::IsNullOrWhiteSpace($prefix) -or $prefix.Length -lt 15) {
   throw "Refusing process sweep: PANDESH_SMOKE_INSTALL prefix is missing or too short: '$prefix'"
 }
