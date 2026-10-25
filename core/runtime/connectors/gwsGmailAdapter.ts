@@ -37,6 +37,7 @@ import {
   verifyPinnedBinary,
 } from './gwsTransport';
 import { summarizeGmailMessage, summarizeGmailThread, type GmailApiMessage, type GmailApiThread } from './gmailMime';
+import { extractPdfFromBytes } from '../../attachments/documentExtraction';
 import {
   buildGmailSendPresentation,
   canonicalizeGmailDraft,
@@ -326,6 +327,114 @@ async function runGmailReadThread(args: Record<string, unknown>, deps: CallDeps)
   return succeeded('gmail_read_thread_succeeded', { threadId, messages });
 }
 
+async function runGmailReadAttachment(args: Record<string, unknown>, deps: CallDeps): Promise<ToolExecutionResult> {
+  const messageId = trimmedNonEmptyString(args.messageId);
+  const attachmentId = trimmedNonEmptyString(args.attachmentId);
+  if (!messageId || !attachmentId) {
+    return invalidArgs('gmail_read_attachment: "messageId" and "attachmentId" are required');
+  }
+  const filename = trimmedNonEmptyString(args.filename) || 'attachment';
+  let mimeType = trimmedNonEmptyString(args.mimeType) || '';
+  if (!mimeType && filename.toLowerCase().endsWith('.pdf')) {
+    mimeType = 'application/pdf';
+  }
+
+  const params = { userId: 'me', messageId, id: attachmentId };
+  const outcome = await callGws(deps, ['gmail', 'users', 'messages', 'attachments', 'get', '--params', JSON.stringify(params)], 'gmail_read_attachment_failed');
+  if (!outcome.ok) return outcome.result;
+
+  const data = outcome.data as { size?: number; data?: string } | null;
+  const rawData = data?.data;
+  if (!rawData) {
+    return succeeded('gmail_read_attachment_succeeded', {
+      messageId,
+      attachmentId,
+      filename,
+      mimeType,
+      size: data?.size ?? 0,
+      extractedText: null,
+      status: 'empty_attachment',
+    });
+  }
+
+  let buffer: Buffer;
+  try {
+    const normalized = rawData.replace(/-/g, '+').replace(/_/g, '/');
+    buffer = Buffer.from(normalized, 'base64');
+  } catch (err: any) {
+    return succeeded('gmail_read_attachment_succeeded', {
+      messageId,
+      attachmentId,
+      filename,
+      mimeType,
+      size: data?.size ?? 0,
+      extractedText: null,
+      status: 'decode_error',
+      error: err?.message,
+    });
+  }
+
+  if (!mimeType || mimeType === 'application/octet-stream') {
+    if (filename.toLowerCase().endsWith('.pdf')) mimeType = 'application/pdf';
+    else if (filename.toLowerCase().endsWith('.txt') || filename.toLowerCase().endsWith('.csv') || filename.toLowerCase().endsWith('.json') || filename.toLowerCase().endsWith('.md')) mimeType = 'text/plain';
+  }
+
+  let extractedText: string | null = null;
+  let pageCount: number | null = null;
+  let truncated = false;
+
+  try {
+    if (mimeType === 'application/pdf') {
+      const extraction = await extractPdfFromBytes(new Uint8Array(buffer));
+      if (extraction) {
+        pageCount = extraction.pageCount;
+        extractedText = extraction.sections.map((s) => s.text).join('\n\n');
+        truncated = extraction.sections.some((s) => s.text.length > 0 && s.charEnd >= 2_000_000);
+      }
+    } else if (mimeType.startsWith('text/') || mimeType === 'application/json') {
+      extractedText = buffer.toString('utf8');
+      if (extractedText.length > 50_000) {
+        extractedText = extractedText.slice(0, 50_000);
+        truncated = true;
+      }
+    } else {
+      return succeeded('gmail_read_attachment_succeeded', {
+        messageId,
+        attachmentId,
+        filename,
+        mimeType,
+        size: buffer.length,
+        extractedText: null,
+        status: 'unsupported_format',
+        note: `Attachment format '${mimeType}' is not supported for text extraction.`,
+      });
+    }
+  } catch (err: any) {
+    return succeeded('gmail_read_attachment_succeeded', {
+      messageId,
+      attachmentId,
+      filename,
+      mimeType,
+      size: buffer.length,
+      extractedText: null,
+      status: 'extraction_failed',
+      error: err?.message,
+    });
+  }
+
+  return succeeded('gmail_read_attachment_succeeded', {
+    messageId,
+    attachmentId,
+    filename,
+    mimeType,
+    size: buffer.length,
+    pageCount,
+    extractedText,
+    truncated,
+    status: 'extracted',
+  });
+}
+
 async function runGmailCreateDraft(
   args: Record<string, unknown>,
   deps: CallDeps,
@@ -478,7 +587,7 @@ export function createGwsGmailProbe(config: GwsGmailAdapterConfig): ConnectorPro
   };
 }
 
-const GMAIL_TOOL_NAMES = new Set(['gmail_search', 'gmail_read_thread', 'gmail_create_draft', 'gmail_send_draft', 'gmail_analyze_inbox', 'gmail_plan_changes', 'gmail_apply_plan', 'gmail_undo_plan']);
+const GMAIL_TOOL_NAMES = new Set(['gmail_search', 'gmail_read_thread', 'gmail_read_attachment', 'gmail_create_draft', 'gmail_send_draft', 'gmail_analyze_inbox', 'gmail_plan_changes', 'gmail_apply_plan', 'gmail_undo_plan']);
 
 function organizeEnv(config: GwsGmailAdapterConfig, deps: CallDeps, accountEmail: string): OrganizeEnv {
   return {
@@ -537,6 +646,8 @@ export function createGwsGmailExecutor(config: GwsGmailAdapterConfig): Connector
           return await runGmailSearch(args, deps);
         case 'gmail_read_thread':
           return await runGmailReadThread(args, deps);
+        case 'gmail_read_attachment':
+          return await runGmailReadAttachment(args, deps);
         case 'gmail_create_draft':
           return await runGmailCreateDraft(args, deps, accountEmail, config.bindings);
         case 'gmail_send_draft':

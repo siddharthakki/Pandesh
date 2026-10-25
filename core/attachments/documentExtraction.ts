@@ -123,7 +123,7 @@ function buildSections(pieces: Array<{ page: number | null; text: string }>): { 
   return { sections, truncated };
 }
 
-async function extractPdf(filePath: string): Promise<DocumentExtractionResult> {
+export async function extractPdfFromBytes(data: Uint8Array): Promise<DocumentExtractionResult> {
   // Legacy build: works under plain Node without DOM/Worker globals, and has
   // no canvas/native dependency for text-only extraction.
   ensureNodeDomMatrixStub();
@@ -138,7 +138,6 @@ async function extractPdf(filePath: string): Promise<DocumentExtractionResult> {
   if (!(globalThis as { pdfjsWorker?: unknown }).pdfjsWorker) {
     await import('pdfjs-dist/legacy/build/pdf.worker.mjs');
   }
-  const data = new Uint8Array(await fs.readFile(filePath));
   // pdfjs-dist 6 removed `isEvalSupported`; font parsing no longer uses eval,
   // so the old disable flag has no corresponding option. `useSystemFonts`
   // remains false so extraction cannot pull host fonts.
@@ -163,6 +162,11 @@ async function extractPdf(filePath: string): Promise<DocumentExtractionResult> {
   } finally {
     await loadingTask.destroy();
   }
+}
+
+async function extractPdf(filePath: string): Promise<DocumentExtractionResult> {
+  const data = new Uint8Array(await fs.readFile(filePath));
+  return extractPdfFromBytes(data);
 }
 
 async function extractDocx(filePath: string): Promise<DocumentExtractionResult> {

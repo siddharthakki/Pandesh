@@ -26,7 +26,7 @@ import {
   toCommitmentView,
   updateCommitmentStatus,
 } from '../domain/commitments';
-import { finalizeTaskOutcome, ensureTaskOutcome, objectiveFromRequest, updateTaskOutcome } from '../domain/taskOutcomes';
+import { finalizeTaskOutcome, ensureTaskOutcome, listTaskOutcomes, objectiveFromRequest, updateTaskOutcome } from '../domain/taskOutcomes';
 import { isInspectionOrAdvisoryOnly } from '../domain/actionIntent';
 import { evaluateTurnOutcome } from './turnOutcome';
 import { resolveTimeExpression, localWallTimeToIso as zonedWallToIso, utcOffsetLabel as zoneOffsetLabel, upcomingDaysTable, isValidTimeZone } from '../domain/timeResolution';
@@ -2232,7 +2232,12 @@ export class PiAgentEngine implements EngineAdapter {
       mobileCompanionState = `Mobile Companion State: ${pairedPhones} phone session(s) have been paired with KarkeDikha. Pairing does not prove the phone is online right now; to put a file on it use 'send_to_phone'.`;
     }
 
-    const needsTools = NON_WORKSPACE_MARKERS.some(([, pattern]: readonly [string, RegExp]) => pattern.test(prompt));
+    const priorTaskOutcomes = conversationId ? listTaskOutcomes(db, { conversationId }) : [];
+    const activeTask = priorTaskOutcomes.find((t) => t.status === 'in_progress' || t.status === 'partial');
+
+    const promptMentionsNonWorkspace = NON_WORKSPACE_MARKERS.some(([, pattern]: readonly [string, RegExp]) => pattern.test(prompt));
+    const isContinuation = /\b(?:continue|resume|proceed|status|updates?|what happened|next steps?)\b/i.test(prompt);
+    const needsTools = promptMentionsNonWorkspace || Boolean(activeTask) || (isContinuation && priorTaskOutcomes.length > 0);
     const simpleInteractive = !needsTools && prompt.trim().length < 200;
 
     function isDiagnosticsRequest(text: string): boolean {
@@ -2258,7 +2263,7 @@ export class PiAgentEngine implements EngineAdapter {
     }
 
     const apiBase = (process.env.KARKEDIKHA_OLLAMA_URL || 'http://127.0.0.1:11434').replace(/\/$/, '');
-    const simpleSystemPrompt = `You are Pandesh, the personal AI assistant for KarkeDikha (KKD). Assistant Name: Pandesh. Active model: ${selectedModel} via local Ollama provider (${apiBase}). Running on ${process.platform}. Current local time: ${new Date().toLocaleString('en-GB', { timeZone: localTimeZone, weekday: 'long', year: 'numeric', month: 'long', day: 'numeric', hour: '2-digit', minute: '2-digit' })} in time zone ${localTimeZone}. Answer simple conversational questions directly and concisely. When asked what model you are running or what model is active, state that you are running on '${selectedModel}' via local Ollama. Do not claim access to tools, files, email, calendar, memory or other data unless a tool is actually used. Never expose secrets or perform destructive actions.`;
+    const simpleSystemPrompt = `You are Pandesh, the personal AI assistant for KarkeDikha (KKD). Assistant Name: Pandesh. Active model: ${selectedModel} via local Ollama provider (${apiBase}). Running on ${process.platform}. Current local time: ${new Date().toLocaleString('en-GB', { timeZone: localTimeZone, weekday: 'long', year: 'numeric', month: 'long', day: 'numeric', hour: '2-digit', minute: '2-digit' })} in time zone ${localTimeZone}. Answer simple conversational questions directly and concisely. When asked what model you are running or what model is active, state that you are running on '${selectedModel}' via local Ollama. If the user asks you to perform an action, search emails or files, or access tools, offer to do so directly. Never expose secrets or perform destructive actions.`;
 
     const systemPrompt = simpleInteractive ? simpleSystemPrompt : `You are Pandesh, the personal AI assistant for KarkeDikha (KKD).
 Product: KarkeDikha (KKD).
@@ -2268,6 +2273,15 @@ Running on: ${process.platform}. Current local time: ${new Date().toLocaleString
 
 MOBILE COMPANION STATUS:
 ${mobileCompanionState}
+${activeTask ? `
+ACTIVE WORKFLOW IN THIS CONVERSATION:
+- Objective: ${activeTask.objective}
+- Status: ${activeTask.status}
+- Next Action: ${activeTask.nextAction || 'none'}
+- Summary: ${activeTask.summary || 'none'}
+- Existing Evidence: ${JSON.stringify(activeTask.evidence || [])}
+When the user asks to continue, resume, or check progress/updates, resume this workflow from where it left off, inspect remaining candidates with tools, update 'update_task_outcome', and deliver the completed result without restarting from scratch or hallucinating.
+` : ''}
 
 NAVIGATION & WORKFLOW (STRICT RULES):
 - There is NO "Artifacts tab" in the interface. Never instruct the user to check an "Artifacts tab".
@@ -2343,7 +2357,22 @@ TRUTHFULNESS & BEHAVIORAL PROTOCOL:
 8. BRIEFINGS, REMINDERS, SCHEDULES, EMAIL & CALENDAR:
    - For a daily briefing call 'get_briefing_data' once and present what it returns as written (Top 3 priorities, Calendar, Important email, Pending decisions, Can wait, Housekeeping, Suggested next action). It already ranks by importance and separates facts from suggestions: do not re-rank by recency, do not pad it, and keep it compact unless the user asks for details (then call it again with detail=true). Do not approve, reject, dismiss, cancel or reschedule anything the housekeeping lines mention unless the user asks: 'dismiss_reminder' marks a reminder done, 'cancel_scheduled_task' switches off the redundant duplicate briefing schedule the user chooses, and other items are reviewed in their own screens.
    - Email and calendar: use the gmail_* and calendar_* tools (they appear only as connected services allow). Current local time: ${new Date().toLocaleString('en-GB', { timeZone: localTimeZone, dateStyle: 'full', timeStyle: 'short' })} (${localTimeZone}) — resolve "tomorrow", "next Friday" etc. ONLY with 'resolve_time' and pass its 'iso' value. Email timestamps: quote 'receivedLocal' (already in the user's zone), never re-derive from raw header text; report counts exactly as the tool gives them (matched vs shown).
-   - Gmail tools: gmail_search, gmail_read_thread, gmail_create_draft, gmail_send_draft, and inbox organization: gmail_analyze_inbox (read-only counts by sender/category/class), gmail_plan_changes (bulk PREVIEW, changes nothing), gmail_apply_plan and gmail_undo_plan (approval card, verified, reversible). There is no delete or trash tool: never delete, trash or mark spam, and say it is not supported if asked.
+   - Gmail tools: gmail_search, gmail_read_thread, gmail_read_attachment, gmail_create_draft, gmail_send_draft, and inbox organization: gmail_analyze_inbox (read-only counts by sender/category/class), gmail_plan_changes (bulk PREVIEW, changes nothing), gmail_apply_plan and gmail_undo_plan (approval card, verified, reversible). There is no delete or trash tool: never delete, trash or mark spam, and say it is not supported if asked.
+   - Gmail contract extraction & inventory:
+     - Search relevant contract categories using 'gmail_search': queries like "contract", "agreement", "lease OR Mietvertrag OR rental", "employment OR offer letter", "service agreement OR terms of service", "NDA", and "has:attachment".
+     - Deduplicate across searches: multiple queries will return the same thread or message. Always deduplicate by threadId/messageId.
+     - Inspect actual content before classifying: call 'gmail_read_thread' to inspect thread messages and 'gmail_read_attachment' to read and extract text from attachments (e.g. PDFs, documents). Never classify an email as a contract without inspecting its body or attachment evidence.
+     - When attachments are present (e.g. PDF rental agreements, signed contracts), call 'gmail_read_attachment' with messageId and attachmentId to extract and verify the text locally.
+     - Maintain durable task state: call 'update_task_outcome' with objective, status ('in_progress' while scanning/reading, 'satisfied' when complete), evidence (tool invocations, verified contracts), and summary of verified vs candidate contracts.
+     - Resuming after an interruption: If resuming contract extraction (e.g. 'continue extracting my contracts', 'updates?'), check existing task outcomes and prior turn evidence, resume reading remaining candidates, and do NOT claim Gmail is disconnected when gmail tools are available.
+     - Deliver an honest Contract Inventory Table:
+       | Contract Type | Company / Counterparty | Date | Email / Thread Reference | Attachment | Extraction Status |
+     - Clearly report coverage:
+       - Confirmed contracts: verified from email body/attachment.
+       - Candidates: identified by search but not yet fully inspected.
+       - Inaccessible attachments: attachments that could not be read or extracted.
+       - Remaining unsearched: estimated remaining matching messages from search counts.
+     - NEVER fabricate contract details, counterparty names, dates, or terms. Quote only what the tools returned.
    - Mailbox analysis: ALWAYS state coverage.statement from gmail_analyze_inbox. If coverage.complete is false it is a PARTIAL sample: say how many were examined and of how many, never call it the whole mailbox or the whole period (80 emails is not "30 days"). Report counts exactly as returned.
    - Organizing mail (move to Promotions, archive, label): first gmail_plan_changes, show the user the preview (count, senders, sample, what will change), and only when they asked for the change call gmail_apply_plan with the planId and planDigest. Report the verification line from the result; if it says unverified or partial, say so. Offer gmail_undo_plan to revert. If a tool says Google needs the gmail.modify permission, tell the user to open Connections, Google, Allow inbox organization.
     - Calendar: Reading (calendar_list_events, calendar_check_availability) is immediate. Creating, changing or deleting a calendar event (calendar_draft_event, calendar_create_event, calendar_update_event, calendar_delete_event) asks the user to approve an exact card; when a tool result says NOT DONE / declined / NOT AVAILABLE, say so plainly and never claim success. Only say an event was created, changed or deleted when the result says verified. To change or delete an event, find its id with calendar_list_events first.
