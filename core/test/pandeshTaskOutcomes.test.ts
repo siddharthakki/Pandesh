@@ -232,4 +232,28 @@ describe('finalizing a task from the evidence', () => {
       verdict: 'verified', reason: 'x', performed: ['write_file'], refused: [], failed: [],
     })).toBeUndefined();
   });
+
+  it('bounds and deduplicates repeated or excessive tool evidence without exceeding TASK_OUTCOME_MAX_ITEMS', () => {
+    updateTaskOutcome(db, { attemptId: 'att_excessive', objective: 'Process 25 items' });
+    // Provide 20 repeated calls of the same tool plus distinct tools
+    const performedTools = [
+      ...Array.from({ length: 20 }, () => 'gmail_read_thread'),
+      'gmail_search',
+      'gmail_read_attachment',
+      ...Array.from({ length: 10 }, () => 'gmail_read_attachment'),
+      ...Array.from({ length: 25 }, (_, i) => `tool_${i}`),
+    ];
+    const record = finalizeTaskOutcome(db, 'att_excessive', {
+      verdict: 'verified',
+      reason: 'Batch inspection completed',
+      performed: performedTools,
+      refused: [],
+      failed: [],
+    });
+    expect(record?.status).toBe('satisfied');
+    expect(record?.evidence.length).toBeLessThanOrEqual(20);
+    // Ensure all evidence items are unique
+    const keys = record?.evidence.map((e) => `${e.kind}:${e.reference}`) ?? [];
+    expect(new Set(keys).size).toBe(keys.length);
+  });
 });

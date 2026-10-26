@@ -338,7 +338,17 @@ export function finalizeTaskOutcome(
     const answerEvidence: TaskOutcomeEvidence[] = context.answerMessageId
       ? [{ kind: 'answer', reference: context.answerMessageId }]
       : [];
-    const evidence = [...existing.evidence, ...answerEvidence];
+    const merged = [...existing.evidence, ...answerEvidence];
+    const seen = new Set<string>();
+    const evidence: TaskOutcomeEvidence[] = [];
+    for (const item of merged) {
+      const key = `${item.kind}:${item.reference}`;
+      if (!seen.has(key)) {
+        seen.add(key);
+        evidence.push(item);
+        if (evidence.length >= TASK_OUTCOME_MAX_ITEMS) break;
+      }
+    }
     if (existing.status === 'in_progress' && evidence.length === 0) {
       // Nothing to point at: leave the record as it is rather than claiming
       // a satisfaction nobody can check.
@@ -352,10 +362,18 @@ export function finalizeTaskOutcome(
     });
   }
   if (outcome.verdict === 'verified') {
-    const evidence: TaskOutcomeEvidence[] = [
-      ...existing.evidence,
-      ...outcome.performed.map((tool) => ({ kind: 'tool', reference: tool })),
-    ];
+    const newItems = outcome.performed.map((tool) => ({ kind: 'tool' as const, reference: tool }));
+    const merged = [...existing.evidence, ...newItems];
+    const seen = new Set<string>();
+    const evidence: TaskOutcomeEvidence[] = [];
+    for (const item of merged) {
+      const key = `${item.kind}:${item.reference}`;
+      if (!seen.has(key)) {
+        seen.add(key);
+        evidence.push(item);
+        if (evidence.length >= TASK_OUTCOME_MAX_ITEMS) break;
+      }
+    }
     return updateTaskOutcome(db, {
       attemptId,
       status: existing.status === 'blocked' ? 'blocked' : 'satisfied',
