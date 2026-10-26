@@ -842,5 +842,113 @@ describe('Pandesh P0 — Nonblocking Background Task Delegation Suite', () => {
     }
     expect(connectorSearchCalled).toBe(true);
   });
+
+  it('regression 4: handles 19+ repeated Gmail thread inspections with task outcome finalization, terminal completion, conversation delivery and notification', async () => {
+    const conv = createConversation(db, {
+      mode: 'baat_kar',
+      actor: 'user',
+      title: '19+ Thread Inspection Regression',
+    });
+
+    const runtimeEventsPublished: any[] = [];
+    broadcaster.on('runtime_event', (event) => runtimeEventsPublished.push(event));
+
+    const threadCount = 20;
+    const threadIds = Array.from({ length: threadCount }, (_, i) => `thread_rep_${i + 1}`);
+    const searchMessages = threadIds.map((tid, idx) => ({
+      id: `msg_search_${idx + 1}`,
+      threadId: tid,
+      subject: `Service Agreement ${idx + 1}`,
+    }));
+
+    const mockToolExecutor = async (toolName: string, args: any) => {
+      if (toolName === 'gmail_search') {
+        return {
+          status: 'succeeded' as const,
+          output: JSON.stringify({
+            messages: searchMessages,
+            counts: { matched: threadCount, moreAvailable: false },
+          }),
+        };
+      }
+      if (toolName === 'gmail_read_thread') {
+        return {
+          status: 'succeeded' as const,
+          output: JSON.stringify({
+            messages: [
+              {
+                id: `msg_${args.threadId}`,
+                subject: `Service Agreement for ${args.threadId}`,
+                body: `This Master Services Agreement governs ${args.threadId}. Effective immediately.`,
+                attachments: [],
+              },
+            ],
+          }),
+        };
+      }
+      return { status: 'succeeded' as const, output: JSON.stringify({}) };
+    };
+
+    const { task } = startGmailContractExtractionTask(
+      db,
+      broadcaster,
+      {
+        conversationId: conv.id,
+        objective: 'Extract all contracts from my Gmail with 20 candidate threads',
+      },
+      { toolExecutor: mockToolExecutor, autoStart: true },
+    );
+
+    // Wait for the background worker to finish
+    let currentTask = getBackgroundTask(db, task.id)!;
+    const deadline = Date.now() + 8000;
+    while (currentTask.status === 'in_progress' && Date.now() < deadline) {
+      await new Promise((r) => setTimeout(r, 50));
+      currentTask = getBackgroundTask(db, task.id)!;
+    }
+
+    // 1. Task Outcome Finalization
+    const outcome = getTaskOutcome(db, task.attemptId);
+    expect(outcome).toBeDefined();
+    expect(outcome!.status).toBe('satisfied');
+    expect(outcome!.evidence.length).toBeLessThanOrEqual(20);
+    expect(outcome!.evidence.length).toBeGreaterThan(0);
+    const evidenceKeys = outcome!.evidence.map((e) => `${e.kind}:${e.reference}`);
+    expect(new Set(evidenceKeys).size).toBe(evidenceKeys.length);
+    expect(outcome!.evidence.map((e) => e.reference)).toContain('gmail_search');
+    expect(outcome!.evidence.map((e) => e.reference)).toContain('gmail_read_thread');
+
+    // 2. Terminal Completion
+    expect(currentTask.status).toBe('completed');
+    expect(getAttempt(db, task.attemptId).status).toBe('completed');
+    expect(currentTask.completedAt).toBeTruthy();
+    expect(currentTask.resultSummary).toBeTruthy();
+    expect(currentTask.resultData).toContain('Contract');
+
+    // 3. Conversation Delivery
+    const messages = listMessages(db, conv.id);
+    const delivered = messages.find((m) => m.role === 'assistant' && m.content.includes('extraction'));
+    expect(delivered).toBeDefined();
+    expect(delivered!.content).toContain('Contract');
+
+    // 4. Notification
+    expect(currentTask.notificationSent).toBe(true);
+    const dbEvents = db.all<Record<string, unknown>>(
+      `SELECT * FROM runtime_events WHERE entityId = ? AND eventType = 'background_task_completed'`,
+      [task.id],
+    );
+    expect(dbEvents.length).toBe(1);
+    const notificationEvent = runtimeEventsPublished.find(
+      (e) => e.eventType === 'background_task_completed' && e.entityId === task.id,
+    );
+    expect(notificationEvent).toBeDefined();
+    expect(notificationEvent.metadata.taskId).toBe(task.id);
+    expect(notificationEvent.metadata.conversationId).toBe(conv.id);
+
+    // 5. Preserved underlying detailed receipts
+    expect(currentTask.payload.toolCallsRecorded.length).toBe(21); // 1 search + 20 thread inspections
+    expect(currentTask.payload.candidateThreadIds.length).toBe(20);
+    expect(currentTask.payload.processedThreadIds.length).toBe(20);
+  });
 });
 

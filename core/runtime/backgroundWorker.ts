@@ -884,15 +884,19 @@ async function executeGmailContractExtraction(
     ? 'Gmail contract extraction completed with partial coverage (additional candidate messages exist in Gmail).'
     : 'Gmail contract extraction completed with verified inventory table.';
 
-  finalizeTaskOutcome(db, attemptId, {
-    verdict: 'verified',
-    reason: isPartial
-      ? 'Gmail contract extraction completed with partial coverage verified from inspected messages'
-      : 'Gmail contract extraction completed with verified evidence',
-    performed: toolCallsRecorded.map((t) => t.tool),
-    refused: [],
-    failed: toolCallsRecorded.filter((t) => t.status === 'failed').map((t) => t.tool),
-  });
+  try {
+    finalizeTaskOutcome(db, attemptId, {
+      verdict: 'verified',
+      reason: isPartial
+        ? 'Gmail contract extraction completed with partial coverage verified from inspected messages'
+        : 'Gmail contract extraction completed with verified evidence',
+      performed: Array.from(new Set(toolCallsRecorded.map((t) => t.tool))),
+      refused: [],
+      failed: Array.from(new Set(toolCallsRecorded.filter((t) => t.status === 'failed').map((t) => t.tool))),
+    });
+  } catch (err) {
+    console.warn('[backgroundWorker] task outcome finalize error:', err);
+  }
 
   createCheckpoint(db, {
     attemptId,
