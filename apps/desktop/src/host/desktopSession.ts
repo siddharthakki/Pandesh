@@ -101,6 +101,8 @@ import { EverydayReminderScheduler } from './everydayReminderScheduler';
 import { everydayToolCatalog } from './everydayToolCatalog';
 import { listWorkerOptions, findWorkerOption, resolveWorkerProfile } from '../../../../core/runtime/localCoreQuestion';
 import { probeDesktopLocalSpeech, transcribeDesktopUtterance } from './desktopLocalSpeech';
+import { readHostPreferences } from './desktopHostPreferences';
+import { PocketTtsCancelled, PocketTtsEngine, probePocketTts } from './pocketTts';
 import {
   probeDesktopLocalSpeechResponse,
   synthesizeDesktopSpeech,
@@ -275,6 +277,8 @@ export class DesktopSession {
    * speechGeneration guard, mirrored host-side so a stale attempt's failure
    * handler cannot clear `speaking` out from under a newer one. */
   private speakGeneration = 0;
+  private pocketTts: PocketTtsEngine | null = null;
+  private pocketFailedAt = 0;
   private voiceConversationId: string | null = null;
   /** Jarvis Conversations rail (Checkpoint 1) — the conversation explicitly
    * opened/selected via the rail, persisted across restart. Distinct from
@@ -346,7 +350,7 @@ export class DesktopSession {
     this.operatorSelectedModel = readSelectedModel(this.dataDir);
     this.selectedConversationId = readSelectedConversation(this.dataDir);
     this.localSpeech = probeDesktopLocalSpeech(this.options.productRoot);
-    this.localSpeechResponse = probeDesktopLocalSpeechResponse(this.options.productRoot);
+    this.localSpeechResponse = probeDesktopLocalSpeechResponse(this.options.productRoot, process.env, this.ttsPreference());
     this.wakeWord = probeDesktopWakeWord(this.options.productRoot, { enabled: false, muted: false });
     this.gmailTokenManager = new GmailTokenManager({
       dataDir: this.dataDir,
@@ -367,7 +371,7 @@ export class DesktopSession {
 
   /** Piper TTS probe — available when staged via fetch-piper.mjs. */
   getLocalSpeechResponseStatus(): DesktopLocalSpeechResponseStatus {
-    this.localSpeechResponse = probeDesktopLocalSpeechResponse(this.options.productRoot);
+    this.localSpeechResponse = probeDesktopLocalSpeechResponse(this.options.productRoot, process.env, this.ttsPreference());
     return {
       ...this.localSpeechResponse,
       voices: [...this.localSpeechResponse.voices],
@@ -609,8 +613,21 @@ export class DesktopSession {
         'Spoken interruption is unavailable while microphone capture is suppressed during playback.',
     });
     try {
-      const { wavPath, engine } = synthesizeDesktopSpeech(this.options.productRoot, text);
-      const wavBase64 = fs.readFileSync(wavPath).toString('base64');
+      const pocket = await this.trySynthesizePocket(text);
+      if (generation !== this.speakGeneration) {
+        // Superseded or stopped while synthesizing: hand back nothing to play.
+        return { wavBase64: '', engine: 'cancelled', synthesizeMs: Date.now() - started, cancelled: true };
+      }
+      let wavBase64: string;
+      let engine: string;
+      if (pocket) {
+        wavBase64 = pocket.toString('base64');
+        engine = 'pocket-tts (CPU)';
+      } else {
+        const piper = synthesizeDesktopSpeech(this.options.productRoot, text);
+        wavBase64 = fs.readFileSync(piper.wavPath).toString('base64');
+        engine = piper.engine;
+      }
       const synthesizeMs = Date.now() - started;
       this.options.log?.(
         `speakText: ${synthesizeMs}ms synth (engine=${engine}, chars=${text.length}, wavKB=${Math.round(wavBase64.length * 0.75 / 1024)})`,
@@ -633,7 +650,38 @@ export class DesktopSession {
     }
   }
 
+  private ttsPreference(): 'piper' | 'pocket' {
+    const env = process.env.PANDESH_TTS_ENGINE?.trim().toLowerCase();
+    if (env === 'pocket' || env === 'piper') return env;
+    return readHostPreferences(this.dataDir).ttsEngine;
+  }
+
+  /** Pocket TTS WAV, or null to fall back to the existing engine (not selected, not provisioned, or failing). */
+  private async trySynthesizePocket(text: string): Promise<Buffer | null> {
+    if (this.ttsPreference() !== 'pocket' || !probePocketTts(this.options.productRoot).ready) return null;
+    // After a failure, go straight to the fallback for a short cooldown instead of re-paying engine start.
+    if (Date.now() - this.pocketFailedAt < 30_000) return null;
+    this.pocketTts ??= new PocketTtsEngine({
+      productRoot: this.options.productRoot,
+      dataDir: this.dataDir,
+      log: this.options.log,
+    });
+    try {
+      const result = await this.pocketTts.synthesize(text);
+      this.options.log?.(
+        `speakText: pocket start=${result.startMs}ms firstAudio=${result.firstAudioMs}ms total=${result.totalMs}ms`,
+      );
+      return result.wav;
+    } catch (err) {
+      if (err instanceof PocketTtsCancelled) return null;
+      this.pocketFailedAt = Date.now();
+      this.options.log?.(`speakText: pocket failed, falling back to piper: ${String(err)}`);
+      return null;
+    }
+  }
+
   stopSpeaking(reason: 'button' | 'host' = 'button'): DesktopSnapshot {
+    this.pocketTts?.cancel();
     this.speakGeneration += 1;
     this.speaking = false;
     this.emitVoice({
@@ -2759,6 +2807,8 @@ export class DesktopSession {
     }
     this.reminderScheduler?.dispose();
     this.reminderScheduler = null;
+    void this.pocketTts?.dispose();
+    this.pocketTts = null;
     this.client?.dispose();
     this.client = undefined;
   }

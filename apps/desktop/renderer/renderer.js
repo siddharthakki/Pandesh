@@ -5762,6 +5762,7 @@ async function speakAnswerText(text) {
   try {
     const spoken = await api.speakText(spokenText);
     console.info(`[voice] turn=${ttsTurnId ?? 'n/a'} stage=tts_audio_ready tSinceStartMs=${Math.round(performance.now() - ttsStartedAt)} synthesizeMs=${spoken.synthesizeMs}`);
+    if (spoken.cancelled) return;
     if (generation <= speechGeneration && activeSpeechAudio) {
       // A newer speak started while synthesizing — abandon this WAV. The
       // newer generation owns clearing `speaking` once its own playback

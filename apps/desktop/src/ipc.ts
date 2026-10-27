@@ -380,6 +380,8 @@ export interface DesktopSpeakResult {
   engine: string;
   /** Wall ms from synthesize start to WAV ready (not playback). */
   synthesizeMs: number;
+  /** True when a newer speak or Stop superseded this request; nothing to play. */
+  cancelled?: boolean;
 }
 
 export interface DesktopOpenRouterStatus {
