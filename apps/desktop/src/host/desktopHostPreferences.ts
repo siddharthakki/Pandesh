@@ -12,6 +12,8 @@ export interface DesktopHostPreferences {
   /** Last known wake enabled preference for tray restore. */
   wakeEnabled: boolean;
   wakeMuted: boolean;
+  /** Spoken-reply engine. Piper stays the default until Pocket TTS is promoted. */
+  ttsEngine: 'piper' | 'pocket';
 }
 
 const DEFAULTS: DesktopHostPreferences = {
@@ -19,6 +21,7 @@ const DEFAULTS: DesktopHostPreferences = {
   openAtLogin: false,
   wakeEnabled: false,
   wakeMuted: false,
+  ttsEngine: 'piper',
 };
 
 export function hostPreferencesPath(dataDir: string): string {
@@ -35,6 +38,7 @@ export function readHostPreferences(dataDir: string): DesktopHostPreferences {
       openAtLogin: Boolean(raw.openAtLogin),
       wakeEnabled: Boolean(raw.wakeEnabled),
       wakeMuted: Boolean(raw.wakeMuted),
+      ttsEngine: raw.ttsEngine === 'pocket' ? 'pocket' : 'piper',
     };
   } catch {
     return { ...DEFAULTS };
