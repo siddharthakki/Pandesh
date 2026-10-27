@@ -66,4 +66,5 @@ Source: "{#SourceDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs 
 [Run]
 Filename: "{app}\{#MyAppExeName}"; Parameters: {#MyAppParams}; Description: "Launch {#MyAppName}"; Flags: nowait postinstall skipifsilent
 
+#define SmokeBuild
 #include "upgrade-shutdown.iss"
