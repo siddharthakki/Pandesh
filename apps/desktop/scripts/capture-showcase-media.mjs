@@ -1,7 +1,7 @@
 /**
  * Capture 6 authentic showcase screenshots from the packaged Pandesh desktop app.
  *
- * Saves directly into: C:\Projects\Pandesh_Releases\assets\screenshots\
+ * Saves into: <PANDESH_RELEASES_DIR>\assets\screenshots\ (default D:\Projects\Pandesh_Releases)
  *
  * Screenshots:
  * 1. 01-welcome-chat.png - Main Panda interface, clear empty conversation, pinned composer
@@ -22,7 +22,8 @@ import { WebSocket } from 'ws';
 const desktopRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const repoRoot = path.resolve(desktopRoot, '..', '..');
 const portableRoot = path.join(repoRoot, 'dist', 'pandesh-win32-x64');
-const outDir = path.resolve('C:\\Projects\\Pandesh_Releases\\assets\\screenshots');
+const releaseAssetsRoot = process.env.PANDESH_RELEASES_DIR || 'D:\\Projects\\Pandesh_Releases';
+const outDir = path.resolve(releaseAssetsRoot, 'assets', 'screenshots');
 
 fs.mkdirSync(outDir, { recursive: true });
 
