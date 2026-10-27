@@ -1542,6 +1542,22 @@ if (gotSingleInstanceLock) {
       void shutdownAndQuit();
       return;
     }
+    // "Open in Pandesh" from the browser bridge: the native host relaunches the app with --panda-open=<conversation id>; the
+    // running instance shows that conversation. The id is validated here because it comes from outside the process.
+    const pandaOpen = Array.isArray(commandLine) ? commandLine.find((arg) => arg.startsWith('--panda-open=')) : undefined;
+    const pandaOpenId = pandaOpen?.slice('--panda-open='.length) ?? '';
+    if (/^[\w-]{1,80}$/.test(pandaOpenId)) {
+      hostLog('opening a browser-bridge task conversation');
+      showJarvisWindow();
+      sendToRenderer(DESKTOP_CHANNELS.event, {
+        kind: 'status',
+        at: new Date().toISOString(),
+        summary: 'Open browser-bridge task',
+        eventType: 'panda_bridge_open',
+        text: pandaOpenId,
+      });
+      return;
+    }
     hostLog('second instance attempted; focusing existing Pandesh window');
     showJarvisWindow();
   });

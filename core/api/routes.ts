@@ -11,6 +11,7 @@ import * as repositories from '../domain/repositories';
 import * as stories from '../domain/stories';
 import * as devStories from '../runtime/kandev/devStories';
 import { KandevClient } from '../runtime/kandev/kandevClient';
+import { registerBridgeRoutes } from './bridgeRoutes';
 
 const kandevClient = new KandevClient();
 import * as dependencies from '../domain/dependencies';
@@ -170,6 +171,7 @@ export function buildRouter(
   // incapable of reaching a cloud model. Tests inject a fake; production
   // always gets a fresh local-only OllamaModelBackend.
   gmailSummaryBackend?: ModelBackend,
+  bridge?: { dataDir: string },
 ): Router<ApiContext, ApiResult> {
   const router = new Router<ApiContext, ApiResult>();
   const capabilities = capabilityRegistry ?? new GovernedCapabilityRegistry().register(createWorkspaceCapabilityAdapter());
@@ -455,6 +457,9 @@ export function buildRouter(
     await devStories.decideDevPermission(ctx.db, kandevClient, match.params.id, match.params.pendingId, body.allow === true, `${who} via ${body.via === 'phone' ? 'phone page' : 'Panda window'}`);
     return { status: 200, body: { ok: true } };
   });
+
+  // --- Panda bridge: instructions relayed from a paired browser (core/api/bridgeRoutes.ts) ---
+  if (bridge) registerBridgeRoutes(router, { dataDir: bridge.dataDir, executor, kandev: kandevClient });
 
   // --- Stories ---
   router.get('/v1/stories', (ctx) => {

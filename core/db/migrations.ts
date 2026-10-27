@@ -1237,6 +1237,65 @@ CREATE INDEX IF NOT EXISTS idx_background_tasks_status ON background_tasks(statu
 CREATE INDEX IF NOT EXISTS idx_background_tasks_conversation ON background_tasks(conversationId);
 `;
 
+const MIGRATION_37_PANDA_BRIDGE = `
+CREATE TABLE IF NOT EXISTS bridge_pairing_codes (
+  codeHash TEXT PRIMARY KEY,
+  createdAt TEXT NOT NULL,
+  expiresAt TEXT NOT NULL,
+  consumedAt TEXT
+);
+CREATE TABLE IF NOT EXISTS bridge_pairings (
+  id TEXT PRIMARY KEY,
+  label TEXT NOT NULL,
+  extensionId TEXT,
+  tokenHash TEXT NOT NULL UNIQUE,
+  createdAt TEXT NOT NULL,
+  lastSeenAt TEXT,
+  revokedAt TEXT,
+  revokedReason TEXT
+);
+CREATE TABLE IF NOT EXISTS bridge_tasks (
+  id TEXT PRIMARY KEY,
+  pairingId TEXT NOT NULL REFERENCES bridge_pairings(id),
+  clientRequestId TEXT NOT NULL,
+  instruction TEXT NOT NULL,
+  instructionSha256 TEXT NOT NULL,
+  sourceRef TEXT NOT NULL DEFAULT '{}',
+  contextText TEXT,
+  contextConfirmed INTEGER NOT NULL DEFAULT 0,
+  sensitivity TEXT NOT NULL DEFAULT 'normal',
+  sensitivityReasons TEXT NOT NULL DEFAULT '[]',
+  conversationId TEXT REFERENCES conversations(id),
+  projectId TEXT,
+  storyId TEXT,
+  attemptId TEXT,
+  executor TEXT,
+  model TEXT,
+  routing TEXT,
+  externalConsent TEXT,
+  workspacePath TEXT,
+  status TEXT NOT NULL,
+  statusDetail TEXT,
+  control TEXT NOT NULL DEFAULT 'none',
+  result TEXT,
+  createdAt TEXT NOT NULL,
+  updatedAt TEXT NOT NULL,
+  completedAt TEXT,
+  UNIQUE (pairingId, clientRequestId)
+);
+CREATE INDEX IF NOT EXISTS idx_bridge_tasks_status ON bridge_tasks(status);
+CREATE INDEX IF NOT EXISTS idx_bridge_tasks_story ON bridge_tasks(storyId);
+CREATE TABLE IF NOT EXISTS bridge_task_checkpoints (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  taskId TEXT NOT NULL REFERENCES bridge_tasks(id),
+  status TEXT NOT NULL,
+  detail TEXT,
+  snapshot TEXT,
+  createdAt TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_bridge_checkpoints_task ON bridge_task_checkpoints(taskId, id);
+`;
+
 export const MIGRATIONS: Migration[] = [
   { version: 1, description: 'bootstrap core_metadata and schema_migrations', sql: MIGRATION_1_BOOTSTRAP },
   { version: 2, description: 'M31 domain schema (projects/repositories/stories/events/etc.)', sql: MIGRATION_2_DOMAIN },
@@ -1274,6 +1333,7 @@ export const MIGRATIONS: Migration[] = [
   { version: 34, description: 'Pandesh task outcomes: the objective, success conditions, evidence, blocker and next action of a task', sql: MIGRATION_34_TASK_OUTCOMES },
   { version: 35, description: 'Gmail inbox organization: durable change plans with the prior label state of every message', sql: MIGRATION_35_GMAIL_CHANGE_PLANS },
   { version: 36, description: 'Pandesh background delegated tasks: durable background worker execution, checkpoints and delivery ledger', sql: MIGRATION_36_BACKGROUND_TASKS },
+  { version: 37, description: 'Panda bridge: browser pairings, relayed tasks (source reference, consent, routing) and durable checkpoints', sql: MIGRATION_37_PANDA_BRIDGE },
 ];
 
 

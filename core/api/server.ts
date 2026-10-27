@@ -17,6 +17,8 @@ import { startScheduledTaskLoop } from '../runtime/scheduler';
 import type { IntelligenceScout } from '../runtime/intelligenceScout';
 import { startCancellationRecoveryLoop } from '../runtime/cancellationRecovery';
 import { startDevStoryLoop } from '../runtime/kandev/devStories';
+import { KandevClient } from '../runtime/kandev/kandevClient';
+import { startPandaBridgeLoop } from '../runtime/kandev/pandaBridge';
 import { startFollowUpCheckLoop } from '../runtime/followUpRoutine';
 import { startBackgroundTaskLoop } from '../runtime/backgroundWorker';
 import { matchAttachmentUploadRoute, handleAttachmentUpload } from './attachmentUpload';
@@ -236,6 +238,7 @@ export function startApiServer(options: StartApiServerOptions): Promise<RunningA
       ...(options.scout ? { scout: options.scout } : {}),
     });
     startDevStoryLoop(options.db, options.broadcaster);
+    startPandaBridgeLoop({ db: options.db, kandev: new KandevClient(), dataDir: options.dataDir, executor });
     // The promise keeper: open commitments whose due moment has arrived are
     // checked against live mail. It runs in Core, so it keeps working while
     // the desktop window is closed, and it only ever reads.
@@ -251,7 +254,7 @@ export function startApiServer(options: StartApiServerOptions): Promise<RunningA
   // A cancellation whose owner stopped heart-beating must still reach a terminal
   // state, even when no client is watching at the time.
   startCancellationRecoveryLoop(options.db, options.broadcaster, executor);
-  const router = buildRouter(options.broadcaster, coreInfo, options.onShutdown, executor, researchRunner, capabilityRegistry, connectorRegistry, options.gmailSummaryBackend);
+  const router = buildRouter(options.broadcaster, coreInfo, options.onShutdown, executor, researchRunner, capabilityRegistry, connectorRegistry, options.gmailSummaryBackend, { dataDir: options.dataDir });
 
   const server = http.createServer(async (req, res) => {
     const correlationId = newId('corr');
@@ -315,6 +318,7 @@ export function startApiServer(options: StartApiServerOptions): Promise<RunningA
           params: matched.match.params,
           body,
           idempotencyKey,
+          pairingToken: typeof req.headers['x-panda-pairing'] === 'string' ? req.headers['x-panda-pairing'] : undefined,
         },
         matched.match,
       );

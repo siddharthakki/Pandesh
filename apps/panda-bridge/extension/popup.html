@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Pandesh Panda Bridge</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  :root { color-scheme: light dark; --fg:#1f2937; --bg:#ffffff; --muted:#6b7280; --line:#d1d5db; --accent:#2563eb; --warn:#d97706; }
+  @media (prefers-color-scheme: dark) { :root { --fg:#e5e7eb; --bg:#111827; --muted:#9ca3af; --line:#374151; } }
+  body { margin:0; width:340px; padding:12px 14px; font:13px/1.4 system-ui,sans-serif; color:var(--fg); background:var(--bg); }
+  h1 { font-size:15px; margin:0 0 8px; }
+  section { margin:10px 0; padding-top:10px; border-top:1px solid var(--line); }
+  input[type=text] { width:100%; box-sizing:border-box; padding:6px 8px; font:inherit; letter-spacing:.15em; text-transform:uppercase; border:1px solid var(--line); border-radius:8px; background:transparent; color:inherit; }
+  button { font:inherit; cursor:pointer; border:1px solid var(--line); background:transparent; color:inherit; border-radius:8px; padding:5px 10px; }
+  button.primary { background:var(--accent); border-color:var(--accent); color:#fff; }
+  .row { display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
+  .muted { color:var(--muted); }
+  .err { color:#b91c1c; }
+  .task { padding:6px 0; border-bottom:1px solid var(--line); }
+  .chip { font-size:11px; padding:1px 7px; border-radius:999px; background:var(--line); }
+  .badge { font-weight:600; padding:1px 8px; border-radius:999px; background:var(--line); }
+  .on { background:var(--warn); color:#fff; }
+</style>
+</head>
+<body>
+  <h1>🐼 Pandesh Panda Bridge</h1>
+  <div id="msg" class="muted"></div>
+
+  <section id="unpaired" hidden>
+    <div>Pair this browser with Pandesh. In Pandesh, create a pairing code, then enter it here.</div>
+    <div class="row" style="margin-top:8px"><input id="code" type="text" maxlength="8" placeholder="PAIRING CODE" autocomplete="off"><button class="primary" id="pair">Pair</button></div>
+  </section>
+
+  <section id="paired" hidden>
+    <div class="row"><span>Paired as <strong id="label"></strong></span><button id="unpair">Unpair</button></div>
+    <div class="row" style="margin-top:8px"><label><input type="checkbox" id="mode"> Panda Mode</label> <span id="badge" class="badge">OFF</span></div>
+    <div class="muted" style="margin-top:4px">When on, prompts typed in ChatGPT go to Pandesh instead of ChatGPT. Off by default.</div>
+    <div id="core" class="muted" style="margin-top:8px"></div>
+  </section>
+
+  <section id="tasksSection" hidden>
+    <strong>Recent tasks</strong>
+    <div id="tasks"></div>
+  </section>
+  <script src="popup.js"></script>
+</body>
+</html>
