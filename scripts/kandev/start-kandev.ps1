@@ -24,7 +24,7 @@ param(
   [string]$BindHost = '',
   [string]$Version = '0.97.0',
   # Short on purpose: Kandev binds an AF_UNIX socket under its home and Windows caps that path at ~108 chars.
-  [string]$KandevHome = (Join-Path $env:USERPROFILE '.kkd-kandev')
+  [string]$KandevHome = $(if ($env:KARKEDIKHA_KANDEV_HOME) { $env:KARKEDIKHA_KANDEV_HOME } else { Join-Path $env:USERPROFILE '.kkd-kandev' })
 )
 $ErrorActionPreference = 'Stop'
 $here = Split-Path -Parent $MyInvocation.MyCommand.Path

@@ -195,6 +195,7 @@ export interface StructuredErrorBody {
 
 export type CoreErrorCode =
   | 'unauthenticated'
+  | 'forbidden'
   | 'invalid_request'
   | 'not_found'
   | 'conflict'

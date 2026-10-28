@@ -5180,6 +5180,11 @@ api.onEvent((event) => {
       }
       return;
     }
+    if (event?.eventType === 'panda_bridge_open') {
+      // "Open in Pandesh" from the browser bridge: show the conversation the relayed task lives in.
+      if (event.text) await openConversationFromRail(String(event.text));
+      return;
+    }
     if (event?.eventType === 'command_queue_open' || event?.eventType === 'command_queue_confirm') {
       const toolsBtn = document.getElementById('btn-tools');
       if (toolsBtn) switchWorkstreamTab('tab-tools', toolsBtn);
