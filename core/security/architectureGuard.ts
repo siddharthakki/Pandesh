@@ -41,6 +41,8 @@ export const AUTHORITATIVE_PROCESS_SPAWN_ALLOWLIST: ReadonlySet<string> = new Se
   'core/runtime/kandev/devStories.ts',
   'core/runtime/kandev/kandevClient.ts',
   'core/runtime/kandev/storyAcceptance.ts',
+  // Runs `node --test` (fixed argv, minimal environment) in a fresh checkout of a delivered deliverable to verify it independently of the worker.
+  'core/runtime/operatorTestRun.ts',
   // Reads the local GPU's name and VRAM with one fixed-argument `nvidia-smi` query (no caller-supplied input); bounds concurrent GPU workloads.
   'core/runtime/hardwareCapacity.ts',
 

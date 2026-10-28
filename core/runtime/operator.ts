@@ -14,7 +14,6 @@ import * as crypto from 'node:crypto';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { spawnSync } from 'node:child_process';
 import type { CoreDatabase } from '../db/connection';
 import { CoreError } from '../domain/errors';
 import {
@@ -30,6 +29,7 @@ import { runHardenedGit } from '../security/hardenedGit';
 import type { ModelBackend } from './modelBackend';
 import type { ToolExecutionResult } from './toolRunner';
 import { validateCitations } from './researchRunner';
+import { runNodeTests } from './operatorTestRun';
 import { cancelBridgeTask, discoverExecutors, dispatchBridgeTask, refreshBridgeTask, type BridgeRuntime } from './kandev/pandaBridge';
 
 export interface OperatorDeps {
@@ -629,11 +629,9 @@ export class OperatorEngine {
     if (html.length === 0 && /\b(?:web\s?site|web\s?page|landing|page)\b/i.test(run.instruction)) return fail('the delivered work contains no HTML page');
     if (testFiles.length === 0) return fail('the delivered work contains no tests');
     // Pandesh runs the tests itself, in a fresh checkout, with a minimal environment.
-    const t = spawnSync(process.execPath, ['--test', '--test-reporter=tap'], { cwd: dir, encoding: 'utf8', timeout: 180_000, windowsHide: true, env: { PATH: process.env.PATH ?? '', SystemRoot: process.env.SystemRoot ?? '' } });
-    const text = `${t.stdout ?? ''}\n${t.stderr ?? ''}`;
-    const pass = Number(text.match(/^# pass (\d+)/m)?.[1] ?? 0);
-    const failed = Number(text.match(/^# fail (\d+)/m)?.[1] ?? 0);
-    if (t.status !== 0 || failed > 0 || pass < 1) return fail(`independent test run failed (pass=${pass}, fail=${failed}): ${text.slice(-300).trim()}`);
+    const t = runNodeTests(dir);
+    const { pass, fail: failed } = t;
+    if (!t.ok) return fail(`independent test run failed (pass=${pass}, fail=${failed}): ${t.tail}`);
     let responsive: boolean | null = null;
     if (/\bresponsive\b/i.test(run.instruction)) {
       const sources = files.filter(f => /\.(?:html?|css)$/i.test(f)).map(f => fs.readFileSync(path.join(dir, f), 'utf8')).join('\n');
