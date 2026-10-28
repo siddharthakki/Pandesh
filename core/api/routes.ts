@@ -12,6 +12,7 @@ import * as stories from '../domain/stories';
 import * as devStories from '../runtime/kandev/devStories';
 import { KandevClient } from '../runtime/kandev/kandevClient';
 import { registerBridgeRoutes } from './bridgeRoutes';
+import { registerOperatorRoutes } from './operatorRoutes';
 
 const kandevClient = new KandevClient();
 import * as dependencies from '../domain/dependencies';
@@ -460,6 +461,8 @@ export function buildRouter(
 
   // --- Panda bridge: instructions relayed from a paired browser (core/api/bridgeRoutes.ts) ---
   if (bridge) registerBridgeRoutes(router, { dataDir: bridge.dataDir, executor, kandev: kandevClient });
+  // --- Master operator: one instruction, many tools (core/api/operatorRoutes.ts) ---
+  if (bridge) registerOperatorRoutes(router, { dataDir: bridge.dataDir, executor, kandev: kandevClient });
 
   // --- Stories ---
   router.get('/v1/stories', (ctx) => {

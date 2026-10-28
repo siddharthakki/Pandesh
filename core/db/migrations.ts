@@ -1237,6 +1237,57 @@ CREATE INDEX IF NOT EXISTS idx_background_tasks_status ON background_tasks(statu
 CREATE INDEX IF NOT EXISTS idx_background_tasks_conversation ON background_tasks(conversationId);
 `;
 
+const MIGRATION_38_OPERATOR = `
+CREATE TABLE IF NOT EXISTS operator_runs (
+  id TEXT PRIMARY KEY,
+  instruction TEXT NOT NULL,
+  workflow TEXT NOT NULL,
+  privacy TEXT NOT NULL,
+  privacyReasons TEXT NOT NULL DEFAULT '[]',
+  pinnedTool TEXT,
+  pinnedModel TEXT,
+  consent TEXT NOT NULL DEFAULT '{}',
+  status TEXT NOT NULL,
+  statusDetail TEXT,
+  context TEXT NOT NULL DEFAULT '{}',
+  result TEXT,
+  createdAt TEXT NOT NULL,
+  updatedAt TEXT NOT NULL,
+  completedAt TEXT
+);
+CREATE TABLE IF NOT EXISTS operator_steps (
+  id TEXT PRIMARY KEY,
+  runId TEXT NOT NULL REFERENCES operator_runs(id),
+  idx INTEGER NOT NULL,
+  kind TEXT NOT NULL,
+  title TEXT NOT NULL,
+  needs TEXT,
+  approval TEXT,
+  status TEXT NOT NULL,
+  attempts INTEGER NOT NULL DEFAULT 0,
+  maxAttempts INTEGER NOT NULL DEFAULT 1,
+  tool TEXT,
+  selection TEXT,
+  output TEXT,
+  evidence TEXT,
+  error TEXT,
+  decidedBy TEXT,
+  startedAt TEXT,
+  completedAt TEXT,
+  UNIQUE (runId, idx)
+);
+CREATE TABLE IF NOT EXISTS operator_events (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  runId TEXT NOT NULL REFERENCES operator_runs(id),
+  stepIdx INTEGER,
+  kind TEXT NOT NULL,
+  detail TEXT,
+  at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_operator_runs_status ON operator_runs(status);
+CREATE INDEX IF NOT EXISTS idx_operator_events_run ON operator_events(runId, id);
+`;
+
 const MIGRATION_37_PANDA_BRIDGE = `
 CREATE TABLE IF NOT EXISTS bridge_pairing_codes (
   codeHash TEXT PRIMARY KEY,
@@ -1334,6 +1385,7 @@ export const MIGRATIONS: Migration[] = [
   { version: 35, description: 'Gmail inbox organization: durable change plans with the prior label state of every message', sql: MIGRATION_35_GMAIL_CHANGE_PLANS },
   { version: 36, description: 'Pandesh background delegated tasks: durable background worker execution, checkpoints and delivery ledger', sql: MIGRATION_36_BACKGROUND_TASKS },
   { version: 37, description: 'Panda bridge: browser pairings, relayed tasks (source reference, consent, routing) and durable checkpoints', sql: MIGRATION_37_PANDA_BRIDGE },
+  { version: 38, description: 'Master operator: durable multi-step runs with per-step tool selection, approvals, evidence and an event trail', sql: MIGRATION_38_OPERATOR },
 ];
 
 
