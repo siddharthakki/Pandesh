@@ -2660,9 +2660,16 @@ export class DesktopSession {
         requestId: this.active?.requestId,
         summary: `Core approval ${payload.resolution}${resolved.resumedAttemptId ? `; resumed ${resolved.resumedAttemptId}` : ''}`,
       });
-      if (payload.resolution === 'rejected') {
-        if (this.active && !this.active.terminal) {
-          await this.finishTurn('cancelled', 'Action rejected by user');
+      if (payload.resolution === 'rejected' && this.active && !this.active.terminal) {
+        // A rejection refuses one action; it does not end the attempt. Pi's in-loop approvals (run_checks, printing,
+        // connectors) keep running, tell the model "not done", and write the reply. Ending the turn here showed a false
+        // "cancelled", dropped that reply, and let the next message start while this attempt was still live — so the
+        // next turn saw the declined request unanswered and proposed it again. Core's own terminal event finishes the
+        // turn; finish here only if Core has already settled the attempt.
+        const attemptId = this.active.attemptId;
+        const current = await this.client?.getAttempt(attemptId).catch(() => undefined);
+        if (current && ['completed', 'failed', 'cancelled'].includes(current.status) && this.active?.attemptId === attemptId && !this.active.terminal) {
+          await this.finishTurn(current.status === 'completed' ? 'completed' : current.status === 'failed' ? 'failed' : 'cancelled', current.status === 'failed' ? 'Action rejected by user' : undefined);
         }
       }
     } catch (err) {
