@@ -12,6 +12,7 @@
  * validation and mutation policy are unchanged. Deterministic, so a restart reproduces it.
  */
 import type { MutationPolicy } from './mutationPolicy';
+import { hasSoftwareBuildIntent } from './softwareIntent';
 
 export type ToolSurface = 'workspace_code_change' | 'full';
 
@@ -88,7 +89,10 @@ export function deriveToolSurface(input: {
   if (input.mutationPolicy === 'denied') return { surface: 'full', reason: 'read_only_objective' };
   if (!input.fileModificationRequired) return { surface: 'full', reason: 'no_file_modification_required' };
   const text = String(input.objectiveText ?? '');
+  // Building software that merely mentions images is still a code change, never an image-generation task.
+  const buildsSoftware = hasSoftwareBuildIntent(text);
   for (const [domain, pattern] of NON_WORKSPACE_MARKERS) {
+    if (domain === 'image' && buildsSoftware) continue;
     if (pattern.test(text)) return { surface: 'full', reason: `objective_mentions_${domain}` };
   }
   return { surface: 'workspace_code_change', reason: 'workspace_code_change_objective' };
