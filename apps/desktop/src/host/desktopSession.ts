@@ -2118,7 +2118,7 @@ export class DesktopSession {
           contextRequirement: hasFolder ? 'medium' : 'small',
           vision: false,
           validationAndRepair: true,
-          ...(worker === 'hermes' ? { engine: 'hermes', specialist: true } : {}),
+          ...(worker === 'hermes' ? { engine: 'hermes', specialist: true } : worker === 'opencode' ? { engine: 'opencode' } : {}),
         },
         selectedProvider,
         selectedModel: model,

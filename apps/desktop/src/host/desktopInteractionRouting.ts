@@ -222,11 +222,13 @@ export function planDesktopInteraction(input: {
   const worker = (input.workerId || 'local-core').trim();
   const wantsFileCreation = Boolean(input.goalText) && detectFileCreationIntent(input.goalText!);
   if (!input.hasFolder) {
-    if (worker === 'autonomous-mission') {
+    if (worker === 'autonomous-mission' || worker === 'opencode') {
       return {
         mode: 'mission',
         requestedMode: 'saath_kar',
-        blockReason: 'Select a repository before starting an autonomous mission.',
+        blockReason: worker === 'opencode'
+          ? 'Select a repository before running OpenCode.'
+          : 'Select a repository before starting an autonomous mission.',
         needsWorkspace: true,
       };
     }

@@ -186,6 +186,21 @@ export class HermesEngine {
    */
   private static startAttempt: Promise<void> | null = null;
 
+  /** Where the Hermes CLI lives. The Windows installer puts only a hermes.cmd shim in hermes\bin; the real executable is in the agent's venv. */
+  static hermesBinaryCandidates(): string[] {
+    const home = path.join(process.env.LOCALAPPDATA || '', 'hermes');
+    return [
+      ...(process.env.HERMES_BIN ? [process.env.HERMES_BIN] : []),
+      path.join(home, 'bin', 'hermes.exe'),
+      path.join(home, 'hermes-agent', 'venv', 'Scripts', 'hermes.exe'),
+      path.join(home, 'bin', 'hermes'),
+    ];
+  }
+
+  static findHermesBinary(): string | undefined {
+    return HermesEngine.hermesBinaryCandidates().find((candidate) => candidate && fs.existsSync(candidate));
+  }
+
   /** Like checkCapabilities, but when the configured endpoint is local and
    * not answering, starts the installed Hermes gateway once (detached) and
    * waits for it, so the user never has to launch Hermes by hand. */
@@ -194,10 +209,8 @@ export class HermesEngine {
     if (first.available || !this.isEnabled()) return first;
     const base = new URL(this.getBaseUrl());
     if (!['127.0.0.1', 'localhost'].includes(base.hostname)) return first;
-    const bin = process.env.HERMES_BIN
-      || [path.join(process.env.LOCALAPPDATA || '', 'hermes', 'bin', 'hermes.exe'), path.join(process.env.LOCALAPPDATA || '', 'hermes', 'bin', 'hermes')]
-        .find((candidate) => fs.existsSync(candidate));
-    if (!bin) return { available: false, error: `${first.error ?? 'Hermes is not running'}; the Hermes CLI is not installed (set HERMES_BIN).` };
+    const bin = HermesEngine.findHermesBinary();
+    if (!bin) return { available: false, error: `${first.error ?? 'Hermes is not running'}; no Hermes executable was found (looked in ${HermesEngine.hermesBinaryCandidates().join(', ')}; set HERMES_BIN to override).` };
     if (!this.startAttempt) {
       this.startAttempt = (async () => {
         const child = cp.spawn(bin, ['gateway', 'run'], { detached: true, stdio: 'ignore', windowsHide: true });
