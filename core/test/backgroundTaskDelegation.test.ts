@@ -691,6 +691,21 @@ describe('Pandesh P0 — Nonblocking Background Task Delegation Suite', () => {
     expect(cancelA.intent).toBe('cancel');
   });
 
+  it('regression 2b: a control word about another subject never acts on the extraction task', () => {
+    const conv = createConversation(db, { mode: 'baat_kar', actor: 'user', title: 'Mixed Chat' });
+    const { task } = startGmailContractExtractionTask(db, broadcaster, { conversationId: conv.id, objective: 'Extract contracts' }, { autoStart: false });
+    for (const prompt of ['Stop the music', 'cancel the reminder for tomorrow', 'continue with the printer setup', 'what is the status of my parcel?', 'show me the results of the weather search']) {
+      expect(routeBackgroundTaskIntent(db, conv.id, prompt).shouldRoute, prompt).toBe(false);
+    }
+    // ...while requests about the task itself still reach it.
+    for (const [prompt, intent] of [['Stop', 'cancel'], ['cancel the extraction', 'cancel'], ['how is the extraction going?', 'status'], ['show contracts', 'results']] as const) {
+      const routing = routeBackgroundTaskIntent(db, conv.id, prompt);
+      expect(routing.shouldRoute, prompt).toBe(true);
+      expect(routing.intent, prompt).toBe(intent);
+    }
+    expect(getBackgroundTask(db, task.id)?.status).not.toBe('cancelled');
+  });
+
   it('regression 3: cancel followed by continue allocates a valid new attempt and syncs ledger and task', async () => {
     const conv = createConversation(db, { mode: 'baat_kar', actor: 'user', title: 'Cancel-Continue Ledger Sync' });
 

@@ -7,6 +7,7 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import type { LocalProcessingCapability } from '../../../../core/shared/wireTypes';
+import { probePocketTts } from './pocketTts';
 
 export interface DesktopLocalSpeechResponseStatus {
   capability: LocalProcessingCapability;
@@ -37,7 +38,16 @@ export function findBundledPiper(productRoot: string): { exe: string; model: str
 export function probeDesktopLocalSpeechResponse(
   productRoot: string,
   env: NodeJS.ProcessEnv = process.env,
+  preferred: 'piper' | 'pocket' = 'piper',
 ): DesktopLocalSpeechResponseStatus {
+  if (preferred === 'pocket') {
+    const pocket = probePocketTts(productRoot);
+    if (pocket.ready) {
+      return { capability: 'available', engine: 'pocket-tts (CPU)', blocker: '', voices: [pocket.voice] };
+    }
+    // Not provisioned: report Piper truthfully so speech still works.
+    return probeDesktopLocalSpeechResponse(productRoot, env, 'piper');
+  }
   const override = env.KARKEDIKHA_LOCAL_TTS_COMMAND?.trim();
   if (override) {
     return {

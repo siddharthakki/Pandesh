@@ -12,7 +12,10 @@
     "resolveJsonModule": true,
     "declaration": false,
     "sourceMap": true,
-    "types": ["node"]
+    "types": ["node"],
+    "paths": {
+      "@earendil-works/pi-ai/api/*": ["./node_modules/@earendil-works/pi-ai/dist/api/*"]
+    }
   },
   "include": ["core/**/*.ts"],
   "exclude": ["node_modules", "out-core-tsc", "core/test/**"]

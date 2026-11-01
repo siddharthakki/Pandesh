@@ -28,6 +28,23 @@ import { startToolInvocation, completeToolInvocation } from '../domain/toolInvoc
 import { recordRuntimeEvent } from '../domain/runtimeEvents';
 import { interactiveLane, DEFAULT_MAX_TOOL_YIELD_MS } from './interactiveLane';
 import { synthesizeContractInventory } from '../domain/contractInventory';
+import { subjectWords } from '../domain/conversationRelevance';
+
+/** Control verbs the routing below already matched; they are not a subject of their own. */
+const CONTROL_WORDS = ['cancel', 'stop', 'abort', 'show', 'view', 'see', 'display', 'check', 'status', 'going'];
+/** Words that name the extraction task itself. */
+const EXTRACTION_TASK_WORDS = ['contract', 'contracts', 'agreement', 'agreements', 'extraction', 'extract', 'gmail', 'inventory'];
+const NAMES_EXTRACTION_TASK = /\b(?:contracts?|agreements?|extract(?:ion)?|gmail|inventory)\b/i;
+
+/**
+ * What a control request ("cancel", "status?", "continue", "show results") is about: nothing but the control verb
+ * ('none'), the extraction task itself ('task'), or some other subject ('other' — "stop the music", "cancel the
+ * reminder"), which must never be routed to the extraction task.
+ */
+function controlRequestSubject(text: string): 'none' | 'task' | 'other' {
+  if (subjectWords(text, [...CONTROL_WORDS, ...EXTRACTION_TASK_WORDS]).length > 0) return 'other';
+  return NAMES_EXTRACTION_TASK.test(text) ? 'task' : 'none';
+}
 import { readConnector } from './assistantBrief';
 import type { ConnectorAdapter } from './connectors/connectorCapability';
 import type { ConnectorId } from '../shared/wireTypes';
@@ -136,7 +153,11 @@ export function routeBackgroundTaskIntent(
     ? getLatestBackgroundTask(db, { conversationId, taskType: 'gmail_contract_extraction' })
     : undefined);
 
-  const mentionsExtraction = /\b(?:extraction|contracts?|agreements?)\b/i.test(requestText);
+  // The latest request is authoritative: a control word routes here only when the request is about this task
+  // (it names it, or says nothing but the control word while such a task exists). "Stop the music" is not.
+  const subject = controlRequestSubject(requestText);
+  if (subject === 'other') return { shouldRoute: false, intent: null, activeTask, latestTask };
+  const mentionsExtraction = subject === 'task';
 
   if (isTaskStatusRequest(requestText)) {
     if (activeTask || mentionsExtraction) {
@@ -444,7 +465,7 @@ export function resumeBackgroundTask(
     actor: BACKGROUND_WORKER_ACTOR,
     clientId: BACKGROUND_WORKER_CLIENT_ID,
     context: {
-      workspaceRoot: options.cwd ?? prevAttempt?.context?.workspaceRoot ?? null,
+      workspaceRoot: options.cwd ?? null,
       allowedTools: ['gmail_search', 'gmail_read_thread', 'gmail_read_attachment'],
     },
   });
@@ -505,7 +526,7 @@ async function invokeTool(
   toolName: string,
   args: Record<string, unknown>,
   options: BackgroundWorkerOptions,
-  signal?: AbortSignal,
+  signal: AbortSignal,
 ): Promise<{ status: string; output: string }> {
   const inv = startToolInvocation(db, {
     attemptId,
@@ -595,7 +616,7 @@ async function executeGmailContractExtraction(
         actor: BACKGROUND_WORKER_ACTOR,
         clientId: BACKGROUND_WORKER_CLIENT_ID,
         context: {
-          workspaceRoot: options.cwd ?? attempt.context?.workspaceRoot ?? null,
+          workspaceRoot: options.cwd ?? null,
           allowedTools: ['gmail_search', 'gmail_read_thread', 'gmail_read_attachment'],
         },
       });

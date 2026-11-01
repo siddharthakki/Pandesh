@@ -75,7 +75,7 @@ export function createHermesSkillCapabilityAdapter(options: HermesSkillCapabilit
       skill: known.name,
       task,
       model: options.model,
-      provider: options.provider ?? 'ollama-launch',
+      provider: options.provider,
       workspaceRoot: ctx.cwd,
       signal: ctx.signal,
     });

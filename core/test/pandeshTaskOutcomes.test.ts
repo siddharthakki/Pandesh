@@ -125,6 +125,17 @@ describe('what a turn actually did', () => {
     expect(outcome.reason).toContain('did not happen');
   });
 
+  it("calls Pi's declined run_checks unverified, but a failing check an attempted failure", () => {
+    const declined = evaluateTurnOutcome([
+      call('run_checks', 'Not run: the user did not approve this command (deletes files or folders). Nothing was changed. Ask the user how to proceed.', true),
+    ]);
+    expect(declined.verdict).toBe('unverified');
+    expect(declined.refused).toEqual(['run_checks']);
+
+    const failing = evaluateTurnOutcome([call('run_checks', 'Check failed. Exit code 1.\n3 tests not run: suite aborted', true)]);
+    expect(failing.verdict).toBe('attempted_failed');
+  });
+
   it('calls a tool that ran and failed an attempted failure, not a refusal', () => {
     const outcome = evaluateTurnOutcome([
       call('run_command', 'Command exited with code 1\nnpm ERR! build failed', true),

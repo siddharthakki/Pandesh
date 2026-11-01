@@ -135,7 +135,18 @@ begin
     Exec(PandeshExe, '"' + TargetDir + '\app" --shutdown-for-upgrade', TargetDir, SW_HIDE, ewNoWait, ResultCode);
   end;
 
+#ifdef SmokeBuild
+  // Smoke build: never fall back to the owner's real profile. Only the
+  // isolated data directory handed in by the smoke harness is ever read.
+  DataDir := GetEnv('KARKEDIKHA_DESKTOP_DATA_DIR');
+  if DataDir = '' then
+  begin
+    Log('Smoke build without KARKEDIKHA_DESKTOP_DATA_DIR: skipping Core shutdown request');
+    Exit;
+  end;
+#else
   DataDir := ExpandConstant('{localappdata}\KarkeDikha\desktop');
+#endif
   CoreJson := DataDir + '\core.json';
   CoreToken := DataDir + '\core.token';
   if FileExists(CoreJson) and FileExists(CoreToken) then

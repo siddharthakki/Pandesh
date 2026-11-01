@@ -107,6 +107,13 @@ export function listWorkerOptions(input?: WorkerDiscoveryInput): WorkerOption[] 
       detail: 'Official Hermes Runs API for autonomous skills, tool execution, and governed workflows.',
     },
     {
+      id: 'opencode',
+      label: 'OpenCode — autonomous coding in the selected folder',
+      mode: 'mutation',
+      selectable: true,
+      detail: 'Runs the installed OpenCode agent on a local Ollama model inside the selected folder. If OpenCode is not installed the task fails with the reason; nothing else is substituted.',
+    },
+    {
       id: COPILOT_LOCAL_WORKER_ID,
       label: 'Copilot Local (external worker)',
       mode: 'mutation',
@@ -147,7 +154,7 @@ export function resolveWorkerProfile(
   const option = findWorkerOption(id, input);
   if (!option) return { ok: false, reason: `unknown worker '${id}'` };
   if (!option.selectable) return { ok: false, reason: `worker '${id}' is not implemented: ${option.detail}` };
-  if (option.id === 'hermes') return { ok: true, profile: 'hermes' };
+  if (option.id === 'hermes' || option.id === 'opencode') return { ok: true, profile: option.id };
   return { ok: true, profile: option.id === 'local-core' ? LOCAL_CORE_QUESTION_PROFILE : 'autonomous-mission' };
 }
 

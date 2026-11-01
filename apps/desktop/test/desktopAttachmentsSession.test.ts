@@ -85,14 +85,10 @@ describe('sending attachments through the existing Core pipeline', () => {
     expect(fs.readdirSync(path.join(dataDir, 'attachment-staging'))).toEqual([]); // bytes live in Core now
   });
 
-  it('a text-only model that cannot see images is replaced for that message by an installed vision model, and the host says so', async () => {
+  it('an explicitly selected text-only model is never silently replaced: the message is not sent and vision-capable alternatives are offered', async () => {
     host.stageAttachmentBytes('screenshot.png', PNG);
-    await host.submitTask('What is in this picture?');
-    expect(submits[0].requestedModel).toBe('gemma4:12b');
-    expect(submits[0].modelSelection.requiredCapabilities.vision).toBe(true);
-    expect(submits[0].modelSelection.userOverrode).toBe(true);
-    expect(host.snapshot().model).toBe('gemma4:12b');
-    expect(host.snapshot().modelNote).toContain("can't see images");
+    await expect(host.submitTask('What is in this picture?')).rejects.toThrow(/lfm:24b can't see images.*gemma4:12b/s);
+    expect(submits).toHaveLength(0);
   });
 
   it('keeps a vision-capable selected model, and never claims an override', async () => {

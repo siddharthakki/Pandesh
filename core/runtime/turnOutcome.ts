@@ -60,6 +60,9 @@ export interface TurnOutcome {
 export const CONSEQUENTIAL_PI_TOOLS: ReadonlySet<string> = new Set([
   'write_file',
   'run_command',
+  // Pi's own shell tool and printer: a declined deletion or print is a refused action, not a conversation.
+  'run_checks',
+  'print_test_page',
   'propose_file_change',
   'propose_text_edit',
   'gmail_create_draft',
@@ -100,7 +103,7 @@ export const CONSEQUENTIAL_PI_TOOLS: ReadonlySet<string> = new Set([
  * per-tool special case.
  */
 const REFUSED_PATTERN =
-  /\b(NOT DONE|NOT AVAILABLE|declined|denied|rejected|refused|not granted|has not been granted|not connected|is not connected|nothing was done|nothing was written|no action was taken|was not sent|did not happen|approval is still|awaiting approval)\b/i;
+  /\b(NOT DONE|NOT AVAILABLE|declined|denied|rejected|refused|not granted|has not been granted|not connected|is not connected|nothing was done|nothing was written|no action was taken|was not sent|did not happen|did not approve|approval is still|awaiting approval)\b|^Not run:/im;
 
 interface ToolResultShape {
   isError?: boolean;

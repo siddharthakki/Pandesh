@@ -191,6 +191,10 @@ if (fs.existsSync(partialJsonSrc)) {
 if (fs.existsSync(path.join(repoRoot, 'runtime', 'piper'))) {
   copyRecursive(path.join(repoRoot, 'runtime', 'piper'), path.join(outDir, 'runtime', 'piper'));
 }
+// Optional Pocket TTS (staged + sha256-verified by scripts/fetch-pocket-tts.mjs); ships with its NOTICE/LICENSE.
+if (fs.existsSync(path.join(repoRoot, 'runtime', 'pocket-tts', 'manifest.json'))) {
+  copyRecursive(path.join(repoRoot, 'runtime', 'pocket-tts'), path.join(outDir, 'runtime', 'pocket-tts'));
+}
 // Gmail connector transport: staged, digest-pinned binary — never on PATH,
 // never fetched by the packaged app itself at runtime (fetch-gws.mjs is a
 // build-time-only step). Missing/mismatched digest fails closed at the
