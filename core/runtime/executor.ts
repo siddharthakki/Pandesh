@@ -497,7 +497,7 @@ export class RuntimeExecutor {
    * caller-mismatched context is returned as an explicit HTTP error. */
   validateAttemptContext(attemptId: string, options: ExecuteOptions = {}) {
     const context = getAttemptContext(this.db, attemptId);
-    if (options.workingDirectory !== undefined && context.workspaceRoot !== undefined && path.resolve(options.workingDirectory) !== path.resolve(context.workspaceRoot)) {
+    if (options.workingDirectory !== undefined && context.workspaceRoot !== undefined && (context.workspaceRoot === null || path.resolve(options.workingDirectory) !== path.resolve(context.workspaceRoot))) {
       throw new CoreError(
         'context_mismatch',
         `working directory does not match frozen context for attempt '${attemptId}'`,

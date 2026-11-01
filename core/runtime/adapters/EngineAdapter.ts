@@ -4,7 +4,7 @@
  * Engines are decoupled and only invoked when configured or required.
  */
 
-export type EngineRole = 'coding' | 'chat' | 'collaborative' | 'specialist';
+export type EngineRole = 'general' | 'coding' | 'chat' | 'collaborative' | 'specialist';
 
 export interface EngineExecutionOptions {
   workingDirectory?: string;
@@ -46,7 +46,8 @@ export interface EngineAdapter {
   readonly description: string;
 
   isAvailable(): Promise<boolean>;
-  execute(prompt: string, options?: EngineExecutionOptions): Promise<EngineExecutionResult>;
+  /** Prompt-only execution. Optional: Pi runs through executeAssistantTurn, which needs Core's database and attempt. */
+  execute?(prompt: string, options?: EngineExecutionOptions): Promise<EngineExecutionResult>;
   abort?(): void;
 }
 

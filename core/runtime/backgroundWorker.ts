@@ -465,7 +465,7 @@ export function resumeBackgroundTask(
     actor: BACKGROUND_WORKER_ACTOR,
     clientId: BACKGROUND_WORKER_CLIENT_ID,
     context: {
-      workspaceRoot: options.cwd ?? prevAttempt?.context?.workspaceRoot ?? null,
+      workspaceRoot: options.cwd ?? null,
       allowedTools: ['gmail_search', 'gmail_read_thread', 'gmail_read_attachment'],
     },
   });
@@ -526,7 +526,7 @@ async function invokeTool(
   toolName: string,
   args: Record<string, unknown>,
   options: BackgroundWorkerOptions,
-  signal?: AbortSignal,
+  signal: AbortSignal,
 ): Promise<{ status: string; output: string }> {
   const inv = startToolInvocation(db, {
     attemptId,
@@ -616,7 +616,7 @@ async function executeGmailContractExtraction(
         actor: BACKGROUND_WORKER_ACTOR,
         clientId: BACKGROUND_WORKER_CLIENT_ID,
         context: {
-          workspaceRoot: options.cwd ?? attempt.context?.workspaceRoot ?? null,
+          workspaceRoot: options.cwd ?? null,
           allowedTools: ['gmail_search', 'gmail_read_thread', 'gmail_read_attachment'],
         },
       });

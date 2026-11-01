@@ -446,7 +446,7 @@ export function synthesizeContractInventory(toolCalls: Array<{ tool: string; res
             ? threadIdFromCall
             : (candidates.has(effectiveThreadId) ? effectiveThreadId : (candidates.has(msg.id) ? msg.id : effectiveThreadId));
 
-          const existing = candidates.get(key) || {
+          const existing: ContractCandidate = candidates.get(key) || {
             id: msg.id || key,
             threadId: effectiveThreadId,
             subject: msg.subject || '(no subject)',

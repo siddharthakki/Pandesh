@@ -32,7 +32,8 @@ export const WORKSPACE_CODE_CHANGE_TOOLS: readonly string[] = ['read_file', 'run
 export const NON_WORKSPACE_MARKERS: ReadonlyArray<readonly [string, RegExp]> = [
   ['email', /\b(?:e-?mails?|gmail|inbox|mailbox)\b/i],
   ['contract', /\b(?:contracts?|agreements?|leases?|ndas?|eula|employment|mou|terms of service|sla|statement of work|sow)\b/i],
-  ['continuation', /\b(?:continue|resume|proceed|status|updates?|keep going|what happened|next steps?)\b/i],
+  // "any updates?" / "status update" ask about earlier work; "Update the README" is a code change, not a continuation.
+  ['continuation', /\b(?:continue|resume|proceed|status|keep going|what happened|next steps?|any updates?|status updates?)\b|\bupdates?\s*\?/i],
   ['extraction', /\b(?:extract|extraction|inventory)\b/i],
   ['calendar', /\b(?:calendar|meetings?|appointments?)\b/i],
   ['reminder', /\b(?:remind(?:er|ers)?|alarms?|set (?:a |an )?timer)\b/i],

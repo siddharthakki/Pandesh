@@ -565,7 +565,7 @@ export class PiAgentEngine implements EngineAdapter {
     const models = createModels();
     models.setProvider(provider);
 
-    const toolCallsRecorded: Array<{ tool: string; args?: unknown; status?: string; result?: unknown }> = [];
+    const toolCallsRecorded: Array<{ tool: string; args?: unknown; status: string; result?: unknown }> = [];
     const invocationMap = new Map<string, string>();
     /** Markdown links for files this turn really shared to the paired phone (see send_to_phone). */
     const phoneShares: string[] = [];
