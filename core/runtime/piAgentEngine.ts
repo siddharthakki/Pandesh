@@ -29,12 +29,16 @@ import {
 import { finalizeTaskOutcome, ensureTaskOutcome, listTaskOutcomes, objectiveFromRequest, updateTaskOutcome } from '../domain/taskOutcomes';
 import { isInspectionOrAdvisoryOnly } from '../domain/actionIntent';
 import { evaluateTurnOutcome } from './turnOutcome';
+import { resolveActiveProject, isProjectInspectionRequest, gatherProjectEvidence, formatProjectEvidenceForModel, composeEvidenceAnswer, isReplyGroundedInProject, isLocalModelEndpoint } from './projectContext';
 import { resolveTimeExpression, localWallTimeToIso as zonedWallToIso, utcOffsetLabel as zoneOffsetLabel, upcomingDaysTable, isValidTimeZone } from '../domain/timeResolution';
 import { cancelScheduledTask, createScheduledTask, listScheduledTasks } from '../domain/scheduledTasks';
 import { transitionAttempt, failAttempt, getAttempt, settleCancelledAttempt } from '../domain/attempts';
 import { createApproval, getApproval, listApprovalsForAttempt, expireApproval } from '../domain/approvals';
 import { recordExecutionQuality } from '../domain/executionQuality';
 import { NON_WORKSPACE_MARKERS } from '../domain/taskToolSurface';
+import { boundConversationContext, isExplicitResumeRequest, selectRelevantTask, LATEST_REQUEST_AUTHORITATIVE } from '../domain/conversationRelevance';
+import type { PowerShellRunner } from './windowsPrinting';
+import { listInstalledPrinters, resolvePrinter, submitTestPage, hasPriorPrintSubmission, isShellPrintCommand, PRINT_SUBMITTING_EVENT, PRINT_FAILED_EVENT } from './windowsPrinting';
 import { synthesizeContractInventory } from '../domain/contractInventory';
 import { evaluateConnectorTruth, formatConnectorTruthPrompt } from '../domain/connectorTruth';
 import { OpenCodeEngine } from './opencodeEngine';
@@ -80,6 +84,34 @@ const RUN_CHECKS_TIMEOUT_MS = 120_000;
 
 const UNBACKED_ACTION_REQUEST = /\b(remind|schedule|create|make|write|add|delete|remove|move|rename|organi[sz]e|fix|run|set up|book|save|generate|install|update|cancel|draft)\b/i;
 const UNBACKED_COMPLETION_CLAIM = /\b(done|scheduled|created|saved|set!|all set|deleted|removed|moved|renamed|fixed|updated|cancelled|generated|wrote|written|i've (?:set|added|made|created))\b/i;
+
+/** Real PowerShell runner for the fixed printing scripts; the name/data travel in `env`, never in the script text. */
+const defaultPowerShellRunner: PowerShellRunner = (script, env, timeoutMs, signal) =>
+  new Promise((resolve) => {
+    const child = cp.spawn('powershell.exe', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command', script], {
+      windowsHide: true,
+      env: { ...process.env, ...env },
+    });
+    let stdout = '';
+    let stderr = '';
+    let timedOut = false;
+    child.stdout?.on('data', (d) => { if (stdout.length < 200_000) stdout += String(d); });
+    child.stderr?.on('data', (d) => { if (stderr.length < 50_000) stderr += String(d); });
+    const kill = () => {
+      if (child.pid !== undefined && child.exitCode === null) cp.spawnSync('taskkill', ['/PID', String(child.pid), '/T', '/F'], { windowsHide: true });
+    };
+    const timer = setTimeout(() => { timedOut = true; kill(); }, timeoutMs);
+    const onAbort = () => kill();
+    signal?.addEventListener('abort', onAbort, { once: true });
+    const done = (code: number | null, extra = '') => {
+      clearTimeout(timer);
+      signal?.removeEventListener('abort', onAbort);
+      resolve({ code, stdout, stderr: stderr + extra, timedOut });
+    };
+    child.on('error', (err) => done(1, err.message));
+    child.on('close', (code) => done(code));
+  });
+
 
 /** Runs a shell command without blocking Core's event loop. On timeout or
  * cancel the whole process tree is killed, so no orphaned child keeps
@@ -279,6 +311,8 @@ export interface PiRunContext {
   model?: string;
   fenceToken: string;
   signal?: AbortSignal;
+  /** Test seam: runs the fixed printing scripts. Production uses the real PowerShell runner. */
+  powerShellRunner?: PowerShellRunner;
 }
 
 /**
@@ -1950,6 +1984,12 @@ export class PiAgentEngine implements EngineAdapter {
             };
           }
 
+          if (isShellPrintCommand(String(args.command || ''))) {
+            return {
+              content: [{ type: 'text', text: "Not run: printing is not done through run_checks. Use 'list_printers' to find the installed printer and 'print_test_page' to print the Windows test page." }],
+              isError: true,
+            };
+          }
           const destructive = destructiveCommandReason(String(args.command || ''));
           if (destructive) {
             const approved = await requestToolApproval({
@@ -2127,6 +2167,71 @@ export class PiAgentEngine implements EngineAdapter {
         },
       },
     ];
+
+    // Printing: installed-printer inventory and the Windows test page, governed and verified.
+    const printNote = (eventType: string, metadata: Record<string, unknown>) => safeRecordRuntimeEvent(db, broadcaster, attemptId, eventType, { requestId, ...metadata }, actor);
+    const printEventsFor = (): Array<{ eventType: string; printer: string }> => {
+      try {
+        return db.all<{ eventType: string; metadata: string }>(
+          `SELECT eventType, metadata FROM runtime_events WHERE eventType IN (?, ?) AND metadata LIKE ? ORDER BY sequence ASC`,
+          [PRINT_SUBMITTING_EVENT, PRINT_FAILED_EVENT, `%"requestId":${JSON.stringify(requestId)}%`],
+        ).map((row) => ({ eventType: row.eventType, printer: String((JSON.parse(row.metadata) as { printer?: string }).printer ?? '') }));
+      } catch { return []; }
+    };
+    tools.push(
+      {
+        name: 'list_printers',
+        label: 'list_printers',
+        description: 'List the printers installed on this Windows PC (name, driver, port, status, default). Read-only. Use this for printer / connected-device inventory before printing.',
+        parameters: { type: 'object', properties: {} },
+        execute: async () => {
+          if (process.platform !== 'win32') return { content: [{ type: 'text', text: 'NOT AVAILABLE: printer inventory is only supported on Windows.' }], isError: true };
+          const inv = await listInstalledPrinters(ctx.powerShellRunner ?? defaultPowerShellRunner, signal);
+          if (!inv.ok) { printNote('printer_inventory_failed', { error: inv.error }); return { content: [{ type: 'text', text: `NOT DONE: ${inv.error}` }], isError: true }; }
+          printNote('printer_inventory', { count: inv.printers.length, printers: inv.printers.map((p) => p.name) });
+          const text = inv.printers.length === 0 ? 'No installed printers were found on this PC.' : JSON.stringify(inv.printers, null, 2);
+          return { content: [{ type: 'text', text }], details: inv.printers };
+        },
+      },
+      {
+        name: 'print_test_page',
+        label: 'print_test_page',
+        description: 'Print the Windows test page on an installed printer. Needs the operator\'s approval, prints at most once per request, and reports the spooler outcome as accepted, completed, failed or unknown. Does not create files or run shell commands.',
+        parameters: {
+          type: 'object',
+          properties: { printerName: { type: 'string', description: 'Exact installed printer name from list_printers (optional if the request names it or only one is installed)' } },
+        },
+        execute: async (_id: string, args: any) => {
+          const fail = (text: string) => ({ content: [{ type: 'text', text }], isError: true });
+          if (process.platform !== 'win32') return fail('NOT AVAILABLE: printing is only supported on Windows.');
+          const inv = await listInstalledPrinters(ctx.powerShellRunner ?? defaultPowerShellRunner, signal);
+          if (!inv.ok) return fail(`NOT DONE: ${inv.error}`);
+          const picked = resolvePrinter(inv.printers, requestText, args?.printerName ? String(args.printerName) : undefined);
+          if ('error' in picked) return fail(`NOT DONE: ${picked.error}${picked.candidates.length ? ` Installed printers: ${picked.candidates.join(', ')}.` : ''} Nothing was printed.`);
+          const printer = picked.printer.name;
+
+          if (hasPriorPrintSubmission(printEventsFor(), printer)) {
+            printNote('print_test_page_duplicate_blocked', { printer });
+            return fail(`NOT DONE: a test page was already submitted to "${printer}" for this request, so it was not sent again. Check the printer; if it did not print, ask the user to request it again.`);
+          }
+          const decision = await requestToolApproval({
+            toolName: 'print_test_page',
+            printer,
+            risk: 'prints one physical page',
+            cardText: `Pandesh wants to print the Windows test page on "${printer}" (${picked.printer.status}). One page will be sent to the printer.`,
+          });
+          if (decision.outcome !== 'approved') {
+            printNote('print_test_page_not_approved', { printer, decision: decision.outcome });
+            return fail(decision.outcome === 'rejected' ? 'NOT DONE: the user declined to print. Nothing was printed.' : decision.outcome === 'timed_out' ? 'NOT DONE: no answer to the print approval was recorded, so nothing was printed.' : `NOT DONE: the approval request could not be created (${decision.reason}). Nothing was printed.`);
+          }
+          if (signal?.aborted) return fail('NOT DONE: the request was cancelled before printing. Nothing was printed.');
+          printNote(PRINT_SUBMITTING_EVENT, { printer });
+          const result = await submitTestPage(printer, ctx.powerShellRunner ?? defaultPowerShellRunner, { signal });
+          printNote(result.outcome === 'failed' ? PRINT_FAILED_EVENT : 'print_test_page_result', { printer, outcome: result.outcome, detail: result.detail, jobIds: result.jobIds });
+          return { content: [{ type: 'text', text: `PRINT OUTCOME: ${result.outcome.toUpperCase()} on "${printer}". ${result.detail}` }], details: result, isError: result.outcome === 'failed' };
+        },
+      },
+    );
 
     // ── Phone delivery: the ORIGINAL file (name + bytes) through the paired mobile interface ──
     tools.push({
@@ -2373,13 +2478,70 @@ export class PiAgentEngine implements EngineAdapter {
     }
 
     const priorTaskOutcomes = conversationId ? listTaskOutcomes(db, { conversationId }) : [];
-    let activeTask = priorTaskOutcomes.find((t) => t.status === 'in_progress' || t.status === 'partial');
-    const isContinuation = /\b(?:continue|resume|proceed|status|updates?|what happened|next steps?)\b/i.test(prompt);
-    if (!activeTask && conversationId && isContinuation) {
-      activeTask = priorTaskOutcomes.find((t) => /contract|extract|agreement|inventory/i.test(t.objective));
-    }
+    // The latest request is authoritative: an open task is offered to the model only when the request refers to it.
+    const isContinuation = isExplicitResumeRequest(requestText);
+    const activeTask = selectRelevantTask(priorTaskOutcomes, requestText);
     const promptMentionsNonWorkspace = NON_WORKSPACE_MARKERS.some(([, pattern]: readonly [string, RegExp]) => pattern.test(prompt));
-    const needsTools = promptMentionsNonWorkspace || Boolean(activeTask) || (isContinuation && priorTaskOutcomes.length > 0);
+    // "This project" / "here" / "how do I run it" refer to the SELECTED workspace. Resolve it from the real folder
+    // before anything else: the persona-only shortcut below has no workspace and would answer as KarkeDikha.
+    const projectInspection = isProjectInspectionRequest(requestText);
+    const projectResolution = projectInspection ? resolveActiveProject(ctx.workspaceRoot) : null;
+    const projectEvidence = projectResolution?.ok ? gatherProjectEvidence(projectResolution.root) : null;
+    const ollamaEndpoint = (process.env.KARKEDIKHA_OLLAMA_URL || 'http://127.0.0.1:11434').replace(/\/$/, '');
+    // Private project files only ever reach a model that runs on this machine.
+    const projectModelIsLocal = isLocalModelEndpoint(ollamaEndpoint, selectedModel);
+
+    if (projectInspection && (projectResolution && (!projectResolution.ok || !projectEvidence || !projectModelIsLocal))) {
+      const reply = !projectResolution!.ok
+        ? projectResolution!.message
+        : projectEvidence && !projectModelIsLocal
+          ? `${composeEvidenceAnswer(projectEvidence, requestText)}\n\n(Answered locally from the project files; the selected model is not running on this machine, so the project contents were not sent to it.)`
+          : 'I could not read the project files.';
+      const answered = projectResolution!.ok && Boolean(projectEvidence);
+      let replyRecord: any = null;
+      try {
+        mutateWithBroadcast(db, broadcaster, () => {
+          replyRecord = appendMessage(db, conversationId, { role: 'assistant', content: reply, actor });
+        });
+      } catch {}
+      safeRecordRuntimeEvent(db, broadcaster, attemptId, answered ? 'project_inspection_answered_locally' : 'project_inspection_unavailable', {
+        reason: projectResolution!.ok ? 'model_not_local' : projectResolution!.reason,
+        workspace: ctx.workspaceRoot ?? null,
+        filesRead: projectEvidence?.filesRead.map((f) => f.path) ?? [],
+      }, actor);
+      try {
+        mutateWithBroadcast(db, broadcaster, () => {
+          ensureTaskOutcome(db, { attemptId, conversationId: conversationId || null, requestId, objective: objectiveFromRequest(requestText) });
+          finalizeTaskOutcome(db, attemptId, answered
+            ? { verdict: 'verified', reason: 'Project inspected from the selected workspace', performed: ['project_inspection'], refused: [], failed: [] }
+            : { verdict: 'unverified', reason: `Project not inspected: ${projectResolution!.ok ? 'no readable files' : projectResolution!.message}`, performed: [], refused: ['project_inspection'], failed: [] },
+          { answerMessageId: replyRecord?.id ?? null });
+        });
+      } catch {}
+      if (answered) {
+        try { mutateWithBroadcast(db, broadcaster, () => { transitionAttempt(db, attemptId, { toStatus: 'completed', fenceToken, actor }); }); } catch {}
+        safeRecordRuntimeEvent(db, broadcaster, attemptId, 'step_finish', { step: 1, engine: 'pi', durationMs: Date.now() - startTime, outcome: 'completed' }, actor);
+        return { success: true, reply };
+      }
+      // Execution finished, but nothing was answered or verified: the attempt does not report success.
+      try {
+        mutateWithBroadcast(db, broadcaster, () => {
+          failAttempt(db, attemptId, { failureReason: !projectResolution!.ok ? `project_unavailable: ${projectResolution!.reason}` : 'project_unreadable', fenceToken, actor });
+        });
+      } catch {}
+      safeRecordRuntimeEvent(db, broadcaster, attemptId, 'step_finish', { step: 1, engine: 'pi', durationMs: Date.now() - startTime, outcome: 'unverified', reason: 'project_unavailable' }, actor);
+      return { success: false, reply };
+    }
+    if (projectEvidence) {
+      safeRecordRuntimeEvent(db, broadcaster, attemptId, 'project_context_resolved', {
+        project: projectEvidence.name,
+        root: projectEvidence.root,
+        filesRead: projectEvidence.filesRead.map((f) => f.path),
+        languages: projectEvidence.languages,
+      }, actor);
+    }
+
+    const needsTools = promptMentionsNonWorkspace || Boolean(activeTask) || (isContinuation && priorTaskOutcomes.length > 0) || Boolean(projectEvidence);
     const simpleInteractive = !needsTools && prompt.trim().length < 200;
 
     function isDiagnosticsRequest(text: string): boolean {
@@ -2405,7 +2567,7 @@ export class PiAgentEngine implements EngineAdapter {
     }
 
     const apiBase = (process.env.KARKEDIKHA_OLLAMA_URL || 'http://127.0.0.1:11434').replace(/\/$/, '');
-    const simpleSystemPrompt = `You are Pandesh, the personal AI assistant for KarkeDikha (KKD). Assistant Name: Pandesh. Active model: ${selectedModel} via local Ollama provider (${apiBase}). Running on ${process.platform}. Current local time: ${new Date().toLocaleString('en-GB', { timeZone: localTimeZone, weekday: 'long', year: 'numeric', month: 'long', day: 'numeric', hour: '2-digit', minute: '2-digit' })} in time zone ${localTimeZone}. Answer simple conversational questions directly and concisely. When asked what model you are running or what model is active, state that you are running on '${selectedModel}' via local Ollama. If the user asks you to perform an action, search emails or files, or access tools, offer to do so directly. Never expose secrets or perform destructive actions.`;
+    const simpleSystemPrompt = `You are Pandesh, the personal AI assistant for KarkeDikha (KKD). Assistant Name: Pandesh. Active model: ${selectedModel} via local Ollama provider (${apiBase}). Running on ${process.platform}. Current local time: ${new Date().toLocaleString('en-GB', { timeZone: localTimeZone, weekday: 'long', year: 'numeric', month: 'long', day: 'numeric', hour: '2-digit', minute: '2-digit' })} in time zone ${localTimeZone}. Answer only the user's most recent message; never repeat or re-deliver an earlier answer unless asked. Answer simple conversational questions directly and concisely. When asked what model you are running or what model is active, state that you are running on '${selectedModel}' via local Ollama. If the user asks you to perform an action, search emails or files, or access tools, offer to do so directly. Never expose secrets or perform destructive actions.`;
 
     let systemPrompt = simpleInteractive ? simpleSystemPrompt : `You are Pandesh, the personal AI assistant for KarkeDikha (KKD).
 Product: KarkeDikha (KKD).
@@ -2424,6 +2586,13 @@ ACTIVE WORKFLOW IN THIS CONVERSATION:
 - Existing Evidence: ${JSON.stringify(activeTask.evidence || [])}
 When the user asks to continue, resume, or check progress/updates, resume this workflow from where it left off, inspect remaining candidates with tools, update 'update_task_outcome', and deliver the completed result without restarting from scratch or hallucinating.
 ` : ''}
+
+${LATEST_REQUEST_AUTHORITATIVE}
+
+${projectEvidence ? formatProjectEvidenceForModel(projectEvidence) : ''}
+PRINTING (STRICT RULES):
+- To see installed printers call 'list_printers'. To print a Windows test page call 'print_test_page' (it needs the operator's approval). Never use 'run_checks' or any shell command to print, and never create a file to print a test page.
+- Report the print outcome exactly as the tool states it: accepted, completed, failed or unknown. Never claim paper came out.
 
 NAVIGATION & WORKFLOW (STRICT RULES):
 - There is NO "Artifacts tab" in the interface. Never instruct the user to check an "Artifacts tab".
@@ -2571,8 +2740,10 @@ TRUTHFULNESS & BEHAVIORAL PROTOCOL:
           systemPrompt += formatConnectorTruthPrompt(connectorState, { activeTask });
         }
         priorTurnsTotal = turns.length;
-        const keptTurns = turns.slice(-10);
+        const bounded = boundConversationContext(turns.map((m) => ({ role: m.role, content: String(m.content) })), requestText);
+        const keptTurns = bounded.turns;
         omittedTurnsCount = Math.max(0, priorTurnsTotal - keptTurns.length);
+        if (bounded.newTopic) safeRecordRuntimeEvent(db, broadcaster, attemptId, 'context_new_topic', { priorTurns: priorTurnsTotal, kept: keptTurns.length }, actor);
         for (const m of keptTurns) {
           priorMessages.push({
             role: m.role,
@@ -2969,10 +3140,25 @@ TRUTHFULNESS & BEHAVIORAL PROTOCOL:
       finalReply += '\n\nCorrection: nothing was sent to your phone in this turn — no file was shared to the paired phone.';
     }
 
+    // A project question is answered only from the selected project's own files: a reply that asks which project, or that
+    // describes Pandesh/KarkeDikha as the project, is replaced by the answer Core can prove from the evidence it read.
+    let projectReplyReplaced = false;
+    if (projectEvidence && !isReplyGroundedInProject(finalReply, projectEvidence)) {
+      finalReply = composeEvidenceAnswer(projectEvidence, requestText);
+      projectReplyReplaced = true;
+      safeRecordRuntimeEvent(db, broadcaster, attemptId, 'project_reply_replaced', { reason: 'reply not grounded in the active project', project: projectEvidence.name }, actor);
+    }
+
     // What actually happened, decided from the tool ledger rather than from
     // the model's own sentence. A turn that said "done" without a tool
     // behind it is not a completed task.
-    const turnOutcome = evaluateTurnOutcome(toolCallsRecorded);
+    let turnOutcome = evaluateTurnOutcome(toolCallsRecorded);
+    if (projectEvidence && turnOutcome.verdict === 'conversational') {
+      // The model producing text is execution completion. The question counts as answered and verified only because
+      // Core read the project's files and the reply is grounded in them.
+      turnOutcome = { verdict: 'verified', reason: `answered from ${projectEvidence.filesRead.length} file(s) read in ${projectEvidence.root}${projectReplyReplaced ? ' (reply replaced by evidence-only answer)' : ''}`, performed: ['project_inspection'], refused: [], failed: [] };
+      try { mutateWithBroadcast(db, broadcaster, () => { ensureTaskOutcome(db, { attemptId, conversationId: conversationId || null, requestId, objective: objectiveFromRequest(requestText) }); }); } catch {}
+    }
     if (turnOutcome.verdict === 'unverified' && !/not (done|available|created|sent|made)|declined|could not|was not|denied/i.test(finalReply)) {
       // The reply must not leave the impression that the work happened.
       finalReply += `\n\nCorrection: the requested work did not happen in this turn — ${turnOutcome.reason}.`;
