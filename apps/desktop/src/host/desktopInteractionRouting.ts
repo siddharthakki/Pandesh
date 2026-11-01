@@ -167,7 +167,7 @@ export function extractImageGenerationPrompt(text: string): string {
  * `get_weather` capability, never left to the model's own tool-calling. */
 const WEATHER_NOUN = /\b(weather|temperature|forecast|rain(?:ing|y)?|snow(?:ing|y)?|humidity)\b/i;
 const WEATHER_LOCATION_PHRASE =
-  /\b(?:weather|temperature|forecast)\b(?:\s+\w+)*?\s+(?:in|for|at)\s+([a-z][a-z\s.'-]*?)(?=\s+(?:right now|today|currently|now|this week)\b|[?.!]|$)/i;
+  /\b(?:weather|temperature|forecast)\b(?:\s+\w+)*?\s+(?:in|for|at)\s+([a-z][a-z\s.'-]*?)(?=\s+(?:right now|today|tonight|tomorrow|currently|now|this (?:week|morning|afternoon|evening|weekend)|for (?:today|tonight|tomorrow|now|this)|please)\b|[?.!,]|$)/i;
 
 export function detectWeatherIntent(text: string): boolean {
   const trimmed = text.trim();

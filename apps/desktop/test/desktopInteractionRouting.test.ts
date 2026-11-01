@@ -156,6 +156,9 @@ describe('extractWeatherLocation', () => {
     expect(extractWeatherLocation("what's the weather in Ulm?")).toBe('Ulm');
     expect(extractWeatherLocation('give me the forecast for New York')).toBe('New York');
     expect(extractWeatherLocation('what is the temperature in Bengaluru right now')).toBe('Bengaluru');
+    expect(extractWeatherLocation('Please look up the weather in Ulm for today.')).toBe('Ulm');
+    expect(extractWeatherLocation('what is the weather in Ulm today?')).toBe('Ulm');
+    expect(extractWeatherLocation('weather in Ulm for tomorrow')).toBe('Ulm');
   });
 
   it('returns null rather than guessing when no location phrase is present', () => {
