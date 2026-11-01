@@ -15,6 +15,8 @@ import { appendMessage, listMessages } from '../domain/conversations';
 import { registerArtifact } from '../domain/artifacts';
 import { listAttachmentsByMessageForConversation } from '../domain/attachments';
 import { finalPath as attachmentFinalPath } from '../attachments/storage';
+import { extractDocument } from '../attachments/documentExtraction';
+import { detectContent } from '../attachments/mime';
 import { isCredentialFilePath, redactSecrets as redactCredentialShapes } from '../platform/credentialStore';
 import { createResearchEvidenceRunner } from './researchCapability';
 import { completeReminder, createNote, createReminder, listReminders } from '../domain/everydayTools';
@@ -84,6 +86,27 @@ const RUN_CHECKS_TIMEOUT_MS = 120_000;
 
 const UNBACKED_ACTION_REQUEST = /\b(remind|schedule|create|make|write|add|delete|remove|move|rename|organi[sz]e|fix|run|set up|book|save|generate|install|update|cancel|draft)\b/i;
 const UNBACKED_COMPLETION_CLAIM = /\b(done|scheduled|created|saved|set!|all set|deleted|removed|moved|renamed|fixed|updated|cancelled|generated|wrote|written|i've (?:set|added|made|created))\b/i;
+
+/** Largest PDF/DOCX read_file will extract (text layer only, locally). */
+const MAX_READ_DOCUMENT_BYTES = 25 * 1024 * 1024;
+
+/**
+ * The text read_file hands the model. A PDF or DOCX (decided from its bytes, not its name) is extracted locally with
+ * the same extractor attachments use, page by page; decoding it as UTF-8 only ever produced binary noise.
+ */
+async function readFileTextForModel(full: string, size: number): Promise<string> {
+  const head = Buffer.alloc(Math.min(size, 64));
+  const fd = fs.openSync(full, 'r');
+  try { fs.readSync(fd, head, 0, head.length, 0); } finally { fs.closeSync(fd); }
+  const detected = detectContent(head, path.extname(full));
+  if (detected?.kind !== 'document') return fs.readFileSync(full, 'utf8');
+  if (size > MAX_READ_DOCUMENT_BYTES) throw new Error(`the document is ${Math.round(size / 1024 / 1024)} MB; documents over ${MAX_READ_DOCUMENT_BYTES / 1024 / 1024} MB are not extracted`);
+  const extraction = await extractDocument(full, detected.mimeType);
+  if (!extraction) throw new Error(`text extraction is not supported for ${detected.mimeType}`);
+  const text = extraction.sections.map((s) => (s.page !== null ? `[page ${s.page}]\n${s.text}` : s.text)).join('\n');
+  if (!text.trim()) throw new Error('the document has no extractable text layer (it may be a scanned image)');
+  return text;
+}
 
 /** Real PowerShell runner for the fixed printing scripts; the name/data travel in `env`, never in the script text. */
 const defaultPowerShellRunner: PowerShellRunner = (script, env, timeoutMs, signal) =>
@@ -1900,7 +1923,7 @@ export class PiAgentEngine implements EngineAdapter {
               };
             }
 
-            const text = fs.readFileSync(full, 'utf8');
+            const text = await readFileTextForModel(full, stat.size);
             const lines = text.split(/\r?\n/);
             const start = typeof args.startLine === 'number' && args.startLine >= 1 ? args.startLine : 1;
             const end = typeof args.endLine === 'number' && args.endLine >= start ? Math.min(args.endLine, lines.length) : Math.min(start + 400, lines.length);
