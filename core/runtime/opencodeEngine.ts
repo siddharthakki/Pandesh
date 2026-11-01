@@ -182,6 +182,8 @@ export class OpenCodeEngine {
       env: {
         ...process.env,
         OPENCODE_DISABLE_AUTOUPDATE: '1',
+        // OpenCode prefers an inherited PWD over the spawn cwd, so a Core started from a terminal would work in that terminal's folder.
+        PWD: workspaceRoot,
         OPENCODE_SERVER_PASSWORD: password,
         OPENCODE_PASSWORD: password,
       },
@@ -340,6 +342,8 @@ export class OpenCodeEngine {
       env: {
         ...process.env,
         OPENCODE_DISABLE_AUTOUPDATE: '1',
+        // OpenCode prefers an inherited PWD over the spawn cwd, so a Core started from a terminal would work in that terminal's folder.
+        PWD: workspaceRoot,
       },
       stdio: ['ignore', 'pipe', 'pipe'],
       shell: isCmd,
@@ -599,7 +603,17 @@ export class OpenCodeEngine {
     // A clean exit is not an outcome. Completed needs evidence: files that really changed, a tool call that really
     // succeeded, or an answer OpenCode actually wrote. Otherwise the attempt fails and says nothing was verified.
     const succeededToolCalls = toolCallsRecorded.filter((call) => call.status === 'succeeded').length;
-    const unverifiedReason = exitCode === 0 && modifiedFiles.length === 0 && succeededToolCalls === 0 && !reply
+    const outsideWrites = toolCallsRecorded
+      .filter((call) => call.status === 'succeeded' && /^(write|edit|multiedit|patch)$/i.test(call.tool))
+      .map((call) => { try { const a = JSON.parse(String(call.args)); return String(a.path ?? a.filePath ?? ''); } catch { return ''; } })
+      .filter((target) => {
+        if (!target || !path.isAbsolute(target)) return false;
+        const rel = path.relative(workspaceRoot, target);
+        return rel === '..' || rel.startsWith(`..${path.sep}`) || path.isAbsolute(rel);
+      });
+    const unverifiedReason = outsideWrites.length > 0
+      ? `OpenCode wrote outside the selected workspace (${outsideWrites[0]}), so this is not reported as done. The file was left where it is; nothing in ${workspaceRoot} was verified.`
+      : exitCode === 0 && modifiedFiles.length === 0 && succeededToolCalls === 0 && !reply
       ? (toolCallsRecorded.length > 0
         ? `OpenCode exited normally, but all ${toolCallsRecorded.length} of its tool calls failed, no file changed and it wrote no answer. Nothing was verified.`
         : 'OpenCode exited normally, but it wrote no answer, changed no file and ran no tool. Nothing was verified.')
@@ -690,6 +704,8 @@ export class OpenCodeEngineAdapter implements EngineAdapter {
       env: {
         ...process.env,
         OPENCODE_DISABLE_AUTOUPDATE: '1',
+        // OpenCode prefers an inherited PWD over the spawn cwd, so a Core started from a terminal would work in that terminal's folder.
+        PWD: workspaceRoot,
         OPENCODE_SERVER_PASSWORD: serverInfo.password,
         OPENCODE_PASSWORD: serverInfo.password,
       },
