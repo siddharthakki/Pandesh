@@ -401,6 +401,8 @@ export class OpenCodeEngine {
                 } catch {}
               }
               safeRecordRuntimeEvent(db, broadcaster, attemptId, 'tool_result', { toolName, success: true, invocationId: invId }, actor);
+              const done = [...toolCallsRecorded].reverse().find((call) => call.tool === toolName && call.status === 'started');
+              if (done) done.status = 'succeeded';
               activeToolInvocations.delete(partId);
             } else if (state === 'failed' || state === 'error') {
               if (invId) {
@@ -415,6 +417,8 @@ export class OpenCodeEngine {
                   });
                 } catch {}
               }
+              const broke = [...toolCallsRecorded].reverse().find((call) => call.tool === toolName && call.status === 'started');
+              if (broke) broke.status = 'failed';
               activeToolInvocations.delete(partId);
             }
           } else if (evType === 'text') {
@@ -480,10 +484,6 @@ export class OpenCodeEngine {
         .map((e) => e.part?.text || e.text || '')
         .join('\n')
         .trim();
-    }
-
-    if (!reply && exitCode === 0) {
-      reply = 'Autonomous coding task executed successfully by OpenCode.';
     }
 
     // Detect modified files
@@ -584,7 +584,16 @@ export class OpenCodeEngine {
       };
     }
 
-    if (exitCode === 0) {
+    // A clean exit is not an outcome. Completed needs evidence: files that really changed, a tool call that really
+    // succeeded, or an answer OpenCode actually wrote. Otherwise the attempt fails and says nothing was verified.
+    const succeededToolCalls = toolCallsRecorded.filter((call) => call.status === 'succeeded').length;
+    const unverifiedReason = exitCode === 0 && modifiedFiles.length === 0 && succeededToolCalls === 0 && !reply
+      ? (toolCallsRecorded.length > 0
+        ? `OpenCode exited normally, but all ${toolCallsRecorded.length} of its tool calls failed, no file changed and it wrote no answer. Nothing was verified.`
+        : 'OpenCode exited normally, but it wrote no answer, changed no file and ran no tool. Nothing was verified.')
+      : null;
+
+    if (exitCode === 0 && !unverifiedReason) {
       try {
         mutateWithBroadcast(db, broadcaster, () => {
           transitionAttempt(db, attemptId, { toStatus: 'completed', fenceToken, actor });
@@ -607,7 +616,7 @@ export class OpenCodeEngine {
         metrics: { totalMs },
       };
     } else {
-      const errMessage = spawnError ?? (stderr.slice(-300) || `OpenCode exited with code ${exitCode}, and printed nothing on its error stream (last output: ${stdout.slice(-160).replace(/\s+/g, ' ') || 'none'})`);
+      const errMessage = spawnError ?? unverifiedReason ?? (stderr.slice(-300) || `OpenCode exited with code ${exitCode}, and printed nothing on its error stream (last output: ${stdout.slice(-160).replace(/\s+/g, ' ') || 'none'})`);
       try {
         mutateWithBroadcast(db, broadcaster, () => {
           failAttempt(db, attemptId, {

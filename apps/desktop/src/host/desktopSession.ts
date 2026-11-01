@@ -3754,10 +3754,12 @@ export class DesktopSession {
     this.taskScope = null;
     const requestId = `everyday_req_${Date.now()}`;
     const attemptId = `everyday_att_${Date.now()}`;
+    const conversationId = await this.ensureCapabilityConversation('Everyday');
+    await this.recordConversationMessage(conversationId, 'user', text);
     this.active = {
       attemptId,
       requestId,
-      conversationId: this.voiceConversationId ?? `everyday_${Date.now()}`,
+      conversationId,
       goal: text,
       tokenBuffer: '',
       terminal: false,
@@ -3817,6 +3819,7 @@ export class DesktopSession {
         }
       }
       await this.refreshEverydayTools();
+      await this.recordConversationMessage(conversationId, 'assistant', reply);
       this.active.terminal = true;
       this.lastTurnOutcome = 'completed';
       this.turnOutcomeKind = 'answered';
@@ -3832,6 +3835,7 @@ export class DesktopSession {
       this.drainSubmissionQueue();
       return { requestId, attemptId, model: 'everyday-tools' };
     } catch (err) {
+      await this.recordConversationMessage(conversationId, 'assistant', `That did not complete: ${(err as Error).message}`);
       this.active.terminal = true;
       this.lastTurnOutcome = 'failed';
       this.turnOutcomeKind = 'failed';
@@ -4010,10 +4014,14 @@ export class DesktopSession {
     this.taskScope = null;
     const requestId = `weather_req_${Date.now()}`;
     const attemptId = `weather_att_${Date.now()}`;
+    // The turn belongs to the conversation the person is in, and is written to it: a reply that only exists as a live
+    // event disappears the next time the thread is re-read from Core.
+    const conversationId = await this.ensureCapabilityConversation('Weather');
+    await this.recordConversationMessage(conversationId, 'user', text);
     this.active = {
       attemptId,
       requestId,
-      conversationId: this.voiceConversationId ?? `weather_${Date.now()}`,
+      conversationId,
       goal: text,
       tokenBuffer: '',
       terminal: false,
@@ -4037,6 +4045,7 @@ export class DesktopSession {
         // "Error invoking remote method 'desktop:submitTask'" IPC failure
         // instead of a normal spoken/answered reply.
         reply = 'Which location? Ask again with a place name, e.g. "what is the weather in Ulm".';
+        await this.recordConversationMessage(conversationId, 'assistant', reply);
         this.active.terminal = true;
         this.lastTurnOutcome = 'completed';
         this.turnOutcomeKind = 'answered';
@@ -4056,8 +4065,9 @@ export class DesktopSession {
       } else if (result.outcome === 'executed') {
         reply = result.message;
       } else {
-        reply = result.reason;
+        reply = `I could not get the weather: ${result.reason}`;
       }
+      await this.recordConversationMessage(conversationId, 'assistant', reply);
       this.active.terminal = true;
       const failed = result.outcome === 'failed' || result.outcome === 'unavailable' || result.outcome === 'denied';
       this.lastTurnOutcome = failed ? 'failed' : 'completed';
@@ -4066,6 +4076,7 @@ export class DesktopSession {
       this.drainSubmissionQueue();
       return { requestId, attemptId: result.attemptId ?? attemptId, model: 'weather' };
     } catch (err) {
+      await this.recordConversationMessage(conversationId, 'assistant', `I could not get the weather: ${(err as Error).message}`);
       this.active.terminal = true;
       this.lastTurnOutcome = 'failed';
       this.turnOutcomeKind = 'failed';
