@@ -111,6 +111,19 @@ export function boundConversationContext<T extends ContextTurn>(turns: readonly 
   return { turns: capped, omitted: Math.max(0, turns.length - capped.length), newTopic: !related };
 }
 
+const SMALL_TALK = new RegExp(String.raw`^(?:(?:hi|hello|hey|hiya|yo|namaste|good (?:morning|afternoon|evening|night)|(?:many )?thanks(?: a lot| so much)?|thank you(?: so much| very much)?|thx|ty|cheers|ok(?:ay)?|cool|nice|great|awesome|perfect|got it|sounds good|bye|goodbye|see you(?: later)?|how are you(?: doing)?|who are you|what(?:'s| is) your name|what model are you(?: running| using)?|which model are you(?: running| using)?)[\s,.!?]*)+$`, 'i');
+
+/**
+ * True only for a message that is entirely small talk: a greeting, thanks, an acknowledgement, a farewell, or a
+ * question about the assistant itself. Such a turn is answered without tools. Everything else — however short, and
+ * whether or not it names a known service — is offered the tools, so "check my mail" or "how hot is it in Delhi"
+ * is acted on instead of answered with an offer to act.
+ */
+export function isSmallTalk(text: string): boolean {
+  const t = String(text ?? '').trim().replace(/^(?:pandesh|panda)[\s,!]+|[\s,]+(?:pandesh|panda)(?=[\s.!?]*$)/gi, '');
+  return t.length > 0 && t.length <= 80 && SMALL_TALK.test(t);
+}
+
 /** Appended to the system prompt so the model answers the latest request and never re-answers history. */
 export const LATEST_REQUEST_AUTHORITATIVE = `LATEST REQUEST IS AUTHORITATIVE (STRICT RULE):
 - Answer only the user's most recent message. Earlier messages are background; never repeat, summarize or re-deliver an earlier answer unless the latest message asks for it.
