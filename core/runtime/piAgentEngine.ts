@@ -1959,7 +1959,7 @@ export class PiAgentEngine implements EngineAdapter {
               risk: destructive,
               cardText: `Pandesh wants to run a command that ${destructive} in ${targetDir}:\n${String(args.command).slice(0, 600)}`,
             });
-            if (!approved) {
+            if (approved.outcome !== 'approved') {
               return {
                 content: [{ type: 'text', text: `Not run: the user did not approve this command (${destructive}). Nothing was changed. Ask the user how to proceed.` }],
                 isError: true,
