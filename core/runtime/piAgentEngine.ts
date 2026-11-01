@@ -36,7 +36,7 @@ import { transitionAttempt, failAttempt, getAttempt, settleCancelledAttempt } fr
 import { createApproval, getApproval, listApprovalsForAttempt, expireApproval } from '../domain/approvals';
 import { recordExecutionQuality } from '../domain/executionQuality';
 import { NON_WORKSPACE_MARKERS } from '../domain/taskToolSurface';
-import { boundConversationContext, isExplicitResumeRequest, selectRelevantTask, LATEST_REQUEST_AUTHORITATIVE } from '../domain/conversationRelevance';
+import { boundConversationContext, isExplicitResumeRequest, isSmallTalk, selectRelevantTask, LATEST_REQUEST_AUTHORITATIVE } from '../domain/conversationRelevance';
 import type { PowerShellRunner } from './windowsPrinting';
 import { listInstalledPrinters, resolvePrinter, submitTestPage, hasPriorPrintSubmission, isShellPrintCommand, PRINT_SUBMITTING_EVENT, PRINT_FAILED_EVENT } from './windowsPrinting';
 import { synthesizeContractInventory } from '../domain/contractInventory';
@@ -2542,7 +2542,9 @@ export class PiAgentEngine implements EngineAdapter {
     }
 
     const needsTools = promptMentionsNonWorkspace || Boolean(activeTask) || (isContinuation && priorTaskOutcomes.length > 0) || Boolean(projectEvidence);
-    const simpleInteractive = !needsTools && prompt.trim().length < 200;
+    // Tools are offered by default. Only a turn that is nothing but small talk is answered without them: a keyword
+    // list cannot enumerate everything a user may ask for, and a tool-less model can only offer to act, not act.
+    const simpleInteractive = !needsTools && !ctx.images?.length && prompt === requestText && isSmallTalk(requestText);
 
     function isDiagnosticsRequest(text: string): boolean {
       return /(?:run|do|perform)\s+(?:a\s+|the\s+)?diagnostic|diagnose\s+(?:my|this|the)\s+(?:pc|computer|system|setup|machine)|check\s+(?:my|this|the)\s+(?:pc|computer|system|setup|machine|health)|system\s+(?:info|health|status|diagnostics)|hardware\s+(?:info|status|telemetry)/i.test(text);
