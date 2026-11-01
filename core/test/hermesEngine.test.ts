@@ -257,6 +257,8 @@ describe('HermesEngine & HermesEngineAdapter', () => {
 
     const workspaceDir = path.join(tempDir, 'workspace');
     fs.mkdirSync(workspaceDir, { recursive: true });
+    // The file the fake Hermes reports writing really exists, so the run has evidence.
+    fs.writeFileSync(path.join(workspaceDir, 'hermes_output.txt'), 'hello');
 
     const result = await HermesEngine.executeHermesRun({
       db,
@@ -276,7 +278,8 @@ describe('HermesEngine & HermesEngineAdapter', () => {
     const runReq = serverRequests.find((r) => r.url === '/v1/runs' && r.method === 'POST');
     expect(runReq).toBeDefined();
     expect(runReq?.headers['idempotency-key']).toBe(`kkd:attempt:${attempt.id}`);
-    expect(runReq?.body.prompt).toBe('Generate a greeting module');
+    expect(runReq?.body.prompt).toContain(`Work only inside this folder: ${workspaceDir}`);
+    expect(runReq?.body.prompt).toMatch(/Generate a greeting module$/);
     // A local model always travels with the local Ollama provider, never
     // left for Hermes to resolve against its (cloud) default.
     expect(runReq?.body.provider).toBe('test-ollama');

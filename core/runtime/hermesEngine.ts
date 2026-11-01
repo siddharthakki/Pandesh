@@ -734,7 +734,11 @@ export class HermesEngine {
     let run: HermesRunResponse;
     try {
       run = await this.submitRun({
-        prompt,
+        // The Hermes gateway ignores workspace_root and resolves relative paths against its own launch folder, so the
+        // folder is stated in the task itself.
+        prompt: workspaceRoot
+          ? `Work only inside this folder: ${workspaceRoot}\nUse absolute paths under it for every file you read, create or change.\n\n${prompt}`
+          : prompt,
         model: selectedModel,
         workspaceRoot,
         idempotencyKey,
@@ -1043,6 +1047,27 @@ export class HermesEngine {
 
     if (!finalReply && runSuccess) {
       finalReply = 'Hermes task executed successfully.';
+    }
+
+    // Hermes runs its own file tools, so a reported write is only done when the file is really inside the selected
+    // workspace. A write elsewhere (or one that is nowhere to be found there) fails the turn and says where it went.
+    if (runSuccess && workspaceRoot) {
+      const writeTargets = [
+        ...modifiedFiles,
+        ...toolCallsRecorded
+          .filter((call) => /write|edit|patch|create_file/i.test(String(call.tool)))
+          .map((call) => { const a = (call.args ?? {}) as Record<string, unknown>; return String(a.path ?? a.file_path ?? a.filePath ?? ''); }),
+      ].filter(Boolean);
+      const misplaced = writeTargets.find((target) => {
+        const abs = path.isAbsolute(target) ? target : path.resolve(workspaceRoot, target);
+        const rel = path.relative(workspaceRoot, abs);
+        return rel === '..' || rel.startsWith(`..${path.sep}`) || path.isAbsolute(rel) || !fs.existsSync(abs);
+      });
+      if (misplaced) {
+        runSuccess = false;
+        runError = `Hermes reported writing ${misplaced}, but that file is not in the selected workspace (${workspaceRoot}), so this is not reported as done.`;
+        finalReply = `${finalReply ? `${finalReply}\n\n` : ''}Correction: ${runError}`;
+      }
     }
 
     // Register artifacts
