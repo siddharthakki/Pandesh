@@ -176,6 +176,7 @@ describe('HermesEngine & HermesEngineAdapter', () => {
         process.env.HERMES_URL = mockServerBaseUrl;
         process.env.HERMES_ENABLED = 'true';
         process.env.HERMES_API_KEY = 'test-hermes-secret-key';
+        process.env.HERMES_OLLAMA_PROVIDER = 'test-ollama';
         resolve();
       });
     });
@@ -185,6 +186,7 @@ describe('HermesEngine & HermesEngineAdapter', () => {
     delete process.env.HERMES_URL;
     delete process.env.HERMES_ENABLED;
     delete process.env.HERMES_API_KEY;
+    delete process.env.HERMES_OLLAMA_PROVIDER;
     if (mockServer) {
       await new Promise<void>((resolve) => mockServer!.close(() => resolve()));
     }
@@ -275,6 +277,9 @@ describe('HermesEngine & HermesEngineAdapter', () => {
     expect(runReq).toBeDefined();
     expect(runReq?.headers['idempotency-key']).toBe(`kkd:attempt:${attempt.id}`);
     expect(runReq?.body.prompt).toBe('Generate a greeting module');
+    // A local model always travels with the local Ollama provider, never
+    // left for Hermes to resolve against its (cloud) default.
+    expect(runReq?.body.provider).toBe('test-ollama');
     expect(runReq?.body.idempotency_key).toBe(`kkd:attempt:${attempt.id}`);
 
     // Verify hermes_run_bound runtime event was recorded in KKD
