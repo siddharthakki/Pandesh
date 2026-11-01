@@ -3084,6 +3084,11 @@ TRUTHFULNESS & BEHAVIORAL PROTOCOL:
       }
     }
 
+    // The contract table is the deliverable only when the user's own words (not attached text) ask about contracts,
+    // or explicitly resume a contract workflow. Any other Gmail request gets its own answer, not a contract table.
+    const contractRequest = /\b(?:contracts?|agreements?)\b/i.test(requestText)
+      || (isContinuation && Boolean(activeTask) && /\b(?:contracts?|agreements?|extract)/i.test(activeTask?.objective ?? ''));
+
     // Anti-hallucination check for Gmail: if Gmail tools were executed successfully,
     // the reply must never claim that Gmail is not connected or that no Gmail tool is available.
     if (toolCallsRecorded.some(t => t.tool.startsWith('gmail_') && t.status === 'completed') &&
@@ -3092,7 +3097,9 @@ TRUTHFULNESS & BEHAVIORAL PROTOCOL:
       safeRecordRuntimeEvent(db, broadcaster, attemptId, 'hallucinated_gmail_disconnect_detected', { replyPreview: finalReply.slice(0, 200) }, actor);
       try {
         const followUpFloor = agent.state.messages.length;
-        await agent.prompt('Correction: You DO have active Gmail access and your gmail tools ran successfully in this turn. Do NOT claim you have no Gmail tool or that Gmail is not connected. Present the real findings from the gmail tool results in the required Contract Inventory Table (| Contract Type | Company / Counterparty | Date | Email / Thread Reference | Attachment | Extraction Status |).');
+        await agent.prompt('Correction: You DO have active Gmail access and your gmail tools ran successfully in this turn. Do NOT claim you have no Gmail tool or that Gmail is not connected. ' + (contractRequest
+          ? 'Present the real findings from the gmail tool results in the required Contract Inventory Table (| Contract Type | Company / Counterparty | Date | Email / Thread Reference | Attachment | Extraction Status |).'
+          : "Answer the user's latest request from the real gmail tool results."));
         await agent.waitForIdle();
         const followUpReply = lastAssistantTextFrom(followUpFloor);
         if (followUpReply) finalReply = followUpReply;
@@ -3102,7 +3109,7 @@ TRUTHFULNESS & BEHAVIORAL PROTOCOL:
     }
 
     // Ensure Contract Inventory Table delivery when contract extraction was performed
-    if ((/\b(?:contracts?|agreement)\b/i.test(prompt) || (isContinuation && Boolean(activeTask))) &&
+    if (contractRequest &&
         toolCallsRecorded.some(t => t.tool.startsWith('gmail_') && t.status === 'completed') &&
         !finalReply.includes('| Contract Type') &&
         !signal?.aborted) {
