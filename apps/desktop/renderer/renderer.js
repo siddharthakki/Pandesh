@@ -158,6 +158,7 @@ const taskCardElapsed = document.getElementById('task-card-elapsed');
 const taskCardMeta = document.getElementById('task-card-meta');
 const taskCardSteps = document.getElementById('task-card-steps');
 const taskCardStop = document.getElementById('task-card-stop');
+const taskCardNext = document.getElementById('task-card-next');
 const workspaceContext = document.getElementById('workspace-context');
 const workspaceContextClose = document.getElementById('workspace-context-close');
 const contextDelivered = document.getElementById('context-delivered');
@@ -1654,6 +1655,31 @@ const APPROVAL_TOOL_LABEL = {
   video_generate: 'Video generation',
 };
 
+/** The approval card asks one plain question; the tool name and gate stay under Details. */
+const APPROVAL_QUESTION = {
+  web_research: 'Search the web?',
+  request_search_permission: 'Search your files and folders?',
+  authorize_mission: 'Start this task on its own?',
+  propose_file_change: 'Change this file?',
+  run_command: 'Run this command?',
+  run_checks: 'Run this command?',
+  write_file: 'Write this file?',
+  propose_text_edit: 'Edit this file?',
+  calendar_create_event: 'Add this to your calendar?',
+  calendar_update_event: 'Change this calendar event?',
+  calendar_delete_event: 'Delete this calendar event?',
+  gmail_send_draft: 'Send this email?',
+  gmail_apply_plan: 'Organize your Gmail like this?',
+  gmail_undo_plan: 'Undo this Gmail change?',
+  inspect_page: 'Open and inspect this page?',
+  image_generate: 'Generate this image?',
+  video_generate: 'Generate this video?',
+};
+
+function approvalQuestion(toolName) {
+  return APPROVAL_QUESTION[String(toolName ?? '').toLowerCase()] ?? 'Allow this action?';
+}
+
 function approvalScopeLabel(scope) {
   const raw = String(scope ?? '').trim();
   if (!raw) return '';
@@ -1711,7 +1737,7 @@ function renderApproval(snapshot) {
       approvalPanel.classList.remove('hidden');
       const heading = document.getElementById('approval-heading');
       const isVideo = req.toolName === 'video_generate';
-      if (heading) heading.textContent = 'Your approval is needed';
+      if (heading) heading.textContent = approvalQuestion(req.toolName || 'image_generate');
       approvalGate.textContent = 'image';
       approvalTool.textContent = req.toolName || 'image_generate';
       approvalScope.textContent = isVideo
@@ -1720,6 +1746,8 @@ function renderApproval(snapshot) {
       const riskEl = document.getElementById('approval-risk');
       if (riskEl) riskEl.textContent = 'Local GPU Execution';
       if (approvalPaths) approvalPaths.textContent = 'None';
+      const imagePathsRow = document.getElementById('approval-paths-row');
+      if (imagePathsRow) imagePathsRow.hidden = true;
       approvalDetail.textContent = [
         req.prompt ? `Prompt: ${req.prompt}` : '',
         req.width && req.height ? `Size: ${req.width}×${req.height}` : '',
@@ -1735,7 +1763,7 @@ function renderApproval(snapshot) {
       approvalPanel.hidden = false;
       approvalPanel.classList.remove('hidden');
       const heading = document.getElementById('approval-heading');
-      if (heading) heading.textContent = 'Your approval is needed';
+      if (heading) heading.textContent = approvalQuestion(card.toolName);
       approvalGate.textContent = card.gate;
       approvalTool.textContent = APPROVAL_TOOL_LABEL[String(card.toolName ?? '').toLowerCase()] ?? card.toolName;
       approvalTool.title = String(card.toolName ?? '');
@@ -1745,11 +1773,12 @@ function renderApproval(snapshot) {
       if (riskEl) {
         riskEl.textContent = card.gate === 'mutation' ? 'Consequential (State Mutation)' : 'Governed Proposal';
       }
+      const hasPaths = Array.isArray(card.paths) && card.paths.length > 0;
       if (approvalPaths) {
-        approvalPaths.textContent = Array.isArray(card.paths) && card.paths.length
-          ? `Paths: ${card.paths.join(', ')}`
-          : 'None';
+        approvalPaths.textContent = hasPaths ? card.paths.join(', ') : 'None';
       }
+      const pathsRow = document.getElementById('approval-paths-row');
+      if (pathsRow) pathsRow.hidden = !hasPaths;
       approvalDetail.textContent = card.detail || '';
       approve.disabled = resolvingApproval;
       reject.disabled = resolvingApproval;
@@ -2732,6 +2761,11 @@ function renderConversationTranscript(container, messages) {
     scrollConversationToEnd();
   });
   if (container === result) {
+    const lastUser = [...messages].reverse().find((message) => message.role === 'user');
+    const durableUserAt = Date.parse(lastUser?.createdAt ?? '') || 0;
+    // A live echo not yet persisted is newer than anything durable.
+    if (durableUserAt > lastUserTurnAt || !container.querySelector('[data-live-echo="1"]')) lastUserTurnAt = durableUserAt;
+    syncResultsStaleness();
     const lastMsg = messages.length ? messages[messages.length - 1] : null;
     lastTranscriptAssistantTail = lastMsg && lastMsg.role === 'assistant' ? String(lastMsg.content || '') : '';
     syncAssistantMode();
@@ -5013,6 +5047,8 @@ submit.addEventListener('click', async () => {
     const userRow = document.createElement('div');
     userRow.className = 'conversation-paragraph-row transcript-row-user';
     userRow.dataset.liveEcho = '1';
+    lastUserTurnAt = Date.now();
+    syncResultsStaleness();
     const speaker = document.createElement('div');
     speaker.className = 'transcript-speaker speaker-user';
     speaker.textContent = 'You';
@@ -5120,6 +5156,15 @@ async function requestStop() {
 
 cancel.addEventListener('click', () => { void requestStop(); });
 taskCardStop?.addEventListener('click', () => { void requestStop(); });
+// Try again sends the failed request once more through the composer, exactly as if typed.
+document.getElementById('task-card-retry')?.addEventListener('click', () => {
+  const text = String(lastSnapshot?.task || '').trim();
+  const input = document.getElementById('task-input');
+  if (!text || !input || lastSnapshot?.running) return;
+  input.value = text;
+  input.dispatchEvent(new Event('input', { bubbles: true }));
+  document.getElementById('submit')?.click();
+});
 
 approve.addEventListener('click', () => resolve('approved'));
 reject.addEventListener('click', () => resolve('rejected'));
@@ -7501,6 +7546,10 @@ function updateComposerStatus() {
   }
   if (el.textContent !== text) el.textContent = text;
   el.dataset.state = state;
+  // One live status per request: while the task card is showing it, the
+  // composer does not repeat it, and an idle "Ready" says nothing.
+  const cardShowsIt = (state === 'working' || state === 'approval') && workspaceTaskCard && !workspaceTaskCard.hidden;
+  el.hidden = state === 'idle' || cardShowsIt;
 }
 
 /* ══════════════════════════════════════════════════════════════════════
@@ -7655,9 +7704,10 @@ function renderWorkspaceTaskCard(snapshot, presence) {
   const running = Boolean(snapshot?.running);
   const outcome = snapshot?.lastTurnOutcome ?? null;
   const hasTask = Boolean(snapshot?.attemptId) && (running || outcome || cockpit?.terminal);
-  // A finished task that delivered results is represented by the result card;
-  // the task card would only repeat it. A failed task keeps its card.
-  const finishedWithResults = !running && outcome === 'completed' && conversationResultCount > 0;
+  // A completed turn is represented by its reply (and the result card when it
+  // delivered files); the task card would only repeat it. A failed or stopped
+  // task keeps its card, with a short reason and a next action.
+  const finishedWithResults = !running && outcome === 'completed';
   // The task card belongs to exactly one conversation. It is shown in that
   // conversation, and while a turn is in flight — never in a fresh, empty
   // conversation, where an earlier task's card would be projected as if it
@@ -7673,10 +7723,11 @@ function renderWorkspaceTaskCard(snapshot, presence) {
   const awaitingApproval = Boolean(snapshot?.awaitingApproval || snapshot?.pendingApproval || snapshot?.cockpit?.pendingApproval);
   workspaceTaskCard.dataset.state = awaitingApproval ? 'waiting_for_approval' : presence;
 
-  // The card is titled with the real request, not a decoration.
-  const goal = String(snapshot?.task || '').trim();
-  const titleText = goal ? goal.slice(0, 90) : (awaitingApproval ? 'Waiting for approval' : (presence === 'completed' ? 'Task complete' : 'Working'));
+  // The request itself is already the user's message right above; the card's
+  // one line is what is happening to it now, updated in place.
+  const titleText = taskCardStatusSentence(snapshot, running, outcome, awaitingApproval);
   if (taskCardTitle && taskCardTitle.textContent !== titleText) taskCardTitle.textContent = titleText;
+  if (taskCardNext) taskCardNext.hidden = running || awaitingApproval || outcome !== 'failed' || !String(snapshot?.task || '').trim();
 
   const worker = snapshot?.selectedWorker || snapshot?.activeWorker || 'local';
   const workerLabel = String(worker).replace(/[-_]/g, ' ');
@@ -7690,6 +7741,49 @@ function renderWorkspaceTaskCard(snapshot, presence) {
   renderTaskCardSteps(cockpit, running, awaitingApproval);
   updateTaskCardElapsed(snapshot);
   syncTaskCardStop();
+}
+
+/** Runtime step titles ("AI response", "list_directory", "Read notes.txt") as the sentence a person reads. */
+const TASK_STEP_PHRASES = [
+  [/^Mission (submitted|started)/i, () => 'Getting started…'],
+  [/^AI response$/i, () => 'Thinking…'],
+  [/^(list_directory|List\b)/i, () => 'Looking through your files…'],
+  [/^Read\s+(.+)$/i, (m) => `Reading ${m[1]}…`],
+  [/^(Read|read_file)$/i, () => 'Reading files…'],
+  [/^(Search|search_files|web_research)/i, () => 'Searching…'],
+  [/^(Edit|Anchored edit|Write)\s+(.+)$/i, (m) => `Writing ${m[2]}…`],
+  [/^(Edit|Anchored edit|write_file|propose_file_change|propose_text_edit)/i, () => 'Writing changes…'],
+  [/^(run_checks|run_command|Running\b)/i, () => 'Running a command…'],
+  [/^(Validate|Verify|Review)/i, () => 'Checking the work…'],
+  [/^Waiting for authorization/i, () => 'Waiting for your approval'],
+  [/^Authorization approved/i, () => 'Approved — continuing…'],
+  [/^Mission completed/i, () => 'Finishing up…'],
+];
+
+function naturalTaskStep(title) {
+  const text = String(title || '').trim();
+  if (!text) return 'Working…';
+  for (const [pattern, phrase] of TASK_STEP_PHRASES) {
+    const match = pattern.exec(text);
+    if (match) return phrase(match);
+  }
+  // An unknown tool id still reads as words, never as snake_case.
+  return /^[a-z]+(_[a-z]+)+$/.test(text) ? `Using ${text.replace(/_/g, ' ')}…` : text;
+}
+
+function taskCardStatusSentence(snapshot, running, outcome, awaitingApproval) {
+  if (awaitingApproval) return 'Waiting for your approval';
+  const cockpit = snapshot?.cockpit;
+  if (running) {
+    const checkpoints = cockpit?.checkpoints ?? [];
+    return naturalTaskStep(cockpit?.currentAction?.title || checkpoints[checkpoints.length - 1]?.title);
+  }
+  if (outcome === 'cancelled') return 'Stopped';
+  if (outcome === 'failed') {
+    const reason = String(cockpit?.finalOutcome || '').split('\n')[0].trim().slice(0, 140);
+    return reason ? `Didn't finish — ${reason}` : "Didn't finish";
+  }
+  return 'Done';
 }
 
 /** The real activity events, newest last, exactly as the runtime reported them. */
@@ -7742,7 +7836,8 @@ function updateTaskCardElapsed(snapshot) {
 function syncTaskCardStop() {
   if (!taskCardStop) return;
   const running = Boolean(lastSnapshot?.running);
-  taskCardStop.hidden = !running;
+  // Stop is offered once, in the composer; the card's control stays for compatibility only.
+  taskCardStop.hidden = true;
   taskCardStop.disabled = !running;
   const label = taskCardStop.querySelector('span');
   const text = stopRequestedNotConfirmed ? 'Stop again' : 'Stop';
@@ -7870,6 +7965,27 @@ function pandaGlyphSvg(className) {
   return svg;
 }
 
+/**
+ * The result card belongs to the turn that produced it. Once the person has
+ * sent a newer message, it folds to its one-line header (click to reopen), so
+ * an earlier deliverable never sits under a later reply as if it were its result.
+ */
+let newestResultAt = 0;
+let lastUserTurnAt = 0;
+let resultsReopenedForTurnAt = -1;
+function syncResultsStaleness() {
+  const box = document.getElementById('conversation-results');
+  if (!box) return;
+  const stale = newestResultAt > 0 && lastUserTurnAt > newestResultAt && resultsReopenedForTurnAt !== lastUserTurnAt;
+  box.dataset.stale = stale ? 'true' : 'false';
+}
+document.querySelector('#conversation-results .result-card-head')?.addEventListener('click', (event) => {
+  const box = document.getElementById('conversation-results');
+  if (box?.dataset.stale !== 'true' || event.target.closest('button')) return;
+  resultsReopenedForTurnAt = lastUserTurnAt;
+  syncResultsStaleness();
+});
+
 /** Results (images, video, documents) made in the conversation being viewed. */
 let conversationResultsSignature = '';
 async function refreshConversationResults() {
@@ -7884,6 +8000,8 @@ async function refreshConversationResults() {
   try {
     if (convId) items = (await api.listArtifacts()).filter((a) => a.conversationId === convId);
   } catch { items = []; }
+  newestResultAt = items.reduce((max, a) => Math.max(max, Date.parse(a.createdAt ?? '') || 0), 0);
+  syncResultsStaleness();
   const signature = `${convId}|${items.map((a) => `${a.id}:${a.availability}`).join(',')}`;
   if (signature === conversationResultsSignature) return;
   conversationResultsSignature = signature;

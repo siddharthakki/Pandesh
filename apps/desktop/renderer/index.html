@@ -424,21 +424,27 @@
               </footer>
             </section>
 
-            <!-- Inline task card: the real state of the work, with Stop -->
+            <!-- Inline task card: one live status line for the request, updated in
+                 place. The raw steps, worker and model telemetry stay under Details;
+                 Stop lives in the composer. -->
             <section id="workspace-task-card" class="panda-task-card" hidden aria-label="Current task">
               <div class="task-card-head">
                 <span class="task-card-ring" aria-hidden="true"></span>
-                <span id="task-card-title" class="task-card-title">Working</span>
+                <span id="task-card-title" class="task-card-title" aria-live="polite">Working</span>
                 <span id="task-card-elapsed" class="task-card-elapsed" title="Elapsed time">0:00</span>
               </div>
-              <ul id="task-card-steps" class="task-card-steps"></ul>
-              <div class="task-card-foot">
-                <span id="task-card-meta" class="task-card-meta">Local</span>
-                <button id="task-card-stop" type="button" class="task-card-stop" title="Stop the running task" aria-label="Stop the running task">
-                  <svg viewBox="0 0 24 24" width="13" height="13" aria-hidden="true"><rect x="6" y="6" width="12" height="12" rx="2" fill="none" stroke="currentColor" stroke-width="2.2"/></svg>
-                  <span>Stop</span>
-                </button>
+              <div id="task-card-next" class="task-card-next" hidden>
+                <button id="task-card-retry" type="button" class="ws-chip">Try again</button>
               </div>
+              <details id="task-card-details" class="task-card-details">
+                <summary>Details</summary>
+                <ul id="task-card-steps" class="task-card-steps"></ul>
+                <p id="live-telemetry" class="task-card-telemetry" role="status" hidden></p>
+                <span id="task-card-meta" class="task-card-meta">Local</span>
+              </details>
+              <button id="task-card-stop" type="button" class="task-card-stop" hidden title="Stop the running task" aria-label="Stop the running task">
+                <span>Stop</span>
+              </button>
             </section>
 
             <!-- Inline Governed Approval Panel (directly visible in Conversation!) -->
@@ -449,28 +455,33 @@
                 </span>
                 <div class="approval-head-text">
                   <h3 id="approval-heading" class="approval-heading">Your approval is needed</h3>
-                  <p class="approval-subline">
-                    <span id="approval-gate" class="gate-tag">MUTATION</span>
-                    <span id="approval-tool" class="approval-tool">—</span>
-                  </p>
                 </div>
               </div>
               <div class="approval-body">
-                <div class="approval-meta-row">
-                  <span class="appr-label">Scope:</span>
-                  <span id="approval-scope" class="font-mono">—</span>
-                </div>
-                <div class="approval-meta-row" id="approval-risk-row">
-                  <span class="appr-label">Risk:</span>
-                  <span id="approval-risk" class="risk-badge">Consequential action</span>
-                </div>
-                <div class="approval-paths-box">
-                  <span class="appr-label">Files affected:</span>
-                  <div id="approval-paths" class="paths-display font-mono">None</div>
-                </div>
                 <div class="approval-detail-box">
                   <p id="approval-detail" class="approval-detail-text"></p>
                 </div>
+                <!-- The governance record (gate, tool, scope, risk, paths) is for
+                     whoever wants it, not something to read before deciding. -->
+                <details class="approval-more">
+                  <summary>Details</summary>
+                  <div class="approval-meta-row">
+                    <span id="approval-gate" class="gate-tag">MUTATION</span>
+                    <span id="approval-tool" class="approval-tool">—</span>
+                  </div>
+                  <div class="approval-meta-row">
+                    <span class="appr-label">Scope:</span>
+                    <span id="approval-scope" class="font-mono">—</span>
+                  </div>
+                  <div class="approval-meta-row" id="approval-risk-row">
+                    <span class="appr-label">Risk:</span>
+                    <span id="approval-risk" class="risk-badge">Consequential action</span>
+                  </div>
+                  <div class="approval-paths-box" id="approval-paths-row">
+                    <span class="appr-label">Files affected:</span>
+                    <div id="approval-paths" class="paths-display font-mono">None</div>
+                  </div>
+                </details>
               </div>
               <div class="approval-actions-bar">
                 <button id="reject" type="button" class="btn-reject">
@@ -940,7 +951,6 @@
       <!-- THE ONE COMPOSER: typing and voice, on every screen -->
       <p id="operation-error" class="composer-error" role="alert" title="Click to dismiss" hidden></p>
       <p id="composer-status" class="composer-status" aria-live="polite">Ready</p>
-      <p id="live-telemetry" class="composer-status" role="status" hidden></p>
       <div id="composer-attachments" class="composer-attachments" aria-label="Files attached to your next message" hidden></div>
       <div class="composer-capsule-wrap" id="composer-capsule">
         <label for="task-input" class="sr-only">Instruction or query for Pandesh</label>
