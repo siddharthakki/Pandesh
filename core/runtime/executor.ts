@@ -1,5 +1,5 @@
 import { piAgentEngine, type PiConnectorBridge, type PiMemoryBridge } from './piAgentEngine';
-import { OpenCodeEngine } from './opencodeEngine';
+import { OpenCodeEngine, openCodeCandidates } from './opencodeEngine';
 import { HermesEngine } from './hermesEngine';
 import { EngineRegistry } from './adapters/EngineAdapter';
 /**
@@ -4418,7 +4418,7 @@ export class RuntimeExecutor {
         return 'opencode';
       }
       if (chosenForTask('opencode')) {
-        return { refused: 'OpenCode was selected for this task but is not available. Nothing was run, and no other engine was substituted.' };
+        return { refused: `OpenCode was selected for this task but could not be started: no OpenCode executable was found (looked for ${openCodeCandidates().join(', ') || 'none'}, then \`opencode\` on PATH; set OPENCODE_BIN to point at it). Nothing was run, and no other engine was substituted.` };
       }
     }
 

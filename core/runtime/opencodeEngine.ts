@@ -1,4 +1,5 @@
 import * as cp from 'node:child_process';
+import * as os from 'node:os';
 import * as path from 'node:path';
 import * as fs from 'node:fs';
 import * as net from 'node:net';
@@ -60,21 +61,26 @@ import {
 
 const DEFAULT_MODEL = 'qwen3-coder:swift-27b';
 const DEFAULT_OLLAMA_URL = process.env.KARKEDIKHA_OLLAMA_URL || 'http://localhost:11434';
-const OPENCODE_EXE_PATH = path.join(
-  process.env.APPDATA || '',
-  'npm',
-  'node_modules',
-  '@opencode',
-  'cli',
-  'bin',
-  'opencode.exe'
-);
+/**
+ * Where OpenCode may live. %APPDATA% is not trusted alone: a profile that redirects it (a portable or test profile)
+ * must still find the person's own npm-installed OpenCode, so the real home directory is searched too.
+ */
+export function openCodeCandidates(): string[] {
+  const npmRoots = [...new Set([
+    path.join(process.env.APPDATA || '', 'npm'),
+    path.join(os.homedir(), 'AppData', 'Roaming', 'npm'),
+  ].filter((root) => root !== 'npm'))];
+  return [
+    ...(process.env.OPENCODE_BIN ? [process.env.OPENCODE_BIN] : []),
+    ...npmRoots.flatMap((root) => [
+      path.join(root, 'node_modules', '@opencode', 'cli', 'bin', 'opencode.exe'),
+      path.join(root, 'opencode.cmd'),
+    ]),
+  ];
+}
 
 export function findOpenCodeExe(): string {
-  if (fs.existsSync(OPENCODE_EXE_PATH)) return OPENCODE_EXE_PATH;
-  const npmCmd = path.join(process.env.APPDATA || '', 'npm', 'opencode.cmd');
-  if (fs.existsSync(npmCmd)) return npmCmd;
-  return 'opencode';
+  return openCodeCandidates().find((candidate) => candidate && fs.existsSync(candidate)) ?? 'opencode';
 }
 
 /** Finds a free TCP port on localhost */
