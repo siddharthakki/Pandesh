@@ -656,7 +656,10 @@ export class RuntimeExecutor {
       } else {
         const selectedEngine = await this.selectEngine(frozenContext, attempt.kind, req);
 
-        if (selectedEngine === 'hermes') {
+        if (typeof selectedEngine === 'object') {
+          // An explicit engine/provider choice that cannot run is reported, never silently replaced.
+          this.mutate(() => failAttempt(this.db, attemptId, { failureReason: selectedEngine.refused, fenceToken: fence.token, actor: CORE_ACTOR }));
+        } else if (selectedEngine === 'hermes') {
           await this.runHermesRun(attemptId, fence.token, controller.signal, options.workingDirectory);
         } else if (selectedEngine === 'opencode') {
           await this.runKarkeDikhaOpenCode(attemptId, fence.token, controller.signal, options.workingDirectory);
@@ -4388,30 +4391,45 @@ export class RuntimeExecutor {
 
   private async selectEngine(
     context: AttemptContextRecord,
-    attemptKind: AttemptKind,
+    attemptKind: string,
     request?: RequestEnvelope
-  ): Promise<'hermes' | 'opencode' | 'pi'> {
-    // 1. Explicit preference or worker selection
-    const worker = context.approvalPolicy?.worker?.toLowerCase();
-    const explicitEngine = (context.modelSelection?.requiredCapabilities as any)?.engine?.toLowerCase();
+  ): Promise<'hermes' | 'opencode' | 'pi' | { refused: string }> {
+    // 1. Explicit preference or worker selection. A choice the operator made for this task (worker / engine) must run
+    // as chosen or fail with the reason; only the machine-wide KKD_PREFERRED_ENGINE default may fall back.
+    const worker = String(context.approvalPolicy?.worker ?? '').toLowerCase();
+    const explicitEngine = String((context.modelSelection?.requiredCapabilities as { engine?: unknown } | undefined)?.engine ?? '').toLowerCase();
     const preferredEngine = process.env.KKD_PREFERRED_ENGINE?.toLowerCase();
+    const chosenForTask = (engine: string) => worker === engine || explicitEngine === engine;
 
-    if (worker === 'hermes' || explicitEngine === 'hermes' || preferredEngine === 'hermes') {
+    if (chosenForTask('hermes') || preferredEngine === 'hermes') {
       const hermesCheck = await HermesEngine.ensureAvailable();
       if (hermesCheck.available) {
         return 'hermes';
       }
-      console.warn('[executor] Hermes requested but unavailable:', hermesCheck.error);
+      if (chosenForTask('hermes')) {
+        return { refused: `Hermes was selected for this task but is not available (${hermesCheck.error ?? 'no response'}). Nothing was run, and no other engine was substituted.` };
+      }
+      console.warn('[executor] Hermes preferred but unavailable:', hermesCheck.error);
     }
 
-    if (worker === 'opencode' || explicitEngine === 'opencode' || preferredEngine === 'opencode') {
+    if (chosenForTask('opencode') || preferredEngine === 'opencode') {
       const opencodeAdapter = EngineRegistry.get('opencode');
       if (opencodeAdapter && await opencodeAdapter.isAvailable()) {
         return 'opencode';
       }
+      if (chosenForTask('opencode')) {
+        return { refused: 'OpenCode was selected for this task but is not available. Nothing was run, and no other engine was substituted.' };
+      }
     }
 
-    if (worker === 'pi' || explicitEngine === 'pi') {
+    // Pi runs its model on local Ollama only. A cloud provider chosen for this task is not sent to Ollama under a cloud
+    // model name; it fails here with the reason, and nothing leaves the machine.
+    if (context.selectedProvider && context.selectedProvider !== 'ollama') {
+      const label = context.selectedProvider === 'openrouter' ? 'OpenRouter' : cloudProviderLabel(context.selectedProvider);
+      return { refused: `${label} was selected for this task, but Pandesh's assistant engine runs only on local Ollama models. Nothing was sent to ${label}, and no local model was substituted. Choose a local model to run this task.` };
+    }
+
+    if (chosenForTask('pi')) {
       return 'pi';
     }
 

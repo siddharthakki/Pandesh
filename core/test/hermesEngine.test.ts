@@ -562,4 +562,27 @@ describe('HermesEngine & HermesEngineAdapter', () => {
     const engine4 = await (executor as any).selectEngine(generalContext, 'baat_kar');
     expect(engine4).toBe('pi');
   });
+
+  it('an explicitly chosen engine or provider that cannot run is refused, never replaced', async () => {
+    const executor = new RuntimeExecutor(db, broadcaster);
+    const hermesDown = vi.spyOn(HermesEngine, 'ensureAvailable').mockResolvedValue({ available: false, error: 'not running' });
+    const opencode = EngineRegistry.get('opencode')!;
+    const opencodeDown = vi.spyOn(opencode, 'isAvailable').mockResolvedValue(false);
+    try {
+      const hermes = await (executor as any).selectEngine({ selectedProvider: 'ollama', approvalPolicy: { worker: 'hermes' }, modelSelection: { requiredCapabilities: {} } }, 'saath_kar');
+      expect(hermes.refused).toMatch(/Hermes was selected .* not available .*no other engine was substituted/);
+
+      const oc = await (executor as any).selectEngine({ selectedProvider: 'ollama', approvalPolicy: { worker: 'opencode' }, modelSelection: { requiredCapabilities: {} } }, 'karke_dikha');
+      expect(oc.refused).toMatch(/OpenCode was selected/);
+
+      const cloud = await (executor as any).selectEngine({ selectedProvider: 'openrouter', selectedModel: 'some/cloud-model', modelSelection: { routingPolicy: 'explicit-openrouter', requiredCapabilities: {} } }, 'baat_kar');
+      expect(cloud.refused).toMatch(/OpenRouter was selected .*Nothing was sent to OpenRouter/);
+
+      // A local selection with no explicit engine still runs on Pi.
+      expect(await (executor as any).selectEngine({ selectedProvider: 'ollama', modelSelection: { requiredCapabilities: {} } }, 'baat_kar')).toBe('pi');
+    } finally {
+      hermesDown.mockRestore();
+      opencodeDown.mockRestore();
+    }
+  });
 });
