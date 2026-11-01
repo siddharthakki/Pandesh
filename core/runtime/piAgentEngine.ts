@@ -3191,9 +3191,9 @@ TRUTHFULNESS & BEHAVIORAL PROTOCOL:
       turnOutcome = { verdict: 'verified', reason: `answered from ${projectEvidence.filesRead.length} file(s) read in ${projectEvidence.root}${projectReplyReplaced ? ' (reply replaced by evidence-only answer)' : ''}`, performed: ['project_inspection'], refused: [], failed: [] };
       try { mutateWithBroadcast(db, broadcaster, () => { ensureTaskOutcome(db, { attemptId, conversationId: conversationId || null, requestId, objective: objectiveFromRequest(requestText) }); }); } catch {}
     }
-    if (turnOutcome.verdict === 'unverified' && !/not (done|available|created|sent|made)|declined|could not|was not|denied/i.test(finalReply)) {
+    if (turnOutcome.verdict === 'unverified' && !/not (done|available|created|sent|made|run|granted)|declined|could not|was not|wasn't|untouched|nothing (?:was )?changed|denied/i.test(finalReply)) {
       // The reply must not leave the impression that the work happened.
-      finalReply += `\n\nCorrection: the requested work did not happen in this turn — ${turnOutcome.reason}.`;
+      finalReply += `\n\nCorrection: ${turnOutcome.reason}.`;
     }
 
     let assistantMessageRecord: any = null;
