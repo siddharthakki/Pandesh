@@ -226,10 +226,6 @@ export function submitRequest(db: CoreDatabase, input: SubmitRequestInput): Subm
             Boolean(input.requestedModel),
           )
     ));
-    // An explicit requested model is the caller's choice: the evidence must say so, or Auto reroute may substitute it.
-    if (input.requestedModel && modelSelection.selectedModel === input.requestedModel && !modelSelection.userOverrode && modelSelection.benchmarkForcedModel !== true) {
-      modelSelection.userOverrode = true;
-    }
     if (
       (selectedProvider && modelSelection.selectedProvider !== selectedProvider)
       || (selectedModel && modelSelection.selectedModel !== selectedModel)
