@@ -182,6 +182,7 @@ const definitions: ModelToolDefinition[] = [
         scopeId: { type: 'string', maxLength: 200 },
         subject: { type: 'string', maxLength: MAX_SUBJECT_CHARS },
         predicate: { type: 'string', maxLength: MAX_PREDICATE_CHARS },
+        query: { type: 'string', maxLength: 200, description: 'Key words to look for in any remembered fact (e.g. "coffee", "database choice"). Prefer this over subject unless you know the exact subject.' },
         includeHistorical: { type: 'boolean', description: 'Include historical/expired facts as well as active ones.' },
       },
       required: [],
@@ -294,6 +295,7 @@ export function createMemoryCapabilityAdapter(options: MemoryCapabilityOptions):
             scopeId: args.scopeId === undefined ? undefined : asString(args.scopeId),
             subject: args.subject === undefined ? undefined : asString(args.subject),
             predicate: args.predicate === undefined ? undefined : asString(args.predicate),
+            query: args.query === undefined ? undefined : asString(args.query),
             includeHistorical: Boolean(args.includeHistorical),
           });
           return ok(result, 'memory_recall_succeeded', safeArgs);

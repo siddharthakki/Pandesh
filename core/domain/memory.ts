@@ -657,6 +657,8 @@ export interface RecallMemoriesInput {
   scopeId?: string;
   subject?: string;
   predicate?: string;
+  /** Free words matched against subject, predicate and value; a fact matches when any word does. */
+  query?: string;
   includeHistorical?: boolean;
   limit?: number;
 }
@@ -681,14 +683,26 @@ export function recallMemories(db: CoreDatabase, input: RecallMemoriesInput = {}
   if (input.scopeId) { clauses.push('scopeId = ?'); params.push(String(input.scopeId)); }
   if (input.subject) { clauses.push('subject = ?'); params.push(normalizeMemoryText(input.subject)); }
   if (input.predicate) { clauses.push('predicate = ?'); params.push(normalizeMemoryText(input.predicate)); }
+  // A model rarely repeats a fact's exact subject weeks later ("coffee" vs
+  // "coffee preference"), so free words match anywhere in the fact.
+  const words = normalizeMemoryText(input.query ?? '').split(/\s+/).filter((word) => word.length >= 3).slice(0, 8);
+  if (words.length) {
+    clauses.push(`(${words.map(() => "(subject LIKE ? ESCAPE '\\' OR predicate LIKE ? ESCAPE '\\' OR normalizedValue LIKE ? ESCAPE '\\')").join(' OR ')})`);
+    for (const word of words) {
+      const like = `%${word.replace(/[\\%_]/g, (c) => `\\${c}`)}%`;
+      params.push(like, like, like);
+    }
+  }
   if (!input.includeHistorical) clauses.push("state IN ('active')");
   else clauses.push("state IN ('active', 'historical', 'expired')");
   const limit = Math.min(Math.max(Number(input.limit ?? MAX_RECALL_RESULTS), 1), MAX_RECALL_RESULTS);
 
+  // The newest facts win the limit (oldest-first would hide everything learned
+  // after the first fifty); they are still returned in the order they were learned.
   const rows = db.all<Record<string, unknown>>(
-    `SELECT * FROM memory_facts ${clauses.length ? `WHERE ${clauses.join(' AND ')}` : ''} ORDER BY createdAt, id LIMIT ?`,
+    `SELECT * FROM memory_facts ${clauses.length ? `WHERE ${clauses.join(' AND ')}` : ''} ORDER BY createdAt DESC, id DESC LIMIT ?`,
     [...params, limit],
-  ).map(asFact);
+  ).map(asFact).reverse();
 
   const entries: MemoryRecallEntry[] = [];
   for (const fact of rows) {
