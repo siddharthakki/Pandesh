@@ -79,6 +79,56 @@ export function openCodeCandidates(): string[] {
   ];
 }
 
+/**
+ * What OpenCode may do on its own. Pandesh cannot answer OpenCode's internal
+ * permission prompts, so anything that would need one is denied outright:
+ * no shell (deletes, git pushes, installs and the like go through Pandesh's
+ * own approved tools), nothing outside the selected workspace, no web, and no
+ * hand-off to subagents that could carry their own looser rules. Editing files
+ * inside the workspace is the delegated task itself.
+ */
+export const OPENCODE_PERMISSION = {
+  bash: 'deny',
+  edit: 'allow',
+  external_directory: 'deny',
+  webfetch: 'deny',
+  websearch: 'deny',
+  task: 'deny',
+  execute: 'deny',
+  browser: 'deny',
+  doom_loop: 'deny',
+} as const;
+
+/** Built-in agents re-pinned to the policy, so no agent definition can widen it. */
+const OPENCODE_AGENTS = ['build', 'plan', 'general', 'explore'] as const;
+
+export function withPandeshPermissions<T extends Record<string, unknown>>(config: T): T & { permission: typeof OPENCODE_PERMISSION } {
+  return {
+    ...config,
+    permission: OPENCODE_PERMISSION,
+    agent: Object.fromEntries(OPENCODE_AGENTS.map((name) => [name, { permission: OPENCODE_PERMISSION }])),
+  };
+}
+
+/**
+ * The environment OpenCode runs in. The person's global OpenCode config (and
+ * any agents or permissions it defines) is never loaded: config comes only
+ * from Pandesh, both inline and from the workspace file.
+ */
+export function openCodeEnv(workspaceRoot: string, config: Record<string, unknown>, extra: Record<string, string> = {}): NodeJS.ProcessEnv {
+  const isolatedConfigHome = path.join(os.tmpdir(), 'pandesh-opencode-config');
+  fs.mkdirSync(isolatedConfigHome, { recursive: true });
+  return {
+    ...process.env,
+    OPENCODE_DISABLE_AUTOUPDATE: '1',
+    // OpenCode prefers an inherited PWD over the spawn cwd, so a Core started from a terminal would work in that terminal's folder.
+    PWD: workspaceRoot,
+    XDG_CONFIG_HOME: isolatedConfigHome,
+    OPENCODE_CONFIG_CONTENT: JSON.stringify(config),
+    ...extra,
+  };
+}
+
 export function findOpenCodeExe(): string {
   return openCodeCandidates().find((candidate) => candidate && fs.existsSync(candidate)) ?? 'opencode';
 }
@@ -133,7 +183,7 @@ export class OpenCodeEngine {
     const opencodeDir = path.join(workspaceRoot, '.opencode');
     fs.mkdirSync(opencodeDir, { recursive: true });
     const configPath = path.join(opencodeDir, 'opencode.json');
-    const config = {
+    const config = withPandeshPermissions({
       $schema: 'https://opencode.ai/config.json',
       autoupdate: false,
       share: 'disabled',
@@ -162,12 +212,7 @@ export class OpenCodeEngine {
         },
       },
       model: `ollama/${DEFAULT_MODEL}`,
-      permission: {
-        bash: 'allow',
-        edit: 'allow',
-        webfetch: 'deny',
-      },
-    };
+    });
     fs.writeFileSync(configPath, JSON.stringify(config, null, 2), 'utf8');
 
     const port = await getFreePort();
@@ -179,14 +224,7 @@ export class OpenCodeEngine {
 
     const server = cp.spawn(exe, ['serve', '--hostname', '127.0.0.1', '--port', String(port)], {
       cwd: workspaceRoot,
-      env: {
-        ...process.env,
-        OPENCODE_DISABLE_AUTOUPDATE: '1',
-        // OpenCode prefers an inherited PWD over the spawn cwd, so a Core started from a terminal would work in that terminal's folder.
-        PWD: workspaceRoot,
-        OPENCODE_SERVER_PASSWORD: password,
-        OPENCODE_PASSWORD: password,
-      },
+      env: openCodeEnv(workspaceRoot, config, { OPENCODE_SERVER_PASSWORD: password, OPENCODE_PASSWORD: password }),
       stdio: 'ignore',
       shell: isCmd,
       windowsHide: true,
@@ -271,15 +309,12 @@ export class OpenCodeEngine {
     }, actor);
     
 
-    // Ensure workspace-level opencode config with automated permissions
+    // Workspace-level opencode config pinned to Pandesh's permission policy
     const effectiveModel = ctx.model || DEFAULT_MODEL;
     // OpenCode talks to Ollama's /v1 endpoint; pin the model first so the run does not pay a cold load mid-session.
     await ensureModelResident(effectiveModel, { signal });
     const opencodeDir = path.join(workspaceRoot, '.opencode');
-    try {
-      fs.mkdirSync(opencodeDir, { recursive: true });
-      const configPath = path.join(opencodeDir, 'opencode.json');
-      const config = {
+    const config = withPandeshPermissions({
         $schema: 'https://opencode.ai/config.json',
         autoupdate: false,
         share: 'disabled',
@@ -316,14 +351,21 @@ export class OpenCodeEngine {
         model: `ollama/${effectiveModel}`,
         small_model: `ollama/${effectiveModel}`,
         enabled_providers: ['ollama'],
-        permission: {
-          bash: 'allow',
-          edit: 'allow',
-          webfetch: 'deny',
-        },
-      };
-      fs.writeFileSync(configPath, JSON.stringify(config, null, 2), 'utf8');
-    } catch {}
+    });
+    try {
+      fs.mkdirSync(opencodeDir, { recursive: true });
+      fs.writeFileSync(path.join(opencodeDir, 'opencode.json'), JSON.stringify(config, null, 2), 'utf8');
+    } catch (err: any) {
+      // A stale workspace config could still grant OpenCode more than Pandesh allows: do not run.
+      const errMessage = `OpenCode was not started: Pandesh could not apply its permission policy in ${workspaceRoot} (${err?.message ?? err}).`;
+      try {
+        mutateWithBroadcast(db, broadcaster, () => {
+          failAttempt(db, attemptId, { failureReason: errMessage, fenceToken, actor });
+        });
+      } catch {}
+      safeRecordRuntimeEvent(db, broadcaster, attemptId, 'step_finish', { step: 1, status: 'failed', error: errMessage }, actor);
+      return { success: false, reply: errMessage, error: errMessage, modifiedFiles: [], metrics: { totalMs: Date.now() - startTime } };
+    }
 
     const exe = findOpenCodeExe();
     // OpenCode 2.x otherwise hands `run` to a shared background service that uses the global config, where the
@@ -339,12 +381,7 @@ export class OpenCodeEngine {
     const isCmd = exe.endsWith('.cmd') || exe.endsWith('.bat');
     const child = cp.spawn(exe, args, {
       cwd: workspaceRoot,
-      env: {
-        ...process.env,
-        OPENCODE_DISABLE_AUTOUPDATE: '1',
-        // OpenCode prefers an inherited PWD over the spawn cwd, so a Core started from a terminal would work in that terminal's folder.
-        PWD: workspaceRoot,
-      },
+      env: openCodeEnv(workspaceRoot, config),
       stdio: ['ignore', 'pipe', 'pipe'],
       shell: isCmd,
       windowsHide: true,
@@ -698,17 +735,14 @@ export class OpenCodeEngineAdapter implements EngineAdapter {
     const exe = findOpenCodeExe();
     const isCmd = process.platform === 'win32' && (exe.endsWith('.cmd') || exe.endsWith('.bat') || exe === 'opencode');
 
-    const args = ['run', '--server', serverInfo.serverUrl, '--auto', '--format', 'json', prompt];
+    // No --auto: it approves every permission not explicitly denied, which would let OpenCode act without Pandesh.
+    const args = ['run', '--server', serverInfo.serverUrl, '--format', 'json', prompt];
     const res = cp.spawnSync(exe, args, {
       cwd: workspaceRoot,
-      env: {
-        ...process.env,
-        OPENCODE_DISABLE_AUTOUPDATE: '1',
-        // OpenCode prefers an inherited PWD over the spawn cwd, so a Core started from a terminal would work in that terminal's folder.
-        PWD: workspaceRoot,
+      env: openCodeEnv(workspaceRoot, withPandeshPermissions({}), {
         OPENCODE_SERVER_PASSWORD: serverInfo.password,
         OPENCODE_PASSWORD: serverInfo.password,
-      },
+      }),
       encoding: 'utf8',
       timeout: options?.timeoutMs || 120000,
       shell: isCmd,
