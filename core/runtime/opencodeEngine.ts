@@ -312,6 +312,8 @@ export class OpenCodeEngine {
           },
         },
         model: `ollama/${effectiveModel}`,
+        small_model: `ollama/${effectiveModel}`,
+        enabled_providers: ['ollama'],
         permission: {
           bash: 'allow',
           edit: 'allow',
@@ -322,8 +324,12 @@ export class OpenCodeEngine {
     } catch {}
 
     const exe = findOpenCodeExe();
+    // OpenCode 2.x otherwise hands `run` to a shared background service that uses the global config, where the
+    // default can be a cloud provider. A private server with the model named outright keeps this on local Ollama.
     const args = [
       'run',
+      '--standalone',
+      '--model', `ollama/${effectiveModel}`,
       '--format', 'json',
       prompt
     ];
