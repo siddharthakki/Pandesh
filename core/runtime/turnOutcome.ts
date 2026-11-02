@@ -88,6 +88,8 @@ export const CONSEQUENTIAL_PI_TOOLS: ReadonlySet<string> = new Set([
   'delegate_to_opencode',
   'dev_stories_dispatch',
   'dev_story_approve_review',
+  // Sending a web form is the browser's one outward action; a declined send must never read as "submitted".
+  'browser_submit',
 ]);
 
 /**
