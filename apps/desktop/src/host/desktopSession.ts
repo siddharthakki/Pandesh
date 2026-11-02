@@ -70,6 +70,7 @@ import {
   type DesktopTaskScope,
 } from './desktopTaskScope';
 import { resolveHostBrowserBin } from '../../../../core/runtime/hostBrowserBin';
+import { reapOrphanedBrowsers } from '../../../../core/runtime/browserSession';
 import { AUTO_CHAT_MODEL, AUTO_RECOVERY_MODEL, AUTO_FALLBACK_MODEL } from '../../../../core/domain/modelRouting';
 import { getOrCreateDesktopClientId, getOrCreateDesktopToken, getOrCreateHostToken } from './desktopToken';
 import { readLastWorkspace, writeLastWorkspace } from './desktopSessionCursor';
@@ -2816,6 +2817,16 @@ export class DesktopSession {
         } catch (err) {
           this.options.log?.(`Owned Core cleanup error: ${(err as Error).message}`);
         }
+      }
+
+      // A force-stopped Core never runs its exit hook, so its headless Edge
+      // would outlive it. Core's own reaper kills only browsers whose launcher
+      // Core is dead and whose OS creation time matches the recorded spawn.
+      try {
+        const reaped = reapOrphanedBrowsers(this.dataDir);
+        if (reaped.reaped > 0) this.options.log?.(`Reaped ${reaped.reaped} browser process(es) left by the stopped Core`);
+      } catch (err) {
+        this.options.log?.(`Browser reap after Core shutdown failed: ${(err as Error).message}`);
       }
     }
 

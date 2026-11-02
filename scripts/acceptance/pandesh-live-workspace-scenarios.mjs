@@ -89,9 +89,9 @@ function coreEndpoint() {
   return { base: `http://127.0.0.1:${rec.port}`, token };
 }
 
-async function coreApi(route) {
+async function coreApi(route, headers = {}) {
   const { base, token } = coreEndpoint();
-  const res = await fetch(`${base}${route}`, { headers: { Authorization: `Bearer ${token}` } });
+  const res = await fetch(`${base}${route}`, { headers: { Authorization: `Bearer ${token}`, ...headers } });
   const text = await res.text();
   try { return JSON.parse(text); } catch { return { raw: text }; }
 }
@@ -106,6 +106,18 @@ async function recordedToolCalls(attemptId) {
     output: String(inv.evidence?.output ?? ''),
     sourceUrls: inv.evidence?.sourceUrls ?? [],
   }));
+}
+
+/**
+ * The complete page the approved browser_submit returned. The tool-invocation
+ * evidence is a 500-char excerpt; the governed capability record keeps it all.
+ * Its anchor is keyed by the desktop's client id, so the read sends that id.
+ */
+async function approvedSubmitOutput(conversationId) {
+  const { clientId } = JSON.parse(fs.readFileSync(path.join(dataDir, 'client-id.json'), 'utf8'));
+  const { actions = [] } = await coreApi(`/v1/capabilities/actions?correlationId=${encodeURIComponent(conversationId)}`, { 'X-Client-Id': clientId });
+  const done = actions.filter((a) => a.toolName === 'browser_submit' && a.invocation?.status === 'succeeded');
+  return String(done.at(-1)?.invocation?.evidence?.output ?? '');
 }
 
 let shotCount = 0;
@@ -390,8 +402,10 @@ try {
     // Then approves: the real form is sent and the result page is read back.
     const third = await runTurn(app, 'form-approve', 'I changed my mind — submit it now, then tell me exactly what the result page shows for the customer name and the delivery instructions.', { conversationId: first.conversationId });
     const result = third.tools.find((t) => t.toolName === 'browser_submit' && t.status === 'succeeded');
-    record('form: approved submission reached the result page', result && /"custname": "Pandesh Stage B"/.test(result.output) && /"comments": "harmless test, no order"/.test(result.output) ? 'PASS' : 'FAIL',
-      result?.output.slice(0, 400) ?? third.tools.map((t) => `${t.toolName}:${t.status}`));
+    const resultOutput = result ? await approvedSubmitOutput(first.conversationId) : '';
+    const formEcho = /"form": \{[^}]*\}/.exec(resultOutput)?.[0];
+    record('form: approved submission reached the result page', result && /"custname": "Pandesh Stage B"/.test(resultOutput) && /"comments": "harmless test, no order"/.test(resultOutput) ? 'PASS' : 'FAIL',
+      result ? `${resultOutput.length} chars; ${formEcho ?? resultOutput.slice(0, 400)}` : third.tools.map((t) => `${t.toolName}:${t.status}`));
     record('form: answer states both submitted values', /Pandesh Stage B/.test(third.reply) && /harmless test, no order/.test(third.reply) ? 'PASS' : 'REVIEW', third.reply.slice(0, 500));
   }
 
