@@ -19,11 +19,17 @@ import { createWindowsProcessIdentityProviderSync, type SyncProcessIdentityProvi
 import {
   CdpSession,
   applyStep,
+  browserProcessId,
+  browserProfileRoot,
+  closeManagedBrowser,
   connectCdp,
   createBrowserProfileDir,
   evaluate,
+  findBrowserRootsByProfile,
   freePort,
-  killProcessTree,
+  isInsideWorkspace,
+  killPidTreeSync,
+  profileDirOf,
   removeBrowserProfileDir,
   sleep,
   waitForDebugEndpoint,
@@ -72,38 +78,48 @@ function hostAllowed(host: string, sites: Set<string>): boolean {
 }
 
 /**
- * Browsers this process launched. They are killed when Core exits, so a
+ * Browsers this process launched, by managed profile. The launcher PID that
+ * spawn() returns exits after handing off, so each entry carries the real
+ * browser PID once CDP reports it. They are killed when Core exits, so a
  * session never outlives the Core that governs its network guard.
  */
-const liveBrowsers = new Set<ChildProcess>();
+interface LiveBrowser { child: ChildProcess; profileDir: string; browserPid?: number }
+const liveBrowsers = new Map<string, LiveBrowser>();
+const liveSessions = new Set<BrowserSession>();
 
-function killBrowserNow(child: ChildProcess): void {
-  if (child.exitCode !== null || child.pid === undefined) return;
-  if (process.platform === 'win32') {
-    spawnSync('taskkill', ['/PID', String(child.pid), '/T', '/F'], { windowsHide: true, stdio: 'ignore' });
-  } else {
-    child.kill('SIGKILL');
-  }
+function killBrowserNow(live: LiveBrowser): void {
+  if (live.browserPid) killPidTreeSync(live.browserPid);
+  else for (const pid of findBrowserRootsByProfile(live.profileDir)) killPidTreeSync(pid);
+  if (live.child.exitCode === null && live.child.pid !== undefined) killPidTreeSync(live.child.pid);
 }
 
 let exitHookInstalled = false;
 
-function trackLiveBrowser(child: ChildProcess): void {
+function trackLiveBrowser(live: LiveBrowser): void {
   if (!exitHookInstalled) {
     exitHookInstalled = true;
-    process.once('exit', () => { for (const c of liveBrowsers) killBrowserNow(c); });
+    process.once('exit', () => { for (const b of liveBrowsers.values()) killBrowserNow(b); });
   }
-  liveBrowsers.add(child);
-  child.once('exit', () => liveBrowsers.delete(child));
+  liveBrowsers.set(live.profileDir, live);
+}
+
+/** Gracefully closes every open browsing session; Core calls this on shutdown. */
+export async function closeAllBrowserSessions(): Promise<void> {
+  await Promise.all([...liveSessions].map((s) => s.close().catch(() => undefined)));
 }
 
 export interface BrowserProcessRecord {
+  /** The spawned launcher PID. */
   pid: number;
   corePid: number;
   sessionId: string;
   startedAt: string;
   /** Epoch ms taken just before spawn; compared with the OS creation time so a reused PID is never killed. */
   spawnedAtMs?: number;
+  /** The real browser process, as CDP reported it. */
+  browserPid?: number;
+  /** The unique managed profile this browser was started with. */
+  profileDir?: string;
 }
 
 function browserRecordFile(dataDir: string): string {
@@ -125,16 +141,23 @@ function writeBrowserRecords(dataDir: string, records: BrowserProcessRecord[]): 
   } catch {}
 }
 
-function recordBrowserLaunch(dataDir: string | undefined, child: ChildProcess, spawnedAtMs: number): void {
+function recordBrowserLaunch(dataDir: string | undefined, child: ChildProcess, spawnedAtMs: number, profileDir: string): void {
   if (!dataDir || !child.pid) return;
   const records = readBrowserRecords(dataDir);
-  records.push({ pid: child.pid, corePid: process.pid, sessionId: '', startedAt: new Date().toISOString(), spawnedAtMs });
+  records.push({ pid: child.pid, corePid: process.pid, sessionId: '', startedAt: new Date().toISOString(), spawnedAtMs, profileDir });
   writeBrowserRecords(dataDir, records);
 }
 
-function removeBrowserRecord(dataDir: string | undefined, pid: number): void {
+function recordBrowserPid(dataDir: string | undefined, profileDir: string, browserPid: number): void {
   if (!dataDir) return;
-  writeBrowserRecords(dataDir, readBrowserRecords(dataDir).filter((record) => record.pid !== pid));
+  writeBrowserRecords(dataDir, readBrowserRecords(dataDir).map((record) => (
+    record.profileDir === profileDir ? { ...record, browserPid } : record
+  )));
+}
+
+function removeBrowserRecord(dataDir: string | undefined, profileDir: string): void {
+  if (!dataDir) return;
+  writeBrowserRecords(dataDir, readBrowserRecords(dataDir).filter((record) => record.profileDir !== profileDir));
 }
 
 function isProcessAlive(pid: number): boolean {
@@ -158,28 +181,55 @@ export interface ReapOptions {
   identity?: SyncProcessIdentityProvider;
   isAlive?: (pid: number) => boolean;
   kill?: (pid: number) => void;
+  /** Root browser PIDs that own a managed profile; used when the browser PID was never recorded. */
+  findByProfile?: (profileDir: string) => number[];
+  removeProfile?: (profileDir: string) => void;
 }
 
 /**
  * Reaps browser processes left behind when a previous Core process crashed.
  * A record is orphaned when its launcher Core pid is neither this process nor
- * still alive. Before killing, the PID's OS creation time must match the
- * recorded spawn time: after a crash or reboot the PID may belong to an
- * unrelated process, which is dropped from the ledger and left alone. When the
- * OS cannot disclose a creation time, nothing is killed. Records belonging to a
- * live Core (this one or another) are kept.
+ * still alive. A record with a managed profile is matched by that profile: the
+ * recorded browser PID is killed only while its command line still names that
+ * exact profile under the Core-owned profile root; otherwise the roots that
+ * own the profile are found by command line. Older records fall back to the
+ * launcher PID, whose OS creation time must match the recorded spawn time;
+ * when the OS cannot disclose a creation time, nothing is killed. Records
+ * belonging to a live Core (this one or another) are kept.
  */
 export function reapOrphanedBrowsers(dataDir: string, options: ReapOptions = {}): { reaped: number; errors: string[] } {
   const identityOf = options.identity ?? createWindowsProcessIdentityProviderSync();
   const alive = options.isAlive ?? isProcessAlive;
   const kill = options.kill ?? killProcessByPid;
+  const findByProfile = options.findByProfile ?? findBrowserRootsByProfile;
+  const removeProfile = options.removeProfile ?? removeBrowserProfileDir;
   const errors: string[] = [];
   let reaped = 0;
   const selfPid = process.pid;
   const remaining: BrowserProcessRecord[] = [];
+  const staleProfiles: string[] = [];
   for (const record of readBrowserRecords(dataDir)) {
     if (record.corePid === selfPid || alive(record.corePid)) {
       remaining.push(record);
+      continue;
+    }
+    const profileDir = record.profileDir;
+    if (profileDir) {
+      if (!isInsideWorkspace(browserProfileRoot(), profileDir)) continue;
+      try {
+        let pids: number[] = [];
+        if (record.browserPid) {
+          const snapshot = identityOf(record.browserPid);
+          const dir = snapshot.alive ? profileDirOf(snapshot.commandLine) : null;
+          if (dir && path.resolve(dir).toLowerCase() === path.resolve(profileDir).toLowerCase()) pids = [record.browserPid];
+        }
+        if (pids.length === 0) pids = findByProfile(profileDir);
+        for (const pid of pids) { kill(pid); reaped += 1; }
+        staleProfiles.push(profileDir);
+      } catch (err) {
+        errors.push(String(err));
+        remaining.push(record);
+      }
       continue;
     }
     if (!Number.isInteger(record.pid) || record.pid <= 0) continue;
@@ -202,6 +252,9 @@ export function reapOrphanedBrowsers(dataDir: string, options: ReapOptions = {})
     }
   }
   writeBrowserRecords(dataDir, remaining);
+  // A just-killed browser holds its profile files for a moment.
+  if (reaped > 0 && !options.removeProfile) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 1_000);
+  for (const dir of staleProfiles) removeProfile(dir);
   return { reaped, errors };
 }
 
@@ -243,11 +296,10 @@ class BrowserSession {
   private lastGoodUrl = '';
 
   private constructor(
-    private readonly child: ChildProcess,
+    private readonly browser: LiveBrowser,
     private readonly proxy: EgressProxy,
     private readonly cdp: CdpSession,
     private readonly sessionId: string,
-    private readonly profileDir: string,
     readonly maxActions: number,
     private readonly onClosed: () => void,
     private readonly dataDir: string | undefined,
@@ -278,20 +330,26 @@ class BrowserSession {
       `--remote-debugging-port=${debugPort}`,
       'about:blank',
     ], { windowsHide: true, stdio: 'ignore' });
-    trackLiveBrowser(child);
-    recordBrowserLaunch(dataDir, child, spawnedAtMs);
+    const live: LiveBrowser = { child, profileDir };
+    trackLiveBrowser(live);
+    recordBrowserLaunch(dataDir, child, spawnedAtMs, profileDir);
+    let cdp: CdpSession | undefined;
     try {
-      const cdp = await connectCdp(await waitForDebugEndpoint(debugPort, signal));
+      cdp = await connectCdp(await waitForDebugEndpoint(debugPort, signal));
+      live.browserPid = await browserProcessId(cdp);
+      if (live.browserPid) recordBrowserPid(dataDir, profileDir, live.browserPid);
       const created = await cdp.send('Target.createTarget', { url: 'about:blank' });
       const attached = await cdp.send('Target.attachToTarget', { targetId: String(created.targetId ?? ''), flatten: true });
       const sessionId = String(attached.sessionId ?? '');
-      const session = new BrowserSession(child, proxy, cdp, sessionId, profileDir, maxActions, onClosed, dataDir);
+      const session = new BrowserSession(live, proxy, cdp, sessionId, maxActions, onClosed, dataDir);
+      liveSessions.add(session);
       await session.install();
       return session;
     } catch (err) {
-      if (child.pid !== undefined) removeBrowserRecord(dataDir, child.pid);
       await proxy.close();
-      await killProcessTree(child);
+      await closeManagedBrowser(cdp, child, profileDir, live.browserPid);
+      liveBrowsers.delete(profileDir);
+      removeBrowserRecord(dataDir, profileDir);
       removeBrowserProfileDir(profileDir);
       throw err;
     }
@@ -731,11 +789,13 @@ class BrowserSession {
     this.closed = true;
     if (this.idleTimer) clearTimeout(this.idleTimer);
     this.onClosed();
-    if (this.child.pid !== undefined) removeBrowserRecord(this.dataDir, this.child.pid);
-    this.cdp.close();
-    await killProcessTree(this.child);
+    liveSessions.delete(this);
+    const { child, profileDir, browserPid } = this.browser;
+    await closeManagedBrowser(this.cdp, child, profileDir, browserPid);
+    liveBrowsers.delete(profileDir);
+    removeBrowserRecord(this.dataDir, profileDir);
     await this.proxy.close();
-    removeBrowserProfileDir(this.profileDir);
+    removeBrowserProfileDir(profileDir);
   }
 }
 

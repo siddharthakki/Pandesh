@@ -47,7 +47,7 @@ import { createMemoryCapabilityAdapter } from './runtime/memoryCapability';
 import { createBrowserCapabilityAdapter } from './runtime/browserCapability';
 import { createImageStudioCapabilityAdapter } from './runtime/imageStudioCapability';
 import { resolveHostBrowserBin } from './runtime/hostBrowserBin';
-import { reapOrphanedBrowsers } from './runtime/browserSession';
+import { closeAllBrowserSessions, reapOrphanedBrowsers } from './runtime/browserSession';
 import { buildConnectorAdapters, CONNECTOR_CREDENTIAL_ENV } from './runtime/connectors/connectorDefinitions';
 import type { ConnectorAdapter } from './runtime/connectors/connectorCapability';
 import { createGwsGmailProbe, createGwsGmailExecutor, createGwsGmailPrepare, defaultGwsGmailConfigDir, type GwsGmailAdapterConfig, type GwsGmailDraftBindingStore } from './runtime/connectors/gwsGmailAdapter';
@@ -496,6 +496,7 @@ async function main(): Promise<void> {
     if (shuttingDown) return;
     shuttingDown = true;
     wsHandle.close();
+    await closeAllBrowserSessions();
     await api.close();
     singletonHandle.release();
     removeDiscoveryRecord(paths.discoveryRecordPath);

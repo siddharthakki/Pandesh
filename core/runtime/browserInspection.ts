@@ -5,7 +5,7 @@
  * already on disk (never npm-installs), and writes screenshots under
  * `<workspace>/.tmp/karkedikha-browser`.
  */
-import { spawn, type ChildProcess } from 'node:child_process';
+import { execFileSync, spawn, spawnSync, type ChildProcess } from 'node:child_process';
 import { LocalAutonomySecurityKernel } from '../security/kernel';
 import { createSanitizedChildEnvironment } from '../security/childEnvironment';
 import * as fs from 'node:fs';
@@ -474,6 +474,98 @@ export async function killProcessTree(child: ChildProcess): Promise<void> {
   child.kill('SIGTERM');
 }
 
+/**
+ * The real browser process behind a CDP connection. On Windows the spawned
+ * msedge.exe is a launcher that hands off to another PID and exits, so the
+ * child's own PID cannot be used to stop the browser.
+ */
+export async function browserProcessId(cdp: CdpSession): Promise<number | undefined> {
+  const info = await withTimeout(cdp.send('SystemInfo.getProcessInfo'), 3_000).catch(() => undefined);
+  const list = (info?.processInfo ?? []) as Array<{ type?: string; id?: number }>;
+  const id = list.find((p) => p.type === 'browser')?.id;
+  return Number.isInteger(id) && id! > 0 ? id : undefined;
+}
+
+/** The --user-data-dir a browser command line names, unquoted. */
+export function profileDirOf(commandLine: string | null): string | null {
+  const m = /--user-data-dir=(?:"([^"]+)"|(\S+))/.exec(commandLine ?? '');
+  return m ? (m[1] ?? m[2] ?? null) : null;
+}
+
+function sameProfile(a: string, b: string): boolean {
+  return path.resolve(a).toLowerCase() === path.resolve(b).toLowerCase();
+}
+
+/**
+ * Root browser PIDs (not renderers or helpers) whose command line names this
+ * exact managed profile. Only profiles under the Core-owned profile root are
+ * ever matched, so an ordinary user browser can never qualify.
+ */
+export function findBrowserRootsByProfile(profileDir: string): number[] {
+  if (process.platform !== 'win32' || !profileDir) return [];
+  if (!isInsideWorkspace(browserProfileRoot(), profileDir) || sameProfile(profileDir, browserProfileRoot())) return [];
+  const leaf = path.basename(profileDir).replace(/[^\w-]/g, '');
+  if (!leaf) return [];
+  const script = [
+    `Get-CimInstance Win32_Process -Filter "CommandLine LIKE '%--user-data-dir=%${leaf}%'" -ErrorAction SilentlyContinue |`,
+    '  ForEach-Object { @{ pid = $_.ProcessId; cmd = $_.CommandLine } } | ConvertTo-Json -Compress',
+  ].join('\n');
+  try {
+    const out = String(execFileSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', script], {
+      encoding: 'utf8', timeout: 8_000, windowsHide: true,
+    }) ?? '').trim();
+    if (!out) return [];
+    const parsed = JSON.parse(out) as { pid: number; cmd: string | null } | Array<{ pid: number; cmd: string | null }>;
+    return (Array.isArray(parsed) ? parsed : [parsed])
+      .filter((p) => !/\s--type=/.test(p.cmd ?? ''))
+      .filter((p) => { const dir = profileDirOf(p.cmd); return dir !== null && sameProfile(dir, profileDir); })
+      .map((p) => p.pid);
+  } catch {
+    return [];
+  }
+}
+
+export function killPidTreeSync(pid: number): void {
+  if (!Number.isInteger(pid) || pid <= 0) return;
+  if (process.platform === 'win32') {
+    spawnSync('taskkill', ['/PID', String(pid), '/T', '/F'], { windowsHide: true, stdio: 'ignore' });
+    return;
+  }
+  try { process.kill(pid, 'SIGKILL'); } catch {}
+}
+
+function pidAlive(pid: number): boolean {
+  try { process.kill(pid, 0); return true; }
+  catch (err) { return (err as NodeJS.ErrnoException).code === 'EPERM'; }
+}
+
+function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
+  return Promise.race([promise, new Promise<T>((_, reject) => setTimeout(() => reject(new Error('timeout')), ms))]);
+}
+
+/**
+ * Stops a managed browser: asks it to close over CDP, waits for the real
+ * browser process to exit, and only then force-kills that process tree (or,
+ * when its PID is unknown, the roots that own this exact profile).
+ */
+export async function closeManagedBrowser(
+  cdp: CdpSession | undefined,
+  child: ChildProcess,
+  profileDir: string,
+  browserPid?: number,
+): Promise<void> {
+  if (cdp) await withTimeout(cdp.send('Browser.close'), 2_000).catch(() => undefined);
+  cdp?.close();
+  if (browserPid) {
+    const deadline = Date.now() + 3_000;
+    while (pidAlive(browserPid) && Date.now() < deadline) await sleep(100);
+    if (pidAlive(browserPid)) killPidTreeSync(browserPid);
+  } else {
+    for (const pid of findBrowserRootsByProfile(profileDir)) killPidTreeSync(pid);
+  }
+  await killProcessTree(child);
+}
+
 async function withInspectedPage<T>(
   request: BrowserInspectionRequest,
   signal: AbortSignal | undefined,
@@ -532,8 +624,7 @@ async function withInspectedPage<T>(
     await evaluate(cdp, sessionId, 'window.__kdkVerificationLoadedAt = Date.now()');
     return await fn(cdp, sessionId, pageUrl);
   } finally {
-    cdp?.close();
-    await killProcessTree(child);
+    await closeManagedBrowser(cdp, child, profileDir, cdp ? await browserProcessId(cdp) : undefined);
     if (server) await server.close().catch(() => undefined);
     removeBrowserProfileDir(profileDir);
   }

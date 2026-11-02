@@ -3,6 +3,7 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { reapOrphanedBrowsers, type BrowserProcessRecord } from '../runtime/browserSession';
+import { browserProfileRoot } from '../runtime/browserInspection';
 
 const dirs: string[] = [];
 function setup(records: unknown): string {
@@ -55,6 +56,51 @@ describe('reapOrphanedBrowsers', () => {
     const out = reapOrphanedBrowsers(dir, { identity, isAlive: () => false, kill: (p) => killed.push(p) });
     expect(killed).toEqual([]);
     expect(out.errors).toHaveLength(2);
+  });
+
+  describe('by managed profile (launcher PID handed off)', () => {
+    const profile = path.join(browserProfileRoot(), 'profile-Abc123');
+    const cmd = (dir: string) => `"msedge.exe" --headless=new --user-data-dir="${dir}" --remote-debugging-port=1 about:blank`;
+    const ident = (commandLine: string) => (pid: number) => ({ pid, alive: true, executablePath: null, creationTimeMs: null, commandLine });
+
+    it('kills the recorded real browser PID while it still owns the profile', () => {
+      const dir = setup([rec({ browserPid: 5151, profileDir: profile })]);
+      const killed: number[] = [];
+      const removed: string[] = [];
+      const out = reapOrphanedBrowsers(dir, {
+        identity: ident(cmd(profile)), isAlive: () => false, kill: (p) => killed.push(p),
+        findByProfile: () => [9999], removeProfile: (p) => removed.push(p),
+      });
+      expect(out.reaped).toBe(1);
+      expect(killed).toEqual([5151]);
+      expect(removed).toEqual([profile]);
+      expect(left(dir)).toEqual([]);
+    });
+
+    it('never kills a reused browser PID; finds the profile owner by command line instead', () => {
+      const dir = setup([rec({ browserPid: 5151, profileDir: profile })]);
+      const killed: number[] = [];
+      const out = reapOrphanedBrowsers(dir, {
+        identity: ident(cmd(path.join(os.tmpdir(), 'someone-else'))), isAlive: () => false, kill: (p) => killed.push(p),
+        findByProfile: (p) => (p === profile ? [6161] : []), removeProfile: () => undefined,
+      });
+      expect(killed).toEqual([6161]);
+      expect(out.reaped).toBe(1);
+    });
+
+    it('ignores a profile outside the managed root, and keeps a live Core\'s records', () => {
+      const dir = setup([
+        rec({ browserPid: 5151, profileDir: path.join(os.homedir(), 'AppData', 'Local', 'Microsoft', 'Edge', 'User Data') }),
+        rec({ corePid: 1, browserPid: 7171, profileDir: profile }),
+      ]);
+      const killed: number[] = [];
+      reapOrphanedBrowsers(dir, {
+        identity: ident(cmd(profile)), isAlive: (pid) => pid === 1, kill: (p) => killed.push(p),
+        findByProfile: () => [8181], removeProfile: () => undefined,
+      });
+      expect(killed).toEqual([]);
+      expect(left(dir)).toHaveLength(1);
+    });
   });
 
   it('survives a corrupt record file', () => {
