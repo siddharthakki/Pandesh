@@ -1,4 +1,5 @@
 import type { DesktopHostTelemetry } from './host/desktopHostTelemetry';
+import type { ToolActivity, ToolActivityKind } from '../../../core/shared/toolActivity';
 
 export type { DesktopHostTelemetry };
 
@@ -137,6 +138,7 @@ export const DESKTOP_CHANNELS = {
   loadArtifactPreview: 'desktop:loadArtifactPreview',
   openArtifactFolder: 'desktop:openArtifactFolder',
   openArtifactFile: 'desktop:openArtifactFile',
+  openActivityDocument: 'desktop:openActivityDocument',
   saveArtifactCopy: 'desktop:saveArtifactCopy',
   /** Bounded local deep-links into the standalone Image Generation Studio
    * app (:8989) for one already-verified Core artifact — never an
@@ -524,6 +526,8 @@ export interface DesktopSnapshot {
   taskScope: DesktopTaskScopeView | null;
   coreBuild?: { instanceId?: string; bundleHash?: string; busy?: boolean };
   cockpit: MissionCockpitView;
+  /** What the contextual workspace shows for the viewed conversation, oldest first. */
+  workspaceActivities: DesktopWorkspaceActivity[];
   workers: DesktopWorkerOption[];
   selectedWorker: string;
   /** Recorded on the request that ran, so the answer is attributable. */
@@ -972,6 +976,29 @@ export interface DesktopActivityEvent {
   durationMs?: number | null;
   costUsd?: number | null;
   clientOrigin?: 'desktop' | 'mobile';
+  /** The bounded preview a tool published with its result (core/shared/toolActivity.ts). */
+  activity?: ToolActivity;
+}
+
+export type WorkspaceActivityState = 'running' | 'completed' | 'failed' | 'cancelled';
+
+/** One real step shown in the contextual workspace (see host/workspaceActivity.ts). */
+export interface DesktopWorkspaceActivity {
+  /** The Core tool invocation id, or a host id for a host-made capability call. */
+  id: string;
+  conversationId: string | null;
+  /** The Core attempt (task) this step belongs to. */
+  taskId: string | null;
+  /** The capability tool that produced it, e.g. browser_goto. */
+  capability: string;
+  kind: ToolActivityKind;
+  title: string;
+  state: WorkspaceActivityState;
+  startedAt: string;
+  endedAt: string | null;
+  /** The reported failure, or a check's summary. */
+  detail: string | null;
+  preview: ToolActivity | null;
 }
 
 export interface DesktopSubmitResult {
@@ -1036,5 +1063,6 @@ export const RENDERER_VISIBLE_KEYS: readonly (keyof DesktopSnapshot)[] = [
   'hostTelemetry',
   'selectedConversationId',
   'activeConversationId',
+  'workspaceActivities',
   'contextEnvelope',
 ];

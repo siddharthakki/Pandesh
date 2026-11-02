@@ -406,6 +406,22 @@ class BrowserSession {
     })()`);
   }
 
+  /**
+   * A small JPEG of what the page shows right now, for the user's workspace
+   * view. Taken once per action, never polled, and scaled down so it stays
+   * cheap to keep.
+   */
+  async screenshot(): Promise<Buffer | null> {
+    if (this.closed) return null;
+    const shot = await this.cdp.send('Page.captureScreenshot', {
+      format: 'jpeg',
+      quality: 55,
+      clip: { x: 0, y: 0, width: 1280, height: 900, scale: 0.625 },
+    }, this.sessionId).catch(() => null);
+    const data = typeof shot?.data === 'string' ? shot.data : '';
+    return data ? Buffer.from(data, 'base64') : null;
+  }
+
   get isClosed(): boolean {
     return this.closed;
   }
@@ -544,6 +560,13 @@ export class BrowserSessionManager {
 
   read(key: string, signal?: AbortSignal): Promise<BrowserPageState> {
     return this.act(key, signal, false, false, async () => undefined);
+  }
+
+  /** The current page of a live session as a small JPEG, or null when there is none. */
+  async screenshot(key: string): Promise<Buffer | null> {
+    const session = this.sessions.get(key);
+    if (!session || session.isClosed) return null;
+    return session.screenshot();
   }
 
   async stop(key: string): Promise<boolean> {

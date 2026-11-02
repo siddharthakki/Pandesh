@@ -17,6 +17,11 @@ import {
 } from './browserInspection';
 import { parsePageLocator } from './pageLocator';
 import { BrowserSessionError, BrowserSessionManager, type BrowserPageState } from './browserSession';
+import * as fs from 'node:fs';
+import * as path from 'node:path';
+import type { CoreDatabase } from '../db/connection';
+import { registerArtifact } from '../domain/artifacts';
+import { BROWSER_SCREENSHOT_SOURCE, type ToolActivity } from '../shared/toolActivity';
 
 const MAX_OUTPUT_CHARS = 8_000;
 const MAX_STEPS = 12;
@@ -48,6 +53,9 @@ export interface BrowserCapabilityOptions {
   browserBin?: string | null;
   env?: NodeJS.ProcessEnv;
   sessions?: BrowserSessionManager;
+  /** With both set, each session action keeps one screenshot as a Core artifact for the workspace view. */
+  db?: CoreDatabase;
+  previewDir?: string;
 }
 
 /** Open-web session tools. Only opening a new site needs the user's approval. */
@@ -190,6 +198,42 @@ export function createBrowserCapabilityAdapter(options: BrowserCapabilityOptions
     },
   ];
 
+  /**
+   * What the user's workspace shows for a page: its address, title, a short
+   * excerpt and — when Core can keep it — a screenshot of the same managed
+   * session. A screenshot failure never fails the browsing action.
+   */
+  const pageActivity = async (key: string, state: BrowserPageState, ctx: ToolExecutionContext): Promise<ToolActivity> => {
+    const activity: ToolActivity = {
+      kind: 'browser',
+      title: state.title || state.url,
+      url: state.url,
+      excerpt: state.text.slice(0, 600),
+    };
+    if (!options.db || !options.previewDir || !/^https?:/.test(state.url)) return activity;
+    try {
+      const shot = await sessions.screenshot(key);
+      if (!shot?.length) return activity;
+      fs.mkdirSync(options.previewDir, { recursive: true });
+      const file = path.join(options.previewDir, `page-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.jpg`);
+      fs.writeFileSync(file, shot);
+      const artifact = registerArtifact(options.db, {
+        attemptId: ctx.attemptId ?? null,
+        kind: 'image',
+        title: (state.title || new URL(state.url).hostname).slice(0, 200),
+        mimeType: 'image/jpeg',
+        absolutePath: file,
+        source: BROWSER_SCREENSHOT_SOURCE,
+        metadata: { url: state.url },
+        actor: 'core:browser',
+      });
+      activity.artifactIds = [artifact.id];
+    } catch {
+      // The page state is still true without a picture of it.
+    }
+    return activity;
+  };
+
   const runSession = async (call: ModelToolCall, ctx: ToolExecutionContext): Promise<ToolExecutionResult> => {
     const key = ctx.correlationId ?? 'default';
     const args = call.arguments;
@@ -234,6 +278,7 @@ export function createBrowserCapabilityAdapter(options: BrowserCapabilityOptions
         output: formatPageState(state),
         resultCategory: 'browser_page_state',
         normalizedArguments: { ...normalizedArguments, pageUrl: state.url },
+        activity: await pageActivity(key, state, ctx),
       };
     } catch (err) {
       return {
@@ -307,6 +352,7 @@ export function createBrowserCapabilityAdapter(options: BrowserCapabilityOptions
           })),
           resultCategory: 'browser_inspect_succeeded',
           normalizedArguments: { ...normalizedArguments, screenshotPath: result.screenshotPath },
+          activity: { kind: 'browser', title: result.title || relativePath || liveUrl, ...(/^https?:/.test(result.url) ? { url: result.url } : {}) },
         };
       } catch (err) {
         return {

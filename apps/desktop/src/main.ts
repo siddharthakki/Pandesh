@@ -1355,6 +1355,13 @@ function registerIpc(): void {
     await shell.openPath(await session.artifactPath(String(artifactId ?? '')));
     return { opened: true };
   });
+  ipcMain.handle(DESKTOP_CHANNELS.openActivityDocument, async (_event, activityId: string) => {
+    if (!session) throw new Error('desktop session is not started');
+    const file = session.activityDocumentPath(String(activityId ?? ''));
+    const result = await shell.openPath(file);
+    if (result) throw new Error(result);
+    return { opened: true };
+  });
   ipcMain.handle(DESKTOP_CHANNELS.saveArtifactCopy, async (_event, artifactId: string) => {
     if (!session || !window) throw new Error('desktop session is not started');
     const source = await session.artifactPath(String(artifactId ?? ''));

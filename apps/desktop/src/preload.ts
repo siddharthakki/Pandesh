@@ -215,6 +215,8 @@ const desktopApi = {
     ipcRenderer.invoke(DESKTOP_CHANNELS.openArtifactFolder, artifactId),
   openArtifactFile: (artifactId: string): Promise<{ opened: boolean }> =>
     ipcRenderer.invoke(DESKTOP_CHANNELS.openArtifactFile, artifactId),
+  openActivityDocument: (activityId: string): Promise<{ opened: boolean }> =>
+    ipcRenderer.invoke(DESKTOP_CHANNELS.openActivityDocument, activityId),
   saveArtifactCopy: (artifactId: string): Promise<{ saved: boolean; path: string | null }> =>
     ipcRenderer.invoke(DESKTOP_CHANNELS.saveArtifactCopy, artifactId),
   openArtifactInStudio: (artifactId: string): Promise<{ opened: boolean }> =>

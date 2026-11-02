@@ -164,6 +164,15 @@ const contextDelivered = document.getElementById('context-delivered');
 const contextDeliveredEmpty = document.getElementById('context-delivered-empty');
 const contextPreview = document.getElementById('context-preview');
 const contextPreviewSection = document.getElementById('context-preview-section');
+const contextActivitySection = document.getElementById('context-activity-section');
+const contextActivityHeading = document.getElementById('context-activity-heading');
+const contextActivity = document.getElementById('context-activity');
+const contextHistorySection = document.getElementById('context-history-section');
+const contextHistory = document.getElementById('context-history');
+const contextApproval = document.getElementById('context-approval');
+const workspaceStop = document.getElementById('workspace-stop');
+const workspaceToggle = document.getElementById('btn-open-workspace');
+const workspaceToggleDot = document.getElementById('workspace-toggle-dot');
 const conversationResultsTitle = document.getElementById('conversation-results-title');
 const conversationResultsFiles = document.getElementById('conversation-results-files');
 const conversationResultsPreview = document.getElementById('conversation-results-preview');
@@ -7493,7 +7502,23 @@ document.querySelectorAll('.sidebar-nav-item').forEach((btn) => {
 // can be dismissed, and a delivered result can be previewed in place.
 document.getElementById('rail-brand')?.addEventListener('click', () => switchSurface('assistant'));
 workspaceContextClose?.addEventListener('click', () => {
-  if (workspaceContext) workspaceContext.hidden = true;
+  // Hiding the workspace never touches the task: it keeps running, and the
+  // header button brings the workspace back.
+  workspaceClosedByUser = true;
+  workspaceClosedAtActivityId = viewedWorkspaceActivities().at(-1)?.id ?? null;
+  updateContextPanelVisibility();
+});
+workspaceToggle?.addEventListener('click', () => {
+  workspaceClosedByUser = Boolean(workspaceContext && !workspaceContext.hidden);
+  if (workspaceClosedByUser) workspaceClosedAtActivityId = viewedWorkspaceActivities().at(-1)?.id ?? null;
+  updateContextPanelVisibility();
+});
+workspaceStop?.addEventListener('click', () => { void requestStop(); });
+document.getElementById('context-approval-review')?.addEventListener('click', () => {
+  // Approvals are decided only on the existing approval card.
+  const card = document.getElementById('approval-panel');
+  if (card && !card.hidden) card.scrollIntoView({ block: 'center', behavior: 'smooth' });
+  else switchSurface('tasks');
 });
 conversationResultsList?.addEventListener('click', (event) => {
   const target = event.target;
@@ -8071,15 +8096,318 @@ function renderWorkspaceContext(snapshot) {
     }
   }
   if (contextDeliveredEmpty) contextDeliveredEmpty.hidden = changed.length > 0;
+  renderWorkspaceActivity(snapshot);
   updateContextPanelVisibility();
 }
 
-/** The panel is only there when it has something real to show. */
+/**
+ * The panel is only there when it has something real to show, and stays
+ * closed once the person closed it — until a new step starts.
+ */
 function updateContextPanelVisibility() {
   if (!workspaceContext) return;
   const changed = lastSnapshot?.cockpit?.filesChanged?.length ?? 0;
   const hasPreview = Boolean(contextPreviewArtifactId);
-  workspaceContext.hidden = !(changed > 0 || hasPreview);
+  const activities = viewedWorkspaceActivities();
+  const hasContent = changed > 0 || hasPreview || activities.length > 0;
+  workspaceContext.hidden = !hasContent || workspaceClosedByUser;
+  workspaceContext.classList.toggle('has-activity', activities.length > 0);
+  if (workspaceToggle) {
+    workspaceToggle.hidden = !hasContent;
+    workspaceToggle.setAttribute('aria-expanded', String(!workspaceContext.hidden));
+    workspaceToggle.title = workspaceContext.hidden ? 'Show what Pandesh is doing and what it produced' : 'Hide the workspace (the task keeps running)';
+  }
+  if (workspaceToggleDot) {
+    workspaceToggleDot.hidden = !(workspaceContext.hidden && activities.some((item) => item.state === 'running'));
+  }
+}
+
+// ── Live activity ────────────────────────────────────────────────────────
+// Every step here is a real Core tool invocation (or a host capability call)
+// reported by the desktop host; the renderer only draws it. Page text, file
+// names and diffs are untrusted, so everything is set as text — never HTML.
+
+/** The step the person picked to inspect; null follows the current step. */
+let workspaceSelectedActivityId = null;
+/** The newest step seen, so a new one can reopen a closed workspace once. */
+let workspaceLatestSeenId = null;
+let workspaceClosedByUser = false;
+let workspaceClosedAtActivityId = null;
+/** Which conversation the workspace shows, and since when. */
+let workspaceViewConversationId;
+let workspaceViewSince = Date.now();
+/** Lazily loaded previews by artifact id (bounded). */
+const workspacePreviewCache = new Map();
+const WORKSPACE_PREVIEW_CACHE_LIMIT = 24;
+/** Previews that could not be loaded, by artifact id → when; retried, never cached. */
+const workspacePreviewFailures = new Map();
+
+const ACTIVITY_KIND_LABEL = { browser: 'Browser', code: 'Code', document: 'Document', image: 'Image', video: 'Video', tool: 'Tool' };
+const ACTIVITY_STATE_LABEL = { running: 'Running', completed: 'Completed', failed: 'Failed', cancelled: 'Cancelled' };
+
+function viewedWorkspaceActivities() {
+  const conversationId = viewingConversationId || lastSnapshot?.activeConversationId || lastSnapshot?.selectedConversationId || null;
+  if (!conversationId) return [];
+  return (lastSnapshot?.workspaceActivities ?? []).filter((item) => item.conversationId === conversationId);
+}
+
+/** The current step: the newest one still running, otherwise the newest. */
+function currentWorkspaceActivity(items) {
+  return [...items].reverse().find((item) => item.state === 'running') ?? items[items.length - 1] ?? null;
+}
+
+function renderWorkspaceActivity(snapshot) {
+  if (!contextActivity) return;
+  const items = viewedWorkspaceActivities();
+  const current = currentWorkspaceActivity(items);
+
+  // A new step opens the workspace (again, if the person closed it for an
+  // earlier step). History restored after a reload, a restart or a switch of
+  // conversation stays behind the header button instead of popping open.
+  const conversationId = viewingConversationId || snapshot?.activeConversationId || snapshot?.selectedConversationId || null;
+  if (conversationId !== workspaceViewConversationId) {
+    workspaceViewConversationId = conversationId;
+    workspaceViewSince = Date.now();
+    workspaceLatestSeenId = null;
+    workspaceClosedAtActivityId = null;
+    workspaceSelectedActivityId = null;
+    workspaceClosedByUser = false;
+  }
+  const newest = items[items.length - 1] ?? null;
+  if (newest && newest.id !== workspaceLatestSeenId) {
+    const restored = workspaceLatestSeenId === null && newest.state !== 'running'
+      && Date.parse(newest.startedAt) < workspaceViewSince - 30_000;
+    workspaceLatestSeenId = newest.id;
+    if (restored) {
+      workspaceClosedByUser = true;
+    } else if (newest.id !== workspaceClosedAtActivityId) {
+      workspaceClosedByUser = false;
+      workspaceSelectedActivityId = null;
+    }
+  }
+
+  const awaitingApproval = Boolean(snapshot?.awaitingApproval || snapshot?.pendingApproval || snapshot?.cockpit?.pendingApproval || snapshot?.pendingImageApproval);
+  if (contextApproval) contextApproval.hidden = !awaitingApproval;
+  if (workspaceStop) workspaceStop.hidden = !snapshot?.running;
+
+  const selected = items.find((item) => item.id === workspaceSelectedActivityId) ?? current;
+  if (contextActivitySection) contextActivitySection.hidden = !selected;
+  if (contextActivityHeading) {
+    contextActivityHeading.textContent = selected && selected.id !== current?.id ? 'Earlier step' : (selected?.state === 'running' ? 'Now' : 'Latest');
+  }
+  // Previews come from Core: redraw once it is connected, and retry a preview
+  // that failed earlier (after a restart Core may answer a moment later).
+  const coreReady = snapshot?.coreState === 'connected';
+  const retryDue = [...workspacePreviewFailures.values()].some((at) => Date.now() - at > 5_000);
+  const detailSignature = selected ? JSON.stringify([selected.id, selected.state, selected.endedAt, selected.detail, selected.preview, coreReady]) : '';
+  if (retryDue) {
+    workspacePreviewFailures.clear();
+    contextActivity.dataset.signature = '';
+  }
+  if (contextActivity.dataset.signature !== detailSignature) {
+    contextActivity.dataset.signature = detailSignature;
+    contextActivity.replaceChildren(...(selected ? buildActivityDetail(selected) : []));
+  }
+
+  if (contextHistorySection) contextHistorySection.hidden = items.length < 2;
+  const historySignature = JSON.stringify([selected?.id ?? null, items.map((item) => [item.id, item.state, item.title])]);
+  if (contextHistory && contextHistory.dataset.signature !== historySignature) {
+    contextHistory.dataset.signature = historySignature;
+    contextHistory.replaceChildren(...[...items].reverse().map((item) => {
+      const row = document.createElement('li');
+      const button = document.createElement('button');
+      button.type = 'button';
+      if (item.id === selected?.id) button.setAttribute('aria-current', 'true');
+      const dot = document.createElement('span');
+      dot.className = 'history-dot';
+      dot.dataset.state = item.state;
+      dot.title = ACTIVITY_STATE_LABEL[item.state] ?? item.state;
+      const title = document.createElement('span');
+      title.className = 'history-title';
+      title.textContent = item.title;
+      const time = document.createElement('span');
+      time.className = 'history-time';
+      time.textContent = formatActivityTime(item.startedAt);
+      button.append(dot, title, time);
+      button.addEventListener('click', () => {
+        workspaceSelectedActivityId = item.id === current?.id ? null : item.id;
+        renderWorkspaceActivity(lastSnapshot);
+      });
+      row.appendChild(button);
+      return row;
+    }));
+  }
+}
+
+function formatActivityTime(iso) {
+  const at = Date.parse(iso);
+  if (!Number.isFinite(at)) return '';
+  return new Date(at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+}
+
+/** Only a credential-free http(s) address is ever made clickable. */
+function safeWebUrl(value) {
+  try {
+    const url = new URL(String(value));
+    if ((url.protocol !== 'http:' && url.protocol !== 'https:') || url.username || url.password) return null;
+    return url.toString();
+  } catch {
+    return null;
+  }
+}
+
+function activityButton(label, onClick) {
+  const button = document.createElement('button');
+  button.type = 'button';
+  button.className = 'apex-chip';
+  button.textContent = label;
+  button.addEventListener('click', () => { void Promise.resolve().then(onClick).catch(showOperationError); });
+  return button;
+}
+
+function buildActivityDetail(item) {
+  const nodes = [];
+  const preview = item.preview ?? {};
+  const meta = document.createElement('div');
+  meta.className = 'activity-meta';
+  const kind = document.createElement('span');
+  kind.className = 'activity-kind';
+  kind.textContent = ACTIVITY_KIND_LABEL[item.kind] ?? 'Tool';
+  const state = document.createElement('span');
+  state.className = 'activity-state';
+  state.dataset.state = item.state;
+  state.textContent = ACTIVITY_STATE_LABEL[item.state] ?? item.state;
+  const tool = document.createElement('span');
+  tool.className = 'activity-tool';
+  tool.textContent = item.capability;
+  meta.append(kind, state, tool);
+  nodes.push(meta);
+
+  const title = document.createElement('p');
+  title.className = 'activity-title';
+  title.textContent = item.title;
+  nodes.push(title);
+
+  const actions = document.createElement('div');
+  actions.className = 'context-preview-actions';
+  const url = safeWebUrl(preview.url);
+  if (url) {
+    // Opens in the system browser through the window's validated link handler.
+    const link = document.createElement('a');
+    link.className = 'activity-url';
+    link.href = url;
+    link.target = '_blank';
+    link.rel = 'noopener noreferrer';
+    link.textContent = url;
+    link.title = 'Open in your browser';
+    nodes.push(link);
+    if (preview.title && preview.title !== item.title) {
+      const page = document.createElement('p');
+      page.className = 'activity-detail';
+      page.textContent = preview.title;
+      nodes.push(page);
+    }
+  }
+
+  const artifactIds = Array.isArray(preview.artifactIds) ? preview.artifactIds : [];
+  if (artifactIds.length) {
+    const grid = document.createElement('div');
+    if (artifactIds.length > 1) grid.className = 'activity-media-grid';
+    for (const artifactId of artifactIds) grid.appendChild(activityArtifactPreview(artifactId, item));
+    nodes.push(grid);
+    if (item.kind === 'image' || item.kind === 'video') {
+      actions.append(
+        activityButton('Open', () => api.openArtifactFile(artifactIds[0])),
+        activityButton('Show in folder', () => api.openArtifactFolder(artifactIds[0])),
+      );
+    }
+  }
+
+  if (preview.path && (item.kind === 'code' || item.kind === 'document')) {
+    const file = document.createElement('div');
+    file.className = 'activity-tool';
+    file.textContent = preview.path;
+    nodes.push(file);
+    actions.appendChild(activityButton('Open file', () => api.openWorkspaceFile(preview.path)));
+  }
+  if (item.id.startsWith('doc-')) actions.appendChild(activityButton('Open original', () => api.openActivityDocument(item.id)));
+
+  if (preview.diff) {
+    const diff = document.createElement('pre');
+    diff.className = 'activity-diff';
+    diff.setAttribute('aria-label', 'Changes');
+    for (const line of String(preview.diff).split('\n')) {
+      const span = document.createElement('span');
+      span.textContent = line || ' ';
+      if (line.startsWith('+') && !line.startsWith('+++')) span.className = 'diff-add';
+      else if (line.startsWith('-') && !line.startsWith('---')) span.className = 'diff-del';
+      else if (line.startsWith('@@')) span.className = 'diff-hunk';
+      diff.appendChild(span);
+    }
+    nodes.push(diff);
+  }
+  if (item.detail) {
+    const detail = document.createElement('p');
+    detail.className = 'activity-detail';
+    if (item.state === 'failed' || item.state === 'cancelled') detail.dataset.tone = 'bad';
+    detail.textContent = item.detail;
+    nodes.push(detail);
+  }
+  if (preview.excerpt && !preview.diff) {
+    const text = document.createElement('pre');
+    text.className = 'activity-text';
+    text.textContent = preview.excerpt;
+    nodes.push(text);
+  }
+  if (actions.childElementCount) nodes.push(actions);
+  return nodes;
+}
+
+/** A verified Core artifact (screenshot, image or video), loaded only when shown. */
+function activityArtifactPreview(artifactId, item) {
+  const holder = document.createElement('div');
+  const draw = (preview) => {
+    holder.replaceChildren();
+    if (preview?.fileUrl) {
+      const video = document.createElement('video');
+      video.className = 'activity-media';
+      video.controls = true;
+      video.preload = 'metadata';
+      video.src = preview.fileUrl;
+      holder.appendChild(video);
+    } else if (typeof preview?.dataUrl === 'string' && preview.dataUrl.startsWith('data:image/')) {
+      const img = document.createElement('img');
+      img.className = item.kind === 'browser' ? 'activity-shot' : 'activity-media';
+      img.alt = item.kind === 'browser' ? `Screenshot of ${item.preview?.title || 'the page'}` : (item.preview?.title || 'Generated image');
+      img.src = preview.dataUrl;
+      holder.appendChild(img);
+    }
+  };
+  const cached = workspacePreviewCache.get(artifactId);
+  if (cached) {
+    draw(cached);
+    return holder;
+  }
+  const note = document.createElement('p');
+  note.className = 'activity-detail';
+  note.textContent = 'Loading preview…';
+  holder.appendChild(note);
+  if (typeof api?.loadArtifactPreview !== 'function') return holder;
+  if (lastSnapshot?.coreState !== 'connected') {
+    note.textContent = 'Preview appears when Pandesh is connected…';
+    return holder;
+  }
+  api.loadArtifactPreview(artifactId).then((preview) => {
+    workspacePreviewCache.set(artifactId, preview);
+    if (workspacePreviewCache.size > WORKSPACE_PREVIEW_CACHE_LIMIT) {
+      workspacePreviewCache.delete(workspacePreviewCache.keys().next().value);
+    }
+    draw(preview);
+  }).catch((err) => {
+    workspacePreviewFailures.set(artifactId, Date.now());
+    note.textContent = `Preview unavailable: ${err?.message ?? err}`;
+  });
+  return holder;
 }
 
 /** Preview a delivered result inside the context panel. */

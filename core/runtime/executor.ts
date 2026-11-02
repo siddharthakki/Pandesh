@@ -34,6 +34,7 @@ import { appendMessage, listMessages } from '../domain/conversations';
 import { formatContinuityBrief, readConversationWorkingState } from '../domain/conversationWorkingState';
 import { startModelInvocation, completeModelInvocation } from '../domain/modelInvocations';
 import { startToolInvocation, completeToolInvocation } from '../domain/toolInvocations';
+import { sanitizeToolActivity } from '../shared/toolActivity';
 import { latestRuntimeSequence, listRuntimeEventsAfter, recordRuntimeEvent } from '../domain/runtimeEvents';
 import { recordExecutionQuality, MAX_VALIDATION_REPAIR_CYCLES } from '../domain/executionQuality';
 import { isTerminalAttemptStatus } from '../domain/attemptTransitions';
@@ -1118,6 +1119,7 @@ export class RuntimeExecutor {
             anchorAttemptId: dispatch.attemptId,
             toolName: pendingCall.name,
             status: dispatch.toolInvocation.status,
+            ...relayedActivity(dispatch.toolInvocation.evidence),
           },
           resultingRevision: null,
         }));
@@ -2249,6 +2251,7 @@ export class RuntimeExecutor {
               anchorAttemptId: dispatch.attemptId,
               toolName: call.name,
               status: dispatch.toolInvocation.status,
+              ...relayedActivity(dispatch.toolInvocation.evidence),
             },
             resultingRevision: null,
           }));
@@ -2953,6 +2956,7 @@ export class RuntimeExecutor {
           resultCategory: result.resultCategory ?? null,
           normalizedArguments: result.normalizedArguments ?? call.arguments,
           pathRecovery: result.pathRecovery ?? null,
+          ...relayedActivity(result),
         },
         actor: CORE_ACTOR,
       }),
@@ -4476,6 +4480,12 @@ export class RuntimeExecutor {
 
 }
 
+
+/** The bounded workspace activity a tool published, ready to spread into evidence or event metadata. */
+function relayedActivity(source: { activity?: unknown } | Record<string, unknown> | null | undefined): { activity?: ReturnType<typeof sanitizeToolActivity> } {
+  const activity = sanitizeToolActivity((source as { activity?: unknown } | null | undefined)?.activity);
+  return activity ? { activity } : {};
+}
 
 function abortError(): Error {
   const err = new Error('aborted');

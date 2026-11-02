@@ -11,6 +11,7 @@
  *   KARKEDIKHA_CORE_PORT      - optional fixed port (default: OS-assigned ephemeral)
  *   KARKEDIKHA_OPENROUTER_API_KEY - host-injected OpenRouter key (never logged)
  */
+import * as path from 'node:path';
 import { execFile } from 'node:child_process';
 import * as crypto from 'node:crypto';
 import * as fs from 'node:fs';
@@ -270,7 +271,7 @@ function buildCapabilityRegistry(dataDir: string, db: CoreDatabase, connectors: 
     .register(research)
     .register(memory)
     .register(createImageStudioCapabilityAdapter({ db, studioRoot: imageStudioRoot }))
-    .register(createBrowserCapabilityAdapter({ browserBin: resolveHostBrowserBin() }))
+    .register(createBrowserCapabilityAdapter({ browserBin: resolveHostBrowserBin(), db, previewDir: path.join(dataDir, 'activity-previews', 'browser') }))
     .register(createComputerUseCapabilityAdapter({ dataDir }))
     .register(createHermesSkillCapabilityAdapter())
     .register(createWeatherCapabilityAdapter())

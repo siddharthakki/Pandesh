@@ -248,6 +248,7 @@
               </div>
               <div class="conv-header-meta">
                 <button id="btn-open-mail" type="button" class="apex-chip" hidden title="Search, read and draft Gmail here (only shown while Google is connected and verified)" aria-expanded="false">Mail</button>
+                <button id="btn-open-workspace" type="button" class="apex-chip workspace-toggle" hidden title="Show what Pandesh is doing and what it produced" aria-expanded="false" aria-controls="workspace-context">Workspace<span id="workspace-toggle-dot" class="workspace-toggle-dot" hidden></span></button>
                 <button id="btn-new-chat-header" type="button" class="apex-chip" title="Start a new conversation">+ New</button>
                 <button id="conversation-export" type="button" class="apex-chip" title="Export transcript">Export</button>
               </div>
@@ -498,10 +499,28 @@
           <!-- Contextual panel: delivered files, previews and results for this conversation -->
           <aside id="workspace-context" class="workspace-context" hidden aria-label="Workspace context">
             <header class="context-head">
-              <span class="context-title">Context</span>
-              <button id="workspace-context-close" type="button" class="ghost-icon-btn" title="Hide the context panel" aria-label="Hide the context panel">×</button>
+              <span class="context-title">Workspace</span>
+              <span class="context-head-actions">
+                <button id="workspace-stop" type="button" class="context-stop" hidden title="Stop the task that is running">Stop task</button>
+                <button id="workspace-context-close" type="button" class="ghost-icon-btn" title="Hide the workspace (the task keeps running)" aria-label="Hide the workspace">×</button>
+              </span>
             </header>
             <div class="context-body scroll-region">
+              <div id="context-approval" class="context-approval" hidden role="status">
+                <span>Waiting for your approval. Nothing happens until you decide.</span>
+                <button id="context-approval-review" type="button" class="context-file-open">Review</button>
+              </div>
+
+              <section class="context-section" id="context-activity-section" hidden aria-live="polite">
+                <h3 class="context-section-title" id="context-activity-heading">Now</h3>
+                <div id="context-activity" class="context-activity"></div>
+              </section>
+
+              <section class="context-section" id="context-history-section" hidden>
+                <h3 class="context-section-title">Steps</h3>
+                <ol id="context-history" class="context-history"></ol>
+              </section>
+
               <section class="context-section">
                 <h3 class="context-section-title">Delivered files</h3>
                 <ul id="context-delivered" class="context-file-list"></ul>

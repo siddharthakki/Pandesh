@@ -30,6 +30,7 @@ import {
   projectApprovalArguments,
 } from './approvalArguments';
 import { startToolInvocation, completeToolInvocation, listToolInvocationsForAttempt } from './toolInvocations';
+import { sanitizeToolActivity } from '../shared/toolActivity';
 import { withIdempotency, lookupIdempotencyResult } from './idempotency';
 import { CoreError } from './errors';
 import { getAttemptContext } from './attemptContext';
@@ -641,12 +642,18 @@ async function executeAndRecord(
   // 'cancelled' regardless of what the adapter itself returned.
   const attemptAfter = getAttempt(db, attemptId);
   const cancelled = Boolean(attemptAfter.cancelRequestedAt);
+  const activity = sanitizeToolActivity(result.activity);
   return completeToolInvocation(db, started.id, {
     status: cancelled ? 'cancelled' : result.status === 'succeeded' ? 'succeeded' : 'failed',
     exitCode: cancelled ? null : result.exitCode,
     evidence: cancelled
       ? { cancelled: true }
-      : { output: result.output, resultCategory: result.resultCategory ?? null, normalizedArguments: result.normalizedArguments ?? evidenceArguments },
+      : {
+        output: result.output,
+        resultCategory: result.resultCategory ?? null,
+        normalizedArguments: result.normalizedArguments ?? evidenceArguments,
+        ...(activity ? { activity } : {}),
+      },
     actor: input.actor,
     clientId: input.clientId,
   });
