@@ -13,6 +13,9 @@
  * Page content is returned as untrusted data, never as instructions.
  */
 import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
+import * as fs from 'node:fs';
+import * as path from 'node:path';
+import { createWindowsProcessIdentityProviderSync, type SyncProcessIdentityProvider } from './processOwnership';
 import {
   CdpSession,
   applyStep,
@@ -94,6 +97,114 @@ function trackLiveBrowser(child: ChildProcess): void {
   child.once('exit', () => liveBrowsers.delete(child));
 }
 
+export interface BrowserProcessRecord {
+  pid: number;
+  corePid: number;
+  sessionId: string;
+  startedAt: string;
+  /** Epoch ms taken just before spawn; compared with the OS creation time so a reused PID is never killed. */
+  spawnedAtMs?: number;
+}
+
+function browserRecordFile(dataDir: string): string {
+  return path.join(dataDir, 'browser-launched-processes.json');
+}
+
+function readBrowserRecords(dataDir: string): BrowserProcessRecord[] {
+  try {
+    const parsed = JSON.parse(fs.readFileSync(browserRecordFile(dataDir), 'utf8'));
+    if (Array.isArray(parsed)) return parsed as BrowserProcessRecord[];
+  } catch {}
+  return [];
+}
+
+function writeBrowserRecords(dataDir: string, records: BrowserProcessRecord[]): void {
+  try {
+    fs.mkdirSync(path.dirname(browserRecordFile(dataDir)), { recursive: true });
+    fs.writeFileSync(browserRecordFile(dataDir), JSON.stringify(records, null, 2), 'utf8');
+  } catch {}
+}
+
+function recordBrowserLaunch(dataDir: string | undefined, child: ChildProcess, spawnedAtMs: number): void {
+  if (!dataDir || !child.pid) return;
+  const records = readBrowserRecords(dataDir);
+  records.push({ pid: child.pid, corePid: process.pid, sessionId: '', startedAt: new Date().toISOString(), spawnedAtMs });
+  writeBrowserRecords(dataDir, records);
+}
+
+function removeBrowserRecord(dataDir: string | undefined, pid: number): void {
+  if (!dataDir) return;
+  writeBrowserRecords(dataDir, readBrowserRecords(dataDir).filter((record) => record.pid !== pid));
+}
+
+function isProcessAlive(pid: number): boolean {
+  try { process.kill(pid, 0); return true; }
+  catch (err) { return (err as NodeJS.ErrnoException).code === 'EPERM'; }
+}
+
+function killProcessByPid(pid: number): void {
+  if (process.platform === 'win32') {
+    spawnSync('taskkill', ['/PID', String(pid), '/T', '/F'], { windowsHide: true, stdio: 'ignore' });
+    return;
+  }
+  try { process.kill(pid, 'SIGTERM'); } catch {}
+}
+
+/** A browser's OS creation time must fall in this window around its recorded spawn time. */
+const SPAWN_WINDOW_BEFORE_MS = 2_000;
+const SPAWN_WINDOW_AFTER_MS = 15_000;
+
+export interface ReapOptions {
+  identity?: SyncProcessIdentityProvider;
+  isAlive?: (pid: number) => boolean;
+  kill?: (pid: number) => void;
+}
+
+/**
+ * Reaps browser processes left behind when a previous Core process crashed.
+ * A record is orphaned when its launcher Core pid is neither this process nor
+ * still alive. Before killing, the PID's OS creation time must match the
+ * recorded spawn time: after a crash or reboot the PID may belong to an
+ * unrelated process, which is dropped from the ledger and left alone. When the
+ * OS cannot disclose a creation time, nothing is killed. Records belonging to a
+ * live Core (this one or another) are kept.
+ */
+export function reapOrphanedBrowsers(dataDir: string, options: ReapOptions = {}): { reaped: number; errors: string[] } {
+  const identityOf = options.identity ?? createWindowsProcessIdentityProviderSync();
+  const alive = options.isAlive ?? isProcessAlive;
+  const kill = options.kill ?? killProcessByPid;
+  const errors: string[] = [];
+  let reaped = 0;
+  const selfPid = process.pid;
+  const remaining: BrowserProcessRecord[] = [];
+  for (const record of readBrowserRecords(dataDir)) {
+    if (record.corePid === selfPid || alive(record.corePid)) {
+      remaining.push(record);
+      continue;
+    }
+    if (!Number.isInteger(record.pid) || record.pid <= 0) continue;
+    try {
+      const snapshot = identityOf(record.pid);
+      if (!snapshot.alive) continue;
+      const spawned = record.spawnedAtMs;
+      const created = snapshot.creationTimeMs;
+      if (typeof spawned !== 'number' || created === null) {
+        errors.push(`pid ${record.pid}: identity unverifiable, not killed`);
+        continue;
+      }
+      // A creation time outside the spawn window means the PID was reused.
+      if (created < spawned - SPAWN_WINDOW_BEFORE_MS || created > spawned + SPAWN_WINDOW_AFTER_MS) continue;
+      kill(record.pid);
+      reaped += 1;
+    } catch (err) {
+      errors.push(String(err));
+      remaining.push(record);
+    }
+  }
+  writeBrowserRecords(dataDir, remaining);
+  return { reaped, errors };
+}
+
 function describeLocator(locator: PageLocator): string {
   const l = locator as Record<string, unknown>;
   return String(l.label ?? l.name ?? l.text ?? l.css ?? JSON.stringify(locator));
@@ -139,12 +250,14 @@ class BrowserSession {
     private readonly profileDir: string,
     readonly maxActions: number,
     private readonly onClosed: () => void,
+    private readonly dataDir: string | undefined,
   ) {}
 
-  static async launch(browserBin: string, maxActions: number, onClosed: () => void, signal?: AbortSignal): Promise<BrowserSession> {
+  static async launch(browserBin: string, maxActions: number, onClosed: () => void, signal?: AbortSignal, dataDir?: string): Promise<BrowserSession> {
     const debugPort = await freePort();
     const proxy = await startEgressProxy();
     const profileDir = createBrowserProfileDir();
+    const spawnedAtMs = Date.now();
     const child = spawn(browserBin, [
       '--headless=new',
       '--disable-gpu',
@@ -166,15 +279,17 @@ class BrowserSession {
       'about:blank',
     ], { windowsHide: true, stdio: 'ignore' });
     trackLiveBrowser(child);
+    recordBrowserLaunch(dataDir, child, spawnedAtMs);
     try {
       const cdp = await connectCdp(await waitForDebugEndpoint(debugPort, signal));
       const created = await cdp.send('Target.createTarget', { url: 'about:blank' });
       const attached = await cdp.send('Target.attachToTarget', { targetId: String(created.targetId ?? ''), flatten: true });
       const sessionId = String(attached.sessionId ?? '');
-      const session = new BrowserSession(child, proxy, cdp, sessionId, profileDir, maxActions, onClosed);
+      const session = new BrowserSession(child, proxy, cdp, sessionId, profileDir, maxActions, onClosed, dataDir);
       await session.install();
       return session;
     } catch (err) {
+      if (child.pid !== undefined) removeBrowserRecord(dataDir, child.pid);
       await proxy.close();
       await killProcessTree(child);
       removeBrowserProfileDir(profileDir);
@@ -409,7 +524,7 @@ class BrowserSession {
       });
     if (!same) {
       throw new BrowserSessionError(
-        `the approved values do not match what was typed (typed: ${JSON.stringify(typed)}); nothing was submitted`,
+        `the values approved for submission do not match what was typed on this page; nothing was submitted`,
         'browser_submit_mismatch',
       );
     }
@@ -419,10 +534,20 @@ class BrowserSession {
       const names = ${JSON.stringify([...this.fills.values()].map((f) => f.name))};
       return names.map((n) => { const el = n && document.getElementsByName(n)[0]; return el ? String(el.value) : null; });
     })()`) as Array<string | null>;
-    const fills = [...this.fills.values()];
-    if (fills.some((f, i) => f.name && held[i] !== f.value)) {
-      this.fills.clear();
-      throw new BrowserSessionError('the page no longer holds the typed values (it was reloaded or changed); nothing was submitted. Fill the fields again before submitting', 'browser_submit_mismatch');
+    const entries = [...this.fills.entries()];
+    // Re-verify against what the page really holds right now, measured against
+    // the values the user approved (the approval boundary), not against the
+    // session's own memory of what was typed. A page that was reloaded or
+    // changed by a script refuses the submission instead of sending stale data.
+    for (let i = 0; i < entries.length; i++) {
+      const [label, fill] = entries[i];
+      if (!fill.name) continue;
+      const match = [label, fill.name, fill.asked].map(key).find((k) => approved.has(k));
+      const approvedValue = match !== undefined ? approved.get(match) : undefined;
+      if (approvedValue !== undefined && held[i] !== approvedValue) {
+        this.fills.clear();
+        throw new BrowserSessionError('the page no longer holds the approved values (it was reloaded or changed); nothing was submitted. Fill the fields again before submitting', 'browser_submit_mismatch');
+      }
     }
     this.armedSubmit = { site: siteKey(host), until: Date.now() + SUBMIT_ARM_MS };
     try {
@@ -591,6 +716,7 @@ class BrowserSession {
     this.closed = true;
     if (this.idleTimer) clearTimeout(this.idleTimer);
     this.onClosed();
+    if (this.child.pid !== undefined) removeBrowserRecord(this.dataDir, this.child.pid);
     this.cdp.close();
     await killProcessTree(this.child);
     await this.proxy.close();
@@ -601,6 +727,7 @@ class BrowserSession {
 export interface BrowserSessionManagerOptions {
   browserBin: () => string | null;
   maxActions?: number;
+  dataDir?: string;
 }
 
 /** Owns every live session, keyed by conversation. */
@@ -629,6 +756,7 @@ export class BrowserSessionManager {
       this.options.maxActions ?? DEFAULT_MAX_BROWSER_ACTIONS,
       () => { this.sessions.delete(key); },
       signal,
+      this.options.dataDir,
     );
     this.launching.set(key, launch);
     try {

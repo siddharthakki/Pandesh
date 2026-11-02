@@ -56,6 +56,8 @@ export interface BrowserCapabilityOptions {
   /** With both set, each session action keeps one screenshot as a Core artifact for the workspace view. */
   db?: CoreDatabase;
   previewDir?: string;
+  /** Durable directory used to record launched browser PIDs so a restarted Core can reap orphaned browsers. */
+  dataDir?: string;
 }
 
 /** Open-web session tools. Only opening a new site needs the user's approval. */
@@ -119,7 +121,7 @@ export function formatPageState(state: BrowserPageState): string {
 export function createBrowserCapabilityAdapter(options: BrowserCapabilityOptions = {}): GovernedCapabilityAdapter {
   const env = options.env ?? process.env;
   const resolveBin = () => (options.browserBin === undefined ? resolveHostBrowserBin(env) : options.browserBin);
-  const sessions = options.sessions ?? new BrowserSessionManager({ browserBin: resolveBin });
+  const sessions = options.sessions ?? new BrowserSessionManager({ browserBin: resolveBin, dataDir: options.dataDir });
   const urlParam = { url: { type: 'string', description: 'Absolute public http(s) URL.' } };
   const definitions: ModelToolDefinition[] = [
     {
