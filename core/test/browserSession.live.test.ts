@@ -50,14 +50,11 @@ describe.skipIf(!live)('live open-web browser session', () => {
     await sessions.fill('form', { label: 'Customer name:' }, 'Pandesh Stage B');
     await sessions.fill('form', { label: 'Delivery instructions:' }, 'harmless test, no order');
 
-    // Denied/unapproved path: clicking the button directly is refused by the guard.
-    const clicked = await sessions.click('form', { locator: { role: 'button', name: 'Submit order' } });
-    expect(clicked.url).toBe('https://httpbin.org/forms/post');
-    expect(clicked.blocked.join(' ')).toMatch(/needs the user's approval/);
+    // Unapproved path: pressing the submit button directly is refused before the page is touched, and what was typed stays.
+    await expect(sessions.click('form', { locator: { role: 'button', name: 'Submit order' } }))
+      .rejects.toMatchObject({ category: 'browser_use_submit' });
 
-    // Values differing from the approval are refused.
-    await sessions.fill('form', { label: 'Customer name:' }, 'Pandesh Stage B');
-    await sessions.fill('form', { label: 'Delivery instructions:' }, 'harmless test, no order');
+    // Values differing from the approval are refused (a mismatch does not clear the typed fields).
     await expect(sessions.submit('form', { role: 'button', name: 'Submit order' }, { 'Customer name:': 'Someone else', 'Delivery instructions:': 'harmless test, no order' }))
       .rejects.toMatchObject({ category: 'browser_submit_mismatch' });
 
@@ -83,11 +80,11 @@ describe.skipIf(!live)('live open-web browser session', () => {
     const filled = await sessions.fill('shapes', browserLocator({ label: 'delivery instructions' })!, 'harmless test, no order');
     expect(filled.controls.find((c) => c.name === 'comments')?.value).toBe('harmless test, no order');
 
-    // A blocked direct click reloads the page and empties it: the old values are no longer offered or sent.
-    await sessions.click('shapes', { locator: { text: 'Submit order' } });
-    await expect(sessions.pendingForm('shapes')).resolves.toBeNull();
-    await sessions.fill('shapes', { label: 'Customer name' }, 'Pandesh Stage B');
-    await sessions.fill('shapes', { label: 'Delivery instructions' }, 'harmless test, no order');
+    // A direct click on the submit button is refused without touching the page: the typed values are still the ones offered.
+    await expect(sessions.click('shapes', { locator: { text: 'Submit order' } })).rejects.toMatchObject({ category: 'browser_use_submit' });
+    await expect(sessions.pendingForm('shapes')).resolves.toMatchObject({
+      fields: { 'Customer name': 'Pandesh Stage B', 'Delivery instructions': 'harmless test, no order' },
+    });
 
     // The model's own key spelling still matches what was typed.
     const done = await sessions.submit('shapes', { text: 'Submit order' }, {

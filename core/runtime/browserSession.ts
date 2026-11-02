@@ -581,6 +581,21 @@ class BrowserSession {
       return;
     }
     if (!target.locator) throw new BrowserSessionError('click needs linkIndex or locator', 'browser_invalid_arguments');
+    // Pressing a form's submit control would only be stopped by the network guard, and the reload after that block
+    // empties the typed fields. Refuse before touching the page, so the fields stay as typed for browser_submit.
+    const sendsForm = await evaluate(this.cdp, this.sessionId, `(function () {
+      ${PAGE_LOCATOR_RUNTIME}
+      const el = kdkFindByLocator(${JSON.stringify(target.locator)});
+      if (!el || !el.form) return false;
+      const type = String(el.getAttribute('type') || '').toLowerCase();
+      return el.tagName === 'BUTTON' ? (type === '' || type === 'submit') : (el.tagName === 'INPUT' && (type === 'submit' || type === 'image'));
+    })()`).catch(() => false);
+    if (sendsForm === true) {
+      throw new BrowserSessionError(
+        `${describeLocatorText(target.locator)} sends the form, so it was not pressed; the fields still hold what was typed. Use browser_submit with the same locator and the typed values to ask the user to approve sending it`,
+        'browser_use_submit',
+      );
+    }
     await this.clickLocator(target.locator);
     await this.waitForLoad();
   }
