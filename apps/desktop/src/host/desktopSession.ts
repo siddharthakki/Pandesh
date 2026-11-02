@@ -2821,7 +2821,8 @@ export class DesktopSession {
 
       // A force-stopped Core never runs its exit hook, so its headless Edge
       // would outlive it. Core's own reaper kills only browsers whose launcher
-      // Core is dead and whose OS creation time matches the recorded spawn.
+      // Core is dead and whose real browser process still owns its recorded
+      // managed profile.
       try {
         const reaped = reapOrphanedBrowsers(this.dataDir);
         if (reaped.reaped > 0) this.options.log?.(`Reaped ${reaped.reaped} browser process(es) left by the stopped Core`);
