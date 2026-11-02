@@ -163,7 +163,7 @@ export function resolveLivePageUrl(
   return resolveBrowserTargetUrl(rawUrl, env);
 }
 
-function sleep(ms: number): Promise<void> {
+export function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
@@ -229,7 +229,7 @@ export function startWorkspaceFileServer(workspaceRoot: string): Promise<{ url: 
   });
 }
 
-function freePort(): Promise<number> {
+export function freePort(): Promise<number> {
   return new Promise((resolve, reject) => {
     const probe = net.createServer();
     probe.listen(0, '127.0.0.1', () => {
@@ -246,17 +246,25 @@ interface CdpPending {
   reject: (err: Error) => void;
 }
 
-class CdpSession {
+export class CdpSession {
   private nextId = 1;
   private readonly pending = new Map<number, CdpPending>();
+  private readonly listeners = new Map<string, Array<(params: Record<string, unknown>, sessionId?: string) => void>>();
 
   constructor(private readonly ws: WebSocket) {
     ws.on('message', (raw) => {
       const msg = JSON.parse(String(raw)) as {
         id?: number;
+        method?: string;
+        params?: Record<string, unknown>;
+        sessionId?: string;
         error?: { message?: string };
         result?: Record<string, unknown>;
       };
+      if (msg.method) {
+        for (const listener of this.listeners.get(msg.method) ?? []) listener(msg.params ?? {}, msg.sessionId);
+        return;
+      }
       if (!msg.id || !this.pending.has(msg.id)) return;
       const waiter = this.pending.get(msg.id)!;
       this.pending.delete(msg.id);
@@ -273,12 +281,21 @@ class CdpSession {
     });
   }
 
+  /** Subscribes to a CDP event, e.g. 'Fetch.requestPaused'. */
+  on(method: string, listener: (params: Record<string, unknown>, sessionId?: string) => void): void {
+    this.listeners.set(method, [...(this.listeners.get(method) ?? []), listener]);
+  }
+
+  onClose(listener: () => void): void {
+    this.ws.once('close', listener);
+  }
+
   close(): void {
     this.ws.close();
   }
 }
 
-async function waitForDebugEndpoint(port: number, signal?: AbortSignal): Promise<string> {
+export async function waitForDebugEndpoint(port: number, signal?: AbortSignal): Promise<string> {
   const deadline = Date.now() + 15_000;
   let lastError = 'browser debug port did not become ready';
   while (Date.now() < deadline) {
@@ -297,7 +314,7 @@ async function waitForDebugEndpoint(port: number, signal?: AbortSignal): Promise
   throw new Error(`browser debug port did not become ready: ${lastError}`);
 }
 
-async function connectCdp(url: string): Promise<CdpSession> {
+export async function connectCdp(url: string): Promise<CdpSession> {
   const ws = new WebSocket(url);
   await new Promise<void>((resolve, reject) => {
     ws.once('open', () => resolve());
@@ -306,7 +323,7 @@ async function connectCdp(url: string): Promise<CdpSession> {
   return new CdpSession(ws);
 }
 
-async function evaluate(cdp: CdpSession, sessionId: string, expression: string): Promise<unknown> {
+export async function evaluate(cdp: CdpSession, sessionId: string, expression: string): Promise<unknown> {
   const result = await cdp.send('Runtime.evaluate', {
     expression,
     awaitPromise: true,
@@ -329,7 +346,7 @@ function keyEventParams(key: string): { key: string; code: string; text: string;
   return { key: ch, code: /^[a-zA-Z]$/.test(ch) ? `Key${ch.toUpperCase()}` : ch, text: ch, windowsVirtualKeyCode: ch.toUpperCase().charCodeAt(0) };
 }
 
-async function applyStep(cdp: CdpSession, sessionId: string, step: BrowserInspectStep): Promise<void> {
+export async function applyStep(cdp: CdpSession, sessionId: string, step: BrowserInspectStep): Promise<void> {
   if (step.action === 'wait') {
     await sleep(Math.min(Math.max(Number(step.ms) || 250, 0), 5_000));
     return;
@@ -442,7 +459,7 @@ function bound(text: string): string {
   return text.length > MAX_SNAPSHOT_CHARS ? `${text.slice(0, MAX_SNAPSHOT_CHARS)}\n…[truncated]` : text;
 }
 
-async function killProcessTree(child: ChildProcess): Promise<void> {
+export async function killProcessTree(child: ChildProcess): Promise<void> {
   if (child.pid && process.platform === 'win32') {
     await new Promise<void>((resolve) => {
       const killer = spawn('taskkill', ['/pid', String(child.pid), '/T', '/F'], {
