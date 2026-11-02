@@ -22,6 +22,12 @@ describe('resolveTimeExpression', () => {
     expect(r.iso).toBe('2026-10-20T15:00:00-07:00');
     expect(r.utc).toBe('2026-10-20T22:00:00.000Z');
   });
+  it('a day plus a part of the day gets a default time; an explicit time wins', () => {
+    expect(ok('tomorrow morning').iso).toBe('2026-10-20T09:00:00-07:00');
+    expect(ok('friday evening').iso).toBe('2026-10-23T18:00:00-07:00');
+    expect(ok('tomorrow in the afternoon').time).toBe('14:00');
+    expect(ok('tomorrow morning at 7am').time).toBe('07:00');
+  });
   it('uses the offset in force on the target day across DST end (2026-11-01)', () => {
     const r = ok('next sunday at 9:00', Date.parse('2026-10-28T17:00:00Z'));
     expect(r.date).toBe('2026-11-08');

@@ -104,6 +104,7 @@ async function recordedToolCalls(attemptId) {
     status: inv.status,
     arguments: inv.evidence?.normalizedArguments ?? inv.argsSummary ?? null,
     output: String(inv.evidence?.output ?? ''),
+    sourceUrls: inv.evidence?.sourceUrls ?? [],
   }));
 }
 
@@ -244,7 +245,10 @@ function launchDesktop() {
 }
 
 async function quit(child) {
+  // Core runs detached and outlives the window; stop this run's Core so the next run can own its database.
+  const corePid = (() => { try { return JSON.parse(fs.readFileSync(path.join(dataDir, 'core.json'), 'utf8')).pid; } catch { return null; } })();
   child.kill();
+  if (corePid) try { execFileSync('taskkill', ['/PID', String(corePid), '/T', '/F'], { stdio: 'ignore' }); } catch { /* already gone */ }
   await sleep(4000);
   try { execFileSync('taskkill', ['/PID', String(child.pid), '/T', '/F'], { stdio: 'ignore' }); } catch { /* gone */ }
   for (let i = 0; i < 30; i += 1) {
@@ -286,6 +290,63 @@ const visited = (turn) => turn.tools
   .map((i) => /^URL: (\S+)/m.exec(i.output)?.[1])
   .filter(Boolean);
 const hostOf = (u) => { try { return new URL(u).hostname.replace(/^www\./, ''); } catch { return ''; } };
+
+/** Where a turn's time went: Ollama's own model-call timings (Core `model_call` events) against the wall clock. */
+async function turnTiming(turn, afterSequence) {
+  const calls = [];
+  for (let after = afterSequence; ;) {
+    const { events = [] } = await coreApi(`/v1/runtime-events?after=${after}&limit=500`);
+    if (!events.length) break;
+    after = events[events.length - 1].sequence;
+    for (const e of events) {
+      if (e.eventType === 'model_call' && e.entityId === turn.attemptId) calls.push(typeof e.metadata === 'string' ? JSON.parse(e.metadata) : e.metadata ?? {});
+    }
+  }
+  const modelMs = calls.reduce((n, c) => n + (c.totalMs ?? 0), 0);
+  const timing = {
+    totalS: +(turn.durationMs / 1000).toFixed(1),
+    modelS: +(modelMs / 1000).toFixed(1),
+    modelCalls: calls.length,
+    promptTokens: calls.map((c) => c.promptTokens),
+    outputTokens: calls.reduce((n, c) => n + (c.outputTokens ?? 0), 0),
+    firstTokenMs: calls.map((c) => c.firstTokenMs),
+    toolCalls: turn.tools.length,
+    numCtx: [...new Set(calls.map((c) => c.numCtx))],
+    approvalWaitS: turn.cards.length ? 'person decides' : 0,
+  };
+  timing.otherS = +(timing.totalS - timing.modelS).toFixed(1);
+  turn.timing = timing;
+  record(`${turn.label}: timing`, 'INFO', timing);
+  return timing;
+}
+
+const lastSequence = async () => {
+  let after = 0;
+  for (;;) {
+    const { events = [] } = await coreApi(`/v1/runtime-events?after=${after}&limit=500`);
+    if (!events.length) return after;
+    after = events[events.length - 1].sequence;
+  }
+};
+
+/** A minimal one-page text PDF, so the invoice fixture is a real PDF the assistant has to read. */
+function writePdf(file, lines, mtime) {
+  const text = lines.map((l, i) => `BT /F1 12 Tf 60 ${760 - i * 20} Td (${l.replace(/[()\\]/g, '\\$&')}) Tj ET`).join('\n');
+  const objects = [
+    '<< /Type /Catalog /Pages 2 0 R >>',
+    '<< /Type /Pages /Kids [3 0 R] /Count 1 >>',
+    '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 5 0 R >> >> /Contents 4 0 R >>',
+    `<< /Length ${Buffer.byteLength(text)} >>\nstream\n${text}\nendstream`,
+    '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>',
+  ];
+  let pdf = '%PDF-1.4\n';
+  const offsets = objects.map((body, i) => { const at = Buffer.byteLength(pdf); pdf += `${i + 1} 0 obj\n${body}\nendobj\n`; return at; });
+  const xref = Buffer.byteLength(pdf);
+  pdf += `xref\n0 ${objects.length + 1}\n0000000000 65535 f \n${offsets.map((o) => `${String(o).padStart(10, '0')} 00000 n \n`).join('')}`;
+  pdf += `trailer\n<< /Size ${objects.length + 1} /Root 1 0 R >>\nstartxref\n${xref}\n%%EOF\n`;
+  fs.writeFileSync(file, pdf, 'latin1');
+  fs.utimesSync(file, mtime, mtime);
+}
 
 function judgeWorkspace(label, turn) {
   const withPicture = turn.views.filter((v) => v.pictureShown);
@@ -375,6 +436,68 @@ try {
       const pictures = change.views.filter((v) => v.pictureShown && /127\.0\.0\.1|localhost/.test(v.browserUrl));
       record('website: preview refreshed after the change', pictures.length && pictures[pictures.length - 1].pictureId !== preview.pictureId ? 'PASS' : 'FAIL', pictures.map((v) => v.pictureId));
     }
+  }
+
+  // --- Daily-driver demonstrations: research, personal documents, memory + reminder. ---
+  if (only.includes('research')) {
+    await newConversation(app);
+    const since = await lastSequence();
+    const turn = await runTurn(app, 'research', 'Find recent information about Ollama and summarize three verified findings with source links.');
+    await turnTiming(turn, since);
+    const opened = [...new Set(turn.tools.filter((t) => t.status === 'succeeded').flatMap((t) => [/^URL: (\S+)/m.exec(t.output)?.[1], ...t.sourceUrls, ...(t.toolName === 'web_fetch' || t.toolName === 'fetch_url' ? [t.arguments?.url] : [])]).filter(Boolean))];
+    record('research: real pages opened', opened.length >= 2 ? 'PASS' : opened.length ? 'PARTIAL' : 'FAIL', { opened, tools: turn.tools.map((t) => `${t.toolName}:${t.status}`) });
+    const cited = [...new Set(turn.reply.match(/https?:\/\/[^\s)\]>"'`]+/g) ?? [])];
+    const unopened = cited.filter((u) => !opened.some((o) => hostOf(o) === hostOf(u)));
+    record('research: answer cites sources it opened', cited.length >= 2 && !unopened.length ? 'PASS' : 'FAIL', { cited, unopened });
+    record('research: three findings given', (turn.reply.match(/^\s*(?:\d+[.)]|[-*•])\s+/gm) ?? []).length >= 3 ? 'PASS' : 'REVIEW', turn.reply.slice(0, 900));
+  }
+
+  if (only.includes('invoice')) {
+    await newConversation(app);
+    const folder = path.join(dataDir, 'sample-invoices');
+    fs.rmSync(folder, { recursive: true, force: true });
+    fs.mkdirSync(folder, { recursive: true });
+    const invoices = [
+      ['invoice-brightline-0817.pdf', '2026-08-14', 'Brightline Plumbing', 'EUR 420.00', '13 September 2026'],
+      ['invoice-northwind-1102.pdf', '2026-09-30', 'Northwind Garage', 'EUR 1,150.00', '30 October 2026'],
+      ['invoice-kestrel-2291.pdf', '2026-10-28', 'Kestrel Web Hosting', 'EUR 2,384.75', '27 November 2026'],
+    ];
+    for (const [name, date, vendor, total, due] of invoices) {
+      writePdf(path.join(folder, name), [`INVOICE - ${vendor}`, `Invoice date: ${date}`, 'Bill to: Sample Customer, Amsterdam', 'IBAN: NL00 TEST 0000 0000 00', `Amount due (total): ${total}`, `Due date: ${due}`], new Date(`${date}T10:00:00`));
+    }
+    fs.writeFileSync(path.join(folder, 'notes.txt'), 'Shopping list: coffee, batteries.');
+    await app.evaluate(`window.karkedikhaDesktop.setFolder(${JSON.stringify(folder)})`).catch((err) => console.log(`[verify] setFolder: ${err.message}`));
+    const since = await lastSequence();
+    const turn = await runTurn(app, 'invoice', 'Find the newest invoice, read it and tell me its total and due date.');
+    await turnTiming(turn, since);
+    const read = turn.tools.filter((t) => t.status === 'succeeded' && /kestrel-2291/.test(JSON.stringify(t.arguments ?? {})));
+    record('invoice: newest invoice really opened', read.length ? 'PASS' : 'FAIL', turn.tools.map((t) => `${t.toolName}:${t.status} ${JSON.stringify(t.arguments ?? {}).slice(0, 120)}`));
+    record('invoice: total and due date correct', /2,?384\.75/.test(turn.reply) && /27(?:th)?\s+Nov|Nov\w*\s+27|2026-11-27/i.test(turn.reply) ? 'PASS' : 'FAIL', turn.reply.slice(0, 500));
+    record('invoice: stayed local (no web tools)', !turn.tools.some((t) => /^(browser_|web_)/.test(t.toolName)) ? 'PASS' : 'FAIL', turn.tools.map((t) => t.toolName));
+    record('invoice: document shown in the workspace', turn.views.some((v) => v.open && /kestrel/i.test(JSON.stringify(v))) ? 'PASS' : 'REVIEW', [...new Set(turn.views.map((v) => v.now))].slice(0, 10));
+    const sinceFollow = await lastSequence();
+    const follow = await runTurn(app, 'invoice-followup', 'Summarize that one.', { conversationId: turn.conversationId });
+    await turnTiming(follow, sinceFollow);
+    record('invoice: follow-up resolved "that one" without asking', /kestrel/i.test(follow.reply) && !/which (invoice|file)|please (specify|provide)/i.test(follow.reply) ? 'PASS' : 'FAIL', follow.reply.slice(0, 500));
+  }
+
+  if (only.includes('remember')) {
+    await newConversation(app);
+    const since = await lastSequence();
+    const turn = await runTurn(app, 'remember', 'Remember that I prefer brief technical explanations, and remind me tomorrow morning to review Pandesh.');
+    await turnTiming(turn, since);
+    const { DatabaseSync } = await import('node:sqlite');
+    const dbFile = fs.readdirSync(dataDir).map((f) => path.join(dataDir, f)).find((f) => /\.(db|sqlite3?)$/.test(f));
+    const db = new DatabaseSync(dbFile, { readOnly: true });
+    const facts = db.prepare("SELECT subject, predicate, displayValue, state FROM memory_facts WHERE state = 'active'").all();
+    const reminders = db.prepare("SELECT title, dueAt, timezone, status FROM everyday_reminders WHERE status NOT IN ('cancelled','completed')").all();
+    db.close();
+    record('remember: memory persisted after approval', facts.some((f) => /brief|concise|short/i.test(`${f.predicate} ${f.displayValue}`)) ? 'PASS' : 'FAIL', { facts, cards: turn.cards.map((c) => c.toolName) });
+    const tomorrow = new Date(Date.now() + 86_400_000).toLocaleDateString('en-CA');
+    const due = reminders.find((r) => /pandesh/i.test(r.title));
+    const dueLocal = due ? new Date(due.dueAt) : null;
+    record('remember: reminder scheduled for tomorrow morning', due && dueLocal.toLocaleDateString('en-CA') === tomorrow && dueLocal.getHours() >= 6 && dueLocal.getHours() < 12 ? 'PASS' : 'FAIL', { reminders, tomorrow, dueLocal: dueLocal?.toString() });
+    record('remember: answer claims only what happened', !/couldn't|could not|failed/i.test(turn.reply) === Boolean(due && facts.length) ? 'PASS' : 'REVIEW', turn.reply.slice(0, 400));
   }
 
   if (only.includes('restart')) {

@@ -63,22 +63,21 @@ function startFakeOllama(): Promise<void> {
       res.end(JSON.stringify({ model: 'fake-model', response: '', done: true }));
       return;
     }
-    if (!req.url?.startsWith('/v1/chat/completions')) {
+    if (!req.url?.startsWith('/api/chat')) {
       res.writeHead(404);
       res.end();
       return;
     }
     chatRequests += 1;
-    // The Pi agent talks to Ollama's OpenAI-compatible endpoint and streams.
-    res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-cache' });
-    const chunk = (delta: Record<string, unknown>, finish: string | null = null) => `data: ${JSON.stringify({
-      id: 'chatcmpl-cancel-e2e',
-      object: 'chat.completion.chunk',
-      created: 0,
+    // The Pi agent streams from Ollama's native /api/chat (NDJSON).
+    res.writeHead(200, { 'content-type': 'application/x-ndjson', 'cache-control': 'no-cache' });
+    const chunk = (delta: { content?: string }, finish: string | null = null) => `${JSON.stringify({
       model: 'fake-model',
-      choices: [{ index: 0, delta, finish_reason: finish }],
-    })}\n\n`;
-    res.write(chunk({ role: 'assistant', content: 'Working' }));
+      message: { role: 'assistant', content: delta.content ?? '' },
+      done: finish !== null,
+      ...(finish ? { done_reason: finish, prompt_eval_count: 3, eval_count: 4 } : {}),
+    })}\n`;
+    res.write(chunk({ content: 'Working' }));
     // The reply is held open: the turn stays in flight until the test cancels
     // it and releases the tail — the transport that completes late.
     const timer = setInterval(() => {
@@ -93,11 +92,6 @@ function startFakeOllama(): Promise<void> {
       if (res.writableEnded || res.destroyed) return;
       res.write(chunk({ content: ' — finished.' }));
       res.write(chunk({}, 'stop'));
-      res.write(`data: ${JSON.stringify({
-        id: 'chatcmpl-cancel-e2e', object: 'chat.completion.chunk', created: 0, model: 'fake-model', choices: [],
-        usage: { prompt_tokens: 3, completion_tokens: 4, total_tokens: 7 },
-      })}\n\n`);
-      res.write('data: [DONE]\n\n');
       res.end();
     };
     req.on('close', () => clearInterval(timer));

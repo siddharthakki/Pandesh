@@ -48,6 +48,8 @@ import { sanitizeToolActivity, type ToolActivity } from '../shared/toolActivity'
 import { approveDevStoryReview, devStoryStatus, dispatchDevStories, planDevStories, reassignDevStory, retryDevStory, stopAllDevStories } from './kandev/devStories';
 import { KandevClient } from './kandev/kandevClient';
 import { ensureModelResident } from './ollamaResidency';
+import { OLLAMA_IMPLICIT_NUM_CTX_BUCKETS, resolveOllamaChatControls } from './ollamaChatControls';
+import { createPiOllamaFetch, type OllamaCallMetrics } from './piOllamaNativeFetch';
 import { interactiveLane, DEFAULT_MAX_TOOL_YIELD_MS } from './interactiveLane';
 import {
   type EngineAdapter,
@@ -84,6 +86,8 @@ const DESTRUCTIVE_COMMANDS: Array<[RegExp, string]> = [
 ];
 
 const RUN_CHECKS_TIMEOUT_MS = 120_000;
+/** Pi's model window. Measured: gemma4 26B runs fully in VRAM at 32K and spills at the 64K machine default. */
+const PI_CONTEXT_WINDOW = 32_768;
 
 const UNBACKED_ACTION_REQUEST = /\b(remind|schedule|create|make|write|add|delete|remove|move|rename|organi[sz]e|fix|run|set up|book|save|generate|install|update|cancel|draft)\b/i;
 const UNBACKED_COMPLETION_CLAIM = /\b(done|scheduled|created|saved|set!|all set|deleted|removed|moved|renamed|fixed|updated|cancelled|generated|wrote|written|i've (?:set|added|made|created))\b/i;
@@ -578,8 +582,29 @@ export class PiAgentEngine implements EngineAdapter {
     // Pi uses Ollama's /v1 endpoint; pin the model natively so a turn does not pay a cold load.
     // Capture and report the residency result so a cold start is visible as model loading rather
     // than being mistaken for an interrupted task.
-    const residency = await ensureModelResident(selectedModel, { baseUrl: this.defaultUrl, signal });
-    console.log(`[karkedikha-core ${new Date().toISOString()}] attemptId=${attemptId} stage=model_residency model=${selectedModel} ok=${residency.ok} durationMs=${residency.durationMs}${residency.error ? ' error=' + residency.error : ''}`);
+    // Pi's requests go to native /api/chat (see piOllamaNativeFetch) so the window and thinking are explicit:
+    // /v1 inherits the machine-wide OLLAMA_CONTEXT_LENGTH, which spilled gemma4 out of VRAM at 64K.
+    const controls = resolveOllamaChatControls({ profile: 'pi', model: selectedModel });
+    const baseNumCtx = controls.numCtx ?? PI_CONTEXT_WINDOW;
+    const residency = await ensureModelResident(selectedModel, { baseUrl: this.defaultUrl, signal, numCtx: baseNumCtx });
+    console.log(`[karkedikha-core ${new Date().toISOString()}] attemptId=${attemptId} stage=model_residency model=${selectedModel} ok=${residency.ok} durationMs=${residency.durationMs} numCtx=${baseNumCtx}${residency.error ? ' error=' + residency.error : ''}`);
+    const ollamaRoot = this.defaultUrl.replace(/\/v1\/?$/, '').replace(/\/$/, '');
+    const modelCalls: OllamaCallMetrics[] = [];
+    const piFetch = createPiOllamaFetch({
+      baseUrl: ollamaRoot,
+      // Grow only when the prompt genuinely needs it: a different num_ctx makes Ollama reload the model.
+      numCtx: (estimated) => {
+        const needed = Math.ceil(estimated * 1.3) + 4_096;
+        if (needed <= baseNumCtx) return baseNumCtx;
+        return OLLAMA_IMPLICIT_NUM_CTX_BUCKETS.find((size) => size >= needed) ?? OLLAMA_IMPLICIT_NUM_CTX_BUCKETS[OLLAMA_IMPLICIT_NUM_CTX_BUCKETS.length - 1];
+      },
+      think: controls.think ?? false,
+      onMetrics: (m) => {
+        modelCalls.push(m);
+        console.log(`[karkedikha-core ${new Date().toISOString()}] attemptId=${attemptId} stage=model_call model=${m.model} numCtx=${m.numCtx} think=${m.think} promptTokens=${m.promptTokens} promptMs=${m.promptMs} outputTokens=${m.outputTokens} generationMs=${m.generationMs} loadMs=${m.loadMs} firstTokenMs=${m.firstTokenMs} totalMs=${m.totalMs} toolCalls=${m.toolCalls} tools=${m.toolDefinitions} chars=${JSON.stringify(m.chars)} status=${m.status}`);
+        safeRecordRuntimeEvent(db, broadcaster, attemptId, 'model_call', { ...m }, actor);
+      },
+    });
 
     const baseUrl = this.defaultUrl.endsWith('/v1') ? this.defaultUrl : `${this.defaultUrl}/v1`;
     const modelConfig: any = {
@@ -591,7 +616,7 @@ export class PiAgentEngine implements EngineAdapter {
       reasoning: false,
       input: ctx.images?.length ? ['text', 'image'] : ['text'],
       cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-      contextWindow: 32768,
+      contextWindow: PI_CONTEXT_WINDOW,
       maxTokens: 4096,
       compat: { supportsDeveloperRole: false, supportsReasoningEffort: false },
     };
@@ -2753,6 +2778,10 @@ TRUTHFULNESS & BEHAVIORAL PROTOCOL:
    - After writing code, run it or its tests with 'run_checks' (e.g. "python fib.py", "python -m pytest -q", "node test.js") and fix failures before answering.
    - Finish with the real full path of every file you created or changed and the actual command output that proves it works. Never claim something works or was changed without tool evidence from this turn.
    - If no workspace is selected, say so and offer to write the file once a folder is chosen.
+6a. FILES & DOCUMENTS (invoices, receipts, statements, contracts, PDFs, photos):
+   - These are files on this computer unless the user says email, mail or inbox. Look in the User-Selected Workspace first with 'search_files' or 'list_directory' and use 'lastModified' (or the date inside the document) for "newest" or "latest". If nothing is there, ask with 'request_search_permission' to look in Downloads or Documents. Use gmail_* tools only when the user mentions email.
+   - Read the file with 'read_file' before quoting anything from it, and name the file you used in the answer.
+   - In a follow-up, "that one", "it" or "this file" means the file named in your previous answer: open it again by that name instead of asking which file.
 7. WEB RESEARCH:
    - For anything current ("latest", news, releases, prices, comparisons, documentation) or any request for sources, call 'web_research' (several focused queries if needed) instead of answering from memory.
    - Cite claims with the evidence markers and list each source's real URL from the tool output. Never invent a URL, title or date; if evidence is thin, say so.
@@ -2866,7 +2895,7 @@ TRUTHFULNESS & BEHAVIORAL PROTOCOL:
         tools: simpleInteractive ? [] : tools,
         messages: priorMessages,
       },
-      streamFn: models.streamSimple.bind(models),
+      streamFn: (model: any, context: any, streamOptions: any) => models.streamSimple(model, context, { ...streamOptions, fetch: piFetch }),
       getApiKey: () => 'no-key',
       // Runs before every model call of the loop: the cooperative yield point for the interactive lane.
       transformContext: async (messages: any[], ctxSignal?: AbortSignal) => {
@@ -2937,6 +2966,11 @@ TRUTHFULNESS & BEHAVIORAL PROTOCOL:
                 exitCode: afterCtx.result?.isError ? 1 : 0,
                 evidence: {
                   output: output?.content?.[0]?.text?.slice(0, 500),
+                  // Every page the tool really returned, beyond the 500-char excerpt: what a citation can be checked against.
+                  ...(() => {
+                    const urls = [...new Set([...String(output?.content?.[0]?.text ?? '').matchAll(/^URL: (\S+)/gm)].map((m) => m[1]))].slice(0, 20);
+                    return urls.length ? { sourceUrls: urls } : {};
+                  })(),
                   ...(sanitizeToolActivity(output?.details?.activity) ? { activity: sanitizeToolActivity(output?.details?.activity) } : {}),
                 },
               });
@@ -3391,6 +3425,8 @@ TRUTHFULNESS & BEHAVIORAL PROTOCOL:
         step: 1,
         engine: 'pi',
         durationMs: Date.now() - startTime,
+        modelCalls: modelCalls.length,
+        modelMs: modelCalls.reduce((sum, call) => sum + call.totalMs, 0),
         outcome: 'cancelled',
       }, actor);
       return { success: false, reply: 'Execution cancelled.' };
@@ -3416,6 +3452,8 @@ TRUTHFULNESS & BEHAVIORAL PROTOCOL:
           step: 1,
           engine: 'pi',
           durationMs: Date.now() - startTime,
+          modelCalls: modelCalls.length,
+          modelMs: modelCalls.reduce((sum, call) => sum + call.totalMs, 0),
           outcome: 'unverified',
           reason: turnOutcome.reason,
         }, actor);
@@ -3457,6 +3495,8 @@ TRUTHFULNESS & BEHAVIORAL PROTOCOL:
       step: 1,
       engine: 'pi',
       durationMs: Date.now() - startTime,
+      modelCalls: modelCalls.length,
+      modelMs: modelCalls.reduce((sum, call) => sum + call.totalMs, 0),
     }, actor);
 
     return {
