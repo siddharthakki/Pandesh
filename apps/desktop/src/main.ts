@@ -943,7 +943,7 @@ function registerIpc(): void {
   });
   ipcMain.handle(DESKTOP_CHANNELS.resolveApproval, async (_event, approvalId: string, resolution: 'approved' | 'rejected') => {
     if (!session) throw new Error('desktop session is not started');
-    await session.resolvePending(String(approvalId ?? ''), resolution === 'rejected' ? 'rejected' : 'approved');
+    await session.resolvePending(String(approvalId ?? ''), resolution === 'approved' ? 'approved' : 'rejected');
     sendSnapshot();
   });
   ipcMain.handle(DESKTOP_CHANNELS.setOpenRouterApiKey, (_event, apiKey: string) => {
@@ -978,7 +978,7 @@ function registerIpc(): void {
   });
   ipcMain.handle(DESKTOP_CHANNELS.resolveGmailApproval, async (_event, approvalId: string, resolution: 'approved' | 'rejected') => {
     if (!session) throw new Error('desktop session is not started');
-    const result = await session.resolveGmailApproval(String(approvalId ?? ''), resolution === 'rejected' ? 'rejected' : 'approved');
+    const result = await session.resolveGmailApproval(String(approvalId ?? ''), resolution === 'approved' ? 'approved' : 'rejected');
     sendSnapshot();
     return result;
   });
@@ -1229,7 +1229,7 @@ function registerIpc(): void {
   });
   ipcMain.handle(DESKTOP_CHANNELS.resolveWebResearch, async (_event, approval: import('./ipc').DesktopResearchApprovalView, resolution: 'approved' | 'rejected') => {
     if (!session) throw new Error('desktop session is not started');
-    return session.resolveWebResearch(approval, resolution === 'rejected' ? 'rejected' : 'approved');
+    return session.resolveWebResearch(approval, resolution === 'approved' ? 'approved' : 'rejected');
   });
   ipcMain.handle(DESKTOP_CHANNELS.getWebResearch, async (_event, researchId: string) => {
     if (!session) throw new Error('desktop session is not started');
@@ -1297,7 +1297,7 @@ function registerIpc(): void {
   });
   ipcMain.handle(DESKTOP_CHANNELS.resolveAssistantApproval, async (_event, approvalId: string, resolution: 'approved' | 'rejected') => {
     if (!session) throw new Error('desktop session is not started');
-    const result = await session.resolveAssistantApproval(String(approvalId ?? ''), resolution === 'rejected' ? 'rejected' : 'approved');
+    const result = await session.resolveAssistantApproval(String(approvalId ?? ''), resolution === 'approved' ? 'approved' : 'rejected');
     sendSnapshot();
     return result;
   });
@@ -1383,7 +1383,7 @@ function registerIpc(): void {
   });
   ipcMain.handle(DESKTOP_CHANNELS.resolveImageApproval, async (_event, approvalId: string, resolution: 'approved' | 'rejected') => {
     if (!session) throw new Error('desktop session is not started');
-    return session.resolveImageApproval(String(approvalId ?? ''), resolution === 'rejected' ? 'rejected' : 'approved');
+    return session.resolveImageApproval(String(approvalId ?? ''), resolution === 'approved' ? 'approved' : 'rejected');
   });
   ipcMain.handle(DESKTOP_CHANNELS.cancelImageGeneration, async () => {
     if (!session) throw new Error('desktop session is not started');
@@ -1391,7 +1391,7 @@ function registerIpc(): void {
   });
   ipcMain.handle(DESKTOP_CHANNELS.resolveWeatherApproval, async (_event, approvalId: string, resolution: 'approved' | 'rejected') => {
     if (!session) throw new Error('desktop session is not started');
-    return session.resolveWeatherApproval(String(approvalId ?? ''), resolution === 'rejected' ? 'rejected' : 'approved');
+    return session.resolveWeatherApproval(String(approvalId ?? ''), resolution === 'approved' ? 'approved' : 'rejected');
   });
   ipcMain.handle(DESKTOP_CHANNELS.cancelWeatherLookup, async () => {
     if (!session) throw new Error('desktop session is not started');

@@ -584,7 +584,7 @@ export class MobileServer {
         res.end(JSON.stringify({ error: 'No active approval' }));
         return;
       }
-      const resolution = body.resolution === 'rejected' ? 'rejected' : 'approved';
+      const resolution = body.resolution === 'approved' ? 'approved' : 'rejected';
       await this.session.resolvePending(approvalId, resolution);
       const updatedSnap = this.session.snapshot();
       this.broadcastSse('snapshot_update', updatedSnap);
