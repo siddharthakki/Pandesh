@@ -93,6 +93,8 @@ import {
   type DesktopInteractionMode,
   type DesktopTurnOutcome,
   type DesktopTurnOutcomeKind,
+  PLACEHOLDER_CONVERSATION_PREFIX,
+  isPlaceholderConversationId,
 } from './desktopInteractionRouting';
 import {
   formatLocalInstant,
@@ -841,7 +843,8 @@ export class DesktopSession {
       stagedAttachments: this.attachmentStaging.list(),
       modelNote: this.modelNote,
       selectedConversationId: this.selectedConversationId,
-      activeConversationId: this.active?.conversationId ?? null,
+      // A host-side placeholder (image_*) is not a Core conversation; exposing it makes the UI open a conversation that does not exist.
+      activeConversationId: this.active && !isPlaceholderConversationId(this.active.conversationId) ? this.active.conversationId : null,
       workspaceActivities: this.workspaceActivitiesForView(),
       cockpit: this.active
         ? projectMissionCockpit(this.cockpitEvents, {
@@ -2111,9 +2114,13 @@ export class DesktopSession {
       if (!visionChoice) {
         throw new Error('None of your installed models can see images. Install a vision model (for example: ollama pull gemma4:12b) and try again.');
       }
+      if (visionChoice.differsFromSelection) {
+        // The person chose this model explicitly: say what it lacks and offer alternatives; never swap it silently.
+        throw new Error(`${model} can't see images, so this message was not sent. Vision-capable models you have installed: ${visionModels.join(', ')}. Pick one of them, or send the message without the image.`);
+      }
       model = visionChoice.model;
       // Only explain a choice the person did not make themselves.
-      this.modelNote = visionChoice.differsFromSelection || isAutoModel ? visionChoice.reason : null;
+      this.modelNote = isAutoModel ? visionChoice.reason : null;
     }
     const attachmentIds: string[] = [];
     for (const item of staged) {
@@ -2167,7 +2174,7 @@ export class DesktopSession {
           contextRequirement: hasFolder ? 'medium' : 'small',
           vision: false,
           validationAndRepair: true,
-          ...(worker === 'hermes' ? { engine: 'hermes', specialist: true } : {}),
+          ...(worker === 'hermes' ? { engine: 'hermes', specialist: true } : worker === 'opencode' ? { engine: 'opencode' } : {}),
         },
         selectedProvider,
         selectedModel: model,
@@ -2175,11 +2182,12 @@ export class DesktopSession {
         ...(useOpenRouter ? { spendCapUsd: openRouterSelection!.maxUsd } : {}),
         selectionReason: useOpenRouter
           ? 'Operator explicitly selected OpenRouter for this submit'
-          : `Configured local Ollama chat model from ${this.provider!.source}`,
+          : `Operator explicitly selected local model ${model} (${this.provider!.source}); no substitution`,
         suitabilitySummary: useOpenRouter
           ? `Using OpenRouter ${model} with a $${openRouterSelection!.maxUsd} cap. No fallback.`
           : `Using local ${model}. Cloud fallback is disabled.`,
-        userOverrode: Boolean(useOpenRouter),
+        // Any explicit (non-Auto) selection is the operator's choice, local Ollama included: Core must never reroute or substitute it.
+        userOverrode: true,
         candidates: [{
           provider: selectedProvider,
           model,
@@ -2498,7 +2506,7 @@ export class DesktopSession {
         routingPolicy: 'local-only',
         selectionReason: 'Quick question asked while a task is working: same local model, answered alongside it',
         suitabilitySummary: `Using local ${model}. Cloud fallback is disabled.`,
-        userOverrode: false,
+        userOverrode: this.operatorSelectedModel !== AUTO_MODEL,
         candidates: [{ provider: 'ollama', model, available: true, capable: true, costRank: 1, rejectionReasons: [] }],
         escalationCandidates: [],
       },
@@ -2708,9 +2716,16 @@ export class DesktopSession {
         requestId: this.active?.requestId,
         summary: `Core approval ${payload.resolution}${resolved.resumedAttemptId ? `; resumed ${resolved.resumedAttemptId}` : ''}`,
       });
-      if (payload.resolution === 'rejected') {
-        if (this.active && !this.active.terminal) {
-          await this.finishTurn('cancelled', 'Action rejected by user');
+      if (payload.resolution === 'rejected' && this.active && !this.active.terminal) {
+        // A rejection refuses one action; it does not end the attempt. Pi's in-loop approvals (run_checks, printing,
+        // connectors) keep running, tell the model "not done", and write the reply. Ending the turn here showed a false
+        // "cancelled", dropped that reply, and let the next message start while this attempt was still live — so the
+        // next turn saw the declined request unanswered and proposed it again. Core's own terminal event finishes the
+        // turn; finish here only if Core has already settled the attempt.
+        const attemptId = this.active.attemptId;
+        const current = await this.client?.getAttempt(attemptId).catch(() => undefined);
+        if (current && ['completed', 'failed', 'cancelled'].includes(current.status) && this.active?.attemptId === attemptId && !this.active.terminal) {
+          await this.finishTurn(current.status === 'completed' ? 'completed' : current.status === 'failed' ? 'failed' : 'cancelled', current.status === 'failed' ? 'Action rejected by user' : undefined);
         }
       }
     } catch (err) {
@@ -3865,10 +3880,12 @@ export class DesktopSession {
     this.taskScope = null;
     const requestId = `everyday_req_${Date.now()}`;
     const attemptId = `everyday_att_${Date.now()}`;
+    const conversationId = await this.ensureCapabilityConversation('Everyday');
+    await this.recordConversationMessage(conversationId, 'user', text);
     this.active = {
       attemptId,
       requestId,
-      conversationId: this.voiceConversationId ?? `everyday_${Date.now()}`,
+      conversationId,
       goal: text,
       tokenBuffer: '',
       terminal: false,
@@ -3928,6 +3945,7 @@ export class DesktopSession {
         }
       }
       await this.refreshEverydayTools();
+      await this.recordConversationMessage(conversationId, 'assistant', reply);
       this.active.terminal = true;
       this.lastTurnOutcome = 'completed';
       this.turnOutcomeKind = 'answered';
@@ -3943,6 +3961,7 @@ export class DesktopSession {
       this.drainSubmissionQueue();
       return { requestId, attemptId, model: 'everyday-tools' };
     } catch (err) {
+      await this.recordConversationMessage(conversationId, 'assistant', `That did not complete: ${(err as Error).message}`);
       this.active.terminal = true;
       this.lastTurnOutcome = 'failed';
       this.turnOutcomeKind = 'failed';
@@ -4022,7 +4041,7 @@ export class DesktopSession {
     this.active = {
       attemptId,
       requestId,
-      conversationId: this.voiceConversationId ?? `image_${Date.now()}`,
+      conversationId: this.voiceConversationId ?? `${PLACEHOLDER_CONVERSATION_PREFIX}${Date.now()}`,
       goal: text,
       tokenBuffer: '',
       terminal: false,
@@ -4093,7 +4112,7 @@ export class DesktopSession {
       this.turnOutcomeKind = 'failed';
       // Show the actual reason in the conversation, not just a "Failed" label.
       const failureText = `I couldn't generate the image: ${(err as Error).message}`;
-      if (!this.active.conversationId.startsWith('image_')) await this.recordConversationMessage(this.active.conversationId, 'assistant', failureText);
+      if (!isPlaceholderConversationId(this.active.conversationId)) await this.recordConversationMessage(this.active.conversationId, 'assistant', failureText);
       this.emit({ kind: 'result', at: nowIso(), requestId, attemptId, summary: 'Image Generation Studio', text: failureText, clientOrigin });
       this.emit({
         kind: 'error',
@@ -4121,10 +4140,14 @@ export class DesktopSession {
     this.taskScope = null;
     const requestId = `weather_req_${Date.now()}`;
     const attemptId = `weather_att_${Date.now()}`;
+    // The turn belongs to the conversation the person is in, and is written to it: a reply that only exists as a live
+    // event disappears the next time the thread is re-read from Core.
+    const conversationId = await this.ensureCapabilityConversation('Weather');
+    await this.recordConversationMessage(conversationId, 'user', text);
     this.active = {
       attemptId,
       requestId,
-      conversationId: this.voiceConversationId ?? `weather_${Date.now()}`,
+      conversationId,
       goal: text,
       tokenBuffer: '',
       terminal: false,
@@ -4148,6 +4171,7 @@ export class DesktopSession {
         // "Error invoking remote method 'desktop:submitTask'" IPC failure
         // instead of a normal spoken/answered reply.
         reply = 'Which location? Ask again with a place name, e.g. "what is the weather in Ulm".';
+        await this.recordConversationMessage(conversationId, 'assistant', reply);
         this.active.terminal = true;
         this.lastTurnOutcome = 'completed';
         this.turnOutcomeKind = 'answered';
@@ -4167,8 +4191,9 @@ export class DesktopSession {
       } else if (result.outcome === 'executed') {
         reply = result.message;
       } else {
-        reply = result.reason;
+        reply = `I could not get the weather: ${result.reason}`;
       }
+      await this.recordConversationMessage(conversationId, 'assistant', reply);
       this.active.terminal = true;
       const failed = result.outcome === 'failed' || result.outcome === 'unavailable' || result.outcome === 'denied';
       this.lastTurnOutcome = failed ? 'failed' : 'completed';
@@ -4177,6 +4202,7 @@ export class DesktopSession {
       this.drainSubmissionQueue();
       return { requestId, attemptId: result.attemptId ?? attemptId, model: 'weather' };
     } catch (err) {
+      await this.recordConversationMessage(conversationId, 'assistant', `I could not get the weather: ${(err as Error).message}`);
       this.active.terminal = true;
       this.lastTurnOutcome = 'failed';
       this.turnOutcomeKind = 'failed';

@@ -6,7 +6,7 @@
   pass after Kandev starts again.
 #>
 param(
-  [string]$KandevHome = (Join-Path $env:USERPROFILE '.kkd-kandev'),
+  [string]$KandevHome = $(if ($env:KARKEDIKHA_KANDEV_HOME) { $env:KARKEDIKHA_KANDEV_HOME } else { Join-Path $env:USERPROFILE '.kkd-kandev' }),
   [int]$OpenCodeWorkerPort = 38621
 )
 $pidFile = Join-Path $KandevHome 'kandev.pid'

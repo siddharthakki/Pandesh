@@ -2,6 +2,7 @@ import type { CoreErrorCode } from '../shared/wireTypes';
 
 const STATUS_BY_CODE: Record<CoreErrorCode, number> = {
   unauthenticated: 401,
+  forbidden: 403,
   invalid_request: 400,
   not_found: 404,
   conflict: 409,

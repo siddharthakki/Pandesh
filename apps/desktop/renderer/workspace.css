@@ -1197,6 +1197,59 @@ body:has(.app[data-workspace="panda"]) { background: var(--ws-bg); }
 }
 .task-card-stop:hover { background: rgba(248, 113, 113, 0.12); }
 .task-card-stop:disabled { opacity: 0.4; cursor: default; }
+.task-card-stop[hidden] { display: none; }
+
+/* A failure reason reads in full; a live step stays one line. */
+.panda-task-card[data-state="failed"] .task-card-title { white-space: normal; font-weight: 600; }
+.task-card-next { padding: 0 1rem 0.6rem 2.6rem; }
+.task-card-next[hidden] { display: none; }
+
+/* A closed Details shows only its summary; the card's own display rules must not leak its contents. */
+.task-card-details:not([open]) > :not(summary),
+.approval-more:not([open]) > :not(summary) { display: none !important; }
+
+/* Details: the raw steps, worker and model telemetry, closed by default. */
+.task-card-details { padding: 0 1rem 0.55rem 2.6rem; }
+.task-card-details > summary {
+  cursor: pointer;
+  width: max-content;
+  font-family: var(--ws-font);
+  font-size: 0.78rem;
+  color: var(--ws-text-faint);
+  list-style: none;
+}
+.task-card-details > summary::-webkit-details-marker { display: none; }
+.task-card-details > summary::after { content: " ▾"; font-size: 0.7rem; }
+.task-card-details[open] > summary::after { content: " ▴"; }
+.task-card-details > summary:hover { color: var(--ws-text-soft); }
+.task-card-details[open] { padding-bottom: 0.75rem; }
+.task-card-details .task-card-steps { padding: 0.5rem 0 0.4rem 1.4rem; }
+.task-card-telemetry {
+  margin: 0 0 0.3rem;
+  font-family: var(--ws-mono);
+  font-size: 0.74rem;
+  color: var(--ws-text-faint);
+  overflow-wrap: anywhere;
+}
+.task-card-telemetry[hidden] { display: none; }
+.task-card-details .task-card-meta { display: block; }
+
+/* The approval card's governance record, closed by default. */
+.approval-more { margin-top: 0.5rem; }
+.approval-more > summary {
+  cursor: pointer;
+  width: max-content;
+  font-size: 0.78rem;
+  color: var(--ws-text-faint);
+}
+.approval-more[open] > summary { margin-bottom: 0.45rem; }
+.approval-more [hidden] { display: none; }
+
+/* An earlier turn's results fold to their header once the conversation has moved on. */
+.app[data-workspace="panda"] .conversation-results[data-stale="true"] .result-card-preview,
+.app[data-workspace="panda"] .conversation-results[data-stale="true"] .conversation-results-list,
+.app[data-workspace="panda"] .conversation-results[data-stale="true"] .result-card-foot { display: none; }
+.app[data-workspace="panda"] .conversation-results[data-stale="true"] .result-card-head { border-bottom: 0; cursor: pointer; }
 
 /* ── The inline approval card ───────────────────────────────────────── */
 

@@ -1237,6 +1237,116 @@ CREATE INDEX IF NOT EXISTS idx_background_tasks_status ON background_tasks(statu
 CREATE INDEX IF NOT EXISTS idx_background_tasks_conversation ON background_tasks(conversationId);
 `;
 
+const MIGRATION_38_OPERATOR = `
+CREATE TABLE IF NOT EXISTS operator_runs (
+  id TEXT PRIMARY KEY,
+  instruction TEXT NOT NULL,
+  workflow TEXT NOT NULL,
+  privacy TEXT NOT NULL,
+  privacyReasons TEXT NOT NULL DEFAULT '[]',
+  pinnedTool TEXT,
+  pinnedModel TEXT,
+  consent TEXT NOT NULL DEFAULT '{}',
+  status TEXT NOT NULL,
+  statusDetail TEXT,
+  context TEXT NOT NULL DEFAULT '{}',
+  result TEXT,
+  createdAt TEXT NOT NULL,
+  updatedAt TEXT NOT NULL,
+  completedAt TEXT
+);
+CREATE TABLE IF NOT EXISTS operator_steps (
+  id TEXT PRIMARY KEY,
+  runId TEXT NOT NULL REFERENCES operator_runs(id),
+  idx INTEGER NOT NULL,
+  kind TEXT NOT NULL,
+  title TEXT NOT NULL,
+  needs TEXT,
+  approval TEXT,
+  status TEXT NOT NULL,
+  attempts INTEGER NOT NULL DEFAULT 0,
+  maxAttempts INTEGER NOT NULL DEFAULT 1,
+  tool TEXT,
+  selection TEXT,
+  output TEXT,
+  evidence TEXT,
+  error TEXT,
+  decidedBy TEXT,
+  startedAt TEXT,
+  completedAt TEXT,
+  UNIQUE (runId, idx)
+);
+CREATE TABLE IF NOT EXISTS operator_events (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  runId TEXT NOT NULL REFERENCES operator_runs(id),
+  stepIdx INTEGER,
+  kind TEXT NOT NULL,
+  detail TEXT,
+  at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_operator_runs_status ON operator_runs(status);
+CREATE INDEX IF NOT EXISTS idx_operator_events_run ON operator_events(runId, id);
+`;
+
+const MIGRATION_37_PANDA_BRIDGE = `
+CREATE TABLE IF NOT EXISTS bridge_pairing_codes (
+  codeHash TEXT PRIMARY KEY,
+  createdAt TEXT NOT NULL,
+  expiresAt TEXT NOT NULL,
+  consumedAt TEXT
+);
+CREATE TABLE IF NOT EXISTS bridge_pairings (
+  id TEXT PRIMARY KEY,
+  label TEXT NOT NULL,
+  extensionId TEXT,
+  tokenHash TEXT NOT NULL UNIQUE,
+  createdAt TEXT NOT NULL,
+  lastSeenAt TEXT,
+  revokedAt TEXT,
+  revokedReason TEXT
+);
+CREATE TABLE IF NOT EXISTS bridge_tasks (
+  id TEXT PRIMARY KEY,
+  pairingId TEXT NOT NULL REFERENCES bridge_pairings(id),
+  clientRequestId TEXT NOT NULL,
+  instruction TEXT NOT NULL,
+  instructionSha256 TEXT NOT NULL,
+  sourceRef TEXT NOT NULL DEFAULT '{}',
+  contextText TEXT,
+  contextConfirmed INTEGER NOT NULL DEFAULT 0,
+  sensitivity TEXT NOT NULL DEFAULT 'normal',
+  sensitivityReasons TEXT NOT NULL DEFAULT '[]',
+  conversationId TEXT REFERENCES conversations(id),
+  projectId TEXT,
+  storyId TEXT,
+  attemptId TEXT,
+  executor TEXT,
+  model TEXT,
+  routing TEXT,
+  externalConsent TEXT,
+  workspacePath TEXT,
+  status TEXT NOT NULL,
+  statusDetail TEXT,
+  control TEXT NOT NULL DEFAULT 'none',
+  result TEXT,
+  createdAt TEXT NOT NULL,
+  updatedAt TEXT NOT NULL,
+  completedAt TEXT,
+  UNIQUE (pairingId, clientRequestId)
+);
+CREATE INDEX IF NOT EXISTS idx_bridge_tasks_status ON bridge_tasks(status);
+CREATE INDEX IF NOT EXISTS idx_bridge_tasks_story ON bridge_tasks(storyId);
+CREATE TABLE IF NOT EXISTS bridge_task_checkpoints (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  taskId TEXT NOT NULL REFERENCES bridge_tasks(id),
+  status TEXT NOT NULL,
+  detail TEXT,
+  snapshot TEXT,
+  createdAt TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_bridge_checkpoints_task ON bridge_task_checkpoints(taskId, id);
+`;
+
 export const MIGRATIONS: Migration[] = [
   { version: 1, description: 'bootstrap core_metadata and schema_migrations', sql: MIGRATION_1_BOOTSTRAP },
   { version: 2, description: 'M31 domain schema (projects/repositories/stories/events/etc.)', sql: MIGRATION_2_DOMAIN },
@@ -1274,6 +1384,8 @@ export const MIGRATIONS: Migration[] = [
   { version: 34, description: 'Pandesh task outcomes: the objective, success conditions, evidence, blocker and next action of a task', sql: MIGRATION_34_TASK_OUTCOMES },
   { version: 35, description: 'Gmail inbox organization: durable change plans with the prior label state of every message', sql: MIGRATION_35_GMAIL_CHANGE_PLANS },
   { version: 36, description: 'Pandesh background delegated tasks: durable background worker execution, checkpoints and delivery ledger', sql: MIGRATION_36_BACKGROUND_TASKS },
+  { version: 37, description: 'Panda bridge: browser pairings, relayed tasks (source reference, consent, routing) and durable checkpoints', sql: MIGRATION_37_PANDA_BRIDGE },
+  { version: 38, description: 'Master operator: durable multi-step runs with per-step tool selection, approvals, evidence and an event trail', sql: MIGRATION_38_OPERATOR },
 ];
 
 

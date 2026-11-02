@@ -1,0 +1,19 @@
+{
+  "manifest_version": 3,
+  "name": "Pandesh Panda Bridge",
+  "version": "0.1.0",
+  "description": "Send a ChatGPT prompt to Pandesh on this PC, only when you choose to. Works on ChatGPT only.",
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEApvcGYyEzacTJ9b9enDD9Ig11y6OZsvDxh4S1NAnT0OLqSXym3xZUUEX8ntFUCMO3gQPgJmNVUB45NlmydCwiVHguZn8RFRo3X/egU6OWLwk2xEVaoP0a32xvNibjKHW7mkUt+p4Fx9JXSB77FA+eDTmTpgHsSK78YnaRZ1tmwnaBXvNnpMNJ13Bm39NFiwoHUNw+UOHmN9ud1CccD9hCjt5bS2nSn3Ue6fM59FIdmXWMLtOeZtahGVZnCpvmLpUBW8qaZpVFAKPNUgWVPjTsLbknY6ackaMeU+YPj0IKO5UDZiqucpkpEDsI+xUehNR7m+aQwxbN0BeCFf8Mr5Gq8QIDAQAB",
+  "minimum_chrome_version": "110",
+  "permissions": ["nativeMessaging", "storage"],
+  "host_permissions": ["https://chatgpt.com/*", "https://chat.openai.com/*"],
+  "background": { "service_worker": "background.js" },
+  "action": { "default_title": "Pandesh Panda Bridge", "default_popup": "popup.html" },
+  "content_scripts": [
+    {
+      "matches": ["https://chatgpt.com/*", "https://chat.openai.com/*"],
+      "js": ["content.js"],
+      "run_at": "document_idle"
+    }
+  ]
+}

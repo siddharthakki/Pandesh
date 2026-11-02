@@ -16,6 +16,8 @@ import { appendMessage, listMessages } from '../domain/conversations';
 import { registerArtifact } from '../domain/artifacts';
 import { listAttachmentsByMessageForConversation } from '../domain/attachments';
 import { finalPath as attachmentFinalPath } from '../attachments/storage';
+import { extractDocument } from '../attachments/documentExtraction';
+import { detectContent } from '../attachments/mime';
 import { isCredentialFilePath, redactSecrets as redactCredentialShapes } from '../platform/credentialStore';
 import { createResearchEvidenceRunner } from './researchCapability';
 import { completeReminder, createNote, createReminder, listReminders } from '../domain/everydayTools';
@@ -91,6 +93,27 @@ const PI_CONTEXT_WINDOW = 32_768;
 
 const UNBACKED_ACTION_REQUEST = /\b(remind|schedule|create|make|write|add|delete|remove|move|rename|organi[sz]e|fix|run|set up|book|save|generate|install|update|cancel|draft)\b/i;
 const UNBACKED_COMPLETION_CLAIM = /\b(done|scheduled|created|saved|set!|all set|deleted|removed|moved|renamed|fixed|updated|cancelled|generated|wrote|written|i've (?:set|added|made|created))\b/i;
+
+/** Largest PDF/DOCX read_file will extract (text layer only, locally). */
+const MAX_READ_DOCUMENT_BYTES = 25 * 1024 * 1024;
+
+/**
+ * The text read_file hands the model. A PDF or DOCX (decided from its bytes, not its name) is extracted locally with
+ * the same extractor attachments use, page by page; decoding it as UTF-8 only ever produced binary noise.
+ */
+async function readFileTextForModel(full: string, size: number): Promise<string> {
+  const head = Buffer.alloc(Math.min(size, 64));
+  const fd = fs.openSync(full, 'r');
+  try { fs.readSync(fd, head, 0, head.length, 0); } finally { fs.closeSync(fd); }
+  const detected = detectContent(head, path.extname(full));
+  if (detected?.kind !== 'document') return fs.readFileSync(full, 'utf8');
+  if (size > MAX_READ_DOCUMENT_BYTES) throw new Error(`the document is ${Math.round(size / 1024 / 1024)} MB; documents over ${MAX_READ_DOCUMENT_BYTES / 1024 / 1024} MB are not extracted`);
+  const extraction = await extractDocument(full, detected.mimeType);
+  if (!extraction) throw new Error(`text extraction is not supported for ${detected.mimeType}`);
+  const text = extraction.sections.map((s) => (s.page !== null ? `[page ${s.page}]\n${s.text}` : s.text)).join('\n');
+  if (!text.trim()) throw new Error('the document has no extractable text layer (it may be a scanned image)');
+  return text;
+}
 
 /** Real PowerShell runner for the fixed printing scripts; the name/data travel in `env`, never in the script text. */
 const defaultPowerShellRunner: PowerShellRunner = (script, env, timeoutMs, signal) =>
@@ -633,7 +656,7 @@ export class PiAgentEngine implements EngineAdapter {
     const models = createModels();
     models.setProvider(provider);
 
-    const toolCallsRecorded: Array<{ tool: string; args?: unknown; status?: string; result?: unknown }> = [];
+    const toolCallsRecorded: Array<{ tool: string; args?: unknown; status: string; result?: unknown }> = [];
     const invocationMap = new Map<string, string>();
     /** Markdown links for files this turn really shared to the paired phone (see send_to_phone). */
     const phoneShares: string[] = [];
@@ -1994,7 +2017,7 @@ export class PiAgentEngine implements EngineAdapter {
               };
             }
 
-            const text = fs.readFileSync(full, 'utf8');
+            const text = await readFileTextForModel(full, stat.size);
             const lines = text.split(/\r?\n/);
             const start = typeof args.startLine === 'number' && args.startLine >= 1 ? args.startLine : 1;
             const end = typeof args.endLine === 'number' && args.endLine >= start ? Math.min(args.endLine, lines.length) : Math.min(start + 400, lines.length);
@@ -2821,7 +2844,7 @@ TRUTHFULNESS & BEHAVIORAL PROTOCOL:
    - "Remind me to follow up if they don't reply" / "I told them I'd chase it" → 'create_commitment' with condition 'no_reply' and the thread id in relatedId. Use 'list_commitments' to see what is still open and 'update_commitment' when the user says a promise was handled. A commitment is not a reminder: it is a promise with a condition, and it is reported in the daily brief.
    - A message starting with "[Scheduled task" runs unattended: do not call tools that need approval (web_research, destructive commands); produce the result directly.
 9. DURABLE MEMORY:
-   - You have a durable, scoped memory. Before answering anything that depends on what the user previously said, decided, preferred, promised or committed to ("we discussed yesterday", "as I said last time", "my preference", "what did I promise"), call 'memory_recall' with the narrowest scope/subject you can. Do not rely on the visible transcript alone — it may be a different conversation.
+   - You have a durable, scoped memory. Before answering anything that depends on what the user previously said, decided, preferred, promised or committed to ("we discussed yesterday", "as I said last time", "my preference", "what did I promise"), call 'memory_recall' with a 'query' of the key words (e.g. query "coffee" for a drink preference) and the scopeType if you know it; use 'subject' only when you know the exact remembered subject. Do not rely on the visible transcript alone — it may be a different conversation.
    - Write with 'memory_remember' ONLY when the user asks for something to be remembered, states a durable preference or decision explicitly, or asks you to keep track of something. Choose scopeType honestly: 'user' for personal preferences and commitments, 'project' for a project's decisions, 'task' for one job's outcome, 'global' only when it is truly cross-project.
    - A memory write is consequential: the user must approve the exact fact. If the write is declined or times out, NOTHING was stored — say so plainly and never claim it was remembered.
    - If the user corrects you ("no, it's X, not Y"), record the corrected fact with 'memory_remember' rather than silently using the new value. 'memory_forget' retires a fact the user asks you to drop. 'memory_impact' shows what a remembered decision affects.
@@ -3225,6 +3248,11 @@ TRUTHFULNESS & BEHAVIORAL PROTOCOL:
       }
     }
 
+    // The contract table is the deliverable only when the user's own words (not attached text) ask about contracts,
+    // or explicitly resume a contract workflow. Any other Gmail request gets its own answer, not a contract table.
+    const contractRequest = /\b(?:contracts?|agreements?)\b/i.test(requestText)
+      || (isContinuation && Boolean(activeTask) && /\b(?:contracts?|agreements?|extract)/i.test(activeTask?.objective ?? ''));
+
     // Anti-hallucination check for Gmail: if Gmail tools were executed successfully,
     // the reply must never claim that Gmail is not connected or that no Gmail tool is available.
     if (toolCallsRecorded.some(t => t.tool.startsWith('gmail_') && t.status === 'completed') &&
@@ -3233,7 +3261,9 @@ TRUTHFULNESS & BEHAVIORAL PROTOCOL:
       safeRecordRuntimeEvent(db, broadcaster, attemptId, 'hallucinated_gmail_disconnect_detected', { replyPreview: finalReply.slice(0, 200) }, actor);
       try {
         const followUpFloor = agent.state.messages.length;
-        await agent.prompt('Correction: You DO have active Gmail access and your gmail tools ran successfully in this turn. Do NOT claim you have no Gmail tool or that Gmail is not connected. Present the real findings from the gmail tool results in the required Contract Inventory Table (| Contract Type | Company / Counterparty | Date | Email / Thread Reference | Attachment | Extraction Status |).');
+        await agent.prompt('Correction: You DO have active Gmail access and your gmail tools ran successfully in this turn. Do NOT claim you have no Gmail tool or that Gmail is not connected. ' + (contractRequest
+          ? 'Present the real findings from the gmail tool results in the required Contract Inventory Table (| Contract Type | Company / Counterparty | Date | Email / Thread Reference | Attachment | Extraction Status |).'
+          : "Answer the user's latest request from the real gmail tool results."));
         await agent.waitForIdle();
         const followUpReply = lastAssistantTextFrom(followUpFloor);
         if (followUpReply) finalReply = followUpReply;
@@ -3243,7 +3273,7 @@ TRUTHFULNESS & BEHAVIORAL PROTOCOL:
     }
 
     // Ensure Contract Inventory Table delivery when contract extraction was performed
-    if ((/\b(?:contracts?|agreement)\b/i.test(prompt) || (isContinuation && Boolean(activeTask))) &&
+    if (contractRequest &&
         toolCallsRecorded.some(t => t.tool.startsWith('gmail_') && t.status === 'completed') &&
         !finalReply.includes('| Contract Type') &&
         !signal?.aborted) {
@@ -3302,9 +3332,9 @@ TRUTHFULNESS & BEHAVIORAL PROTOCOL:
       turnOutcome = { verdict: 'verified', reason: `answered from ${projectEvidence.filesRead.length} file(s) read in ${projectEvidence.root}${projectReplyReplaced ? ' (reply replaced by evidence-only answer)' : ''}`, performed: ['project_inspection'], refused: [], failed: [] };
       try { mutateWithBroadcast(db, broadcaster, () => { ensureTaskOutcome(db, { attemptId, conversationId: conversationId || null, requestId, objective: objectiveFromRequest(requestText) }); }); } catch {}
     }
-    if (turnOutcome.verdict === 'unverified' && !/not (done|available|created|sent|made)|declined|could not|was not|denied/i.test(finalReply)) {
+    if (turnOutcome.verdict === 'unverified' && !/not (done|available|created|sent|made|run|granted)|declined|could not|was not|wasn't|untouched|nothing (?:was )?changed|denied/i.test(finalReply)) {
       // The reply must not leave the impression that the work happened.
-      finalReply += `\n\nCorrection: the requested work did not happen in this turn — ${turnOutcome.reason}.`;
+      finalReply += `\n\nCorrection: ${turnOutcome.reason}.`;
     }
 
     let assistantMessageRecord: any = null;

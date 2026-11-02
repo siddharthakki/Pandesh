@@ -87,7 +87,7 @@ export async function startEgressProxy(resolve: EgressResolver = defaultResolver
       res.writeHead(403, { 'content-type': 'text/plain' }).end('Blocked by Pandesh network guard');
       return;
     }
-    const headers = { ...req.headers, host: target.host };
+    const headers: http.OutgoingHttpHeaders = { ...req.headers, host: target.host };
     delete headers['proxy-connection'];
     delete headers['proxy-authorization'];
     const upstream = http.request({

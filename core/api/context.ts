@@ -11,6 +11,8 @@ export interface ApiContext {
   params: Record<string, string>;
   body: unknown;
   idempotencyKey?: string;
+  /** `X-Panda-Pairing` header: the browser extension's pairing token (resolved by hash in the bridge routes). */
+  pairingToken?: string;
 }
 
 export interface ApiResult {

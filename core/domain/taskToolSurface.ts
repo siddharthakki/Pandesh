@@ -12,6 +12,7 @@
  * validation and mutation policy are unchanged. Deterministic, so a restart reproduces it.
  */
 import type { MutationPolicy } from './mutationPolicy';
+import { hasSoftwareBuildIntent } from './softwareIntent';
 
 export type ToolSurface = 'workspace_code_change' | 'full';
 
@@ -31,7 +32,8 @@ export const WORKSPACE_CODE_CHANGE_TOOLS: readonly string[] = ['read_file', 'run
 export const NON_WORKSPACE_MARKERS: ReadonlyArray<readonly [string, RegExp]> = [
   ['email', /\b(?:e-?mails?|gmail|inbox|mailbox)\b/i],
   ['contract', /\b(?:contracts?|agreements?|leases?|ndas?|eula|employment|mou|terms of service|sla|statement of work|sow)\b/i],
-  ['continuation', /\b(?:continue|resume|proceed|status|updates?|keep going|what happened|next steps?)\b/i],
+  // "any updates?" / "status update" ask about earlier work; "Update the README" is a code change, not a continuation.
+  ['continuation', /\b(?:continue|resume|proceed|status|keep going|what happened|next steps?|any updates?|status updates?)\b|\bupdates?\s*\?/i],
   ['extraction', /\b(?:extract|extraction|inventory)\b/i],
   ['calendar', /\b(?:calendar|meetings?|appointments?)\b/i],
   ['reminder', /\b(?:remind(?:er|ers)?|alarms?|set (?:a |an )?timer)\b/i],
@@ -88,7 +90,10 @@ export function deriveToolSurface(input: {
   if (input.mutationPolicy === 'denied') return { surface: 'full', reason: 'read_only_objective' };
   if (!input.fileModificationRequired) return { surface: 'full', reason: 'no_file_modification_required' };
   const text = String(input.objectiveText ?? '');
+  // Building software that merely mentions images is still a code change, never an image-generation task.
+  const buildsSoftware = hasSoftwareBuildIntent(text);
   for (const [domain, pattern] of NON_WORKSPACE_MARKERS) {
+    if (domain === 'image' && buildsSoftware) continue;
     if (pattern.test(text)) return { surface: 'full', reason: `objective_mentions_${domain}` };
   }
   return { surface: 'workspace_code_change', reason: 'workspace_code_change_objective' };

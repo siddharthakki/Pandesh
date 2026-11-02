@@ -176,6 +176,7 @@ describe('HermesEngine & HermesEngineAdapter', () => {
         process.env.HERMES_URL = mockServerBaseUrl;
         process.env.HERMES_ENABLED = 'true';
         process.env.HERMES_API_KEY = 'test-hermes-secret-key';
+        process.env.HERMES_OLLAMA_PROVIDER = 'test-ollama';
         resolve();
       });
     });
@@ -185,6 +186,7 @@ describe('HermesEngine & HermesEngineAdapter', () => {
     delete process.env.HERMES_URL;
     delete process.env.HERMES_ENABLED;
     delete process.env.HERMES_API_KEY;
+    delete process.env.HERMES_OLLAMA_PROVIDER;
     if (mockServer) {
       await new Promise<void>((resolve) => mockServer!.close(() => resolve()));
     }
@@ -255,6 +257,8 @@ describe('HermesEngine & HermesEngineAdapter', () => {
 
     const workspaceDir = path.join(tempDir, 'workspace');
     fs.mkdirSync(workspaceDir, { recursive: true });
+    // The file the fake Hermes reports writing really exists, so the run has evidence.
+    fs.writeFileSync(path.join(workspaceDir, 'hermes_output.txt'), 'hello');
 
     const result = await HermesEngine.executeHermesRun({
       db,
@@ -274,7 +278,11 @@ describe('HermesEngine & HermesEngineAdapter', () => {
     const runReq = serverRequests.find((r) => r.url === '/v1/runs' && r.method === 'POST');
     expect(runReq).toBeDefined();
     expect(runReq?.headers['idempotency-key']).toBe(`kkd:attempt:${attempt.id}`);
-    expect(runReq?.body.prompt).toBe('Generate a greeting module');
+    expect(runReq?.body.prompt).toContain(`Work only inside this folder: ${workspaceDir}`);
+    expect(runReq?.body.prompt).toMatch(/Generate a greeting module$/);
+    // A local model always travels with the local Ollama provider, never
+    // left for Hermes to resolve against its (cloud) default.
+    expect(runReq?.body.provider).toBe('test-ollama');
     expect(runReq?.body.idempotency_key).toBe(`kkd:attempt:${attempt.id}`);
 
     // Verify hermes_run_bound runtime event was recorded in KKD
@@ -561,5 +569,28 @@ describe('HermesEngine & HermesEngineAdapter', () => {
     };
     const engine4 = await (executor as any).selectEngine(generalContext, 'baat_kar');
     expect(engine4).toBe('pi');
+  });
+
+  it('an explicitly chosen engine or provider that cannot run is refused, never replaced', async () => {
+    const executor = new RuntimeExecutor(db, broadcaster);
+    const hermesDown = vi.spyOn(HermesEngine, 'ensureAvailable').mockResolvedValue({ available: false, error: 'not running' });
+    const opencode = EngineRegistry.get('opencode')!;
+    const opencodeDown = vi.spyOn(opencode, 'isAvailable').mockResolvedValue(false);
+    try {
+      const hermes = await (executor as any).selectEngine({ selectedProvider: 'ollama', approvalPolicy: { worker: 'hermes' }, modelSelection: { requiredCapabilities: {} } }, 'saath_kar');
+      expect(hermes.refused).toMatch(/Hermes was selected .* not available .*no other engine was substituted/);
+
+      const oc = await (executor as any).selectEngine({ selectedProvider: 'ollama', approvalPolicy: { worker: 'opencode' }, modelSelection: { requiredCapabilities: {} } }, 'karke_dikha');
+      expect(oc.refused).toMatch(/OpenCode was selected/);
+
+      const cloud = await (executor as any).selectEngine({ selectedProvider: 'openrouter', selectedModel: 'some/cloud-model', modelSelection: { routingPolicy: 'explicit-openrouter', requiredCapabilities: {} } }, 'baat_kar');
+      expect(cloud.refused).toMatch(/OpenRouter was selected .*Nothing was sent to OpenRouter/);
+
+      // A local selection with no explicit engine still runs on Pi.
+      expect(await (executor as any).selectEngine({ selectedProvider: 'ollama', modelSelection: { requiredCapabilities: {} } }, 'baat_kar')).toBe('pi');
+    } finally {
+      hermesDown.mockRestore();
+      opencodeDown.mockRestore();
+    }
   });
 });

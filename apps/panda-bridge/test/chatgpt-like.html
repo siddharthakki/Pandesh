@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>ChatGPT (test fixture)</title>
+<style>
+  body { font-family: system-ui, sans-serif; margin: 0; display: flex; flex-direction: column; height: 100vh; }
+  main { flex: 1; overflow: auto; padding: 16px; }
+  [data-message-author-role] { margin: 8px 0; padding: 8px 12px; border-radius: 10px; background: #f3f4f6; max-width: 48rem; }
+  [data-message-author-role="user"] { background: #dbeafe; }
+  footer { padding: 8px 16px 16px; }
+  form { display: flex; gap: 8px; align-items: flex-end; max-width: 48rem; margin: 0 auto; }
+  #prompt-textarea { flex: 1; min-height: 40px; border: 1px solid #9ca3af; border-radius: 12px; padding: 8px 12px; }
+  #prompt-textarea p { margin: 0; }
+</style>
+</head>
+<body>
+<!--
+  Stand-in for the ChatGPT page, used only by the Panda bridge acceptance test. It mirrors the elements the extension relies on
+  (a ProseMirror contenteditable #prompt-textarea inside a form, a data-testid="send-button", [data-message-author-role] messages)
+  and counts every submission that reaches the *page* - which is exactly what Panda Mode must prevent and what OFF must allow.
+-->
+<main id="log">
+  <div data-message-author-role="assistant">Hello! How can I help you today?</div>
+</main>
+<footer>
+  <form id="composer-form">
+    <div id="prompt-textarea" class="ProseMirror" contenteditable="true"><p><br></p></div>
+    <button type="button" data-testid="send-button" aria-label="Send prompt">Send</button>
+  </form>
+</footer>
+<script>
+  window.__chatgptSubmissions = [];
+  const composer = document.getElementById('prompt-textarea');
+  const log = document.getElementById('log');
+  function submit() {
+    const text = composer.innerText.replace(/\n$/, '');
+    if (!text.trim()) return;
+    window.__chatgptSubmissions.push(text);
+    const m = document.createElement('div');
+    m.setAttribute('data-message-author-role', 'user');
+    m.textContent = text;
+    log.append(m);
+    composer.innerHTML = '<p><br></p>';
+  }
+  // Like the real page, these listeners live in the bubbling phase on the page itself.
+  composer.addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); submit(); } });
+  document.querySelector('[data-testid="send-button"]').addEventListener('click', submit);
+  document.getElementById('composer-form').addEventListener('submit', (e) => { e.preventDefault(); submit(); });
+</script>
+</body>
+</html>

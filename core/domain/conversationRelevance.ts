@@ -41,6 +41,16 @@ export function isExplicitResumeRequest(text: string): boolean {
   return EXPLICIT_RESUME.test(text);
 }
 
+/**
+ * The request's own subject words: content words that are not resume/control filler, not back-references to earlier
+ * work, and not in `ignore` (e.g. the control verbs a caller already matched). Empty for "Continue", "Cancel",
+ * "What's the status?"; non-empty for "stop the music".
+ */
+export function subjectWords(text: string, ignore: readonly string[] = []): string[] {
+  const skip = stemmed([...ignore]);
+  return [...contentWords(text)].filter((w) => !RESUME_FILLER.has(w) && !BACK_REFERENCE_WORDS.has(w) && !skip.has(w));
+}
+
 export interface RelevantTaskCandidate {
   objective: string;
   status: string;

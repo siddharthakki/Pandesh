@@ -30,6 +30,7 @@ import { latestRuntimeSequence, listRuntimeEventsAfter } from '../../domain/runt
 import type { RuntimeEventRecord } from '../../shared/wireTypes';
 import { KandevClient, kandevHome, type KandevPermission, type KandevSession } from './kandevClient';
 import { prepareWorkerProfile } from './workerProfile';
+import { gpuLaneLimit } from '../hardwareCapacity';
 import { automatedChecks, deviceChecks, examineDiff, runAcceptance, validateAcceptanceChecks, type AcceptanceCheck, type VerificationLevel } from './storyAcceptance';
 
 export const DEV_ACTOR = 'kkd:dev-coordinator';
@@ -38,10 +39,10 @@ const MAX_WORKERS = Number(process.env.KARKEDIKHA_KANDEV_MAX_WORKERS || 2);
 const DEFAULT_CLAUDE_MODEL = process.env.KARKEDIKHA_KANDEV_CLAUDE_MODEL || 'sonnet';
 
 export type DevAgent = 'claude' | 'opencode' | 'antigravity' | 'hermes';
-const AGENT_IDS: Record<DevAgent, string> = { claude: 'claude-acp', opencode: 'opencode-acp', antigravity: 'antigravity-acp', hermes: 'hermes-acp' };
+export const AGENT_IDS: Record<DevAgent, string> = { claude: 'claude-acp', opencode: 'opencode-acp', antigravity: 'antigravity-acp', hermes: 'hermes-acp' };
 /** Agents whose default model runs on the local GPU; at most one of them runs at a time. */
 const GPU_AGENTS = new Set<DevAgent>(['opencode', 'hermes']);
-const usesLocalGpu = (spec: DevStorySpec) => GPU_AGENTS.has(spec.agent) && (!spec.model || /^(ollama|llama|local)/i.test(spec.model));
+export const usesLocalGpu = (spec: Pick<DevStorySpec, 'agent' | 'model'>) => GPU_AGENTS.has(spec.agent) && (!spec.model || /^(ollama|llama|local)/i.test(spec.model));
 
 export interface DevStorySpec {
   kind: 'kkd-dev-story';
@@ -283,13 +284,22 @@ export async function dispatchDevStories(db: CoreDatabase, kandev: KandevClient,
     }
     // Resource ordering against stories already in flight and earlier ones in this dispatch (same files, or both on
     // the local GPU).
+    const gpuPeers: Array<{ tid: string; title: string }> = [];
     for (const earlier of [...inFlight, ...ordered.slice(0, ordered.indexOf(story))]) {
       const tid = taskIds.get(earlier.id) ?? (inFlight.includes(earlier) ? (await kandev.taskByExternalId(ctx.workspaceId, earlier.id))?.id : undefined);
-      if (!tid || blockers.has(tid)) continue;
+      if (!tid) continue;
       const espec = devSpec(earlier)!;
+      if (usesLocalGpu(spec) && usesLocalGpu(espec)) gpuPeers.push({ tid, title: earlier.title });
+      if (blockers.has(tid)) continue;
       const shared = overlaps(spec.paths, espec.paths);
       if (shared.length) blockers.set(tid, `shares ${shared.join(', ')} with "${earlier.title}"`);
-      else if (usesLocalGpu(spec) && usesLocalGpu(espec)) blockers.set(tid, `local GPU lane after "${earlier.title}"`);
+    }
+    // Local-GPU workloads run side by side only as far as the card's VRAM allows (one on a 24 GB card). Each one beyond the
+    // limit waits for the workload `limit` places before it, so at most `limit` run at once.
+    const lanes = gpuLaneLimit();
+    if (gpuPeers.length >= lanes) {
+      const gate = gpuPeers[gpuPeers.length - lanes];
+      if (!blockers.has(gate.tid)) blockers.set(gate.tid, `local GPU lane (${lanes} at a time) after "${gate.title}"`);
     }
     const profileId = await profileFor(kandev, spec.agent, spec.model);
     const repositoryId = await kandevRepositoryId(kandev, ctx.workspaceId, spec);
@@ -1219,7 +1229,22 @@ function isStopped(db: CoreDatabase, storyId: string): boolean {
  */
 export async function stopAllDevStories(db: CoreDatabase, kandev: KandevClient, reason = 'Stop All requested by the user'): Promise<{ stopped: string[]; stillRunning: string[]; kandevAvailable: boolean }> {
   for (let i = 0; integrating && i < 120; i++) await new Promise(r => setTimeout(r, 500));
-  const stories = listStories(db, { limit: 200 }).filter(s => devSpec(s) && ['implementing', 'review', 'validation', 'delivery_approval', 'merge_queue'].includes(s.status));
+  const stories = listStories(db, { limit: 200 }).filter(s => devSpec(s) && STOPPABLE.includes(s.status));
+  return stopStories(db, kandev, stories, reason);
+}
+
+const STOPPABLE: StoryStatus[] = ['implementing', 'review', 'validation', 'delivery_approval', 'merge_queue'];
+
+/** Stops one story's worker and parks the story exactly as Stop All does, leaving every other story alone. */
+export async function stopDevStory(db: CoreDatabase, kandev: KandevClient, storyId: string, reason = 'Stopped by the user'): Promise<{ stopped: string[]; stillRunning: string[]; kandevAvailable: boolean }> {
+  const story = getStory(db, storyId);
+  if (!devSpec(story)) throw new CoreError('invalid_request', 'not a development story');
+  if (!STOPPABLE.includes(story.status)) throw new CoreError('conflict', `story is ${story.status}; there is nothing to stop`);
+  for (let i = 0; integrating && i < 120; i++) await new Promise(r => setTimeout(r, 500));
+  return stopStories(db, kandev, [getStory(db, storyId)], reason);
+}
+
+async function stopStories(db: CoreDatabase, kandev: KandevClient, stories: StoryRecord[], reason: string): Promise<{ stopped: string[]; stillRunning: string[]; kandevAvailable: boolean }> {
   const available = await kandev.healthy();
   const ctx = available ? await kandevContext(kandev).catch(() => null) : null;
   const stopped: string[] = [];

@@ -41,6 +41,68 @@ function hermesSkillRoots(): string[] {
   return roots.filter((root) => fs.existsSync(root));
 }
 
+function hermesProfileDir(): string | null {
+  if (process.env.HERMES_HOME) return process.env.HERMES_HOME;
+  const localAppData = process.env.LOCALAPPDATA || (process.platform === 'win32' ? path.join(process.env.HOME ?? '', 'AppData', 'Local') : '');
+  return localAppData ? path.join(localAppData, 'hermes') : null;
+}
+
+function endpointHostPort(url: string): string | null {
+  try {
+    const u = new URL(url);
+    const host = u.hostname === 'localhost' ? '127.0.0.1' : u.hostname;
+    return `${host}:${u.port || (u.protocol === 'https:' ? '443' : '80')}`;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The Hermes provider id whose endpoint is Pandesh's local Ollama, read from
+ * the `providers:` block of the Hermes config. A bare model sent to Hermes is
+ * resolved against its global default provider — on this profile a cloud
+ * provider — so a local model must always travel with this id. Returns null
+ * when Hermes has no provider pointing at local Ollama.
+ */
+export function resolveHermesLocalOllamaProvider(configText?: string): string | null {
+  if (configText === undefined && process.env.HERMES_OLLAMA_PROVIDER) return process.env.HERMES_OLLAMA_PROVIDER.trim();
+  let text = configText;
+  if (text === undefined) {
+    const dir = hermesProfileDir();
+    if (!dir) return null;
+    try { text = fs.readFileSync(path.join(dir, 'config.yaml'), 'utf8'); } catch { return null; }
+  }
+  const target = endpointHostPort(DEFAULT_OLLAMA_URL);
+  if (!target) return null;
+  const lines = text.split(/\r?\n/);
+  const start = lines.findIndex((line) => /^providers:\s*$/.test(line));
+  if (start === -1) return null;
+  let current: string | null = null;
+  for (let i = start + 1; i < lines.length; i++) {
+    const line = lines[i];
+    if (/^\S/.test(line)) break;
+    const entry = /^ {2}([A-Za-z0-9_.:-]+):\s*$/.exec(line);
+    if (entry) { current = entry[1]; continue; }
+    const endpoint = /^ {4}(?:api|base_url):\s*['"]?([^'"\s]+)/.exec(line);
+    if (current && endpoint && endpointHostPort(endpoint[1]) === target) return current;
+  }
+  return null;
+}
+
+/**
+ * The provider a Hermes run is sent with: the caller's explicit choice as
+ * given, otherwise the local Ollama provider. Throws rather than letting
+ * Hermes pick its own (cloud) default for a local model.
+ */
+export function hermesProviderFor(model: string, explicitProvider?: string): string {
+  if (explicitProvider?.trim()) return explicitProvider.trim();
+  const local = resolveHermesLocalOllamaProvider();
+  if (!local) {
+    throw new Error(`Hermes has no provider configured for local Ollama (${DEFAULT_OLLAMA_URL}), so "${model}" cannot run locally. Add an Ollama entry under providers: in the Hermes config, or set HERMES_OLLAMA_PROVIDER.`);
+  }
+  return local;
+}
+
 function readSkillFrontmatter(filePath: string): { name: string; description: string } | null {
   let raw: string;
   try { raw = fs.readFileSync(filePath, 'utf8'); } catch { return null; }
@@ -186,6 +248,21 @@ export class HermesEngine {
    */
   private static startAttempt: Promise<void> | null = null;
 
+  /** Where the Hermes CLI lives. The Windows installer puts only a hermes.cmd shim in hermes\bin; the real executable is in the agent's venv. */
+  static hermesBinaryCandidates(): string[] {
+    const home = path.join(process.env.LOCALAPPDATA || '', 'hermes');
+    return [
+      ...(process.env.HERMES_BIN ? [process.env.HERMES_BIN] : []),
+      path.join(home, 'bin', 'hermes.exe'),
+      path.join(home, 'hermes-agent', 'venv', 'Scripts', 'hermes.exe'),
+      path.join(home, 'bin', 'hermes'),
+    ];
+  }
+
+  static findHermesBinary(): string | undefined {
+    return HermesEngine.hermesBinaryCandidates().find((candidate) => candidate && fs.existsSync(candidate));
+  }
+
   /** Like checkCapabilities, but when the configured endpoint is local and
    * not answering, starts the installed Hermes gateway once (detached) and
    * waits for it, so the user never has to launch Hermes by hand. */
@@ -194,10 +271,8 @@ export class HermesEngine {
     if (first.available || !this.isEnabled()) return first;
     const base = new URL(this.getBaseUrl());
     if (!['127.0.0.1', 'localhost'].includes(base.hostname)) return first;
-    const bin = process.env.HERMES_BIN
-      || [path.join(process.env.LOCALAPPDATA || '', 'hermes', 'bin', 'hermes.exe'), path.join(process.env.LOCALAPPDATA || '', 'hermes', 'bin', 'hermes')]
-        .find((candidate) => fs.existsSync(candidate));
-    if (!bin) return { available: false, error: `${first.error ?? 'Hermes is not running'}; the Hermes CLI is not installed (set HERMES_BIN).` };
+    const bin = HermesEngine.findHermesBinary();
+    if (!bin) return { available: false, error: `${first.error ?? 'Hermes is not running'}; no Hermes executable was found (looked in ${HermesEngine.hermesBinaryCandidates().join(', ')}; set HERMES_BIN to override).` };
     if (!this.startAttempt) {
       this.startAttempt = (async () => {
         const child = cp.spawn(bin, ['gateway', 'run'], { detached: true, stdio: 'ignore', windowsHide: true });
@@ -251,6 +326,7 @@ export class HermesEngine {
     payload: {
       prompt: string;
       model?: string;
+      provider?: string;
       workspaceRoot?: string;
       idempotencyKey: string;
       metadata?: Record<string, unknown>;
@@ -259,6 +335,8 @@ export class HermesEngine {
   ): Promise<HermesRunResponse> {
     const baseUrl = this.getBaseUrl();
     const apiKey = this.getApiKey();
+    const model = payload.model || DEFAULT_HERMES_MODEL;
+    const provider = hermesProviderFor(model, payload.provider);
 
     const res = await fetch(`${baseUrl}/v1/runs`, {
       method: 'POST',
@@ -270,7 +348,8 @@ export class HermesEngine {
       body: JSON.stringify({
         input: payload.prompt,
         prompt: payload.prompt,
-        model: payload.model || DEFAULT_HERMES_MODEL,
+        model,
+        provider,
         workspace_root: payload.workspaceRoot,
         idempotency_key: payload.idempotencyKey,
         metadata: payload.metadata,
@@ -439,6 +518,13 @@ export class HermesEngine {
     const toolCalls: Array<{ tool: string; args?: unknown; status?: string; result?: unknown }> = [];
 
     try {
+      const model = input.model || DEFAULT_HERMES_MODEL;
+      let provider: string;
+      try {
+        provider = hermesProviderFor(model, input.provider);
+      } catch (err: any) {
+        return { runId: null, status: 'failed', output: '', toolCalls, error: err.message, stopped: false };
+      }
       const prompt = `Use the "${input.skill}" skill to carry out this task:\n\n${input.task}`;
       const res = await fetch(`${baseUrl}/v1/runs`, {
         method: 'POST',
@@ -450,8 +536,8 @@ export class HermesEngine {
         body: JSON.stringify({
           input: prompt,
           prompt,
-          model: input.model || DEFAULT_HERMES_MODEL,
-          ...(input.provider ? { provider: input.provider } : {}),
+          model,
+          provider,
           ...(input.workspaceRoot ? { workspace_root: input.workspaceRoot } : {}),
           metadata: { skill: input.skill, requested_by: 'pandesh' },
           endpoints: { ollama: DEFAULT_OLLAMA_URL },
@@ -648,7 +734,11 @@ export class HermesEngine {
     let run: HermesRunResponse;
     try {
       run = await this.submitRun({
-        prompt,
+        // The Hermes gateway ignores workspace_root and resolves relative paths against its own launch folder, so the
+        // folder is stated in the task itself.
+        prompt: workspaceRoot
+          ? `Work only inside this folder: ${workspaceRoot}\nUse absolute paths under it for every file you read, create or change.\n\n${prompt}`
+          : prompt,
         model: selectedModel,
         workspaceRoot,
         idempotencyKey,
@@ -957,6 +1047,27 @@ export class HermesEngine {
 
     if (!finalReply && runSuccess) {
       finalReply = 'Hermes task executed successfully.';
+    }
+
+    // Hermes runs its own file tools, so a reported write is only done when the file is really inside the selected
+    // workspace. A write elsewhere (or one that is nowhere to be found there) fails the turn and says where it went.
+    if (runSuccess && workspaceRoot) {
+      const writeTargets = [
+        ...modifiedFiles,
+        ...toolCallsRecorded
+          .filter((call) => /write|edit|patch|create_file/i.test(String(call.tool)))
+          .map((call) => { const a = (call.args ?? {}) as Record<string, unknown>; return String(a.path ?? a.file_path ?? a.filePath ?? ''); }),
+      ].filter(Boolean);
+      const misplaced = writeTargets.find((target) => {
+        const abs = path.isAbsolute(target) ? target : path.resolve(workspaceRoot, target);
+        const rel = path.relative(workspaceRoot, abs);
+        return rel === '..' || rel.startsWith(`..${path.sep}`) || path.isAbsolute(rel) || !fs.existsSync(abs);
+      });
+      if (misplaced) {
+        runSuccess = false;
+        runError = `Hermes reported writing ${misplaced}, but that file is not in the selected workspace (${workspaceRoot}), so this is not reported as done.`;
+        finalReply = `${finalReply ? `${finalReply}\n\n` : ''}Correction: ${runError}`;
+      }
     }
 
     // Register artifacts

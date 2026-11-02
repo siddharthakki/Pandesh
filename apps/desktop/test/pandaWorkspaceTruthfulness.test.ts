@@ -116,7 +116,7 @@ describe('a genuinely new conversation', () => {
       task: 'summarise the notes',
     } as Partial<DesktopSnapshot>));
     expect(el('workspace-task-card')?.hidden).toBe(false);
-    expect(text('task-card-title')).toBe('summarise the notes');
+    expect(text('task-card-title')).toBe('Working…');
   });
 });
 
