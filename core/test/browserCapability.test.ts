@@ -85,7 +85,7 @@ describe('host-managed browser capability', () => {
   it('registers inspect_page as a consequential governed tool', () => {
     const registry = new GovernedCapabilityRegistry().register(createBrowserCapabilityAdapter({ browserBin: 'edge' }));
     expect(registry.definitions().map((tool) => tool.name)).toEqual([
-      'inspect_page', 'browser_open_site', 'browser_goto', 'browser_read', 'browser_click', 'browser_scroll', 'browser_back', 'browser_stop',
+      'inspect_page', 'browser_open_site', 'browser_goto', 'browser_read', 'browser_click', 'browser_scroll', 'browser_back', 'browser_fill', 'browser_submit', 'browser_stop',
     ]);
     expect(registry.classify('inspect_page')).toEqual({ capabilityId: 'browser', risk: 'consequential' });
   });

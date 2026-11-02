@@ -2,7 +2,7 @@
  * Live open-web browsing through a real host browser. Opt-in: needs Edge or
  * Chrome on disk and internet access. Run with PANDESH_LIVE_BROWSER=1.
  */
-import { afterAll, describe, expect, it } from 'vitest';
+import { afterAll, describe, expect, it, onTestFinished } from 'vitest';
 import { resolveHostBrowserBin } from '../runtime/hostBrowserBin';
 import { BrowserSessionManager } from '../runtime/browserSession';
 
@@ -41,6 +41,34 @@ describe.skipIf(!live)('live open-web browser session', () => {
     expect(after.url).not.toContain('iana.org');
     expect(after.blocked.join(' ')).toMatch(/not approved/);
   }, 60_000);
+
+  it('fills a public test form; submits only the approved values; a plain click cannot submit', async () => {
+    const sessions = new BrowserSessionManager({ browserBin: () => resolveHostBrowserBin(), maxActions: 12 });
+    onTestFinished(() => sessions.stopAll());
+    const form = await sessions.openSite('form', 'https://httpbin.org/forms/post');
+    expect(form.controls.map((c) => c.label).join('|')).toMatch(/Customer name/);
+    await sessions.fill('form', { label: 'Customer name:' }, 'Pandesh Stage B');
+    await sessions.fill('form', { label: 'Delivery instructions:' }, 'harmless test, no order');
+
+    // Denied/unapproved path: clicking the button directly is refused by the guard.
+    const clicked = await sessions.click('form', { locator: { role: 'button', name: 'Submit order' } });
+    expect(clicked.url).toBe('https://httpbin.org/forms/post');
+    expect(clicked.blocked.join(' ')).toMatch(/needs the user's approval/);
+
+    // Values differing from the approval are refused.
+    await sessions.fill('form', { label: 'Customer name:' }, 'Pandesh Stage B');
+    await sessions.fill('form', { label: 'Delivery instructions:' }, 'harmless test, no order');
+    await expect(sessions.submit('form', { role: 'button', name: 'Submit order' }, { 'Customer name:': 'Someone else', 'Delivery instructions:': 'harmless test, no order' }))
+      .rejects.toMatchObject({ category: 'browser_submit_mismatch' });
+
+    const done = await sessions.submit('form', { role: 'button', name: 'Submit order' }, {
+      'Customer name:': 'Pandesh Stage B', 'Delivery instructions:': 'harmless test, no order',
+    });
+    expect(done.url).toBe('https://httpbin.org/post');
+    expect(done.text).toContain('"custname": "Pandesh Stage B"');
+    expect(done.text).toContain('"comments": "harmless test, no order"');
+    console.log('[live] submitted page:', done.url, done.text.slice(0, 400));
+  }, 90_000);
 
   it('enforces the action budget and closes on Stop', async () => {
     // 'conv' used 5 of 6 actions above (the refused goto also counts).

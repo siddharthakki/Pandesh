@@ -4,15 +4,15 @@
  * One host browser per conversation, kept alive between tool calls so the
  * agent can navigate across pages. Every request the page makes passes a
  * Core-owned network guard (CDP Fetch interception):
- *   - only public http(s) hosts; DNS answers are checked per request so a
- *     name that resolves (or rebinds) to a private address is refused;
+ *   - only public http(s) URLs; all traffic leaves through the Core egress
+ *     proxy, which resolves each host once and connects to the vetted public
+ *     address, so a name that rebinds to a private address is refused;
  *   - a top-level navigation may only reach a site the user approved;
- *   - non-GET requests (form submissions, posts) are refused — this stage
- *     is read-and-navigate only.
+ *   - non-GET requests are refused, except one form submission the user
+ *     approved separately through browser_submit.
  * Page content is returned as untrusted data, never as instructions.
  */
-import { spawn, type ChildProcess } from 'node:child_process';
-import { promises as dns } from 'node:dns';
+import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
 import {
   CdpSession,
   applyStep,
@@ -25,7 +25,8 @@ import {
   sleep,
   waitForDebugEndpoint,
 } from './browserInspection';
-import { isNonPublicAddress, resolvePublicWebUrl, siteKey } from './browserHostPolicy';
+import { resolvePublicWebUrl, siteKey } from './browserHostPolicy';
+import { EGRESS_CANARY_HOST, startEgressProxy, type EgressProxy } from './browserEgressProxy';
 import type { PageLocator } from './pageLocator';
 
 export const DEFAULT_MAX_BROWSER_ACTIONS = 15;
@@ -34,7 +35,8 @@ const NAV_TIMEOUT_MS = 20_000;
 const MAX_TEXT_CHARS = 3_000;
 const MAX_LINKS = 60;
 const MAX_CONTROLS = 25;
-const DNS_CACHE_MS = 30_000;
+const CANARY_TIMEOUT_MS = 5_000;
+const SUBMIT_ARM_MS = 15_000;
 const SAFE_METHODS = new Set(['GET', 'HEAD', 'OPTIONS']);
 
 export interface PageLink { index: number; text: string; href: string }
@@ -66,11 +68,45 @@ function hostAllowed(host: string, sites: Set<string>): boolean {
   return false;
 }
 
+/**
+ * Browsers this process launched. They are killed when Core exits, so a
+ * session never outlives the Core that governs its network guard.
+ */
+const liveBrowsers = new Set<ChildProcess>();
+
+function killBrowserNow(child: ChildProcess): void {
+  if (child.exitCode !== null || child.pid === undefined) return;
+  if (process.platform === 'win32') {
+    spawnSync('taskkill', ['/PID', String(child.pid), '/T', '/F'], { windowsHide: true, stdio: 'ignore' });
+  } else {
+    child.kill('SIGKILL');
+  }
+}
+
+let exitHookInstalled = false;
+
+function trackLiveBrowser(child: ChildProcess): void {
+  if (!exitHookInstalled) {
+    exitHookInstalled = true;
+    process.once('exit', () => { for (const c of liveBrowsers) killBrowserNow(c); });
+  }
+  liveBrowsers.add(child);
+  child.once('exit', () => liveBrowsers.delete(child));
+}
+
+function describeLocator(locator: PageLocator): string {
+  const l = locator as Record<string, unknown>;
+  return String(l.label ?? l.name ?? l.text ?? l.css ?? JSON.stringify(locator));
+}
+
 class BrowserSession {
   readonly approvedSites = new Set<string>();
   actionsUsed = 0;
   private blocked: string[] = [];
-  private readonly dnsCache = new Map<string, { ok: boolean; at: number }>();
+  /** Values the agent typed through browser_fill on the current page, by field. */
+  readonly fills = new Map<string, string>();
+  /** One approved form submission may pass the guard, to this site, until it expires. */
+  private armedSubmit?: { site: string; until: number };
   private idleTimer?: NodeJS.Timeout;
   private closed = false;
   private mainFrameId = '';
@@ -78,6 +114,7 @@ class BrowserSession {
 
   private constructor(
     private readonly child: ChildProcess,
+    private readonly proxy: EgressProxy,
     private readonly cdp: CdpSession,
     private readonly sessionId: string,
     private readonly profileDir: string,
@@ -87,6 +124,7 @@ class BrowserSession {
 
   static async launch(browserBin: string, maxActions: number, onClosed: () => void, signal?: AbortSignal): Promise<BrowserSession> {
     const debugPort = await freePort();
+    const proxy = await startEgressProxy();
     const profileDir = createBrowserProfileDir();
     const child = spawn(browserBin, [
       '--headless=new',
@@ -96,20 +134,29 @@ class BrowserSession {
       '--disable-extensions',
       '--disable-sync',
       '--disable-background-networking',
+      // Every connection goes through the Core egress proxy (loopback too),
+      // and nothing may bypass it over UDP.
+      `--proxy-server=http://127.0.0.1:${proxy.port}`,
+      '--proxy-bypass-list=<-loopback>',
+      '--disable-quic',
+      '--force-webrtc-ip-handling-policy=disable_non_proxied_udp',
+      '--webrtc-ip-handling-policy=disable_non_proxied_udp',
       ...(process.platform !== 'win32' ? ['--no-sandbox', '--disable-dev-shm-usage'] : []),
       `--user-data-dir=${profileDir}`,
       `--remote-debugging-port=${debugPort}`,
       'about:blank',
     ], { windowsHide: true, stdio: 'ignore' });
+    trackLiveBrowser(child);
     try {
       const cdp = await connectCdp(await waitForDebugEndpoint(debugPort, signal));
       const created = await cdp.send('Target.createTarget', { url: 'about:blank' });
       const attached = await cdp.send('Target.attachToTarget', { targetId: String(created.targetId ?? ''), flatten: true });
       const sessionId = String(attached.sessionId ?? '');
-      const session = new BrowserSession(child, cdp, sessionId, profileDir, maxActions, onClosed);
+      const session = new BrowserSession(child, proxy, cdp, sessionId, profileDir, maxActions, onClosed);
       await session.install();
       return session;
     } catch (err) {
+      await proxy.close();
       await killProcessTree(child);
       removeBrowserProfileDir(profileDir);
       throw err;
@@ -124,23 +171,32 @@ class BrowserSession {
     await cdp.send('Runtime.enable', {}, sessionId);
     const tree = await cdp.send('Page.getFrameTree', {}, sessionId);
     this.mainFrameId = String((tree.frameTree as { frame?: { id?: string } } | undefined)?.frame?.id ?? '');
+    await this.proveEgressProxy();
     await cdp.send('Fetch.enable', { patterns: [{ urlPattern: '*', requestStage: 'Request' }] }, sessionId);
     await cdp.send('Browser.setDownloadBehavior', { behavior: 'deny' }).catch(() => undefined);
     await cdp.send('Emulation.setDeviceMetricsOverride', { width: 1280, height: 900, deviceScaleFactor: 1, mobile: false }, sessionId);
   }
 
-  private async hostIsPublic(host: string): Promise<boolean> {
-    const cached = this.dnsCache.get(host);
-    if (cached && Date.now() - cached.at < DNS_CACHE_MS) return cached.ok;
-    let ok = false;
-    try {
-      const answers = await dns.lookup(host, { all: true, verbatim: true });
-      ok = answers.length > 0 && answers.every((a) => !isNonPublicAddress(a.address));
-    } catch {
-      ok = false;
+  /**
+   * Fails closed unless the browser demonstrably sends its traffic through
+   * the egress proxy: the canary host does not exist, so only the proxy can
+   * have answered it.
+   */
+  private async proveEgressProxy(): Promise<void> {
+    void this.cdp.send('Page.navigate', { url: `http://${EGRESS_CANARY_HOST}/` }, this.sessionId).catch(() => undefined);
+    const deadline = Date.now() + CANARY_TIMEOUT_MS;
+    while (!this.proxy.canarySeen && Date.now() < deadline) await sleep(50);
+    if (!this.proxy.canarySeen) {
+      throw new BrowserSessionError('the browser network guard could not be verified, so browsing stays off', 'browser_network_guard_unverified');
     }
-    this.dnsCache.set(host, { ok, at: Date.now() });
-    return ok;
+    await this.cdp.send('Page.navigate', { url: 'about:blank' }, this.sessionId).catch(() => undefined);
+  }
+
+  private takeArmedSubmit(host: string): boolean {
+    const armed = this.armedSubmit;
+    if (!armed || Date.now() > armed.until || !hostAllowed(host, new Set([armed.site]))) return false;
+    this.armedSubmit = undefined;
+    return true;
   }
 
   private async guard(params: Record<string, unknown>): Promise<void> {
@@ -157,14 +213,14 @@ class BrowserSession {
     const method = String(request.method ?? 'GET').toUpperCase();
     if (!target.ok) {
       reason = `${String(request.url ?? '').slice(0, 120)}: ${target.reason}`;
-    } else if (!SAFE_METHODS.has(method)) {
-      reason = isTopNavigation
-        ? `form submission (${method}) to ${target.host} was not sent: submitting is not permitted in this browsing mode`
-        : '';
     } else if (isTopNavigation && !hostAllowed(target.host, this.approvedSites)) {
       reason = `navigation to ${target.host} was stopped: that site is not approved yet (use browser_open_site)`;
-    } else if (!(await this.hostIsPublic(target.host))) {
-      reason = `${target.host} resolves to a private or local network address`;
+    } else if (!SAFE_METHODS.has(method)) {
+      if (!isTopNavigation) {
+        reason = '';
+      } else if (!this.takeArmedSubmit(target.host)) {
+        reason = `form submission (${method}) to ${target.host} was not sent: it needs the user's approval through browser_submit`;
+      }
     }
     if (reason === undefined) {
       await this.cdp.send('Fetch.continueRequest', { requestId }, this.sessionId).catch(() => undefined);
@@ -201,6 +257,55 @@ class BrowserSession {
       const ready = await evaluate(this.cdp, this.sessionId, 'document.readyState').catch(() => 'loading');
       if (ready === 'complete' || ready === 'interactive') return;
       await sleep(150);
+    }
+  }
+
+  private async currentHost(): Promise<string> {
+    const href = await evaluate(this.cdp, this.sessionId, 'location.href').catch(() => '');
+    try {
+      return new URL(String(href)).hostname.toLowerCase();
+    } catch {
+      return '';
+    }
+  }
+
+  async fill(locator: PageLocator, value: string): Promise<void> {
+    const host = await this.currentHost();
+    if (!host || !hostAllowed(host, this.approvedSites)) {
+      throw new BrowserSessionError('fields can only be filled on a page of an approved site', 'browser_site_not_approved');
+    }
+    await applyStep(this.cdp, this.sessionId, { action: 'fill', locator, value });
+    this.fills.set(describeLocator(locator), value);
+  }
+
+  /**
+   * Submits the current form after the user approved exactly these values.
+   * Refuses when the typed values differ from what was approved.
+   */
+  async submit(locator: PageLocator, approvedFields: Record<string, string>): Promise<void> {
+    const host = await this.currentHost();
+    if (!host || !hostAllowed(host, this.approvedSites)) {
+      throw new BrowserSessionError('a form can only be submitted on a page of an approved site', 'browser_site_not_approved');
+    }
+    const typed = Object.fromEntries(this.fills);
+    const approved = Object.fromEntries(Object.entries(approvedFields).map(([k, v]) => [k, String(v)]));
+    const same = Object.keys(typed).length > 0
+      && Object.keys(typed).length === Object.keys(approved).length
+      && Object.entries(typed).every(([k, v]) => approved[k] === v);
+    if (!same) {
+      throw new BrowserSessionError(
+        `the approved values do not match what was typed (typed: ${JSON.stringify(typed)}); nothing was submitted`,
+        'browser_submit_mismatch',
+      );
+    }
+    this.armedSubmit = { site: siteKey(host), until: Date.now() + SUBMIT_ARM_MS };
+    try {
+      await applyStep(this.cdp, this.sessionId, { action: 'click', locator });
+      await sleep(300);
+      await this.waitForLoad();
+    } finally {
+      this.armedSubmit = undefined;
+      this.fills.clear();
     }
   }
 
@@ -256,8 +361,11 @@ class BrowserSession {
       await this.navigate('about:blank');
       throw new BrowserSessionError(`the page could not be shown (${url.slice(0, 60)}); ${this.blocked[0] ?? 'it left the public web'}`, 'browser_navigation_blocked');
     }
-    if (/^https?:/.test(url)) this.lastGoodUrl = url;
-    const blocked = this.blocked;
+    if (/^https?:/.test(url)) {
+      if (url !== this.lastGoodUrl) this.fills.clear();
+      this.lastGoodUrl = url;
+    }
+    const blocked = [...this.blocked, ...this.proxy.drainRefusals()];
     this.blocked = [];
     return {
       url,
@@ -309,6 +417,7 @@ class BrowserSession {
     this.onClosed();
     this.cdp.close();
     await killProcessTree(this.child);
+    await this.proxy.close();
     removeBrowserProfileDir(this.profileDir);
   }
 }
@@ -423,6 +532,14 @@ export class BrowserSessionManager {
 
   back(key: string, signal?: AbortSignal): Promise<BrowserPageState> {
     return this.act(key, signal, false, true, (s) => s.back());
+  }
+
+  fill(key: string, locator: PageLocator, value: string, signal?: AbortSignal): Promise<BrowserPageState> {
+    return this.act(key, signal, false, true, (s) => s.fill(locator, value));
+  }
+
+  submit(key: string, locator: PageLocator, approvedFields: Record<string, string>, signal?: AbortSignal): Promise<BrowserPageState> {
+    return this.act(key, signal, false, true, (s) => s.submit(locator, approvedFields));
   }
 
   read(key: string, signal?: AbortSignal): Promise<BrowserPageState> {

@@ -51,7 +51,14 @@ export interface BrowserCapabilityOptions {
 }
 
 /** Open-web session tools. Only opening a new site needs the user's approval. */
-const SESSION_TOOLS = new Set(['browser_open_site', 'browser_goto', 'browser_read', 'browser_click', 'browser_scroll', 'browser_back', 'browser_stop']);
+const SESSION_TOOLS = new Set(['browser_open_site', 'browser_goto', 'browser_read', 'browser_click', 'browser_scroll', 'browser_back', 'browser_fill', 'browser_submit', 'browser_stop']);
+/** Each of these asks the user every time: a new site, or sending a form. */
+const APPROVAL_TOOLS = new Set(['inspect_page', 'browser_open_site', 'browser_submit']);
+
+function asFieldValues(raw: unknown): Record<string, string> {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return {};
+  return Object.fromEntries(Object.entries(raw as Record<string, unknown>).map(([k, v]) => [k, String(v)]));
+}
 
 /**
  * The model-facing view of a page. Page text is framed as untrusted data so
@@ -118,7 +125,7 @@ export function createBrowserCapabilityAdapter(options: BrowserCapabilityOptions
     },
     {
       name: 'browser_open_site',
-      description: 'Open a public website in a real browser session for this conversation. The user approves each new site once; afterwards use browser_goto/browser_click for pages on that site. Returns the page text, numbered links and controls. Use for research and navigation; it cannot submit forms.',
+      description: 'Open a public website in a real browser session for this conversation. The user approves each new site once; afterwards use browser_goto/browser_click for pages on that site. Returns the page text, numbered links and controls. Use for research and navigation; to send a form use browser_fill then browser_submit.',
       parameters: { type: 'object', properties: urlParam, required: ['url'] },
     },
     {
@@ -153,6 +160,30 @@ export function createBrowserCapabilityAdapter(options: BrowserCapabilityOptions
       parameters: { type: 'object', properties: {} },
     },
     {
+      name: 'browser_fill',
+      description: 'Type a value into one form field on the current page of an approved site. Nothing is sent to the website until browser_submit is approved.',
+      parameters: {
+        type: 'object',
+        properties: {
+          locator: { type: 'object', description: 'The field: {label} preferred, or {role,name}, {css}.' },
+          value: { type: 'string', description: 'Text to type.' },
+        },
+        required: ['locator', 'value'],
+      },
+    },
+    {
+      name: 'browser_submit',
+      description: 'Ask the user to approve sending the filled form, then click its submit button. fields must list exactly the values typed with browser_fill, keyed by the same label/name used in their locators; any difference refuses the submission. Returns the page after submitting.',
+      parameters: {
+        type: 'object',
+        properties: {
+          locator: { type: 'object', description: 'The submit button, e.g. {role:"button", name:"Submit order"}.' },
+          fields: { type: 'object', description: 'Every filled field and its value, shown to the user for approval.' },
+        },
+        required: ['locator', 'fields'],
+      },
+    },
+    {
       name: 'browser_stop',
       description: 'Close the browser session for this conversation.',
       parameters: { type: 'object', properties: {} },
@@ -176,6 +207,16 @@ export function createBrowserCapabilityAdapter(options: BrowserCapabilityOptions
         case 'browser_scroll': state = await sessions.scroll(key, args.direction === 'up' ? 'up' : 'down', ctx.signal); break;
         case 'browser_back': state = await sessions.back(key, ctx.signal); break;
         case 'browser_read': state = await sessions.read(key, ctx.signal); break;
+        case 'browser_fill':
+        case 'browser_submit': {
+          if (!locator) {
+            return { status: 'failed', exitCode: 1, output: `${call.name} needs a locator`, resultCategory: 'browser_invalid_arguments', normalizedArguments };
+          }
+          state = call.name === 'browser_fill'
+            ? await sessions.fill(key, locator, String(args.value ?? ''), ctx.signal)
+            : await sessions.submit(key, locator, asFieldValues(args.fields), ctx.signal);
+          break;
+        }
         default: {
           const stopped = await sessions.stop(key);
           return {
@@ -208,9 +249,9 @@ export function createBrowserCapabilityAdapter(options: BrowserCapabilityOptions
   return {
     id: 'browser',
     definitions: () => definitions,
-    // Opening a site the user has not approved, and the legacy inspector,
-    // need approval; moving within an approved site does not.
-    classify: (toolName) => (toolName === 'inspect_page' || toolName === 'browser_open_site' ? 'consequential' : 'read_only'),
+    // Opening a new site, submitting a form, and the legacy inspector need
+    // approval; moving and typing within an approved site do not.
+    classify: (toolName) => (APPROVAL_TOOLS.has(toolName) ? 'consequential' : 'read_only'),
     health: () => {
       const browserBin = options.browserBin === undefined ? resolveHostBrowserBin(env) : options.browserBin;
       if (!browserBin) {

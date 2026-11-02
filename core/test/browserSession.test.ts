@@ -26,10 +26,11 @@ describe('open-web browser host policy', () => {
 });
 
 describe('browser capability session tools', () => {
-  it('needs approval only to open a new site', () => {
+  it('needs approval to open a new site and, separately, to submit a form', () => {
     const adapter = createBrowserCapabilityAdapter({ browserBin: null });
     expect(adapter.classify('browser_open_site')).toBe('consequential');
-    for (const tool of ['browser_goto', 'browser_read', 'browser_click', 'browser_scroll', 'browser_back', 'browser_stop']) {
+    expect(adapter.classify('browser_submit')).toBe('consequential');
+    for (const tool of ['browser_goto', 'browser_read', 'browser_click', 'browser_scroll', 'browser_back', 'browser_fill', 'browser_stop']) {
       expect(adapter.classify(tool)).toBe('read_only');
     }
   });
