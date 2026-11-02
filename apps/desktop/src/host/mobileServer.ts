@@ -23,6 +23,8 @@ export interface MobilePairingInfo {
   url: string;
   pairedCount: number;
   connectedClients: number;
+  /** True only while the HTTP server is actually bound; a pairing code exists either way. */
+  listening: boolean;
 }
 
 /** The phone never sees Kandev's own identifiers or addresses. */
@@ -142,6 +144,7 @@ export class MobileServer {
       url: `http://${ip}:${this.port}/?pair=${this.pairingCode}`,
       pairedCount: liveSockets,
       connectedClients: liveSockets,
+      listening: this.isRunning(),
     };
   }
 

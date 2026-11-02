@@ -628,7 +628,7 @@
           <div class="integrations-head">
             <div class="integrations-title-wrap">
               <h2 class="integrations-main-title">Connections</h2>
-              <p class="muted">Accounts and engines Panda can use. Status here is checked live, not assumed.</p>
+              <p class="muted">What Panda can use, what works now, and what needs you. Status is checked live, not assumed.</p>
             </div>
             <button id="btn-refresh-integrations" type="button" class="apex-chip" title="Refresh statuses">
               <svg viewBox="0 0 24 24" width="13" height="13"><path fill="none" stroke="currentColor" stroke-width="2" d="M23 4v6h-6M1 20v-6h6M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>
@@ -636,11 +636,31 @@
             </button>
           </div>
 
+          <!-- Summary: what works, what needs you, what to do next, and the privacy stance -->
+          <div class="conn-summary" id="conn-summary" aria-label="Connection summary">
+            <div class="conn-tile" id="conn-tile-ok"><span class="conn-tile-num" id="conn-count-ok">0</span><span class="conn-tile-label">Connected now</span></div>
+            <div class="conn-tile" id="conn-tile-attn"><span class="conn-tile-num" id="conn-count-attn">0</span><span class="conn-tile-label">Needs attention</span></div>
+            <button type="button" class="conn-tile conn-tile-action" id="conn-add" data-conn-tab-go="configure"><span class="conn-tile-num" aria-hidden="true">+</span><span class="conn-tile-label">Add connection</span></button>
+            <div class="conn-tile" id="conn-tile-privacy"><span class="conn-tile-num conn-tile-text" id="conn-privacy-mode">Local only</span><span class="conn-tile-label">Privacy mode</span></div>
+          </div>
+
+          <div class="conn-tabs" role="tablist" aria-label="Connection sections">
+            <button type="button" role="tab" class="conn-tab is-active" data-conn-tab="connected" aria-selected="true">Connected</button>
+            <button type="button" role="tab" class="conn-tab" data-conn-tab="configure" aria-selected="false">Add / Configure</button>
+            <button type="button" role="tab" class="conn-tab" data-conn-tab="cloud" aria-selected="false">Cloud Providers</button>
+            <button type="button" role="tab" class="conn-tab" data-conn-tab="advanced" aria-selected="false">Advanced / Diagnostics</button>
+          </div>
+
+          <div class="conn-panel" data-conn-panel="connected">
+            <div id="conn-connected-list" class="conn-rows" aria-live="polite"></div>
+          </div>
+
+          <div class="conn-panel" data-conn-panel="cloud" hidden>
           <!-- AI Models & Providers: local by default, free cloud only for approved public text -->
           <section id="cloud-providers-card" class="cloud-providers-card" aria-labelledby="cloud-providers-title">
             <div class="cloud-head">
               <div>
-                <h3 id="cloud-providers-title" class="int-card-title">AI Models &amp; Providers</h3>
+                <h3 id="cloud-providers-title" class="int-card-title">Cloud Providers</h3>
                 <p class="muted cloud-subtitle">Ollama stays the default. Free cloud models are optional, public text only, and off until you choose one.</p>
               </div>
               <div class="cloud-head-actions">
@@ -660,7 +680,9 @@
             </label>
             <p id="cloud-action-note" class="cloud-action-note" role="status"></p>
           </section>
+          </div>
 
+          <div class="conn-panel" data-conn-panel="configure" hidden>
           <div class="integrations-grid">
             <!-- Google Services: real status, one-time setup, Connect, permissions, recovery -->
             <div class="integration-card google-card is-wide" id="integ-card-google" data-state="checking">
@@ -748,15 +770,15 @@
               </details>
             </div>
 
-            <!-- 1. KarkeDikha Mobile Card -->
+            <!-- 1. Pandesh Mobile Card -->
             <div class="integration-card" id="integ-card-mobile">
               <div class="int-card-head">
                 <div class="int-icon-wrap">📱</div>
                 <div>
-                  <h3 class="int-card-title">KarkeDikha Mobile</h3>
+                  <h3 class="int-card-title">Pandesh Mobile</h3>
                   <span class="int-card-subtitle">Phone companion</span>
                 </div>
-                <span id="integ-mobile-badge" class="int-badge online">Active :3030</span>
+                <span id="integ-mobile-badge" class="int-badge online">Checking…</span>
               </div>
               <p class="int-card-desc">Connect your phone securely on local Wi-Fi to chat with Pandesh, run missions, and approve file actions.</p>
               <div class="int-details-box">
@@ -766,7 +788,7 @@
                 </div>
                 <div class="int-detail-row">
                   <span class="int-detail-label">ACCESS URL:</span>
-                  <span id="integ-mobile-url" class="font-mono text-cyan">http://192.168.2.66:3030/</span>
+                  <span id="integ-mobile-url" class="font-mono text-cyan">—</span>
                 </div>
                 <div class="int-detail-row">
                   <span class="int-detail-label">STATUS:</span>
@@ -779,17 +801,17 @@
               </div>
             </div>
 
-            <!-- 2. ImageGeneration Studio Card -->
+            <!-- 2. Image Studio Card -->
             <div class="integration-card" id="integ-card-studio">
               <div class="int-card-head">
                 <div class="int-icon-wrap">🎨</div>
                 <div>
-                  <h3 class="int-card-title">ImageGeneration Studio</h3>
+                  <h3 class="int-card-title">Image Studio</h3>
                   <span class="int-card-subtitle">Local ComfyUI Backend</span>
                 </div>
                 <span id="integ-studio-badge" class="int-badge">Probing…</span>
               </div>
-              <p class="int-card-desc">Existing image-generation software at <code>C:\Projects\ImageGeneration</code> with ComfyUI.</p>
+              <p class="int-card-desc">Generate images on this PC with your local ComfyUI. It starts on demand when you ask for an image.</p>
               <div class="int-details-box">
                 <div class="int-detail-row">
                   <span class="int-detail-label">API SERVER:</span>
@@ -809,6 +831,35 @@
               </div>
             </div>
 
+            <!-- 4. Pandesh Voice & Speech Card -->
+            <div class="integration-card" id="integ-card-voice">
+              <div class="int-card-head">
+                <div class="int-icon-wrap">🎙️</div>
+                <div>
+                  <h3 class="int-card-title">Pandesh Voice & Speech</h3>
+                  <span class="int-card-subtitle">Whisper ASR & Piper TTS</span>
+                </div>
+                <span id="integ-voice-badge" class="int-badge online">Ready</span>
+              </div>
+              <p class="int-card-desc">Local speech recognition with VAD and spoken voice responses. Wake name: <strong>Pandesh</strong>.</p>
+              <div class="int-details-box">
+                <div class="int-detail-row">
+                  <span class="int-detail-label">ASR MODEL:</span>
+                  <span class="font-mono">whisper-base.en</span>
+                </div>
+                <div class="int-detail-row">
+                  <span class="int-detail-label">WAKE WORD:</span>
+                  <span id="integ-wake-status" class="font-mono">Pandesh (Enabled)</span>
+                </div>
+              </div>
+            </div>
+
+          </div>
+          </div>
+
+          <div class="conn-panel" data-conn-panel="advanced" hidden>
+            <p class="muted conn-adv-note">Runtime, build and endpoint details. Nothing here is needed to set up a connection.</p>
+            <div class="integrations-grid">
             <!-- 3. Local AI Models Card -->
             <div class="integration-card" id="integ-card-models">
               <div class="int-card-head">
@@ -823,34 +874,11 @@
               <div class="int-details-box">
                 <div class="int-detail-row">
                   <span class="int-detail-label">ACTIVE MODEL:</span>
-                  <strong id="integ-model-active" class="font-mono">qwen3.8:27b-mtp-q4_K_M</strong>
+                  <strong id="integ-model-active" class="font-mono">—</strong>
                 </div>
                 <div class="int-detail-row">
                   <span class="int-detail-label">ROUTING:</span>
                   <span class="font-mono">local-only</span>
-                </div>
-              </div>
-            </div>
-
-            <!-- 4. Pandesh Voice & Speech Card -->
-            <div class="integration-card" id="integ-card-voice">
-              <div class="int-card-head">
-                <div class="int-icon-wrap">🎙️</div>
-                <div>
-                  <h3 class="int-card-title">Pandesh Voice & Speech</h3>
-                  <span class="int-card-subtitle">Whisper ASR & Piper TTS</span>
-                </div>
-                <span class="int-badge online">Ready</span>
-              </div>
-              <p class="int-card-desc">Local speech recognition with VAD and spoken voice responses. Wake name: <strong>Pandesh</strong>.</p>
-              <div class="int-details-box">
-                <div class="int-detail-row">
-                  <span class="int-detail-label">ASR MODEL:</span>
-                  <span class="font-mono">whisper-base.en</span>
-                </div>
-                <div class="int-detail-row">
-                  <span class="int-detail-label">WAKE WORD:</span>
-                  <span id="integ-wake-status" class="font-mono">Pandesh (Enabled)</span>
                 </div>
               </div>
             </div>
@@ -869,21 +897,21 @@
               <div class="int-details-box">
                 <div class="int-detail-row">
                   <span class="int-detail-label">CPU:</span>
-                  <span id="integ-hw-cpu" class="font-mono">AMD Ryzen 9 5900X (12 cores)</span>
+                  <span id="integ-hw-cpu" class="font-mono">Detecting…</span>
                 </div>
                 <div class="int-detail-row">
                   <span class="int-detail-label">RAM:</span>
-                  <span id="integ-hw-ram" class="font-mono">64 GB Total</span>
+                  <span id="integ-hw-ram" class="font-mono">Detecting…</span>
                 </div>
                 <div class="int-detail-row">
                   <span class="int-detail-label">GPU & VRAM:</span>
-                  <span id="integ-hw-gpu" class="font-mono">NVIDIA RTX 3090 (24 GB VRAM)</span>
+                  <span id="integ-hw-gpu" class="font-mono">Detecting…</span>
                 </div>
               </div>
             </div>
 
             <!-- About Pandesh: the build this app actually is. -->
-            <div class="integration-card" id="about-card">
+            <div class="integration-card is-wide" id="about-card">
               <div class="int-card-head">
                 <div class="int-icon-wrap">ⓘ</div>
                 <div>
@@ -929,6 +957,7 @@
                 <button id="about-copy-diagnostics" type="button" class="apex-chip">Copy diagnostics</button>
                 <span id="about-copy-status" class="muted" role="status"></span>
               </div>
+            </div>
             </div>
           </div>
         </div>

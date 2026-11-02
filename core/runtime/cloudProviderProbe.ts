@@ -13,6 +13,7 @@ import type { CloudProviderCredential } from './cloudCredentials';
 
 export const CLOUD_PROBE_PROMPT = 'Reply with the single word OK.';
 const DEFAULT_TIMEOUT_MS = 15_000;
+const MAX_LISTED_OTHERS = 300;
 /** Audio, speech, moderation and image models are listed by providers but are not chat models. */
 const NON_CHAT_MODEL = /whisper|\btts\b|speech|transcri|moderat|guard|orpheus|dall-?e|image|stable-diffusion|flux/i;
 
@@ -36,6 +37,8 @@ export interface CloudModelListing {
   pool: Array<{ id: string; displayName: string; contextWindow?: number; vision: boolean | 'unknown'; tools: boolean | 'unknown' }>;
   /** Count of models that were listed but not offered, by reason. */
   excluded: Record<'paid' | 'unknown' | 'promotional' | 'trial' | 'nonGenerative', number>;
+  /** Listed chat models that were not offered, with why. Display only: they can never be selected. */
+  others?: Array<{ id: string; displayName: string; reason: 'paid' | 'unknown' | 'promotional' | 'trial' }>;
 }
 
 export interface CloudConnectionTest {
@@ -144,15 +147,18 @@ export async function listCloudModels(
       return { ...base, ok: false, latencyMs, httpStatus: response.status, errorClass: 'malformed_response', error: 'The model list did not have the expected shape.', pool: [] };
     }
     const pool: CloudModelListing['pool'] = [];
+    const others: NonNullable<CloudModelListing['others']> = [];
     for (const model of models) {
       if (model.kind !== 'generative' || NON_CHAT_MODEL.test(model.modelId)) { excluded.nonGenerative += 1; continue; }
       if (model.freeness === 'free') {
         pool.push({ id: model.modelId, displayName: model.displayName, contextWindow: model.contextWindow, vision: model.vision, tools: model.tools });
         continue;
       }
-      excluded[model.freeness === 'paid' ? 'paid' : model.freeness === 'promotional' ? 'promotional' : model.freeness === 'trial' ? 'trial' : 'unknown'] += 1;
+      const reason = model.freeness === 'paid' ? 'paid' : model.freeness === 'promotional' ? 'promotional' : model.freeness === 'trial' ? 'trial' : 'unknown';
+      excluded[reason] += 1;
+      if (others.length < MAX_LISTED_OTHERS) others.push({ id: model.modelId, displayName: model.displayName, reason });
     }
-    return { ...base, ok: true, latencyMs, httpStatus: response.status, pool };
+    return { ...base, ok: true, latencyMs, httpStatus: response.status, pool, others };
   } catch (error) {
     return { ...base, ok: false, latencyMs: Date.now() - started, httpStatus: null, ...networkFailure(error, credential), pool: [] };
   }

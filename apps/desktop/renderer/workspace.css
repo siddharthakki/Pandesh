@@ -2222,3 +2222,93 @@ body:has(.app[data-workspace="panda"]) { background: var(--ws-bg); }
   font: 0.82rem/1.5 var(--ws-mono, monospace);
 }
 .cloud-approval-actions { display: flex; justify-content: flex-end; gap: 0.6rem; margin-top: 1rem; }
+
+/* ── Connections: summary, tabs, overview rows, provider cards ───────────
+   Setup first; diagnostics live in their own tab. The composer is not shown here. */
+.app[data-active-surface="integrations"] .composer-capsule-wrap,
+.app[data-active-surface="integrations"] #composer-status,
+.app[data-active-surface="integrations"] #composer-attachments,
+.app[data-active-surface="integrations"] #live-telemetry { display: none; }
+
+.app[data-workspace="panda"] .conn-summary {
+  width: min(var(--ws-reading-width), 100%);
+  margin: 1rem auto 0;
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 0.6rem;
+}
+@media (max-width: 720px) { .app[data-workspace="panda"] .conn-summary { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+.app[data-workspace="panda"] .conn-tile {
+  display: flex; flex-direction: column; gap: 0.2rem; align-items: flex-start;
+  padding: 0.7rem 0.85rem;
+  border: 1px solid var(--ws-line); border-radius: var(--ws-radius-sm);
+  background: var(--ws-surface-1); color: var(--ws-text);
+  font-family: var(--ws-font); text-align: left; box-sizing: border-box;
+}
+.app[data-workspace="panda"] .conn-tile-num { font-size: 1.5rem; font-weight: 650; line-height: 1.1; }
+.app[data-workspace="panda"] .conn-tile-text { font-size: 1.05rem; line-height: 1.5rem; }
+.app[data-workspace="panda"] .conn-tile-label { font-size: 0.78rem; color: var(--ws-text-soft); }
+.app[data-workspace="panda"] .conn-tile-action { cursor: pointer; border-color: var(--ws-accent-line); }
+.app[data-workspace="panda"] .conn-tile-action .conn-tile-num { color: var(--ws-accent); }
+.app[data-workspace="panda"] .conn-tile-action:hover { background: var(--ws-accent-soft); }
+.app[data-workspace="panda"] #conn-tile-ok .conn-tile-num { color: var(--ws-success); }
+.app[data-workspace="panda"] #conn-tile-attn.is-alert { border-color: rgba(234, 179, 8, 0.45); }
+.app[data-workspace="panda"] #conn-tile-attn.is-alert .conn-tile-num { color: var(--ws-warn); }
+
+.app[data-workspace="panda"] .conn-tabs {
+  width: min(var(--ws-reading-width), 100%);
+  margin: 1.1rem auto 0.9rem;
+  display: flex; gap: 0.25rem; flex-wrap: wrap;
+  border-bottom: 1px solid var(--ws-line);
+}
+.app[data-workspace="panda"] .conn-tab {
+  padding: 0.5rem 0.85rem; border: 0; border-bottom: 2px solid transparent; margin-bottom: -1px;
+  background: none; color: var(--ws-text-soft); font: inherit; font-family: var(--ws-font); font-size: 0.88rem; cursor: pointer;
+}
+.app[data-workspace="panda"] .conn-tab:hover { color: var(--ws-text); }
+.app[data-workspace="panda"] .conn-tab.is-active { color: var(--ws-text); border-bottom-color: var(--ws-accent); font-weight: 600; }
+.app[data-workspace="panda"] .conn-panel { width: min(var(--ws-reading-width), 100%); margin: 0 auto 2rem; }
+.app[data-workspace="panda"] .conn-panel[hidden] { display: none; }
+.app[data-workspace="panda"] .conn-panel .cloud-providers-card { margin: 0; }
+.app[data-workspace="panda"] .conn-adv-note { margin: 0 0 0.8rem; font-size: 0.82rem; }
+
+.app[data-workspace="panda"] .conn-group { margin-bottom: 1.1rem; }
+.app[data-workspace="panda"] .conn-group-title { margin: 0 0 0.45rem; font-size: 0.78rem; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; color: var(--ws-text-faint); }
+.app[data-workspace="panda"] .conn-row {
+  display: grid; grid-template-columns: minmax(0, 1fr) auto auto; gap: 0.8rem; align-items: center;
+  padding: 0.65rem 0.85rem; margin-bottom: 0.4rem;
+  border: 1px solid var(--ws-line); border-radius: var(--ws-radius-sm); background: var(--ws-surface-1);
+  font-family: var(--ws-font);
+}
+.app[data-workspace="panda"] .conn-row.is-attention { border-color: rgba(234, 179, 8, 0.4); }
+.app[data-workspace="panda"] .conn-row-text { display: flex; flex-direction: column; gap: 0.15rem; min-width: 0; }
+.app[data-workspace="panda"] .conn-row-text strong { font-size: 0.92rem; }
+.app[data-workspace="panda"] .conn-row-text span { font-size: 0.78rem; color: var(--ws-text-soft); overflow-wrap: anywhere; }
+.app[data-workspace="panda"] .conn-row-status { font-size: 0.8rem; color: var(--ws-text-soft); white-space: nowrap; }
+.app[data-workspace="panda"] .conn-row.is-ok .conn-row-status { color: var(--ws-success); }
+.app[data-workspace="panda"] .conn-row.is-attention .conn-row-status { color: var(--ws-warn); }
+.app[data-workspace="panda"] .conn-more { font-size: 0.82rem; }
+
+/* Provider cards: one column; unconfigured ones are a single line until opened. */
+.app[data-workspace="panda"] .cloud-provider-list { grid-template-columns: minmax(0, 1fr); }
+.app[data-workspace="panda"] .cp-head {
+  width: 100%; padding: 0; border: 0; background: none; color: inherit; font: inherit; cursor: pointer; text-align: left;
+}
+.app[data-workspace="panda"] .cp-reason { margin: 0; font-size: 0.8rem; color: var(--ws-text-soft); overflow-wrap: anywhere; }
+.app[data-workspace="panda"] .cp-checked { color: var(--ws-text-faint); }
+.app[data-workspace="panda"] .cloud-provider:not(.is-open) .cp-body { display: none; }
+.app[data-workspace="panda"] .cloud-provider[data-state="failed"] { border-color: rgba(248, 113, 113, 0.4); }
+.app[data-workspace="panda"] .cloud-provider[data-state="ready"] { border-color: rgba(74, 222, 128, 0.35); }
+.app[data-workspace="panda"] .cp-body { display: flex; flex-direction: column; gap: 0.55rem; }
+.app[data-workspace="panda"] .cp-note { margin: 0; font-size: 0.8rem; line-height: 1.45; color: var(--ws-text-soft); }
+.app[data-workspace="panda"] .cp-note:empty { display: none; }
+.app[data-workspace="panda"] .cp-note[data-tone="ok"] { color: var(--ws-success); }
+.app[data-workspace="panda"] .cp-note[data-tone="warn"] { color: var(--ws-warn); }
+.app[data-workspace="panda"] .cp-note[data-tone="error"] { color: var(--ws-danger); }
+.app[data-workspace="panda"] .cloud-listing-empty { margin: 0; font-size: 0.78rem; line-height: 1.5; color: var(--ws-warn); }
+.app[data-workspace="panda"] .cp-info summary { cursor: pointer; font-size: 0.76rem; color: var(--ws-text-faint); }
+.app[data-workspace="panda"] .cp-showall { display: flex; gap: 0.45rem; align-items: center; margin-top: 0.5rem; font-size: 0.78rem; cursor: pointer; }
+.app[data-workspace="panda"] .cp-showall input { accent-color: var(--ws-accent); }
+.app[data-workspace="panda"] .cp-all-models { list-style: none; margin: 0.4rem 0 0; padding: 0; max-height: 14rem; overflow: auto; font-size: 0.76rem; }
+.app[data-workspace="panda"] .cp-all-models li { display: flex; justify-content: space-between; gap: 0.8rem; padding: 0.2rem 0; border-bottom: 1px solid var(--ws-line-soft); color: var(--ws-text-soft); }
+.app[data-workspace="panda"] .cp-all-why { color: var(--ws-text-faint); white-space: nowrap; }

@@ -432,6 +432,8 @@ export interface DesktopCloudModelListing {
   error?: string;
   pool: DesktopCloudModel[];
   excluded: { paid: number; unknown: number; promotional: number; trial: number; nonGenerative: number };
+  /** Listed but not offered (display only; never selectable). */
+  others?: Array<{ id: string; displayName: string; reason: 'paid' | 'unknown' | 'promotional' | 'trial' }>;
 }
 
 export interface DesktopCloudConnectionTest {
@@ -994,6 +996,7 @@ export interface MobilePairingView {
   url: string;
   pairedCount: number;
   connectedClients: number;
+  listening: boolean;
 }
 
 /** Renderer-visible contract. Credentials never appear here. */

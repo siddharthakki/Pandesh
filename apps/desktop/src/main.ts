@@ -751,7 +751,7 @@ async function createWindow(): Promise<void> {
     });
     await mobileServer.start();
     const info = mobileServer.getPairingInfo();
-    hostLog(`KarkeDikha Mobile server running at ${info.url} (PIN: ${info.code})`);
+    hostLog(`Pandesh Mobile server running at ${info.url} (PIN: ${info.code})`);
   } catch (err) {
     hostLog(`mobile server start failed: ${(err as Error).message}`);
   }
@@ -1466,6 +1466,7 @@ function registerIpc(): void {
       url: 'http://127.0.0.1:3030/',
       pairedCount: 0,
       connectedClients: 0,
+      listening: false,
     };
   });
   ipcMain.handle(DESKTOP_CHANNELS.minimizeWindow, () => {

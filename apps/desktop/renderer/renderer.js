@@ -3363,12 +3363,72 @@ function cloudProviderLabel(cloud, providerId) {
   return (cloud?.providers ?? []).find((provider) => provider.id === providerId)?.displayName || providerId;
 }
 
+const cloudCards = new Map();
+let lastCloudState = null;
+
+const CLOUD_STATE_LABELS = {
+  'not-configured': 'Not configured',
+  'key-saved': 'Key saved',
+  failed: 'Connection failed',
+  'no-models': 'Connected, no usable models',
+  ready: 'Connected, models available',
+};
+
+function formatCheckedAt(iso) {
+  if (!iso) return 'Never checked';
+  const when = new Date(iso);
+  if (Number.isNaN(when.getTime())) return 'Never checked';
+  return `Last checked ${when.toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}`;
+}
+
+/** Why a provider that answered still offers nothing, in plain words. */
+function cloudFilteringExplanation(provider, listing) {
+  const excluded = listing.excluded ?? {};
+  const hidden = (excluded.paid ?? 0) + (excluded.unknown ?? 0) + (excluded.promotional ?? 0) + (excluded.trial ?? 0);
+  const total = (listing.pool?.length ?? 0) + hidden + (excluded.nonGenerative ?? 0);
+  const parts = [`Your key works: ${provider.displayName} listed ${total} model${total === 1 ? '' : 's'}, but none could be verified as free.`];
+  parts.push('Pandesh only offers a cloud model when the provider’s own data shows it is free (zero price or a free tier), so a cloud call can never cost money by surprise.');
+  if (provider.id === 'nvidia') {
+    parts.push('NVIDIA’s catalog does not mark individual models as free, so every NVIDIA model is held back until that can be verified. This is a filter, not a broken key.');
+  }
+  if (hidden > 0) {
+    parts.push(`Held back: ${excluded.paid ?? 0} paid, ${excluded.trial ?? 0} trial, ${excluded.promotional ?? 0} promotional, ${excluded.unknown ?? 0} unverified.`);
+  }
+  return parts.join(' ');
+}
+
+/** One of five explicit states, plus a short reason and when it was last checked. */
+function cloudProviderState(provider, cloud) {
+  const listing = cloud?.listings?.[provider.id] ?? null;
+  const test = cloud?.tests?.[provider.id] ?? null;
+  const checkedAt = [listing?.checkedAt, test?.checkedAt].filter(Boolean).sort().pop() ?? null;
+  if (!provider.configured) {
+    return { id: 'not-configured', label: CLOUD_STATE_LABELS['not-configured'], tone: 'offline', reason: 'No API key yet.', checkedAt };
+  }
+  if (listing && !listing.ok) {
+    const auth = listing.errorClass === 'auth';
+    return {
+      id: 'failed', label: CLOUD_STATE_LABELS.failed, tone: 'warn', checkedAt,
+      reason: auth ? 'The provider rejected this key. Check it and save again.' : `${listing.errorClass ?? 'error'}: ${cloudListingError(listing)}`,
+    };
+  }
+  if (listing && listing.ok && listing.pool.length === 0) {
+    return { id: 'no-models', label: CLOUD_STATE_LABELS['no-models'], tone: 'busy', reason: 'Key is valid, 0 free models found.', checkedAt };
+  }
+  if (listing && listing.ok) {
+    const n = listing.pool.length;
+    return { id: 'ready', label: CLOUD_STATE_LABELS.ready, tone: 'online', reason: `${n} free model${n === 1 ? '' : 's'} available.`, checkedAt };
+  }
+  return { id: 'key-saved', label: CLOUD_STATE_LABELS['key-saved'], tone: 'busy', reason: `Key saved${provider.keyHint ? ` (${provider.keyHint})` : ''}. Not tested yet.`, checkedAt };
+}
+
 /**
- * Settings → AI Models & Providers. Cards are built once per provider and updated in place so a
+ * Settings → Cloud Providers. Cards are built once per provider and updated in place so a
  * half-typed API key is never wiped by an unrelated snapshot refresh.
  */
 function renderCloudSettings(snapshot) {
   const cloud = snapshot?.cloud ?? null;
+  lastCloudState = cloud;
   if (cloudStateBadge) {
     const on = Boolean(cloud && !cloud.off && cloud.enabledProviders.length > 0);
     cloudStateBadge.textContent = !cloud ? 'Catalog unavailable' : on ? 'Free cloud on' : 'Cloud off';
@@ -3386,9 +3446,12 @@ function renderCloudSettings(snapshot) {
       cloudProviderList.replaceChildren(note);
       cloudCards.clear();
     }
+    renderConnectionsOverview();
     return;
   }
-  const ids = cloud.providers.map((provider) => provider.id);
+  // Providers you have set up come first; the rest stay as compact one-line rows in catalog order.
+  const sorted = [...cloud.providers].sort((a, b) => Number(b.configured) - Number(a.configured));
+  const ids = sorted.map((provider) => provider.id);
   for (const id of [...cloudCards.keys()]) {
     if (!ids.includes(id)) {
       cloudCards.get(id).root.remove();
@@ -3404,6 +3467,7 @@ function renderCloudSettings(snapshot) {
       cloudProviderList.replaceChildren(note);
       cloudCards.clear();
     }
+    renderConnectionsOverview();
     return;
   }
   cloudProviderList.dataset.signature = ids.join('|');
@@ -3411,10 +3475,9 @@ function renderCloudSettings(snapshot) {
   if (cloudProviderList.children.length !== ordered.length || ordered.some((node, index) => cloudProviderList.children[index] !== node)) {
     cloudProviderList.replaceChildren(...ordered);
   }
-  for (const provider of cloud.providers) updateCloudProviderCard(provider, cloud);
+  for (const provider of sorted) updateCloudProviderCard(provider, cloud);
+  renderConnectionsOverview();
 }
-
-const cloudCards = new Map();
 
 function buildCloudProviderCard(providerId) {
   if (!cloudProviderList) return null;
@@ -3422,20 +3485,24 @@ function buildCloudProviderCard(providerId) {
   root.className = 'cloud-provider';
   root.dataset.provider = providerId;
 
-  const head = document.createElement('div');
-  head.className = 'cloud-provider-head';
-  const title = document.createElement('h4');
+  const head = document.createElement('button');
+  head.type = 'button';
+  head.className = 'cloud-provider-head cp-head';
+  const title = document.createElement('span');
   title.className = 'cloud-provider-name';
   const badge = document.createElement('span');
   badge.className = 'int-badge';
+  badge.setAttribute('role', 'status');
   head.append(title, badge);
 
-  const meta = document.createElement('p');
-  meta.className = 'cloud-provider-meta';
+  const reason = document.createElement('p');
+  reason.className = 'cp-reason';
+  const checked = document.createElement('span');
+  checked.className = 'cp-checked';
+  reason.append(document.createTextNode(''), checked);
 
-  const warning = document.createElement('p');
-  warning.className = 'cloud-provider-warning';
-  warning.hidden = true;
+  const body = document.createElement('div');
+  body.className = 'cp-body';
 
   const keyRow = document.createElement('div');
   keyRow.className = 'cloud-key-row';
@@ -3444,16 +3511,12 @@ function buildCloudProviderCard(providerId) {
   keyInput.autocomplete = 'off';
   keyInput.spellcheck = false;
   keyInput.placeholder = 'Paste API key (stored encrypted on this PC)';
-  keyInput.setAttribute('aria-label', 'API key');
+  keyInput.setAttribute('aria-label', `${providerId} API key`);
   const saveKey = document.createElement('button');
   saveKey.type = 'button';
   saveKey.className = 'apex-chip';
   saveKey.textContent = 'Save key';
-  const clearKey = document.createElement('button');
-  clearKey.type = 'button';
-  clearKey.className = 'apex-chip';
-  clearKey.textContent = 'Clear';
-  keyRow.append(keyInput, saveKey, clearKey);
+  keyRow.append(keyInput, saveKey);
 
   const baseRow = document.createElement('label');
   baseRow.className = 'cloud-base-row';
@@ -3468,6 +3531,16 @@ function buildCloudProviderCard(providerId) {
 
   const actions = document.createElement('div');
   actions.className = 'cloud-provider-actions';
+  const mkBtn = (text) => {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'apex-chip';
+    button.textContent = text;
+    return button;
+  };
+  const testConn = mkBtn('Test connection');
+  const discover = mkBtn('Discover models');
+  const clearKey = mkBtn('Disconnect');
   const enabledLabel = document.createElement('label');
   enabledLabel.className = 'cloud-enabled';
   const enabled = document.createElement('input');
@@ -3475,16 +3548,17 @@ function buildCloudProviderCard(providerId) {
   const enabledText = document.createElement('span');
   enabledText.textContent = 'Enabled';
   enabledLabel.append(enabled, enabledText);
-  const discover = document.createElement('button');
-  discover.type = 'button';
-  discover.className = 'apex-chip';
-  discover.textContent = 'Discover free models';
   const keyLink = document.createElement('a');
   keyLink.className = 'cloud-key-link';
   keyLink.target = '_blank';
   keyLink.rel = 'noreferrer noopener';
   keyLink.textContent = 'Get a free key';
-  actions.append(enabledLabel, discover, keyLink);
+  actions.append(testConn, discover, clearKey, enabledLabel, keyLink);
+
+  // The per-card result line: what the last action actually did, right where it was clicked.
+  const note = document.createElement('p');
+  note.className = 'cp-note';
+  note.setAttribute('role', 'status');
 
   const listing = document.createElement('div');
   listing.className = 'cloud-listing';
@@ -3493,25 +3567,92 @@ function buildCloudProviderCard(providerId) {
   testResult.className = 'cloud-test-result';
   testResult.setAttribute('role', 'status');
 
-  root.append(head, meta, warning, keyRow, baseRow, actions, listing, testResult);
+  const info = document.createElement('details');
+  info.className = 'cp-info';
+  const infoSummary = document.createElement('summary');
+  infoSummary.textContent = 'Free tier, privacy and catalog details';
+  const meta = document.createElement('p');
+  meta.className = 'cloud-provider-meta';
+  const warning = document.createElement('p');
+  warning.className = 'cloud-provider-warning';
+  warning.hidden = true;
+  info.append(infoSummary, meta, warning);
+
+  body.append(keyRow, baseRow, actions, note, listing, testResult, info);
+  root.append(head, reason, body);
   cloudProviderList.appendChild(root);
 
-  const entry = { root, title, badge, meta, warning, keyInput, saveKey, clearKey, baseRow, baseInput, enabled, discover, keyLink, listing, testResult };
+  const entry = { root, head, title, badge, reason, checked, body, meta, warning, keyInput, saveKey, clearKey, testConn, discover, baseRow, baseInput, enabled, keyLink, note, listing, testResult, showAll: false, expanded: null };
   cloudCards.set(providerId, entry);
 
-  saveKey.addEventListener('click', async () => {
-    showOperationError(null);
-    saveKey.disabled = true;
-    try {
-      const state = await api.setCloudProviderKey(providerId, keyInput.value, baseInput.value.trim() || undefined);
-      keyInput.value = '';
-      if (cloudActionNote) cloudActionNote.textContent = `Saved and enabled ${cloudProviderLabel(state, providerId)}. Discover its free models next.`;
-      renderSnapshot(await api.getSnapshot());
-    } catch (error) {
-      showOperationError(error);
-    } finally {
-      saveKey.disabled = false;
+  const setNote = (text, tone) => {
+    note.textContent = text;
+    note.dataset.tone = tone ?? '';
+  };
+  const labelOf = (state) => cloudProviderLabel(state, providerId);
+  const refreshAll = async () => renderSnapshot(await api.getSnapshot());
+
+  head.addEventListener('click', () => {
+    entry.expanded = !root.classList.contains('is-open');
+    root.classList.toggle('is-open', entry.expanded);
+    head.setAttribute('aria-expanded', String(entry.expanded));
+  });
+
+  /** Reads the provider's live model list; the same call both proves the key and finds the free models. */
+  const runDiscovery = async () => {
+    const state = await api.discoverCloudModels(providerId);
+    const result = state.listings?.[providerId];
+    const provider = (state.providers ?? []).find((p) => p.id === providerId) ?? { id: providerId, displayName: labelOf(state) };
+    if (result?.ok && result.pool.length > 0) {
+      setNote(`Key valid. ${result.pool.length} free model${result.pool.length === 1 ? '' : 's'} found in ${result.latencyMs} ms.`, 'ok');
+    } else if (result?.ok) {
+      setNote(cloudFilteringExplanation(provider, result), 'warn');
+    } else {
+      setNote(`Connection failed — ${cloudListingError(result)}`, 'error');
     }
+    return state;
+  };
+
+  const busy = async (button, workingText, work) => {
+    showOperationError(null);
+    const original = button.textContent;
+    button.disabled = true;
+    button.textContent = workingText;
+    try {
+      await work();
+    } catch (error) {
+      setNote(error instanceof Error ? error.message : String(error), 'error');
+    } finally {
+      button.disabled = false;
+      button.textContent = original;
+      try { await refreshAll(); } catch { /* the next snapshot will catch up */ }
+    }
+  };
+
+  saveKey.addEventListener('click', () => {
+    if (!keyInput.value.trim()) { setNote('Paste an API key first.', 'warn'); return; }
+    void busy(saveKey, 'Saving…', async () => {
+      const saved = await api.setCloudProviderKey(providerId, keyInput.value, baseInput.value.trim() || undefined);
+      keyInput.value = '';
+      const hint = (saved.providers ?? []).find((p) => p.id === providerId)?.keyHint;
+      setNote(`Key saved${hint ? ` (${hint})` : ''}. Checking it with ${labelOf(saved)}…`, 'info');
+      await runDiscovery();
+    });
+  });
+
+  discover.addEventListener('click', () => { void busy(discover, 'Discovering…', runDiscovery); });
+
+  testConn.addEventListener('click', () => {
+    void busy(testConn, 'Testing…', async () => {
+      const state = await runDiscovery();
+      const result = state.listings?.[providerId];
+      if (!result?.ok || result.pool.length === 0) return;
+      const model = (state.selectedModel?.startsWith(`${providerId}::`) ? state.selectedModel.slice(providerId.length + 2) : null) ?? result.pool[0].id;
+      const tested = await api.testCloudProvider(providerId, model);
+      const outcome = tested.tests?.[providerId];
+      if (outcome?.ok) setNote(`Connected. ${model} replied in ${outcome.latencyMs} ms.`, 'ok');
+      else if (outcome) setNote(`Key valid, but the test message failed on ${model}: ${outcome.errorClass ?? 'error'}${outcome.error ? ` — ${outcome.error}` : ''}`, 'error');
+    });
   });
 
   clearKey.addEventListener('click', async () => {
@@ -3519,10 +3660,10 @@ function buildCloudProviderCard(providerId) {
     if (!window.confirm('Remove this provider key and turn the provider off? Cloud models from it will no longer be selectable.')) return;
     try {
       const state = await api.clearCloudProviderKey(providerId);
-      if (cloudActionNote) cloudActionNote.textContent = `${cloudProviderLabel(state, providerId)} key removed.`;
-      renderSnapshot(await api.getSnapshot());
+      setNote(`${labelOf(state)} disconnected. The key was removed from this PC.`, 'info');
+      await refreshAll();
     } catch (error) {
-      showOperationError(error);
+      setNote(error instanceof Error ? error.message : String(error), 'error');
     }
   });
 
@@ -3530,35 +3671,11 @@ function buildCloudProviderCard(providerId) {
     showOperationError(null);
     try {
       const state = await api.setCloudProviderEnabled(providerId, enabled.checked);
-      if (cloudActionNote) cloudActionNote.textContent = enabled.checked
-        ? `${cloudProviderLabel(state, providerId)} enabled for approved public text.`
-        : `${cloudProviderLabel(state, providerId)} disabled.`;
-      renderSnapshot(await api.getSnapshot());
+      setNote(enabled.checked ? `${labelOf(state)} enabled for approved public text.` : `${labelOf(state)} disabled.`, 'info');
+      await refreshAll();
     } catch (error) {
-      showOperationError(error);
+      setNote(error instanceof Error ? error.message : String(error), 'error');
       enabled.checked = !enabled.checked;
-    }
-  });
-
-  discover.addEventListener('click', async () => {
-    showOperationError(null);
-    discover.disabled = true;
-    const original = discover.textContent;
-    discover.textContent = 'Discovering…';
-    try {
-      const state = await api.discoverCloudModels(providerId);
-      const listingState = state.listings?.[providerId];
-      if (cloudActionNote) {
-        cloudActionNote.textContent = listingState?.ok
-          ? `${cloudProviderLabel(state, providerId)}: ${listingState.pool.length} free model${listingState.pool.length === 1 ? '' : 's'} in ${listingState.latencyMs} ms.`
-          : `${cloudProviderLabel(state, providerId)}: discovery failed — ${cloudListingError(listingState)}`;
-      }
-      renderSnapshot(await api.getSnapshot());
-    } catch (error) {
-      showOperationError(error);
-    } finally {
-      discover.disabled = false;
-      discover.textContent = original;
     }
   });
 
@@ -3582,10 +3699,18 @@ function cloudListingError(listing) {
 function updateCloudProviderCard(provider, cloud) {
   const entry = cloudCards.get(provider.id);
   if (!entry) return;
+  const state = cloudProviderState(provider, cloud);
+  entry.root.dataset.state = state.id;
   entry.title.textContent = provider.displayName;
-  const on = provider.enabled && provider.configured;
-  entry.badge.textContent = !provider.configured ? 'No key' : on ? 'Enabled' : 'Off';
-  entry.badge.className = `int-badge ${on ? 'online' : provider.configured ? 'busy' : 'offline'}`;
+  entry.badge.textContent = state.label;
+  entry.badge.className = `int-badge ${state.tone}`;
+  entry.reason.firstChild.textContent = state.reason;
+  entry.checked.textContent = state.id === 'not-configured' ? '' : ` · ${formatCheckedAt(state.checkedAt)}`;
+  // Cards you have set up open by default; untouched, unconfigured providers stay one line.
+  const open = entry.expanded ?? provider.configured;
+  entry.root.classList.toggle('is-open', open);
+  entry.head.setAttribute('aria-expanded', String(open));
+
   entry.meta.textContent = `Free tier: ${provider.freeTier?.kind ?? 'unknown'}`
     + ` · ${cloudPaymentLabel(provider.paymentMethodRequired)}`
     + ` · Catalog verified ${provider.lastVerifiedAt || 'unknown'}`
@@ -3607,9 +3732,13 @@ function updateCloudProviderCard(provider, cloud) {
       ? 'Server address (on this PC or your own network; any key text works if your server has none)'
       : 'Endpoint (include your account id)';
   }
+  entry.saveKey.textContent = provider.configured ? 'Replace key' : 'Save key';
+  entry.keyInput.placeholder = provider.configured ? `Key saved${provider.keyHint ? ` (${provider.keyHint})` : ''} — paste a new one to replace it` : 'Paste API key (stored encrypted on this PC)';
   entry.enabled.checked = provider.enabled;
   entry.enabled.disabled = !provider.configured;
+  entry.testConn.disabled = !provider.configured;
   entry.discover.disabled = !provider.configured;
+  entry.clearKey.disabled = !provider.configured;
   entry.keyLink.href = provider.apiKeysUrl || provider.signupUrl || provider.docsUrl || '#';
   entry.keyLink.textContent = provider.freeTier?.kind === 'free-forever' ? 'Get a free key' : 'Free-tier details';
 
@@ -3618,9 +3747,12 @@ function updateCloudProviderCard(provider, cloud) {
   const selected = cloud?.selectedModel ?? null;
   const signature = JSON.stringify({
     models: (listing?.pool ?? []).map((model) => [model.id, model.displayName, model.contextWindow ?? null, model.vision, model.tools]),
+    others: listing?.others?.length ?? 0,
+    showAll: entry.showAll,
     ok: listing?.ok ?? null,
     error: listing?.error ?? null,
     latency: listing?.latencyMs ?? null,
+    configured: provider.configured,
     test,
     selected,
   });
@@ -3632,8 +3764,8 @@ function updateCloudProviderCard(provider, cloud) {
     const hint = document.createElement('p');
     hint.className = 'muted cloud-listing-hint';
     hint.textContent = provider.configured
-      ? 'Press “Discover free models” to read this provider’s live model list and keep only verified free ones.'
-      : 'Add a key to discover this provider’s free models.';
+      ? 'Press “Test connection” to check the key, or “Discover models” to read the live model list and keep only verified free ones.'
+      : 'Add a key to connect this provider.';
     children.push(hint);
   } else if (!listing.ok) {
     const error = document.createElement('p');
@@ -3642,15 +3774,15 @@ function updateCloudProviderCard(provider, cloud) {
     children.push(error);
   } else if (listing.pool.length === 0) {
     const empty = document.createElement('p');
-    empty.className = 'cloud-listing-error';
-    empty.textContent = 'No verified free generative models were returned. Nothing from this provider can be selected.';
+    empty.className = 'cloud-listing-empty';
+    empty.textContent = cloudFilteringExplanation(provider, listing);
     children.push(empty);
   } else {
     const summary = document.createElement('p');
     summary.className = 'cloud-listing-summary';
     const excluded = listing.excluded ?? {};
     summary.textContent = `${listing.pool.length} free model${listing.pool.length === 1 ? '' : 's'} · ${listing.latencyMs} ms`
-      + ` · excluded ${excluded.paid ?? 0} paid, ${excluded.trial ?? 0} trial, ${excluded.promotional ?? 0} promotional, ${excluded.unknown ?? 0} unknown`;
+      + ` · held back ${excluded.paid ?? 0} paid, ${excluded.trial ?? 0} trial, ${excluded.promotional ?? 0} promotional, ${excluded.unknown ?? 0} unverified`;
     children.push(summary);
     const list = document.createElement('ul');
     list.className = 'cloud-model-list';
@@ -3667,7 +3799,8 @@ function updateCloudProviderCard(provider, cloud) {
         showOperationError(null);
         try {
           renderSnapshot(await api.selectCloudModel(encoded));
-          if (cloudActionNote) cloudActionNote.textContent = `${provider.displayName} ${model.displayName || model.id} selected. Each send asks you to approve its exact text.`;
+          entry.note.textContent = `${model.displayName || model.id} selected. Each send asks you to approve its exact text.`;
+          entry.note.dataset.tone = 'ok';
         } catch (error) {
           showOperationError(error);
         }
@@ -3697,9 +3830,11 @@ function updateCloudProviderCard(provider, cloud) {
           const state = await api.testCloudProvider(provider.id, model.id);
           const result = state.tests?.[provider.id];
           if (result?.ok) {
-            if (cloudActionNote) cloudActionNote.textContent = `${provider.displayName} ${model.id}: replied in ${result.latencyMs} ms${result.replyPreview ? ` (“${result.replyPreview}”)` : ''}.`;
+            entry.note.textContent = `${model.id} replied in ${result.latencyMs} ms${result.replyPreview ? ` (“${result.replyPreview}”)` : ''}.`;
+            entry.note.dataset.tone = 'ok';
           } else if (result) {
-            if (cloudActionNote) cloudActionNote.textContent = `${provider.displayName} ${model.id}: ${result.errorClass ?? 'error'} — ${result.error ?? 'no reply'}`;
+            entry.note.textContent = `${model.id}: ${result.errorClass ?? 'error'} — ${result.error ?? 'no reply'}`;
+            entry.note.dataset.tone = 'error';
           }
         } catch (error) {
           showOperationError(error);
@@ -3713,6 +3848,39 @@ function updateCloudProviderCard(provider, cloud) {
       list.appendChild(item);
     }
     children.push(list);
+  }
+
+  // Everything the provider listed, for reference. These can never be selected: only verified-free models can.
+  if (listing?.ok && (listing.others?.length ?? 0) > 0) {
+    const toggle = document.createElement('label');
+    toggle.className = 'cp-showall';
+    const box = document.createElement('input');
+    box.type = 'checkbox';
+    box.checked = entry.showAll;
+    box.addEventListener('change', () => {
+      entry.showAll = box.checked;
+      updateCloudProviderCard(provider, lastCloudState);
+    });
+    const text = document.createElement('span');
+    text.textContent = `Show all ${listing.pool.length + listing.others.length} discovered models (view only, not selectable)`;
+    toggle.append(box, text);
+    children.push(toggle);
+    if (entry.showAll) {
+      const reasons = { paid: 'paid', unknown: 'free status unverified', promotional: 'promotional', trial: 'trial' };
+      const all = document.createElement('ul');
+      all.className = 'cp-all-models';
+      for (const model of listing.others) {
+        const item = document.createElement('li');
+        const name = document.createElement('span');
+        name.textContent = model.displayName || model.id;
+        const why = document.createElement('span');
+        why.className = 'cp-all-why';
+        why.textContent = reasons[model.reason] ?? model.reason;
+        item.append(name, why);
+        all.appendChild(item);
+      }
+      children.push(all);
+    }
   }
   entry.listing.replaceChildren(...children);
 
@@ -3732,6 +3900,136 @@ function updateCloudProviderCard(provider, cloud) {
     entry.testResult.className = 'cloud-test-result';
     entry.testResult.textContent = '';
   }
+}
+
+/* ── Connections: tabs and the "what works / what needs me" overview ───────────────── */
+
+function showConnTab(name) {
+  document.querySelectorAll('[data-conn-tab]').forEach((tab) => {
+    const active = tab.getAttribute('data-conn-tab') === name;
+    tab.classList.toggle('is-active', active);
+    tab.setAttribute('aria-selected', String(active));
+  });
+  document.querySelectorAll('[data-conn-panel]').forEach((panel) => {
+    panel.hidden = panel.getAttribute('data-conn-panel') !== name;
+  });
+}
+
+let connOverviewQueued = false;
+
+function wireConnectionTabs() {
+  document.querySelectorAll('[data-conn-tab]').forEach((tab) => {
+    tab.addEventListener('click', () => showConnTab(tab.getAttribute('data-conn-tab')));
+  });
+  document.querySelectorAll('[data-conn-tab-go]').forEach((button) => {
+    button.addEventListener('click', () => showConnTab(button.getAttribute('data-conn-tab-go')));
+  });
+  // Rebuild the overview whenever any status badge elsewhere on the page changes.
+  const queue = () => {
+    if (connOverviewQueued) return;
+    connOverviewQueued = true;
+    requestAnimationFrame(() => { connOverviewQueued = false; renderConnectionsOverview(); });
+  };
+  const observer = new MutationObserver(queue);
+  for (const id of ['integ-google-badge', 'integ-mobile-badge', 'integ-studio-badge', 'integ-models-badge', 'integ-voice-badge']) {
+    const node = document.getElementById(id);
+    if (node) observer.observe(node, { childList: true, characterData: true, subtree: true, attributes: true, attributeFilter: ['class'] });
+  }
+  renderConnectionsOverview();
+}
+
+/** ok = working now, attention = broken or half-done, idle = simply not set up. */
+function badgeTone(node) {
+  const text = (node?.textContent ?? '').trim();
+  const cls = node?.className ?? '';
+  if (/needs attention|failed|error|unreachable/i.test(text) || /\bwarn\b/.test(cls)) return 'attention';
+  if (/not connected|setup needed|checking|probing|offline|waiting|—/i.test(text)) return 'idle';
+  if (/\bonline\b/.test(cls) || /connected|ready|active|live/i.test(text)) return 'ok';
+  return 'idle';
+}
+
+function renderConnectionsOverview() {
+  const list = document.getElementById('conn-connected-list');
+  if (!list) return;
+  const rows = [];
+  const fromBadge = (name, detail, badgeId, tab) => {
+    const node = document.getElementById(badgeId);
+    rows.push({ name, detail, status: node?.textContent?.trim() || 'Checking…', tone: badgeTone(node), tab });
+  };
+  fromBadge('Local AI (Ollama)', 'Runs on your GPU. Nothing leaves this PC.', 'integ-models-badge', 'advanced');
+  fromBadge('Google (Gmail & Calendar)', 'Read, draft and organize mail; manage events after you approve.', 'integ-google-badge', 'configure');
+  fromBadge('Pandesh Mobile', 'Your phone on the same Wi-Fi.', 'integ-mobile-badge', 'configure');
+  fromBadge('Image Studio', 'Local ComfyUI image generation.', 'integ-studio-badge', 'configure');
+  fromBadge('Voice & speech', 'Local speech recognition and spoken replies.', 'integ-voice-badge', 'configure');
+  const cloud = lastCloudState;
+  let unconfiguredProviders = 0;
+  for (const provider of cloud?.providers ?? []) {
+    if (!provider.configured) { unconfiguredProviders += 1; continue; }
+    const state = cloudProviderState(provider, cloud);
+    rows.push({
+      name: provider.displayName,
+      detail: `${state.reason}${state.checkedAt ? ` ${formatCheckedAt(state.checkedAt)}.` : ''}`,
+      status: state.label,
+      tone: state.id === 'ready' ? 'ok' : state.id === 'failed' || state.id === 'no-models' ? 'attention' : 'idle',
+      tab: 'cloud',
+    });
+  }
+
+  const ok = rows.filter((row) => row.tone === 'ok');
+  const attention = rows.filter((row) => row.tone === 'attention');
+  const idle = rows.filter((row) => row.tone === 'idle');
+  const setText = (id, value) => { const node = document.getElementById(id); if (node) node.textContent = value; };
+  setText('conn-count-ok', String(ok.length));
+  setText('conn-count-attn', String(attention.length));
+  document.getElementById('conn-tile-attn')?.classList.toggle('is-alert', attention.length > 0);
+  const cloudOn = Boolean(cloud && !cloud.off && cloud.enabledProviders.length > 0);
+  setText('conn-privacy-mode', cloudOn ? 'Local + free cloud' : 'Local only');
+
+  const makeRow = (row) => {
+    const item = document.createElement('div');
+    item.className = `conn-row is-${row.tone}`;
+    const text = document.createElement('div');
+    text.className = 'conn-row-text';
+    const name = document.createElement('strong');
+    name.textContent = row.name;
+    const detail = document.createElement('span');
+    detail.textContent = row.detail;
+    text.append(name, detail);
+    const status = document.createElement('span');
+    status.className = 'conn-row-status';
+    status.textContent = row.status;
+    const go = document.createElement('button');
+    go.type = 'button';
+    go.className = 'apex-chip';
+    go.textContent = row.tone === 'ok' ? 'Manage' : row.tone === 'attention' ? 'Fix' : 'Set up';
+    go.addEventListener('click', () => showConnTab(row.tab));
+    item.append(text, status, go);
+    return item;
+  };
+  const group = (title, items) => {
+    if (items.length === 0) return null;
+    const section = document.createElement('section');
+    section.className = 'conn-group';
+    const heading = document.createElement('h3');
+    heading.className = 'conn-group-title';
+    heading.textContent = `${title} (${items.length})`;
+    section.append(heading, ...items.map(makeRow));
+    return section;
+  };
+  const parts = [group('Needs attention', attention), group('Connected', ok), group('Not set up yet', idle)].filter(Boolean);
+  if (unconfiguredProviders > 0) {
+    const more = document.createElement('p');
+    more.className = 'muted conn-more';
+    more.textContent = `${unconfiguredProviders} optional cloud provider${unconfiguredProviders === 1 ? '' : 's'} available. `;
+    const link = document.createElement('button');
+    link.type = 'button';
+    link.className = 'link-btn';
+    link.textContent = 'Browse Cloud Providers';
+    link.addEventListener('click', () => showConnTab('cloud'));
+    more.appendChild(link);
+    parts.push(more);
+  }
+  list.replaceChildren(...parts);
 }
 
 /**
@@ -6491,6 +6789,7 @@ function wireAboutPanel() {
       void applyAppMetadata();
       const integrations = document.querySelector('[data-surface="integrations"]');
       if (integrations) integrations.click();
+      showConnTab('advanced');
       const about = document.getElementById('about-card');
       if (about) about.scrollIntoView({ block: 'center' });
     });
@@ -6504,6 +6803,7 @@ function wireAboutPanel() {
 
 void applyAppMetadata();
 wireAboutPanel();
+wireConnectionTabs();
 void refreshConversationsRail();
 void refreshIntegrationsView();
 void refreshTasksMissionsView();
@@ -7107,13 +7407,24 @@ async function refreshIntegrationsView() {
       if (urlEl) urlEl.textContent = pairInfo.url || `http://${pairInfo.ip}:3030/?pair=${pairInfo.code}`;
       if (statusEl) {
         const liveCount = Number(pairInfo.connectedClients ?? pairInfo.pairedCount ?? 0);
-        statusEl.textContent = liveCount > 0
-          ? `${liveCount} device(s) connected`
-          : 'Ready for pairing (Local Wi-Fi)';
+        statusEl.textContent = pairInfo.listening === false
+          ? `Not running (port ${pairInfo.port} unavailable)`
+          : liveCount > 0
+            ? `${liveCount} device(s) connected`
+            : 'Ready for pairing (Local Wi-Fi)';
+      }
+      const mobileBadge = document.getElementById('integ-mobile-badge');
+      if (mobileBadge) {
+        const live = Number(pairInfo.connectedClients ?? pairInfo.pairedCount ?? 0);
+        const listening = pairInfo.listening !== false && Boolean(pairInfo.code);
+        mobileBadge.textContent = !listening ? 'Not running' : live > 0 ? `${live} phone${live === 1 ? '' : 's'} connected` : 'Ready to pair';
+        mobileBadge.className = `int-badge ${listening ? 'online' : 'warn'}`;
       }
     }
   } catch (err) {
     console.warn('Mobile pairing probe failed', err);
+    const mobileBadge = document.getElementById('integ-mobile-badge');
+    if (mobileBadge) { mobileBadge.textContent = 'Check failed'; mobileBadge.className = 'int-badge warn'; }
   }
 
   // 2. Image Studio
