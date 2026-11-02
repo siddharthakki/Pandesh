@@ -1,4 +1,5 @@
 import * as cp from 'node:child_process';
+import { holdAwaitedApproval } from './cancellationRecovery';
 import * as path from 'node:path';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
@@ -234,6 +235,30 @@ export function describeUnansweredApproval(outcome: PiToolApprovalOutcome): stri
     return `The web-access approval request could not be created (${outcome.reason}), so nothing was searched. This is a system error, not the user's decision.`;
   }
   return 'The web-access approval request was not answered, so nothing was searched.';
+}
+
+/**
+ * The reply for a turn whose model wrote no answer: what the recorded tool
+ * calls show, in plain words, ending at the step that failed. Never claims
+ * the task was done.
+ */
+export function describeUnansweredTurn(calls: Array<{ tool: string; status?: string; result?: unknown }>, stopped: boolean): string {
+  const finished = calls.filter((c) => c.status === 'completed' || c.status === 'failed');
+  if (stopped) return 'Stopped. Nothing after the last finished step was done.';
+  if (!finished.length) return 'I finished this turn without producing a reply. Nothing is confirmed as done — please ask again.';
+  const text = (c: { result?: unknown }) => {
+    const r = c.result as { content?: Array<{ text?: string }> } | string | undefined;
+    const raw = typeof r === 'string' ? r : r?.content?.[0]?.text ?? '';
+    return raw.replace(/^NOT DONE \([^)]*\):\s*/, '').replace(/\s+/g, ' ').trim();
+  };
+  const last = finished[finished.length - 1];
+  const done = finished.filter((c) => c.status === 'completed').length;
+  const lead = done ? `${done} step${done === 1 ? '' : 's'} ran, but I did not write a final answer.` : 'I did not get past the first step.';
+  if (last.status === 'failed') {
+    const why = text(last).split(/(?<=[.;])\s/)[0].slice(0, 300) || 'it reported an error';
+    return `${lead} The last step (${last.tool.replace(/_/g, ' ')}) failed: ${why}\n\nNothing after that step was done. You can tell me how to proceed, or ask me to try again.`;
+  }
+  return `${lead} Nothing is confirmed as done — the steps are listed under Details. Ask me to continue and I will pick up from there.`;
 }
 
 function safeRecordRuntimeEvent(
@@ -588,6 +613,10 @@ export class PiAgentEngine implements EngineAdapter {
     /** Markdown links for files this turn really shared to the paired phone (see send_to_phone). */
     const phoneShares: string[] = [];
     const pendingInvocations: string[] = [];
+    /** Calls that failed this turn, by tool+arguments, with why: an identical retry learns nothing new. */
+    const failedCalls = new Map<string, string>();
+    let refusedRepeats = 0;
+    const callSignature = (name: string, args: unknown) => `${name}:${JSON.stringify(args ?? {}, (_k, v) => (v && typeof v === 'object' && !Array.isArray(v) ? Object.fromEntries(Object.entries(v).sort()) : v))}`;
 
     const SKIP_DIRS = new Set([
       'node_modules',
@@ -826,9 +855,14 @@ export class PiAgentEngine implements EngineAdapter {
       }
       const pollStart = Date.now();
       let current = getApproval(db, approval.id);
-      while (current.status === 'pending' && Date.now() - pollStart < timeoutMs && !signal?.aborted) {
-        await new Promise(r => setTimeout(r, 400));
-        current = getApproval(db, approval.id);
+      const release = holdAwaitedApproval(approval.id);
+      try {
+        while (current.status === 'pending' && Date.now() - pollStart < timeoutMs && !signal?.aborted) {
+          await new Promise(r => setTimeout(r, 400));
+          current = getApproval(db, approval.id);
+        }
+      } finally {
+        release();
       }
       try {
         mutateWithBroadcast(db, broadcaster, () => {
@@ -2351,9 +2385,14 @@ export class PiAgentEngine implements EngineAdapter {
       } catch {}
       const pollStart = Date.now();
       let current = getApproval(db, approvalId);
-      while (current.status === 'pending' && Date.now() - pollStart < timeoutMs && !signal?.aborted) {
-        await new Promise((r) => setTimeout(r, 400));
-        current = getApproval(db, approvalId);
+      const release = holdAwaitedApproval(approvalId);
+      try {
+        while (current.status === 'pending' && Date.now() - pollStart < timeoutMs && !signal?.aborted) {
+          await new Promise((r) => setTimeout(r, 400));
+          current = getApproval(db, approvalId);
+        }
+      } finally {
+        release();
       }
       try {
         mutateWithBroadcast(db, broadcaster, () => {
@@ -2362,7 +2401,8 @@ export class PiAgentEngine implements EngineAdapter {
           }
         });
       } catch {}
-      return current.status === 'approved' ? 'approved' : current.status === 'pending' ? 'timeout' : 'rejected';
+      // Only a recorded decision is a refusal; anything else (no answer, retired) is not.
+      return current.status === 'approved' ? 'approved' : current.status === 'rejected' ? 'rejected' : 'timeout';
     }
 
     function connectorText(text: string, isError = false) {
@@ -2376,9 +2416,11 @@ export class PiAgentEngine implements EngineAdapter {
       if (outcome.outcome === 'approval_required') {
         const decision = await awaitConnectorApproval(outcome.approval.id);
         if (decision !== 'approved') {
+          // Not done is a failed call, never a succeeded one: the workspace and
+          // the step list must not show "Sent the form" for a form that was not sent.
           return connectorText(decision === 'timeout'
-            ? 'The user did not respond to the approval request in time. NOTHING was done. Do not claim it happened; offer to try again.'
-            : 'The user declined this action. NOTHING was done. Do not claim it happened and do not retry it unless they ask again.');
+            ? 'NOT DONE: no answer to the approval request was recorded, so nothing was done. Do not claim it happened; tell the user and offer to ask again.'
+            : 'NOT DONE: the user declined this action, so nothing was done. Do not claim it happened and do not retry it unless they ask again.', true);
         }
         outcome = await bridge.dispatch(toolName, args);
       }
@@ -2478,9 +2520,11 @@ export class PiAgentEngine implements EngineAdapter {
       if (outcome.outcome === 'approval_required') {
         const decision = await awaitConnectorApproval(outcome.approval.id);
         if (decision !== 'approved') {
+          // Not done is a failed call, never a succeeded one: the workspace and
+          // the step list must not show "Sent the form" for a form that was not sent.
           return connectorText(decision === 'timeout'
-            ? 'The user did not respond to the approval request in time. NOTHING was done. Do not claim it happened; offer to try again.'
-            : 'The user declined this action. NOTHING was done. Do not claim it happened and do not retry it unless they ask again.');
+            ? 'NOT DONE: no answer to the approval request was recorded, so nothing was done. Do not claim it happened; tell the user and offer to ask again.'
+            : 'NOT DONE: the user declined this action, so nothing was done. Do not claim it happened and do not retry it unless they ask again.', true);
         }
         outcome = await bridge.dispatch(toolName, args);
       }
@@ -2838,6 +2882,17 @@ TRUTHFULNESS & BEHAVIORAL PROTOCOL:
         const callId = hookCtx.toolCall.id || `${toolName}_${Date.now()}`;
         const args = hookCtx.args || {};
 
+        const earlierFailure = failedCalls.get(callSignature(toolName, args));
+        if (earlierFailure !== undefined) {
+          refusedRepeats += 1;
+          safeRecordRuntimeEvent(db, broadcaster, attemptId, 'repeated_failed_call_refused', { toolName, repeats: refusedRepeats }, actor);
+          return {
+            block: true,
+            reason: `Not run: this exact ${toolName} call already failed in this turn (${earlierFailure.slice(0, 300)}). Change the arguments using what that error told you, or stop and tell the user plainly what is blocking you.`,
+            terminate: refusedRepeats >= 3,
+          };
+        }
+
         let invRec: any;
         try {
           mutateWithBroadcast(db, broadcaster, () => {
@@ -2895,6 +2950,9 @@ TRUTHFULNESS & BEHAVIORAL PROTOCOL:
 
         const toolStatus = afterCtx.result?.isError || output?.isError || output?.status === 'failed' ? 'failed' : 'completed';
         const toolArgs = afterCtx.toolCall?.arguments ?? afterCtx.toolCall?.args;
+        if (toolStatus === 'failed' && !signal?.aborted) {
+          failedCalls.set(callSignature(toolName, afterCtx.args ?? toolArgs), String(output?.content?.[0]?.text ?? 'it failed'));
+        }
         toolCallsRecorded.push({ tool: toolName, args: toolArgs, result: output, status: toolStatus });
         return undefined;
       },
@@ -3178,7 +3236,7 @@ TRUTHFULNESS & BEHAVIORAL PROTOCOL:
     }
 
     if (!finalReply) {
-      finalReply = 'I finished this turn without producing a reply. Nothing is confirmed as done — please ask again.';
+      finalReply = describeUnansweredTurn(toolCallsRecorded, Boolean(signal?.aborted));
     }
 
     // Phone delivery is verified, not narrated: the link to the real shared file is attached by Core, and a claim of

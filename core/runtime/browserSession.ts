@@ -27,7 +27,7 @@ import {
 } from './browserInspection';
 import { resolvePublicWebUrl, siteKey } from './browserHostPolicy';
 import { EGRESS_CANARY_HOST, startEgressProxy, type EgressProxy } from './browserEgressProxy';
-import type { PageLocator } from './pageLocator';
+import { PAGE_LOCATOR_RUNTIME, describeLocator as describeLocatorText, parsePageLocator, type PageLocator } from './pageLocator';
 
 export const DEFAULT_MAX_BROWSER_ACTIONS = 15;
 const IDLE_CLOSE_MS = 10 * 60_000;
@@ -40,7 +40,7 @@ const SUBMIT_ARM_MS = 15_000;
 const SAFE_METHODS = new Set(['GET', 'HEAD', 'OPTIONS']);
 
 export interface PageLink { index: number; text: string; href: string }
-export interface PageControl { kind: string; label: string }
+export interface PageControl { kind: string; label: string; name?: string; value?: string }
 
 export interface BrowserPageState {
   url: string;
@@ -99,12 +99,31 @@ function describeLocator(locator: PageLocator): string {
   return String(l.label ?? l.name ?? l.text ?? l.css ?? JSON.stringify(locator));
 }
 
+/**
+ * The locator a model meant, from the shapes small models actually send:
+ * a bare string, `{name}` without a role, `{placeholder}`, `{id}` or
+ * `{selector}`. Anything else goes through the strict parser unchanged.
+ */
+export function browserLocator(raw: unknown): PageLocator | undefined {
+  if (typeof raw === 'string') return raw.trim() ? { label: raw.trim() } : undefined;
+  const strict = parsePageLocator(raw);
+  if (strict || !raw || typeof raw !== 'object') return strict;
+  const r = raw as Record<string, unknown>;
+  const str = (v: unknown) => (typeof v === 'string' && v.trim() ? v.trim() : undefined);
+  const label = str(r.name) ?? str(r.placeholder) ?? str(r.field) ?? str(r.ariaLabel) ?? str(r.aria_label);
+  if (label) return { label };
+  const id = str(r.id);
+  if (id) return { css: `#${id.replace(/[^\w-]/g, '')}` };
+  const selector = str(r.selector);
+  return selector ? { css: selector } : undefined;
+}
+
 class BrowserSession {
   readonly approvedSites = new Set<string>();
   actionsUsed = 0;
   private blocked: string[] = [];
   /** Values the agent typed through browser_fill on the current page, by field. */
-  readonly fills = new Map<string, string>();
+  readonly fills = new Map<string, { value: string; name: string; asked: string }>();
   /** One approved form submission may pass the guard, to this site, until it expires. */
   private armedSubmit?: { site: string; until: number };
   private idleTimer?: NodeJS.Timeout;
@@ -260,6 +279,16 @@ class BrowserSession {
     }
   }
 
+  async currentUrl(): Promise<string> {
+    return String(await evaluate(this.cdp, this.sessionId, 'location.href').catch(() => ''));
+  }
+
+  async location(): Promise<{ url: string; title: string }> {
+    const at = await evaluate(this.cdp, this.sessionId, '[location.href, document.title]').catch(() => ['', '']);
+    const [url, title] = Array.isArray(at) ? at.map(String) : ['', ''];
+    return { url, title };
+  }
+
   private async currentHost(): Promise<string> {
     const href = await evaluate(this.cdp, this.sessionId, 'location.href').catch(() => '');
     try {
@@ -269,38 +298,135 @@ class BrowserSession {
     }
   }
 
+  /**
+   * Types into one field. The field is found by its exact locator first, then
+   * — for a label, name or text — by the field's own label, name, id or
+   * placeholder ignoring case and a trailing ":" or "*", but only when exactly
+   * one field matches. A miss names the fields that do exist, so the next
+   * attempt has something new to go on.
+   */
   async fill(locator: PageLocator, value: string): Promise<void> {
     const host = await this.currentHost();
     if (!host || !hostAllowed(host, this.approvedSites)) {
       throw new BrowserSessionError('fields can only be filled on a page of an approved site', 'browser_site_not_approved');
     }
-    await applyStep(this.cdp, this.sessionId, { action: 'fill', locator, value });
-    this.fills.set(describeLocator(locator), value);
+    const result = await evaluate(this.cdp, this.sessionId, `(function () {
+      ${PAGE_LOCATOR_RUNTIME}
+      const locator = ${JSON.stringify(locator)};
+      const value = ${JSON.stringify(value)};
+      const norm = (s) => kdkNorm(s).replace(/[\\s:*]+$/, '');
+      const fields = Array.from(document.querySelectorAll('input, textarea, select')).filter((f) => {
+        const t = String(f.type || '').toLowerCase();
+        return !['hidden', 'submit', 'button', 'reset', 'image', 'file'].includes(t) && !f.disabled && !f.readOnly;
+      });
+      let el = null;
+      try { el = kdkFindByLocator(locator); } catch (err) { el = null; }
+      if (el && el.tagName === 'LABEL' && el.control) el = el.control;
+      if (el && !fields.includes(el)) el = null;
+      const wanted = norm(locator.label || locator.name || locator.text || '');
+      if (!el && wanted) {
+        const keys = (f) => [kdkAccessibleName(f), f.name, f.id, f.getAttribute('placeholder')].map(norm).filter(Boolean);
+        const exact = fields.filter((f) => keys(f).includes(wanted));
+        const loose = exact.length ? exact : fields.filter((f) => keys(f).some((k) => k.length > 2 && (k.includes(wanted) || wanted.includes(k))));
+        if (loose.length === 1) el = loose[0];
+      }
+      const describe = (f) => ({ label: kdkAccessibleName(f).replace(/[\\s:*]+$/, '').slice(0, 60), name: f.name || '' });
+      if (!el) return { ok: false, fields: fields.slice(0, 20).map(describe) };
+      el.scrollIntoView({ block: 'center', inline: 'nearest' });
+      el.focus();
+      const type = String(el.type || '').toLowerCase();
+      if (type === 'checkbox' || type === 'radio') {
+        el.checked = /^(1|true|yes|on|checked|selected)$/i.test(value.trim());
+      } else if (el.tagName === 'SELECT') {
+        const option = Array.from(el.options).find((o) => norm(o.value) === norm(value) || norm(o.text) === norm(value));
+        if (!option) return { ok: false, options: Array.from(el.options).map((o) => o.text).slice(0, 20), field: describe(el) };
+        el.value = option.value;
+      } else {
+        const proto = el.tagName === 'TEXTAREA' ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
+        Object.getOwnPropertyDescriptor(proto, 'value').set.call(el, value);
+      }
+      el.dispatchEvent(new Event('input', { bubbles: true }));
+      el.dispatchEvent(new Event('change', { bubbles: true }));
+      return { ok: true, field: describe(el), value: type === 'checkbox' || type === 'radio' ? String(el.checked) : el.value };
+    })()`) as { ok: boolean; field?: { label: string; name: string }; value?: string; fields?: Array<{ label: string; name: string }>; options?: string[] };
+    if (!result?.ok) {
+      if (result?.options) {
+        throw new BrowserSessionError(
+          `"${value}" is not one of the choices in "${result.field?.label}": ${result.options.join(', ')}`,
+          'browser_target_missing',
+        );
+      }
+      const known = (result?.fields ?? []).map((f) => `"${f.label || f.name}"${f.name ? ` (name=${f.name})` : ''}`).join(', ');
+      throw new BrowserSessionError(
+        `no single field on this page matches ${describeLocatorText(locator)}. ${known ? `Fields here: ${known}. Use {"label": "<one of these>"}.` : 'This page has no fillable fields.'}`,
+        'browser_target_missing',
+      );
+    }
+    if (result.value !== value && result.value !== 'true' && result.value !== 'false' && result.field) {
+      throw new BrowserSessionError(`the field "${result.field.label}" kept "${String(result.value).slice(0, 80)}" instead of the value typed`, 'browser_action_failed');
+    }
+    const label = result.field?.label || result.field?.name || describeLocator(locator);
+    this.fills.set(label, { value: result.value ?? value, name: result.field?.name ?? '', asked: describeLocator(locator) });
+  }
+
+  /** What was typed on this page, by field label: what a submission would send. */
+  typedFields(): Record<string, string> {
+    return Object.fromEntries([...this.fills].map(([label, fill]) => [label, fill.value]));
+  }
+
+  /** Where the form holding the typed fields would be sent. */
+  async formDestination(): Promise<string> {
+    const names = [...this.fills.values()].map((f) => f.name).filter(Boolean);
+    const target = await evaluate(this.cdp, this.sessionId, `(function () {
+      const names = ${JSON.stringify(names)};
+      const field = names.map((n) => document.getElementsByName(n)[0]).find(Boolean);
+      const form = (field && field.form) || document.forms[0];
+      if (!form) return '';
+      return (form.method || 'get').toUpperCase() + ' ' + form.action;
+    })()`).catch(() => '');
+    return String(target ?? '');
   }
 
   /**
    * Submits the current form after the user approved exactly these values.
-   * Refuses when the typed values differ from what was approved.
+   * Refuses when the typed values differ from what was approved. A field is
+   * matched by its label, its name, or the locator text used to fill it,
+   * ignoring case, spacing, "_" and a trailing ":".
    */
   async submit(locator: PageLocator, approvedFields: Record<string, string>): Promise<void> {
     const host = await this.currentHost();
     if (!host || !hostAllowed(host, this.approvedSites)) {
       throw new BrowserSessionError('a form can only be submitted on a page of an approved site', 'browser_site_not_approved');
     }
-    const typed = Object.fromEntries(this.fills);
-    const approved = Object.fromEntries(Object.entries(approvedFields).map(([k, v]) => [k, String(v)]));
-    const same = Object.keys(typed).length > 0
-      && Object.keys(typed).length === Object.keys(approved).length
-      && Object.entries(typed).every(([k, v]) => approved[k] === v);
+    const typed = this.typedFields();
+    const key = (s: string) => s.toLowerCase().replace(/[_\s]+/g, ' ').replace(/^label "|"$/g, '').replace(/[\s:*]+$/, '').trim();
+    const approved = new Map(Object.entries(approvedFields).map(([k, v]) => [key(k), String(v)]));
+    const same = this.fills.size > 0
+      && this.fills.size === approved.size
+      && [...this.fills].every(([label, fill]) => {
+        const match = [label, fill.name, fill.asked].map(key).find((k) => approved.has(k));
+        return match !== undefined && approved.get(match) === fill.value;
+      });
     if (!same) {
       throw new BrowserSessionError(
         `the approved values do not match what was typed (typed: ${JSON.stringify(typed)}); nothing was submitted`,
         'browser_submit_mismatch',
       );
     }
+    // What is sent is what the page holds: refuse when the fields no longer
+    // carry the approved values (the page reloaded, a script changed them).
+    const held = await evaluate(this.cdp, this.sessionId, `(function () {
+      const names = ${JSON.stringify([...this.fills.values()].map((f) => f.name))};
+      return names.map((n) => { const el = n && document.getElementsByName(n)[0]; return el ? String(el.value) : null; });
+    })()`) as Array<string | null>;
+    const fills = [...this.fills.values()];
+    if (fills.some((f, i) => f.name && held[i] !== f.value)) {
+      this.fills.clear();
+      throw new BrowserSessionError('the page no longer holds the typed values (it was reloaded or changed); nothing was submitted. Fill the fields again before submitting', 'browser_submit_mismatch');
+    }
     this.armedSubmit = { site: siteKey(host), until: Date.now() + SUBMIT_ARM_MS };
     try {
-      await applyStep(this.cdp, this.sessionId, { action: 'click', locator });
+      await this.clickLocator(locator);
       await sleep(300);
       await this.waitForLoad();
     } finally {
@@ -330,8 +456,21 @@ class BrowserSession {
       return;
     }
     if (!target.locator) throw new BrowserSessionError('click needs linkIndex or locator', 'browser_invalid_arguments');
-    await applyStep(this.cdp, this.sessionId, { action: 'click', locator: target.locator });
+    await this.clickLocator(target.locator);
     await this.waitForLoad();
+  }
+
+  /** Clicks an element; a miss names the buttons the page does have. */
+  private async clickLocator(locator: PageLocator): Promise<void> {
+    try {
+      await applyStep(this.cdp, this.sessionId, { action: 'click', locator });
+    } catch (err) {
+      if (!/locator not found/.test(err instanceof Error ? err.message : String(err))) throw err;
+      const buttons = await evaluate(this.cdp, this.sessionId, `Array.from(document.querySelectorAll('button, input[type=submit], input[type=button], [role=button]'))
+        .map((b) => String(b.innerText || b.value || b.getAttribute('aria-label') || '').replace(/\\s+/g, ' ').trim()).filter(Boolean).slice(0, 15)`).catch(() => []);
+      const list = Array.isArray(buttons) && buttons.length ? ` Buttons here: ${buttons.map((b) => `"${String(b)}"`).join(', ')}; use {"text": "<one of these>"}, or a numbered link with linkIndex.` : '';
+      throw new BrowserSessionError(`nothing on this page matches ${describeLocatorText(locator)}.${list}`, 'browser_target_missing');
+    }
   }
 
   async scroll(direction: 'down' | 'up'): Promise<void> {
@@ -351,6 +490,8 @@ class BrowserSession {
     // last good page and report the block instead of failing the session.
     if (url.startsWith('chrome-error:') && this.lastGoodUrl) {
       if (!this.blocked.length) this.blocked.push('the page could not be loaded');
+      // Reloading the page empties its fields: nothing typed is held any more.
+      this.fills.clear();
       await this.navigate(this.lastGoodUrl);
       raw = await this.readPage();
       url = String((raw as { url?: unknown } | undefined)?.url ?? '');
@@ -396,9 +537,24 @@ class BrowserSession {
         a.setAttribute('data-kdk-link', String(links.length + 1));
         links.push({ index: links.length + 1, text, href });
       }
+      const kindOf = (el) => {
+        const t = String(el.type || '').toLowerCase();
+        if (el.tagName === 'BUTTON' || ['submit', 'button', 'reset', 'image'].includes(t)) return 'button';
+        if (el.tagName === 'TEXTAREA') return 'text area';
+        if (el.tagName === 'SELECT') return 'choice list';
+        if (t === 'checkbox' || t === 'radio') return t;
+        return 'text field';
+      };
       const controls = Array.from(document.querySelectorAll('input:not([type=hidden]), textarea, select, button'))
-        .map((el) => ({ kind: el.tagName.toLowerCase() + (el.type ? ':' + el.type : ''),
-          label: clean(el.getAttribute('aria-label') || (el.labels && el.labels[0] && el.labels[0].innerText) || el.placeholder || el.innerText || el.name).slice(0, 60) }))
+        .map((el) => {
+          const kind = kindOf(el);
+          const t = String(el.type || '').toLowerCase();
+          const value = kind === 'button' || t === 'password' ? '' : (t === 'checkbox' || t === 'radio' ? (el.checked ? 'checked' : '') : String(el.value || ''));
+          return { kind,
+            label: clean(el.getAttribute('aria-label') || (el.labels && el.labels[0] && el.labels[0].innerText) || el.placeholder || el.innerText || el.value || el.name).replace(/[\\s:*]+$/, '').slice(0, 60),
+            name: String(el.name || '').slice(0, 40),
+            value: clean(value).slice(0, 60) };
+        })
         .filter((c) => c.label)
         .slice(0, ${MAX_CONTROLS});
       return { url: location.href, title: document.title,
@@ -413,10 +569,14 @@ class BrowserSession {
    */
   async screenshot(): Promise<Buffer | null> {
     if (this.closed) return null;
+    // The clip is in page coordinates: follow the scroll so the picture is
+    // what the viewport shows, not the top of the document.
+    const at = await evaluate(this.cdp, this.sessionId, '[window.scrollX, window.scrollY]').catch(() => [0, 0]);
+    const [x, y] = Array.isArray(at) ? at.map((n) => Math.max(0, Number(n) || 0)) : [0, 0];
     const shot = await this.cdp.send('Page.captureScreenshot', {
       format: 'jpeg',
-      quality: 55,
-      clip: { x: 0, y: 0, width: 1280, height: 900, scale: 0.625 },
+      quality: 60,
+      clip: { x, y, width: 1280, height: 900, scale: 0.625 },
     }, this.sessionId).catch(() => null);
     const data = typeof shot?.data === 'string' ? shot.data : '';
     return data ? Buffer.from(data, 'base64') : null;
@@ -560,6 +720,20 @@ export class BrowserSessionManager {
 
   read(key: string, signal?: AbortSignal): Promise<BrowserPageState> {
     return this.act(key, signal, false, false, async () => undefined);
+  }
+
+  /** What was typed on the session's current page, and where its form would go. */
+  async pendingForm(key: string): Promise<{ fields: Record<string, string>; destination: string; page: string } | null> {
+    const session = this.sessions.get(key);
+    if (!session || session.isClosed || session.fills.size === 0) return null;
+    return { fields: session.typedFields(), destination: await session.formDestination(), page: await session.currentUrl() };
+  }
+
+  /** The address and title the live session shows, without spending an action. */
+  async peek(key: string): Promise<{ url: string; title: string } | null> {
+    const session = this.sessions.get(key);
+    if (!session || session.isClosed) return null;
+    return session.location();
   }
 
   /** The current page of a live session as a small JPEG, or null when there is none. */

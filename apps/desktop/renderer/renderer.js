@@ -173,6 +173,9 @@ const contextApproval = document.getElementById('context-approval');
 const workspaceStop = document.getElementById('workspace-stop');
 const workspaceToggle = document.getElementById('btn-open-workspace');
 const workspaceToggleDot = document.getElementById('workspace-toggle-dot');
+const workspaceResizer = document.getElementById('workspace-resizer');
+const contextNow = document.getElementById('context-now');
+const contextDeliveredSection = document.getElementById('context-delivered-section');
 const conversationResultsTitle = document.getElementById('conversation-results-title');
 const conversationResultsFiles = document.getElementById('conversation-results-files');
 const conversationResultsPreview = document.getElementById('conversation-results-preview');
@@ -7101,7 +7104,17 @@ async function refreshLiveTelemetry() {
     const t = (tasks || []).find((x) => !['completed', 'failed', 'cancelled'].includes(x.status));
     if (!t) { line.hidden = true; return; }
     const elapsed = formatElapsed(Date.now() - Date.parse(t.startedAt || t.createdAt));
-    line.textContent = `${t.worker}${t.model ? ` · ${t.model}` : ''} · ${elapsed} · ${describeModelPhase(t)}`;
+    const technical = `${t.worker}${t.model ? ` · ${t.model}` : ''} · ${elapsed} · ${describeModelPhase(t)}`;
+    // One plain sentence about the step happening now; the model telemetry
+    // stays one hover away instead of competing with the task card.
+    const action = lastSnapshot?.cockpit?.currentAction?.title;
+    const awaiting = Boolean(lastSnapshot?.awaitingApproval || lastSnapshot?.pendingApproval || lastSnapshot?.cockpit?.pendingApproval);
+    const plain = t.status === 'cancelling' ? 'Stopping…'
+      : awaiting ? 'Waiting for your approval — nothing runs until you decide.'
+        : action && action !== 'AI response' ? `${action}…`
+          : 'Deciding the next step…';
+    line.textContent = `${plain} · ${elapsed}`;
+    line.title = technical;
     line.hidden = false;
   } catch { line.hidden = true; } finally { liveTelemetryBusy = false; }
 }
@@ -7833,6 +7846,9 @@ function updateComposerStatus() {
   }
   if (el.textContent !== text) el.textContent = text;
   el.dataset.state = state;
+  // While work runs, the line below (the step happening now) says it once.
+  const telemetryShown = document.getElementById('live-telemetry')?.hidden === false;
+  el.hidden = state === 'working' && telemetryShown;
 }
 
 /* ══════════════════════════════════════════════════════════════════════
@@ -8025,27 +8041,64 @@ function renderWorkspaceTaskCard(snapshot, presence) {
 }
 
 /** The real activity events, newest last, exactly as the runtime reported them. */
+/** Bookkeeping checkpoints, said the way a person would. */
+const TASK_STEP_WORDS = {
+  'Mission submitted': 'Started',
+  'Waiting for authorization': 'Waiting for your approval',
+  'Authorization approved': 'You approved',
+  'Mission completed': 'Done',
+};
+
 function renderTaskCardSteps(cockpit, running, awaitingApproval = false) {
   if (!taskCardSteps) return;
-  let checkpoints = (cockpit?.checkpoints ?? []).slice(-5);
+  const all = cockpit?.checkpoints ?? [];
+  // Model turns between tools are not steps of the task; one "Deciding the
+  // next step" stands in for them only while nothing else is happening.
+  const approvedLater = (index) => all.slice(index + 1).some((later) => later.title === 'Authorization approved');
+  let checkpoints = all.filter((item, index) => (item.title !== 'AI response'
+    || (running && index === all.length - 1 && item.outcome === 'running'))
+    && !(item.title === 'Waiting for authorization' && approvedLater(index)));
   if (awaitingApproval) {
     checkpoints = checkpoints.filter((item) => item.title !== 'Mission completed');
   }
-  const signature = `${running}|${awaitingApproval}|${checkpoints.map((item) => `${item.title}|${item.outcome ?? ''}`).join('~')}`;
+  const shown = checkpoints.slice(-6);
+  const signature = `${running}|${awaitingApproval}|${all.map((item) => `${item.title}|${item.outcome ?? ''}|${item.count ?? 1}`).join('~')}`;
   if (taskCardSteps.dataset.signature === signature) return;
   taskCardSteps.dataset.signature = signature;
-  taskCardSteps.replaceChildren(...checkpoints.map((item, index) => {
+  const rows = shown.map((item, index) => {
     const row = document.createElement('li');
-    const isLast = index === checkpoints.length - 1;
+    const isLast = index === shown.length - 1;
     if (item.outcome) row.dataset.outcome = item.outcome;
     else if (isLast && running) row.dataset.outcome = 'active';
     const label = document.createElement('span');
-    // The title is the human step ("Read notes.txt", "AI response"). The raw
-    // detail can carry internal attempt ids, so it stays out of the card.
-    label.textContent = item.title;
+    // Plain words only; the raw detail can carry internal ids.
+    const words = item.title === 'AI response' ? 'Deciding the next step' : (TASK_STEP_WORDS[item.title] ?? item.title);
+    label.textContent = item.count > 1 ? `${words} (×${item.count})` : words;
     row.appendChild(label);
+    if (item.outcome === 'failed' && item.detail) {
+      const why = document.createElement('span');
+      why.className = 'task-step-why';
+      why.textContent = item.detail;
+      row.appendChild(why);
+    }
     return row;
-  }));
+  });
+  // Every recorded step, tool names included, for whoever wants to look.
+  const details = document.createElement('li');
+  details.className = 'task-step-details';
+  const box = document.createElement('details');
+  const summary = document.createElement('summary');
+  summary.textContent = `Details (${all.length} steps)`;
+  const list = document.createElement('ol');
+  for (const item of all) {
+    const line = document.createElement('li');
+    line.textContent = [item.tool ?? item.title, item.outcome ?? '', item.count > 1 ? `×${item.count}` : '', item.detail ?? ''].filter(Boolean).join(' · ');
+    list.appendChild(line);
+  }
+  box.open = taskCardSteps.querySelector('.task-step-details details')?.open ?? false;
+  box.append(summary, list);
+  details.appendChild(box);
+  taskCardSteps.replaceChildren(...rows, ...(all.length ? [details] : []));
 }
 
 /** Elapsed time, ticked from the attempt's real start time. */
@@ -8189,11 +8242,18 @@ function renderWorkspaceActivity(snapshot) {
   const awaitingApproval = Boolean(snapshot?.awaitingApproval || snapshot?.pendingApproval || snapshot?.cockpit?.pendingApproval || snapshot?.pendingImageApproval);
   if (contextApproval) contextApproval.hidden = !awaitingApproval;
   if (workspaceStop) workspaceStop.hidden = !snapshot?.running;
+  renderWorkspaceNow(current, awaitingApproval, Boolean(snapshot?.running));
+  if (contextDeliveredSection) contextDeliveredSection.hidden = items.length > 0 && !(snapshot?.cockpit?.filesChanged?.length);
 
   const selected = items.find((item) => item.id === workspaceSelectedActivityId) ?? current;
   if (contextActivitySection) contextActivitySection.hidden = !selected;
   if (contextActivityHeading) {
-    contextActivityHeading.textContent = selected && selected.id !== current?.id ? 'Earlier step' : (selected?.state === 'running' ? 'Now' : 'Latest');
+    contextActivityHeading.textContent = selected && selected.id !== current?.id ? 'Earlier step' : (snapshot?.running ? 'Now' : 'Latest');
+  }
+  if (selected?.kind === 'browser') {
+    renderBrowserView(selected, items, snapshot?.coreState === 'connected');
+    renderWorkspaceHistory(items, selected, current);
+    return;
   }
   // Previews come from Core: redraw once it is connected, and retry a preview
   // that failed earlier (after a restart Core may answer a moment later).
@@ -8208,7 +8268,39 @@ function renderWorkspaceActivity(snapshot) {
     contextActivity.dataset.signature = detailSignature;
     contextActivity.replaceChildren(...(selected ? buildActivityDetail(selected) : []));
   }
+  renderWorkspaceHistory(items, selected, current);
+}
 
+/** One plain sentence on top of the workspace: what is happening right now. */
+function renderWorkspaceNow(current, awaitingApproval, running) {
+  if (!contextNow) return;
+  let state = current?.state ?? '';
+  let text = '';
+  if (awaitingApproval) {
+    state = 'approval';
+    text = 'Waiting for your approval — nothing happens until you decide.';
+  } else if (current) {
+    if (current.state === 'running') text = `${current.title}…`;
+    else if (current.state === 'failed') text = `${current.title}${current.detail ? ` — ${current.detail}` : ''}`;
+    else if (current.state === 'cancelled') text = `Stopped: ${current.title}`;
+    else text = running ? `${current.title} · deciding the next step…` : current.title;
+  }
+  const signature = `${state}|${text}`;
+  if (contextNow.dataset.signature === signature) return;
+  contextNow.dataset.signature = signature;
+  contextNow.dataset.state = state;
+  if (!text) {
+    contextNow.replaceChildren();
+    return;
+  }
+  const dot = document.createElement('span');
+  dot.className = 'now-dot';
+  const words = document.createElement('span');
+  words.textContent = text;
+  contextNow.replaceChildren(dot, words);
+}
+
+function renderWorkspaceHistory(items, selected, current) {
   if (contextHistorySection) contextHistorySection.hidden = items.length < 2;
   const historySignature = JSON.stringify([selected?.id ?? null, items.map((item) => [item.id, item.state, item.title])]);
   if (contextHistory && contextHistory.dataset.signature !== historySignature) {
@@ -8238,6 +8330,274 @@ function renderWorkspaceActivity(snapshot) {
     }));
   }
 }
+
+// ── Browser view ─────────────────────────────────────────────────────────
+// Pandesh browses in its own background browser session; this frame shows the
+// picture that session took after each step (Core screenshots, never a second
+// browser and never a reconstruction). It is updated in place so the panel
+// does not jump while the conversation is being read or typed in.
+
+let browserView = null;
+
+function browserViewNodes() {
+  if (browserView) return browserView;
+  const root = document.createElement('div');
+  root.className = 'browser-view';
+  const frame = document.createElement('div');
+  frame.className = 'browser-frame';
+  const bar = document.createElement('div');
+  bar.className = 'browser-bar';
+  const address = document.createElement('div');
+  address.className = 'browser-address';
+  const title = document.createElement('span');
+  title.className = 'browser-address-title';
+  const url = document.createElement('span');
+  url.className = 'browser-address-url';
+  address.append(title, url);
+  const enlarge = document.createElement('button');
+  enlarge.type = 'button';
+  enlarge.className = 'browser-bar-btn';
+  enlarge.textContent = 'Enlarge';
+  enlarge.title = 'Show this picture full size';
+  const open = document.createElement('a');
+  open.className = 'browser-bar-btn';
+  open.textContent = 'Open in your browser ↗';
+  open.target = '_blank';
+  open.rel = 'noopener noreferrer';
+  open.title = 'Opens this address in your own browser, in a separate window. Pandesh keeps working in its own session.';
+  bar.append(address, enlarge, open);
+  const viewport = document.createElement('div');
+  viewport.className = 'browser-viewport';
+  viewport.title = 'Click to enlarge';
+  const img = document.createElement('img');
+  img.alt = '';
+  img.hidden = true;
+  const note = document.createElement('div');
+  note.className = 'browser-viewport-note';
+  const badge = document.createElement('span');
+  badge.className = 'browser-viewport-badge';
+  badge.hidden = true;
+  viewport.append(img, note, badge);
+  const caption = document.createElement('p');
+  caption.className = 'browser-caption';
+  frame.append(bar, viewport, caption);
+  const strip = document.createElement('div');
+  strip.className = 'browser-strip';
+  strip.setAttribute('aria-label', 'Pictures of earlier browser steps');
+  const more = document.createElement('div');
+  root.append(frame, strip, more);
+  const showLarge = () => {
+    if (img.hidden || !img.src) return;
+    openWorkspaceLightbox(img.src, `${title.textContent} — ${url.textContent}`);
+  };
+  enlarge.addEventListener('click', showLarge);
+  viewport.addEventListener('click', showLarge);
+  browserView = { root, title, url, open, enlarge, viewport, img, note, badge, caption, strip, more };
+  return browserView;
+}
+
+/** Loads a Core artifact preview once (bounded cache), or null when it cannot be shown. */
+function loadWorkspacePreview(artifactId) {
+  const cached = workspacePreviewCache.get(artifactId);
+  if (cached) return Promise.resolve(cached);
+  if (typeof api?.loadArtifactPreview !== 'function' || lastSnapshot?.coreState !== 'connected') return Promise.resolve(null);
+  // A picture that just failed is retried on the panel's own schedule, not on every redraw.
+  if (Date.now() - (workspacePreviewFailures.get(artifactId) ?? 0) < 5_000) return Promise.resolve(null);
+  return api.loadArtifactPreview(artifactId).then((preview) => {
+    workspacePreviewCache.set(artifactId, preview);
+    if (workspacePreviewCache.size > WORKSPACE_PREVIEW_CACHE_LIMIT) {
+      workspacePreviewCache.delete(workspacePreviewCache.keys().next().value);
+    }
+    return preview;
+  }).catch(() => {
+    workspacePreviewFailures.set(artifactId, Date.now());
+    return null;
+  });
+}
+
+function renderBrowserView(selected, items, coreReady) {
+  const view = browserViewNodes();
+  if (contextActivity.firstChild !== view.root || contextActivity.childNodes.length !== 1) {
+    contextActivity.replaceChildren(view.root);
+  }
+  contextActivity.dataset.signature = 'browser';
+  const browserItems = items.filter((item) => item.kind === 'browser');
+  const index = browserItems.findIndex((item) => item.id === selected.id);
+  const shotOf = (item) => (Array.isArray(item?.preview?.artifactIds) ? item.preview.artifactIds[0] : null);
+  // The picture for this step; while it runs (or if it failed without one),
+  // the newest earlier picture of the same browser, clearly marked as older.
+  let frameItem = shotOf(selected) ? selected : null;
+  if (!frameItem) {
+    for (let i = index - 1; i >= 0; i -= 1) {
+      if (shotOf(browserItems[i])) { frameItem = browserItems[i]; break; }
+    }
+  }
+  const stale = Boolean(frameItem && frameItem.id !== selected.id);
+  const page = selected.preview?.url ? selected.preview : (frameItem?.preview ?? {});
+  const address = safeWebUrl(page.url);
+  view.title.textContent = page.title && page.title !== address ? page.title : (address ? new URL(address).hostname : 'Pandesh’s browser');
+  view.url.textContent = address ?? '';
+  view.url.title = address ?? '';
+  view.open.hidden = !address;
+  if (address) view.open.href = address;
+  view.viewport.dataset.stale = String(stale);
+  view.badge.hidden = !stale;
+  view.badge.textContent = selected.state === 'running' ? 'Updating…' : 'Picture from the step before';
+
+  const artifactId = shotOf(frameItem);
+  if (!artifactId) {
+    view.img.hidden = true;
+    view.img.removeAttribute('src');
+    view.img.dataset.artifactId = '';
+    view.note.hidden = false;
+    view.note.textContent = selected.state === 'running' ? 'Starting Pandesh’s browser…' : 'No picture was taken for this step.';
+  } else if (view.img.dataset.artifactId !== artifactId) {
+    view.img.dataset.artifactId = artifactId;
+    if (view.img.hidden) {
+      view.note.hidden = false;
+      view.note.textContent = coreReady ? 'Loading the picture…' : 'The picture appears when Pandesh is connected…';
+    }
+    void loadWorkspacePreview(artifactId).then((preview) => {
+      if (view.img.dataset.artifactId !== artifactId) return;
+      if (typeof preview?.dataUrl === 'string' && preview.dataUrl.startsWith('data:image/')) {
+        view.img.src = preview.dataUrl;
+        view.img.alt = `Pandesh’s browser showing ${page.title || address || 'a page'}`;
+        view.img.hidden = false;
+        view.note.hidden = true;
+      } else {
+        view.img.dataset.artifactId = '';
+        view.note.hidden = false;
+        view.note.textContent = coreReady ? 'This picture is no longer available.' : 'The picture appears when Pandesh is connected…';
+      }
+    });
+  }
+  const when = formatActivityTime(frameItem?.endedAt || frameItem?.startedAt || selected.startedAt);
+  view.caption.textContent = frameItem
+    ? `Pandesh’s browser after: ${frameItem.title}${when ? ` · ${when}` : ''}. A picture is taken after every step; it is not a live control.`
+    : 'Pandesh’s browser runs in the background; a picture appears here after each step.';
+
+  // Earlier pictures of this browsing, newest last, to step through.
+  const stripItems = browserItems.slice(-14);
+  const stripSignature = JSON.stringify([selected.id, stripItems.map((item) => [item.id, item.state, shotOf(item)])]);
+  if (view.strip.dataset.signature !== stripSignature) {
+    view.strip.dataset.signature = stripSignature;
+    view.strip.hidden = stripItems.length < 2;
+    view.strip.replaceChildren(...stripItems.map((item) => {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.dataset.state = item.state;
+      button.title = item.title;
+      if (item.id === selected.id) button.setAttribute('aria-current', 'true');
+      const shot = document.createElement('img');
+      shot.className = 'strip-shot';
+      shot.alt = '';
+      const id = shotOf(item);
+      if (id) void loadWorkspacePreview(id).then((preview) => { if (preview?.dataUrl) shot.src = preview.dataUrl; });
+      const label = document.createElement('span');
+      label.className = 'strip-label';
+      label.textContent = item.title;
+      button.append(shot, label);
+      button.addEventListener('click', () => {
+        const latest = currentWorkspaceActivity(viewedWorkspaceActivities());
+        workspaceSelectedActivityId = item.id === latest?.id ? null : item.id;
+        renderWorkspaceActivity(lastSnapshot);
+      });
+      return button;
+    }));
+    const active = view.strip.querySelector('[aria-current="true"]');
+    if (active) view.strip.scrollLeft = Math.max(0, active.offsetLeft - view.strip.clientWidth + active.offsetWidth + 8);
+  }
+
+  // The page's own words stay one click away.
+  const excerpt = page.excerpt && !stale ? page.excerpt : '';
+  const moreSignature = JSON.stringify([selected.id, selected.state, selected.detail, excerpt]);
+  if (view.more.dataset.signature !== moreSignature) {
+    view.more.dataset.signature = moreSignature;
+    const parts = [];
+    if (selected.detail && (selected.state === 'failed' || selected.state === 'cancelled')) {
+      const detail = document.createElement('p');
+      detail.className = 'activity-detail';
+      detail.dataset.tone = 'bad';
+      detail.textContent = selected.detail;
+      parts.push(detail);
+    }
+    if (excerpt) {
+      const box = document.createElement('details');
+      box.className = 'activity-more';
+      const summary = document.createElement('summary');
+      summary.textContent = 'Text Pandesh read on this page';
+      const text = document.createElement('pre');
+      text.className = 'activity-text';
+      text.textContent = excerpt;
+      box.append(summary, text);
+      parts.push(box);
+    }
+    view.more.replaceChildren(...parts);
+  }
+}
+
+function openWorkspaceLightbox(src, caption) {
+  const box = document.createElement('div');
+  box.className = 'workspace-lightbox';
+  box.setAttribute('role', 'dialog');
+  box.setAttribute('aria-label', 'Enlarged picture');
+  const img = document.createElement('img');
+  img.src = src;
+  img.alt = caption;
+  const text = document.createElement('p');
+  text.textContent = caption;
+  box.append(img, text);
+  const close = () => { box.remove(); document.removeEventListener('keydown', onKey, true); };
+  const onKey = (event) => { if (event.key === 'Escape') { event.stopPropagation(); close(); } };
+  box.addEventListener('click', close);
+  document.addEventListener('keydown', onKey, true);
+  document.body.appendChild(box);
+}
+
+// The workspace width is the person's: dragged, kept across restarts.
+const WORKSPACE_WIDTH_KEY = 'pandesh.workspaceWidthPct';
+function applyWorkspaceWidth(pct) {
+  if (!workspaceContext) return;
+  if (Number.isFinite(pct)) workspaceContext.style.setProperty('--workspace-width', `${Math.min(72, Math.max(26, pct))}%`);
+  else workspaceContext.style.removeProperty('--workspace-width');
+}
+try { applyWorkspaceWidth(Number.parseFloat(localStorage.getItem(WORKSPACE_WIDTH_KEY) ?? '')); } catch { /* default width */ }
+function saveWorkspaceWidth() {
+  try {
+    const value = workspaceContext?.style.getPropertyValue('--workspace-width');
+    if (value) localStorage.setItem(WORKSPACE_WIDTH_KEY, String(Number.parseFloat(value)));
+    else localStorage.removeItem(WORKSPACE_WIDTH_KEY);
+  } catch { /* the width just is not remembered */ }
+}
+workspaceResizer?.addEventListener('pointerdown', (event) => {
+  const layout = workspaceContext?.parentElement;
+  if (!layout) return;
+  event.preventDefault();
+  workspaceResizer.setPointerCapture(event.pointerId);
+  workspaceContext.classList.add('resizing');
+  const rect = layout.getBoundingClientRect();
+  const move = (e) => applyWorkspaceWidth(((rect.right - e.clientX) / rect.width) * 100);
+  const up = () => {
+    workspaceResizer.removeEventListener('pointermove', move);
+    workspaceResizer.removeEventListener('pointerup', up);
+    workspaceResizer.removeEventListener('pointercancel', up);
+    workspaceContext.classList.remove('resizing');
+    saveWorkspaceWidth();
+  };
+  workspaceResizer.addEventListener('pointermove', move);
+  workspaceResizer.addEventListener('pointerup', up);
+  workspaceResizer.addEventListener('pointercancel', up);
+});
+workspaceResizer?.addEventListener('dblclick', () => { applyWorkspaceWidth(NaN); saveWorkspaceWidth(); });
+workspaceResizer?.addEventListener('keydown', (event) => {
+  if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return;
+  event.preventDefault();
+  const layout = workspaceContext?.parentElement;
+  if (!layout) return;
+  const now = (workspaceContext.getBoundingClientRect().width / layout.getBoundingClientRect().width) * 100;
+  applyWorkspaceWidth(now + (event.key === 'ArrowLeft' ? 3 : -3));
+  saveWorkspaceWidth();
+});
 
 function formatActivityTime(iso) {
   const at = Date.parse(iso);

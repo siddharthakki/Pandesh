@@ -103,6 +103,20 @@ export function settleAbandonedCancellations(
   return result;
 }
 
+/**
+ * Approvals a live worker in this Core process is polling for right now. A
+ * conversation's governed capability calls hang off a per-conversation anchor
+ * attempt that no worker holds a lease on, so the lease alone cannot tell
+ * "abandoned" from "the chat turn is waiting for the person".
+ */
+const awaitedApprovals = new Set<string>();
+
+/** Marks an approval as being waited for; call the returned function when the wait ends. */
+export function holdAwaitedApproval(approvalId: string): () => void {
+  awaitedApprovals.add(approvalId);
+  return () => { awaitedApprovals.delete(approvalId); };
+}
+
 export interface OrphanedApprovalSweepResult {
   retired: Array<{ approvalId: string; attemptId: string }>;
 }
@@ -134,6 +148,7 @@ export function retireOrphanedApprovals(
     for (const approval of listApprovalsForAttempt(db, attempt.id)) {
       if (approval.status !== 'pending') continue;
       if (continuation?.pendingApprovalId === approval.id) continue;
+      if (awaitedApprovals.has(approval.id)) continue;
       try {
         expireApproval(db, approval.id, {
           actor: ACTOR,

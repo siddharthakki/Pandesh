@@ -16,6 +16,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { sanitizeToolActivity, type ToolActivity, type ToolActivityKind } from '../../../../core/shared/toolActivity';
 import type { DesktopActivityEvent, DesktopWorkspaceActivity, WorkspaceActivityState } from '../ipc';
+import { browserStep } from './missionCockpit';
 
 export const MAX_ACTIVITIES_PER_CONVERSATION = 30;
 const MAX_ACTIVITIES_TOTAL = 400;
@@ -53,7 +54,9 @@ function clip(value: unknown, max: number): string {
 }
 
 /** A plain sentence for what the call is doing, from its (Core-projected) arguments. */
-export function activityTitle(toolName: string, args: Record<string, unknown> = {}): string {
+export function activityTitle(toolName: string, args: Record<string, unknown> = {}, state: 'running' | 'ok' | 'failed' = 'running'): string {
+  const plain = browserStep(toolName, args, state);
+  if (plain) return plain;
   const target = clip(args.path ?? args.filePath ?? '', 80);
   switch (toolName) {
     case 'browser_open_site': return `Opening ${hostOf(args.url)}`;
@@ -108,6 +111,8 @@ function reportedDetail(event: DesktopActivityEvent): string | null {
 
 export class WorkspaceActivityLog {
   private items: DesktopWorkspaceActivity[] = [];
+  /** How a running step will read once it ends ("Filled …" / "Could not fill …"), by invocation id. */
+  private readonly endTitles = new Map<string, { ok: string; failed: string }>();
 
   constructor(private readonly file?: string) {
     this.load();
@@ -139,6 +144,10 @@ export class WorkspaceActivityLog {
     const preview = sanitizeToolActivity(event.activity) ?? null;
     if (isStart(event)) {
       if (this.get(event.invocationId)) return false;
+      if (browserStep(toolName, event.toolArgs ?? {}, 'ok')) {
+        this.endTitles.set(event.invocationId, { ok: activityTitle(toolName, event.toolArgs, 'ok'), failed: activityTitle(toolName, event.toolArgs, 'failed') });
+        if (this.endTitles.size > 200) this.endTitles.delete(this.endTitles.keys().next().value as string);
+      }
       this.add({
         id: event.invocationId,
         conversationId,
@@ -162,6 +171,9 @@ export class WorkspaceActivityLog {
     // check with nothing to preview — through what Core reported.
     const detail = state !== 'completed' || (CODE_TOOLS.has(toolName) && !preview) ? reportedDetail(event) : null;
     if (existing) {
+      const ended = this.endTitles.get(existing.id);
+      if (ended && state !== 'cancelled') existing.title = state === 'completed' ? ended.ok : ended.failed;
+      this.endTitles.delete(existing.id);
       existing.state = state;
       existing.endedAt = event.at;
       existing.preview = preview ?? existing.preview;

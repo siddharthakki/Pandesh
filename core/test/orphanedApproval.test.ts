@@ -14,7 +14,7 @@ import { acquireFence } from '../domain/fence';
 import { createRequest } from '../domain/requests';
 import { createApproval, getApproval, listPendingApprovals } from '../domain/approvals';
 import { newId } from '../domain/ids';
-import { retireOrphanedApprovals } from '../runtime/cancellationRecovery';
+import { holdAwaitedApproval, retireOrphanedApprovals } from '../runtime/cancellationRecovery';
 
 let dir: string;
 let db: CoreDatabase;
@@ -65,6 +65,17 @@ describe('approvals whose worker is gone', () => {
     const later = new Date(Date.now() + 60_000);
     expect(retireOrphanedApprovals(db, { now: later, isExecuting: (id) => id === gone.attemptId }).retired).toHaveLength(0);
     expect(getApproval(db, gone.approvalId).status).toBe('pending');
+  });
+
+  it('are left alone while a chat turn in this Core is waiting for the answer, even without a lease', () => {
+    // A conversation's capability calls hang off an anchor attempt nobody leases.
+    const anchored = waitingAttempt(1);
+    const later = new Date(Date.now() + 60_000);
+    const release = holdAwaitedApproval(anchored.approvalId);
+    expect(retireOrphanedApprovals(db, { now: later }).retired).toHaveLength(0);
+    expect(getApproval(db, anchored.approvalId).status).toBe('pending');
+    release();
+    expect(retireOrphanedApprovals(db, { now: later }).retired).toEqual([anchored]);
   });
 
   it('is idempotent', () => {

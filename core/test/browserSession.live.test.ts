@@ -4,7 +4,7 @@
  */
 import { afterAll, describe, expect, it, onTestFinished } from 'vitest';
 import { resolveHostBrowserBin } from '../runtime/hostBrowserBin';
-import { BrowserSessionManager } from '../runtime/browserSession';
+import { BrowserSessionManager, browserLocator } from '../runtime/browserSession';
 
 const live = process.env.PANDESH_LIVE_BROWSER === '1' && resolveHostBrowserBin() !== null;
 
@@ -68,6 +68,32 @@ describe.skipIf(!live)('live open-web browser session', () => {
     expect(done.text).toContain('"custname": "Pandesh Stage B"');
     expect(done.text).toContain('"comments": "harmless test, no order"');
     console.log('[live] submitted page:', done.url, done.text.slice(0, 400));
+  }, 90_000);
+
+  it('fills with the locator shapes small models really sent, and names the fields on a miss', async () => {
+    const sessions = new BrowserSessionManager({ browserBin: () => resolveHostBrowserBin(), maxActions: 14 });
+    onTestFinished(() => sessions.stopAll());
+    const form = await sessions.openSite('shapes', 'https://httpbin.org/forms/post');
+    expect(form.controls.find((c) => c.label === 'Customer name')?.name).toBe('custname');
+
+    // Recorded failures: {name} without a role, a guessed name attribute, a type the input does not declare.
+    await sessions.fill('shapes', browserLocator({ name: 'Customer name:' })!, 'Pandesh Stage B');
+    await expect(sessions.fill('shapes', browserLocator({ css: "input[name='customer_name']" })!, 'x'))
+      .rejects.toThrow(/Fields here: .*"Customer name" \(name=custname\)/);
+    const filled = await sessions.fill('shapes', browserLocator({ label: 'delivery instructions' })!, 'harmless test, no order');
+    expect(filled.controls.find((c) => c.name === 'comments')?.value).toBe('harmless test, no order');
+
+    // A blocked direct click reloads the page and empties it: the old values are no longer offered or sent.
+    await sessions.click('shapes', { locator: { text: 'Submit order' } });
+    await expect(sessions.pendingForm('shapes')).resolves.toBeNull();
+    await sessions.fill('shapes', { label: 'Customer name' }, 'Pandesh Stage B');
+    await sessions.fill('shapes', { label: 'Delivery instructions' }, 'harmless test, no order');
+
+    // The model's own key spelling still matches what was typed.
+    const done = await sessions.submit('shapes', { text: 'Submit order' }, {
+      CUSTOMER_NAME: 'Pandesh Stage B', DELIVERY_INSTRUCTIONS: 'harmless test, no order',
+    });
+    expect(done.text).toContain('"custname": "Pandesh Stage B"');
   }, 90_000);
 
   it('enforces the action budget and closes on Stop', async () => {

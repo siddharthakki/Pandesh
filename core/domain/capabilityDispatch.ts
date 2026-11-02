@@ -715,7 +715,7 @@ export async function dispatchCapability(db: CoreDatabase, registry: GovernedCap
   // the arguments BEFORE the approval digest is computed (for example the
   // creation time of the process a termination would kill). The approval then
   // binds that fact, and execution can re-verify it.
-  const preparedArguments = await registry.prepare(input.toolName, input.arguments);
+  const preparedArguments = await registry.prepare(input.toolName, input.arguments, { correlationId: input.correlationId });
   if (preparedArguments && preparedArguments !== input.arguments) {
     input = { ...input, arguments: preparedArguments };
   }

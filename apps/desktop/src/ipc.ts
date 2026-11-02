@@ -236,6 +236,8 @@ export interface CockpitCheckpoint {
   detail?: string;
   outcome?: 'ok' | 'failed' | 'running' | 'cached';
   count?: number;
+  /** The tool behind a step, for the expandable details; the title stays plain words. */
+  tool?: string;
 }
 
 export interface CockpitCurrentAction {

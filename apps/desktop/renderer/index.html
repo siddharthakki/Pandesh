@@ -498,6 +498,7 @@
 
           <!-- Contextual panel: delivered files, previews and results for this conversation -->
           <aside id="workspace-context" class="workspace-context" hidden aria-label="Workspace context">
+            <div id="workspace-resizer" class="workspace-resizer" role="separator" aria-orientation="vertical" aria-label="Resize the workspace" tabindex="0" title="Drag to resize · double-click to reset"></div>
             <header class="context-head">
               <span class="context-title">Workspace</span>
               <span class="context-head-actions">
@@ -511,8 +512,9 @@
                 <button id="context-approval-review" type="button" class="context-file-open">Review</button>
               </div>
 
-              <section class="context-section" id="context-activity-section" hidden aria-live="polite">
+              <section class="context-section" id="context-activity-section" hidden>
                 <h3 class="context-section-title" id="context-activity-heading">Now</h3>
+                <p id="context-now" class="context-now" aria-live="polite"></p>
                 <div id="context-activity" class="context-activity"></div>
               </section>
 
@@ -521,7 +523,7 @@
                 <ol id="context-history" class="context-history"></ol>
               </section>
 
-              <section class="context-section">
+              <section class="context-section" id="context-delivered-section">
                 <h3 class="context-section-title">Delivered files</h3>
                 <ul id="context-delivered" class="context-file-list"></ul>
                 <p id="context-delivered-empty" class="context-empty">No files changed yet.</p>

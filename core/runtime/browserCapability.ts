@@ -16,7 +16,7 @@ import {
   type BrowserInspectionRunner,
 } from './browserInspection';
 import { parsePageLocator } from './pageLocator';
-import { BrowserSessionError, BrowserSessionManager, type BrowserPageState } from './browserSession';
+import { BrowserSessionError, BrowserSessionManager, browserLocator, type BrowserPageState } from './browserSession';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import type { CoreDatabase } from '../db/connection';
@@ -63,6 +63,26 @@ const SESSION_TOOLS = new Set(['browser_open_site', 'browser_goto', 'browser_rea
 /** Each of these asks the user every time: a new site, or sending a form. */
 const APPROVAL_TOOLS = new Set(['inspect_page', 'browser_open_site', 'browser_submit']);
 
+/** Browser screenshots kept on disk; the workspace history never shows more than this. */
+export const MAX_KEPT_SCREENSHOTS = 400;
+
+/**
+ * Keeps the newest screenshots and deletes the rest. A step whose picture was
+ * pruned still shows its address, title and text; only the picture is gone.
+ */
+export function pruneScreenshots(dir: string, keep = MAX_KEPT_SCREENSHOTS): void {
+  try {
+    const shots = fs.readdirSync(dir)
+      .filter((name) => /^page-\d+-[a-z0-9]+\.(jpg|png)$/.test(name))
+      .sort();
+    for (const name of shots.slice(0, Math.max(0, shots.length - keep))) {
+      fs.rmSync(path.join(dir, name), { force: true });
+    }
+  } catch {
+    // Cleanup is best effort; browsing never fails because of it.
+  }
+}
+
 function asFieldValues(raw: unknown): Record<string, string> {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return {};
   return Object.fromEntries(Object.entries(raw as Record<string, unknown>).map(([k, v]) => [k, String(v)]));
@@ -88,7 +108,10 @@ export function formatPageState(state: BrowserPageState): string {
     lines.push('Links (use browser_click with linkIndex):', ...state.links.map((l) => `[${l.index}] ${l.text} -> ${l.href}`));
   }
   if (state.controls.length) {
-    lines.push('Controls:', ...state.controls.map((c) => `- ${c.kind}: ${c.label}`));
+    lines.push(
+      'Controls (fill with browser_fill {"locator":{"label":"<label>"}}, press a button with browser_click {"locator":{"text":"<label>"}}):',
+      ...state.controls.map((c) => `- ${c.kind} "${c.label}"${c.name ? ` (name=${c.name})` : ''}${c.value ? ` = "${c.value}"` : ''}`),
+    );
   }
   return bound(lines.join('\n'));
 }
@@ -133,7 +156,7 @@ export function createBrowserCapabilityAdapter(options: BrowserCapabilityOptions
     },
     {
       name: 'browser_open_site',
-      description: 'Open a public website in a real browser session for this conversation. The user approves each new site once; afterwards use browser_goto/browser_click for pages on that site. Returns the page text, numbered links and controls. Use for research and navigation; to send a form use browser_fill then browser_submit.',
+      description: 'Open a public website in a real browser session for this conversation. The user approves each new site once; afterwards use browser_goto/browser_click for pages on that site. Returns the page text, numbered links and controls. Use for research and navigation; to send a form use browser_fill then browser_submit. If the page is already open in this conversation, do not open it again (that asks the user again and clears typed values): use browser_read to look at it.',
       parameters: { type: 'object', properties: urlParam, required: ['url'] },
     },
     {
@@ -181,7 +204,7 @@ export function createBrowserCapabilityAdapter(options: BrowserCapabilityOptions
     },
     {
       name: 'browser_submit',
-      description: 'Ask the user to approve sending the filled form, then click its submit button. fields must list exactly the values typed with browser_fill, keyed by the same label/name used in their locators; any difference refuses the submission. Returns the page after submitting.',
+      description: 'Ask the user to approve sending the filled form, then click its submit button. Call it directly on the page you filled (the values typed there stay in place between messages). fields must list exactly the values typed with browser_fill, keyed by the same label/name used in their locators; any difference refuses the submission. Returns the page after submitting.',
       parameters: {
         type: 'object',
         properties: {
@@ -217,6 +240,7 @@ export function createBrowserCapabilityAdapter(options: BrowserCapabilityOptions
       fs.mkdirSync(options.previewDir, { recursive: true });
       const file = path.join(options.previewDir, `page-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.jpg`);
       fs.writeFileSync(file, shot);
+      pruneScreenshots(options.previewDir);
       const artifact = registerArtifact(options.db, {
         attemptId: ctx.attemptId ?? null,
         kind: 'image',
@@ -234,13 +258,41 @@ export function createBrowserCapabilityAdapter(options: BrowserCapabilityOptions
     return activity;
   };
 
+  /** The inspected page (often the person's own site on this machine) with the picture the inspector took. */
+  const inspectionActivity = (result: { title: string; url: string; screenshotPath: string }, fallbackTitle: string, ctx: ToolExecutionContext): ToolActivity => {
+    const activity: ToolActivity = { kind: 'browser', title: result.title || fallbackTitle, ...(/^https?:/.test(result.url) ? { url: result.url } : {}) };
+    if (!options.db || !options.previewDir) return activity;
+    try {
+      const source = path.isAbsolute(result.screenshotPath) ? result.screenshotPath : path.join(ctx.cwd, result.screenshotPath);
+      if (!fs.existsSync(source)) return activity;
+      fs.mkdirSync(options.previewDir, { recursive: true });
+      const file = path.join(options.previewDir, `page-${Date.now()}-${Math.random().toString(36).slice(2, 8)}${path.extname(source) || '.png'}`);
+      fs.copyFileSync(source, file);
+      pruneScreenshots(options.previewDir);
+      const artifact = registerArtifact(options.db, {
+        attemptId: ctx.attemptId ?? null,
+        kind: 'image',
+        title: (result.title || fallbackTitle).slice(0, 200),
+        mimeType: /\.jpe?g$/i.test(file) ? 'image/jpeg' : 'image/png',
+        absolutePath: file,
+        source: BROWSER_SCREENSHOT_SOURCE,
+        metadata: { url: result.url },
+        actor: 'core:browser',
+      });
+      activity.artifactIds = [artifact.id];
+    } catch {
+      // The inspection result stands without its picture.
+    }
+    return activity;
+  };
+
   const runSession = async (call: ModelToolCall, ctx: ToolExecutionContext): Promise<ToolExecutionResult> => {
     const key = ctx.correlationId ?? 'default';
     const args = call.arguments;
     const normalizedArguments = { ...args };
     try {
       let state: BrowserPageState;
-      const locator = parsePageLocator(args.locator);
+      const locator = browserLocator(args.locator ?? args.label ?? args.field);
       switch (call.name) {
         case 'browser_open_site': state = await sessions.openSite(key, String(args.url ?? ''), ctx.signal); break;
         case 'browser_goto': state = await sessions.goto(key, String(args.url ?? ''), ctx.signal); break;
@@ -281,12 +333,19 @@ export function createBrowserCapabilityAdapter(options: BrowserCapabilityOptions
         activity: await pageActivity(key, state, ctx),
       };
     } catch (err) {
+      // A failed action still shows the page as it really is, so the person
+      // sees what the browser was looking at when it went wrong.
+      const where = err instanceof BrowserSessionError && err.category === 'browser_cancelled' ? null : await sessions.peek(key).catch(() => null);
+      const activity = where && /^https?:/.test(where.url)
+        ? await pageActivity(key, { url: where.url, title: where.title, text: '', links: [], controls: [], actionsUsed: 0, actionsRemaining: 0, blocked: [] }, ctx)
+        : undefined;
       return {
         status: 'failed',
         exitCode: 1,
         output: bound(err instanceof Error ? err.message : String(err)),
         resultCategory: err instanceof BrowserSessionError ? err.category : 'browser_action_failed',
         normalizedArguments,
+        ...(activity ? { activity } : {}),
       };
     }
   };
@@ -297,6 +356,15 @@ export function createBrowserCapabilityAdapter(options: BrowserCapabilityOptions
     // Opening a new site, submitting a form, and the legacy inspector need
     // approval; moving and typing within an approved site do not.
     classify: (toolName) => (APPROVAL_TOOLS.has(toolName) ? 'consequential' : 'read_only'),
+    // The submit approval shows — and binds — what the browser really holds:
+    // the values typed into this page and the form's destination, not the
+    // model's description of them.
+    prepare: async (toolName, args, context) => {
+      if (toolName !== 'browser_submit' || !context?.correlationId) return args;
+      const form = await sessions.pendingForm(context.correlationId).catch(() => null);
+      if (!form) return args;
+      return { ...args, fields: form.fields, destination: form.destination, page: form.page };
+    },
     health: () => {
       const browserBin = options.browserBin === undefined ? resolveHostBrowserBin(env) : options.browserBin;
       if (!browserBin) {
@@ -352,7 +420,7 @@ export function createBrowserCapabilityAdapter(options: BrowserCapabilityOptions
           })),
           resultCategory: 'browser_inspect_succeeded',
           normalizedArguments: { ...normalizedArguments, screenshotPath: result.screenshotPath },
-          activity: { kind: 'browser', title: result.title || relativePath || liveUrl, ...(/^https?:/.test(result.url) ? { url: result.url } : {}) },
+          activity: inspectionActivity(result, relativePath || liveUrl, ctx),
         };
       } catch (err) {
         return {
