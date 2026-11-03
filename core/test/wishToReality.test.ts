@@ -16,8 +16,8 @@ import {
   prepareWishPurchase, recordWishLedgerClaim, resolveWishGoal, updateWishTarget, verifyWishLedgerEntry, wishFunds,
 } from '../domain/wishes';
 import { advanceWish, buildWebsiteDeliverable, extractOffers, parseEvidenceSources, renderOnePageSite, renderWishStatus } from '../runtime/wishPipeline';
-import { fulfilWishOrder, invoiceWishOrder, markWishOrderDelivered } from '../runtime/wishFulfilment';
-import { acceptWishOrder, authorizeWishBusiness, createWishOrder, getWishOrder, wishCommerceFigures } from '../domain/wishOrders';
+import { fulfilWishOrder, invoiceWishOrder, markWishOrderDelivered, normalizeSiteBrief } from '../runtime/wishFulfilment';
+import { acceptWishOrder, authorizeWishBusiness, createWishOrder, getWishOrder, resolveWishOrder, wishCommerceFigures } from '../domain/wishOrders';
 import { classifyChatToolCall } from '../domain/permissionModes';
 
 const WISH = 'Pandesh, I want the AOC CU34G4ZCA monitor for €200. Find a legitimate way to earn enough money to buy it.';
@@ -168,7 +168,7 @@ describe('money is never invented', () => {
 describe('permission modes', () => {
   it('wish_status is read-only; every wish tool that changes something is a mutation (Plan Only blocks it)', () => {
     expect(classifyChatToolCall('wish_status', {}, new Set(), null)).toBe('read');
-    for (const tool of ['create_wish_goal', 'advance_wish', 'record_wish_money', 'update_wish_goal', 'build_wish_deliverable', 'wish_order']) {
+    for (const tool of ['create_wish_goal', 'advance_wish', 'record_wish_money', 'update_wish_goal', 'build_wish_deliverable', 'wish_order', 'wish_owner_decision']) {
       expect(classifyChatToolCall(tool, {}, new Set(), null)).toBe('mutating');
     }
   });
@@ -216,6 +216,32 @@ describe('demonstration money is never purchasing power', () => {
     expect(status).toMatch(/Still to earn: €200\.00/);
     expect(wishCommerceFigures(db, goal.id, 'real').leads).toBe(0);
   });
+
+  it('a lost order id, a repeated lead or a repeated payment never creates a second customer or a second payment', () => {
+    const { goal } = createWishGoal(db, { wish: WISH });
+    const lead = { goalId: goal.id, mode: 'demo' as const, channel: 'demo', customerName: 'Anna Beispiel', priceCents: 29_000 };
+    const order = createWishOrder(db, lead);
+    expect(createWishOrder(db, { ...lead, customerName: 'anna beispiel' }).id).toBe(order.id);
+    expect(resolveWishOrder(db, goal.id, 'demo-001').id).toBe(order.id);
+    createWishOrder(db, { ...lead, customerName: 'Bernd Beispiel' });
+    expect(() => resolveWishOrder(db, goal.id, 'demo-001')).toThrow(/more than one open order fits; open orders: word_/);
+    expect(resolveWishOrder(db, goal.id, 'demo-001', { customerName: 'Anna Beispiel' }).id).toBe(order.id);
+
+    // The brief exactly as gpt-oss:20b passed it in the local-model run: same content, its own field names.
+    acceptWishOrder(db, order.id, normalizeSiteBrief({
+      about: 'Ich bin Anna Beispiel, qualifizierte Kindertagespflegeperson seit 2019.', accent: '#2e7d5b', address: 'Musterweg 3, 89077 Ulm', email: 'anna.beispiel@example.org',
+      highlights: ['max. 5 Kinder', 'großer Garten', 'Bio-Mittagessen'], hours: ['Mo–Fr 7:30–15:00'], imprint: 'Anna Beispiel, Musterweg 3, 89077 Ulm, 0731 000000, anna.beispiel@example.org',
+      language: 'de', location: 'Ulm-Söflingen', name: 'Kindertagespflege Kleine Füchse', phone: '0731 000000', subtitle: 'Liebevolle Betreuung für Kinder von 1 bis 3 Jahren',
+      privacyPolicy: 'Diese Website erhebt keine personenbezogenen Daten und setzt keine Cookies. Verantwortlich: Anna Beispiel, Musterweg 3, 89077 Ulm.', services: ['Ganztagsbetreuung'],
+    }));
+    const built = fulfilWishOrder(db, dir, order.id);
+    expect(built.qc!.checks.filter((c) => !c.ok).map((c) => c.name)).toEqual(['privacy policy present']); // one sentence is not a complete policy
+    expect(built.brief).toMatchObject({ businessName: 'Kindertagespflege Kleine Füchse', impressum: { name: 'Anna Beispiel', address: 'Musterweg 3, 89077 Ulm', phone: '0731 000000', email: 'anna.beispiel@example.org' } });
+
+    const claim = { goalId: goal.id, kind: 'revenue', amountCents: 29_000, description: 'Zahlung', evidenceRef: 'DEMO-SEPA-0001', orderId: order.id, recordedBy: 'karkedikha:pi' };
+    const first = recordWishLedgerClaim(db, claim);
+    expect(recordWishLedgerClaim(db, { ...claim, description: 'dieselbe Zahlung' }).id).toBe(first.id);
+  });
 });
 
 describe('a real order after the owner authorizes the business', () => {
@@ -241,6 +267,9 @@ describe('a real order after the owner authorizes the business', () => {
     order = fulfilWishOrder(db, dir, order.id);
     expect(order.qc!.checks.filter((c) => !c.ok)).toEqual([]);
     order = markWishOrderDelivered(db, order.id, 30);
+    authorizeWishBusiness(db, { ...authorization, taxNumber: '' }, 'client:desktop-1');
+    expect(() => invoiceWishOrder(db, dir, order.id, goal, T0)).toThrow(/Steuernummer/);
+    authorizeWishBusiness(db, authorization, 'client:desktop-1');
     order = invoiceWishOrder(db, dir, order.id, goal, T0);
     expect(order.invoiceNumber).toBe('RE-2026-001');
     const invoice = fs.readFileSync(order.invoiceFile!, 'utf8');

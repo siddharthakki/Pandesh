@@ -21,9 +21,9 @@ import { detectContent } from '../attachments/mime';
 import { isCredentialFilePath, redactSecrets as redactCredentialShapes } from '../platform/credentialStore';
 import { createResearchEvidenceRunner } from './researchCapability';
 import { advanceWish, buildWebsiteDeliverable, renderWishStatus } from './wishPipeline';
-import { fulfilWishOrder, invoiceWishOrder, markWishOrderDelivered } from './wishFulfilment';
-import { createWishGoal, evaluateWishPurchase, formatMoney, parseAmountToCents, prepareWishPurchase, recordWishLedgerClaim, resolveWishGoal, updateWishTarget } from '../domain/wishes';
-import { acceptWishOrder, addWishOrderEvent, createWishOrder, getWishOrder } from '../domain/wishOrders';
+import { fulfilWishOrder, invoiceWishOrder, markWishOrderDelivered, normalizeSiteBrief } from './wishFulfilment';
+import { createWishGoal, evaluateWishPurchase, formatMoney, isAssistantActor, listWishLedger, parseAmountToCents, prepareWishPurchase, recordWishLedgerClaim, resolveWishGoal, updateWishTarget, verifyWishLedgerEntry } from '../domain/wishes';
+import { acceptWishOrder, addWishOrderEvent, authorizeWishBusiness, createWishOrder, listWishOrders, resolveWishOrder, WISH_BUSINESS_SCOPES, wishOrderNextStep } from '../domain/wishOrders';
 import { completeReminder, createNote, createReminder, listReminders } from '../domain/everydayTools';
 import { buildDailyBriefing, renderDailyBriefing } from './dailyBriefing';
 import {
@@ -1097,6 +1097,18 @@ export class PiAgentEngine implements EngineAdapter {
       return drives;
     }
 
+    /**
+     * A decision only the business owner makes (record the authorization, confirm a payment) goes on the approval card.
+     * Returns the person who approved it, or why nothing may be recorded. A standing authorization or Core is never the owner.
+     */
+    async function askWishOwner(action: string, cardText: string): Promise<{ approver: string } | { notRecorded: string }> {
+      const decision = await requestToolApproval({ toolName: 'wish_owner_decision', action, cardText });
+      if (decision.outcome !== 'approved') return { notRecorded: describeUnansweredApproval(decision) };
+      const approver = db.get<{ actor: string | null }>("SELECT actor FROM runtime_events WHERE domain = 'approval' AND entityId = ? AND eventType = 'approval_resolved' ORDER BY createdAt DESC LIMIT 1", [decision.approvalId ?? ''])?.actor ?? '';
+      if (isAssistantActor(approver)) return { notRecorded: 'only a person can make this decision, and this approval was not made by one' };
+      return { approver };
+    }
+
     // Construct native tools
     const tools: any[] = [
       {
@@ -1814,29 +1826,53 @@ export class PiAgentEngine implements EngineAdapter {
             evidenceKind: { type: 'string', description: 'What proves it, e.g. bank_transfer, paypal, invoice, receipt.' },
             evidenceRef: { type: 'string', description: 'The reference the user gave (transaction id, invoice number).' },
             orderId: { type: 'string', description: 'For a customer payment: the order it pays (a demo order\'s money is demo money and never counts).' },
+            demo: { type: 'boolean', description: 'The user said this money is simulated (a demonstration).' },
           },
           required: ['kind', 'amount', 'description'],
         },
         execute: async (_id: string, args: any) => {
           try {
             const goal = resolveWishGoal(db, args.goalId ? String(args.goalId) : null);
+            const amountCents = Math.round(Number(args.amount) * 100);
+            const mode = args.demo === true ? 'demo' as const : null;
+            // A customer payment belongs to its order. A lost id resolves only to the one fitting order; without an id,
+            // only to the single delivered/invoiced order of exactly this amount.
+            let orderId: string | null = null;
+            if (args.orderId) orderId = resolveWishOrder(db, goal.id, String(args.orderId), { mode }).id;
+            else if (args.kind === 'revenue') {
+              const due = listWishOrders(db, goal.id).filter((o) => ['delivered', 'invoiced'].includes(o.status) && o.priceCents === amountCents && (!mode || o.mode === mode));
+              if (due.length === 1) orderId = due[0].id;
+            }
             const entry = recordWishLedgerClaim(db, {
               goalId: goal.id,
               kind: String(args.kind),
-              amountCents: Math.round(Number(args.amount) * 100),
+              amountCents,
               description: String(args.description ?? ''),
               evidenceKind: args.evidenceKind ? String(args.evidenceKind) : null,
               evidenceRef: args.evidenceRef ? String(args.evidenceRef) : null,
-              orderId: args.orderId ? String(args.orderId) : null,
+              orderId,
+              ...(mode ? { mode } : {}),
               recordedBy: actor,
             });
+            // A customer payment with its bank reference that fits an invoiced order of exactly this amount: the owner can
+            // confirm it on the card right away, after looking at their statement. Without that click it stays a claim.
+            const paid = entry.status === 'claimed' && entry.kind === 'revenue' && entry.orderId && entry.evidenceRef
+              ? listWishOrders(db, goal.id).find((o) => o.id === entry.orderId && o.status === 'invoiced' && o.priceCents === entry.amountCents) : undefined;
+            if (paid) {
+              const owner = await askWishOwner('verify_payment', `CONFIRM this ${entry.mode === 'demo' ? 'DEMO ' : ''}payment: ${formatMoney(entry.amountCents, entry.currency)} for invoice ${paid.invoiceNumber} (${paid.customerName}).\nOnly approve after you saw it on your bank/PayPal statement with reference: ${entry.evidenceRef}`);
+              if ('approver' in owner) {
+                const verified = verifyWishLedgerEntry(db, entry.id, 'verified', owner.approver, { paymentReference: entry.evidenceRef });
+                prepareWishPurchase(db, goal.id);
+                return { content: [{ type: 'text', text: `Payment ${verified.id} reconciled by ${owner.approver} with reference ${entry.evidenceRef}; order ${paid.id} is paid.${verified.mode === 'demo' ? ' It is DEMO money and never counts.' : ''}\n\n${renderWishStatus(db, goal.id)}` }] };
+              }
+            }
             const readiness = evaluateWishPurchase(db, goal.id);
             return {
               content: [{
                 type: 'text',
-                text: `Recorded as an UNVERIFIED claim (${entry.id}): ${entry.kind} ${formatMoney(entry.amountCents, entry.currency)} "${entry.description}".\n`
-                  + `It does not count yet. Available verified funds stay ${formatMoney(Math.max(0, readiness.funds.availableCents), goal.currency)} and the amount still to earn stays ${formatMoney(readiness.shortfallCents, goal.currency)} until the user verifies the claim themselves in Pandesh. `
-                  + 'You cannot verify money and must not say you will; do not subtract unverified amounts.',
+                text: `Recorded as an UNVERIFIED ${entry.mode === 'demo' ? 'DEMO ' : ''}claim (${entry.id}): ${entry.kind} ${formatMoney(entry.amountCents, entry.currency)} "${entry.description}"${entry.orderId ? ` for order ${entry.orderId}` : ''}.\n`
+                  + `It does not count yet. Available verified funds stay ${formatMoney(Math.max(0, readiness.funds.availableCents), goal.currency)} and the amount still to earn stays ${formatMoney(readiness.shortfallCents, goal.currency)} until the user has checked their statement and confirms it on the card ('wish_owner_decision' verify_payment). `
+                  + 'You cannot verify money yourself; do not subtract unverified amounts.',
               }],
             };
           } catch (err: any) { return { content: [{ type: 'text', text: `Could not record the money: ${err.message}` }], isError: true }; }
@@ -1882,8 +1918,8 @@ export class PiAgentEngine implements EngineAdapter {
         description:
           'Run one customer order of the website offering, step by step, as the user reports what happened. '
           + 'new_lead: a prospect asked about the service (channel: personal_network, referral, inbound_listing, association_with_permission, walk_in; demo=true for a simulated customer). '
-          + 'accept: the customer accepted and sent the questionnaire answers (brief). build: Pandesh builds the site, Impressum and privacy pages, runs the quality checks and writes the handover. '
-          + 'delivered: the user sent the site and the customer accepted it. invoice: Pandesh writes the invoice (the user sends it). log_step: time the user spent on a step. '
+          + 'accept: the customer accepted and sent the questionnaire answers (brief, only what the customer wrote); Pandesh then builds the site, Impressum and privacy pages, runs the quality checks and writes the handover in the same call. build: rebuild after a change. '
+          + 'delivered: the user sent the site and the customer accepted it; Pandesh then writes the invoice in the same call (the user sends it). invoice: write it again if it could not be written then. log_step: time the user spent on a step. '
           + 'Real orders are refused until the user has recorded the business authorization in Pandesh. Pandesh never contacts customers, publishes, sends invoices or collects money.',
         parameters: {
           type: 'object',
@@ -1907,32 +1943,115 @@ export class PiAgentEngine implements EngineAdapter {
           try {
             if (!ctx.dataDir) return { content: [{ type: 'text', text: 'NOT DONE: Pandesh\'s data folder is not available in this run.' }], isError: true };
             const goal = resolveWishGoal(db, args.goalId ? String(args.goalId) : null);
-            const orderId = String(args.orderId ?? '');
+            const recordLead = () => createWishOrder(db, {
+              goalId: goal.id, mode: args.demo === true ? 'demo' : 'real', channel: args.demo === true ? 'demo' : String(args.channel ?? ''),
+              customerName: String(args.customerName ?? ''), customerEmail: args.customerEmail ? String(args.customerEmail) : null,
+              customerAddress: args.customerAddress ? String(args.customerAddress) : null, priceCents: Math.round(Number(args.price ?? 290) * 100),
+            });
+            let orderId = '';
+            if (args.action !== 'new_lead') {
+              try {
+                orderId = resolveWishOrder(db, goal.id, args.orderId ? String(args.orderId) : null, { customerName: args.customerName ? String(args.customerName) : null, mode: args.demo === true ? 'demo' : null }).id;
+              } catch (err) {
+                // A customer who accepted asked first: record the lead (same authorization gates) instead of failing.
+                if (args.action !== 'accept' || !args.customerName) throw err;
+                orderId = recordLead().id;
+              }
+            }
             const minutes = Number.isFinite(Number(args.minutes)) && Number(args.minutes) > 0 ? Math.round(Number(args.minutes)) : undefined;
-            const order = args.action === 'new_lead'
-              ? createWishOrder(db, {
-                goalId: goal.id, mode: args.demo === true ? 'demo' : 'real', channel: args.demo === true ? 'demo' : String(args.channel ?? ''),
-                customerName: String(args.customerName ?? ''), customerEmail: args.customerEmail ? String(args.customerEmail) : null,
-                customerAddress: args.customerAddress ? String(args.customerAddress) : null, priceCents: Math.round(Number(args.price ?? 290) * 100),
-              })
-              : args.action === 'accept' ? acceptWishOrder(db, orderId, (args.brief ?? {}) as Record<string, unknown>)
+            const dataDir = ctx.dataDir;
+            // Writing the invoice sends nothing, so it is drafted the moment the customer accepted the site (the gates still apply).
+            let invoiceNote = '';
+            const deliverAndInvoice = () => {
+              const delivered = markWishOrderDelivered(db, orderId, minutes);
+              try { return invoiceWishOrder(db, dataDir, orderId, goal); } catch (err: any) { invoiceNote = `\nInvoice not written: ${err.message}`; return delivered; }
+            };
+            const order = args.action === 'new_lead' ? recordLead()
+              // Building is Pandesh's own step and reaches no one, so accepting the answers builds and checks the site at once.
+              : args.action === 'accept' ? (acceptWishOrder(db, orderId, normalizeSiteBrief((args.brief ?? {}) as Record<string, unknown>)), fulfilWishOrder(db, ctx.dataDir, orderId))
                 : args.action === 'build' ? fulfilWishOrder(db, ctx.dataDir, orderId)
-                  : args.action === 'delivered' ? markWishOrderDelivered(db, orderId, minutes)
+                  : args.action === 'delivered' ? deliverAndInvoice()
                     : args.action === 'invoice' ? invoiceWishOrder(db, ctx.dataDir, orderId, goal)
-                      : args.action === 'log_step' ? (getWishOrder(db, orderId), addWishOrderEvent(db, orderId, { by: 'human', step: String(args.step ?? 'work').slice(0, 200), ...(minutes ? { minutes } : {}) }))
+                      : args.action === 'log_step' ? addWishOrderEvent(db, orderId, { by: 'human', step: String(args.step ?? 'work').slice(0, 200), ...(minutes ? { minutes } : {}) })
                         : null;
             if (!order) return { content: [{ type: 'text', text: `Unknown action '${String(args.action)}'.` }], isError: true };
             const last = order.events[order.events.length - 1];
             return {
               content: [{
                 type: 'text',
-                text: `${order.mode === 'demo' ? 'DEMO ' : ''}order ${order.id} (${order.customerName}): ${order.status}. Last step: ${last?.step}.`
+                text: `${order.mode === 'demo' ? 'DEMO ' : ''}order ${order.id} (${order.customerName}): ${order.status}. Last step: ${last?.step}. Use orderId "${order.id}" for this order's next steps. ${wishOrderNextStep(order.status)}`
                   + `${order.qc ? `\nQuality checks: ${order.qc.checks.map((c) => `${c.ok ? 'OK' : 'FAIL'} ${c.detail}`).join('; ')}` : ''}`
-                  + `${order.folder ? `\nFiles: ${order.folder}` : ''}${order.invoiceFile ? `\nInvoice: ${order.invoiceFile}` : ''}`
+                  + `${order.folder ? `\nFiles: ${order.folder}` : ''}${order.invoiceFile ? `\nInvoice: ${order.invoiceFile}` : ''}${invoiceNote}`
                   + '\nNothing was sent, published or collected; the user does that.',
               }],
             };
-          } catch (err: any) { return { content: [{ type: 'text', text: `Order step not done: ${err.message}` }], isError: true }; }
+          } catch (err: any) {
+            let hint = '';
+            try { const o = resolveWishOrder(db, resolveWishGoal(db, args.goalId ? String(args.goalId) : null).id, args.orderId ? String(args.orderId) : null, { customerName: args.customerName ? String(args.customerName) : null }); hint = ` Order ${o.id} is ${o.status}. ${wishOrderNextStep(o.status)}`; } catch {}
+            return { content: [{ type: 'text', text: `Order step not done: ${err.message}.${hint}` }], isError: true };
+          }
+        },
+      },
+      {
+        name: 'wish_owner_decision',
+        label: 'wish_owner_decision',
+        description:
+          'Ask the USER, on an approval card, to make a decision only the business owner can make. '
+          + 'record_business: the business authorization exactly as the user stated it (legal name, address, e-mail, tax number, vatMode, what they registered, tax reserve %, payment details, and which of publish/contact/contract/payments they allow). '
+          + 'verify_payment: the user checked their bank/PayPal statement and confirms a recorded money claim with its payment reference (or rejects it). '
+          + 'Nothing is recorded unless the user approves the card. Never fill in a value the user did not give.',
+        parameters: {
+          type: 'object',
+          properties: {
+            action: { type: 'string', enum: ['record_business', 'verify_payment'] },
+            goalId: { type: 'string' },
+            legalName: { type: 'string' }, address: { type: 'string' }, email: { type: 'string' }, phone: { type: 'string' },
+            taxNumber: { type: 'string', description: 'The Steuernummer the Finanzamt assigned, as the user gave it.' },
+            vatMode: { type: 'string', enum: ['kleinunternehmer', 'regular'] },
+            registration: { type: 'string', description: 'What the user registered and when, in their words.' },
+            taxReservePercent: { type: 'number' },
+            paymentDetails: { type: 'string', description: 'IBAN and account holder, or PayPal, as printed on invoices.' },
+            allow: { type: 'array', items: { type: 'string', enum: [...WISH_BUSINESS_SCOPES] }, description: 'The outward actions the user allows. Omitted ones stay forbidden.' },
+            ledgerEntryId: { type: 'string', description: 'verify_payment: the claim to resolve (optional when paymentReference matches the claim\'s reference).' },
+            paymentReference: { type: 'string', description: 'verify_payment: the reference on the user\'s statement.' },
+            resolution: { type: 'string', enum: ['verified', 'rejected'] },
+          },
+          required: ['action'],
+        },
+        execute: async (_id: string, args: any) => {
+          try {
+            const goal = resolveWishGoal(db, args.goalId ? String(args.goalId) : null);
+            let cardText: string;
+            if (args.action === 'record_business') {
+              const allow = new Set((Array.isArray(args.allow) ? args.allow : []).map(String));
+              cardText = 'Record your business authorization (only you can; Pandesh does not check it with any authority):\n'
+                + `Name: ${args.legalName ?? '—'}\nAddress: ${args.address ?? '—'}\nE-mail: ${args.email ?? '—'}${args.phone ? `\nPhone: ${args.phone}` : ''}\n`
+                + `Steuernummer: ${args.taxNumber || 'none'}\nVAT: ${args.vatMode === 'kleinunternehmer' ? '§19 UStG small business (no VAT on invoices)' : args.vatMode === 'regular' ? 'regular VAT' : '—'}\n`
+                + `Registered: ${args.registration ?? '—'}\nIncome-tax reserve: ${args.taxReservePercent ?? '—'}%\nPayment details: ${args.paymentDetails || 'none'}\n`
+                + `Allowed: ${WISH_BUSINESS_SCOPES.map((s) => `${s} ${allow.has(s) ? 'YES' : 'no'}`).join(', ')}`;
+            } else if (args.action === 'verify_payment') {
+              const ledger = listWishLedger(db, goal.id);
+              const byReference = ledger.filter((e) => e.status === 'claimed' && args.paymentReference && e.evidenceRef === String(args.paymentReference).trim());
+              const entry = ledger.find((e) => e.id === String(args.ledgerEntryId ?? '')) ?? (byReference.length === 1 ? byReference[0] : undefined);
+              if (entry) args.ledgerEntryId = entry.id;
+              if (!entry) return { content: [{ type: 'text', text: `NOT DONE: no money claim '${String(args.ledgerEntryId ?? '')}' on this goal. Use wish_status to see the claims.` }], isError: true };
+              cardText = `${args.resolution === 'rejected' ? 'REJECT' : 'CONFIRM'} this ${entry.mode === 'demo' ? 'DEMO ' : ''}money claim: ${entry.kind} ${formatMoney(entry.amountCents, entry.currency)} "${entry.description}"`
+                + `${args.resolution === 'rejected' ? '' : `\nOnly approve after you saw it on your bank/PayPal statement with reference: ${args.paymentReference || '—'}`}`;
+            } else {
+              return { content: [{ type: 'text', text: `Unknown action '${String(args.action)}'.` }], isError: true };
+            }
+            const owner = await askWishOwner(String(args.action), cardText);
+            if ('notRecorded' in owner) return { content: [{ type: 'text', text: `NOT RECORDED: ${owner.notRecorded}` }] };
+            const approver = owner.approver;
+            if (args.action === 'record_business') {
+              const allow = new Set((Array.isArray(args.allow) ? args.allow : []).map(String));
+              const business = authorizeWishBusiness(db, { ...args, scopes: Object.fromEntries(WISH_BUSINESS_SCOPES.map((s) => [s, allow.has(s)])) }, approver);
+              return { content: [{ type: 'text', text: `Business authorization recorded by ${business.authorizedBy}: ${business.legalName}; allowed: ${WISH_BUSINESS_SCOPES.filter((s) => business.scopes[s]).join(', ') || 'nothing'}.` }] };
+            }
+            const entry = verifyWishLedgerEntry(db, String(args.ledgerEntryId), args.resolution === 'rejected' ? 'rejected' : 'verified', approver, { paymentReference: args.paymentReference ? String(args.paymentReference) : null });
+            prepareWishPurchase(db, goal.id);
+            return { content: [{ type: 'text', text: `Claim ${entry.id} is now ${entry.status} (by ${approver}).\n\n${renderWishStatus(db, goal.id)}` }] };
+          } catch (err: any) { return { content: [{ type: 'text', text: `Not recorded: ${err.message}` }], isError: true }; }
         },
       },
       {
@@ -3263,8 +3382,8 @@ TRUTHFULNESS & BEHAVIORAL PROTOCOL:
    - Cite claims with the evidence markers and list each source's real URL from the tool output. Never invent a URL, title or date; if evidence is thin, say so.
 7a. WISHES (the user wants to buy something and to earn the money for it, e.g. "I want the X for €200, find a legitimate way to earn it"):
    - Call 'create_wish_goal' with the user's words, then 'advance_wish' once. Present the status it returns as written: offers with their URLs, the selected earning option and the offering folder, funds and what blocks the purchase.
-   - Money is never invented: income the user reports goes in with 'record_wish_money' as a claim (a customer payment is kind revenue). Only the user can verify a claim, in Pandesh; you cannot, so never offer to, and never count unverified money in totals. Never say money was earned, an offer was published, a customer was contacted or anything was bought; Pandesh does none of those.
-   - Customer orders go through 'wish_order' as the user reports each step. Real orders need the business authorization the user records in Pandesh; if a step is refused as NOT AUTHORIZED, say so and offer a demo order instead. Demo money is never purchasing power.
+   - Money is never invented: income the user reports goes in with 'record_wish_money' as a claim (a customer payment is kind revenue). Only the user can verify a claim: when they say they checked their statement, call 'wish_owner_decision' (verify_payment) so they confirm it on the card; you never verify it yourself and never count unverified money in totals. Never say money was earned, an offer was published, a customer was contacted or anything was bought; Pandesh does none of those.
+   - Customer orders go through 'wish_order' as the user reports each step. Real orders need the business authorization; the user records it through 'wish_owner_decision' (record_business) with exactly the details they give. If a step is refused as NOT AUTHORIZED, say so and offer a demo order instead. Demo money is never purchasing power.
 8. BRIEFINGS, REMINDERS, SCHEDULES, EMAIL & CALENDAR:
    - For a daily briefing call 'get_briefing_data' once and present what it returns as written (Top 3 priorities, Calendar, Important email, Pending decisions, Can wait, Housekeeping, Suggested next action). It already ranks by importance and separates facts from suggestions: do not re-rank by recency, do not pad it, and keep it compact unless the user asks for details (then call it again with detail=true). Do not approve, reject, dismiss, cancel or reschedule anything the housekeeping lines mention unless the user asks: 'dismiss_reminder' marks a reminder done, 'cancel_scheduled_task' switches off the redundant duplicate briefing schedule the user chooses, and other items are reviewed in their own screens.
    - Email and calendar: use the gmail_* and calendar_* tools (they appear only as connected services allow). Current local time: ${new Date().toLocaleString('en-GB', { timeZone: localTimeZone, dateStyle: 'full', timeStyle: 'short' })} (${localTimeZone}) — resolve "tomorrow", "next Friday" etc. ONLY with 'resolve_time' and pass its 'iso' value. Email timestamps: quote 'receivedLocal' (already in the user's zone), never re-derive from raw header text; report counts exactly as the tool gives them (matched vs shown).
@@ -3535,7 +3654,8 @@ TRUTHFULNESS & BEHAVIORAL PROTOCOL:
         return 'steered';
       },
     });
-    let replyFloor = 0;
+    // The agent starts with the conversation's earlier messages; an answer from before this turn is never its reply.
+    let replyFloor = agent.state.messages.length;
     // Cancellation reaches the live model request, not just the tools: aborting the agent
     // aborts the in-flight Ollama stream and stops the loop before another tool call starts.
     if (signal) {

@@ -143,11 +143,40 @@ export function listWishOrders(db: CoreDatabase, goalId: string): WishOrder[] {
   return db.all<Record<string, unknown>>('SELECT * FROM wish_orders WHERE goalId = ? ORDER BY createdAt', [goalId]).map(asOrder);
 }
 
+/**
+ * The order a step refers to. A model often loses or invents the id ("demo-001"); then the step applies only to the one
+ * open order that fits (by customer name and mode when given). Anything ambiguous is an error naming the real ids.
+ */
+export function resolveWishOrder(db: CoreDatabase, goalId: string, ref: string | null | undefined, hint: { customerName?: string | null; mode?: WishMoneyMode | null; statuses?: WishOrderStatus[] } = {}): WishOrder {
+  const exact = ref ? db.get<Record<string, unknown>>('SELECT * FROM wish_orders WHERE id = ? AND goalId = ?', [ref, goalId]) : undefined;
+  if (exact) return asOrder(exact);
+  const name = hint.customerName?.trim().toLowerCase();
+  const open = listWishOrders(db, goalId).filter((o) => !['paid', 'cancelled'].includes(o.status)
+    && (!hint.statuses || hint.statuses.includes(o.status)) && (!hint.mode || o.mode === hint.mode) && (!name || o.customerName.toLowerCase() === name));
+  if (open.length === 1) return open[0];
+  const list = listWishOrders(db, goalId).filter((o) => !['paid', 'cancelled'].includes(o.status)).map((o) => `${o.id} (${o.mode === 'demo' ? 'DEMO ' : ''}"${o.customerName}", ${o.status})`).join('; ');
+  throw new CoreError('not_found', `${ref ? `order '${ref}' not found` : 'no order id given'}${open.length > 1 ? ' and more than one open order fits' : ''}; open orders: ${list || 'none'}`);
+}
+
 export function addWishOrderEvent(db: CoreDatabase, orderId: string, event: Omit<WishOrderEvent, 'at'>, patch: { status?: WishOrderStatus; sql?: string; params?: unknown[] } = {}): WishOrder {
   const order = getWishOrder(db, orderId);
   const events = [...order.events, { at: nowIso(), ...event }];
   db.run(`UPDATE wish_orders SET eventsJson = ?, status = ?, updatedAt = ?${patch.sql ? `, ${patch.sql}` : ''} WHERE id = ?`, [JSON.stringify(events), patch.status ?? order.status, nowIso(), ...(patch.params ?? []), orderId]);
   return getWishOrder(db, orderId);
+}
+
+/** What the order needs next, in the wish_order tool's own terms. */
+export function wishOrderNextStep(status: WishOrderStatus): string {
+  return {
+    lead: 'Next: accept, with the questionnaire answers (brief), once the customer accepted the offer.',
+    intake_received: 'Next: build.',
+    qc_failed: 'Next: accept again with corrected answers (the failed checks say what is missing).',
+    built: 'Next: the user reviews and sends the site; when the customer accepted it, delivered.',
+    delivered: 'Next: invoice.',
+    invoiced: 'Next: the user sends the invoice; when the customer pays, record_wish_money with the payment reference, then the user confirms it with wish_owner_decision (verify_payment).',
+    paid: 'This order is complete.',
+    cancelled: 'This order was cancelled.',
+  }[status];
 }
 
 /** A prospect who asked about the service through a lawful channel. A real one needs the 'contact' authorization. */
@@ -161,6 +190,9 @@ export function createWishOrder(db: CoreDatabase, input: { goalId: string; mode:
   const customerName = String(input.customerName ?? '').trim().slice(0, 200);
   if (!customerName) throw new CoreError('invalid_request', 'the customer needs a name');
   if (!Number.isInteger(input.priceCents) || input.priceCents <= 0) throw new CoreError('invalid_request', 'the agreed price must be a positive amount');
+  // The same person asking again is the same lead, not a second customer.
+  const same = listWishOrders(db, goal.id).find((o) => o.mode === input.mode && o.status !== 'cancelled' && o.status !== 'paid' && o.customerName.toLowerCase() === customerName.toLowerCase());
+  if (same) return same;
   const id = newId('word');
   const now = nowIso();
   const events: WishOrderEvent[] = [{ at: now, by: 'human', step: `lead recorded (${input.channel})` }];

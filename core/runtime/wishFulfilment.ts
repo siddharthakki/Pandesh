@@ -55,6 +55,33 @@ export interface SiteBrief {
 
 const esc = (s: string) => s.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]!));
 
+/**
+ * The intake answers as a model passes them: the same content under other names ("imprint", "subtitle", the Impressum
+ * as one line). Only names and shapes change; no text is added, and the quality checks still judge the result.
+ */
+export function normalizeSiteBrief(raw: Record<string, unknown>): Record<string, unknown> {
+  const pick = (...keys: string[]) => keys.map((k) => raw[k]).find((v) => v !== undefined && v !== '');
+  const list = (v: unknown) => (Array.isArray(v) ? v.map(String) : typeof v === 'string' && v.trim() ? v.split(/\s*[;\n]\s*/).filter(Boolean) : undefined);
+  const brief: Record<string, unknown> = { ...raw };
+  const alias: Record<string, string[]> = {
+    businessName: ['businessName', 'name', 'Name der Tagespflege'], tagline: ['tagline', 'subtitle', 'Untertitel'], area: ['area', 'location', 'Ort'],
+    about: ['about', 'Über mich'], address: ['address', 'Adresse'], phone: ['phone', 'Telefon'], email: ['email', 'E-Mail'], accent: ['accent', 'Farbe'],
+    language: ['language', 'Sprache'], privacyPolicy: ['privacyPolicy', 'privacy', 'Datenschutzerklärung', 'datenschutz'],
+  };
+  for (const [key, names] of Object.entries(alias)) { const v = pick(...names); if (v !== undefined) brief[key] = v; }
+  for (const [key, names] of Object.entries({ highlights: ['highlights', 'Highlights'], services: ['services', 'Leistungen'], hours: ['hours', 'Zeiten'] })) {
+    const v = list(pick(...names)); if (v) brief[key] = v;
+  }
+  const imp = pick('impressum', 'imprint', 'Impressum');
+  if (typeof imp === 'string' && imp.trim()) {
+    const email = imp.match(/[^\s,;]+@[^\s,;]+/)?.[0];
+    const phone = imp.match(/\+?\d[\d /-]{5,}\d/)?.[0];
+    const parts = imp.split(',').map((p) => p.trim()).filter((p) => p && p !== email && p !== phone);
+    brief.impressum = { name: parts[0] ?? '', address: parts.slice(1).join(', '), ...(phone ? { phone } : {}), ...(email ? { email } : {}) };
+  } else if (imp && typeof imp === 'object') brief.impressum = imp;
+  return brief;
+}
+
 const LABELS = {
   de: {
     about: 'Über uns', services: 'Angebot', hours: 'Zeiten', contact: 'Kontakt', call: 'Anrufen', write: 'E-Mail schreiben', phone: 'Telefon',
@@ -275,6 +302,8 @@ export function invoiceWishOrder(db: CoreDatabase, dataDir: string, orderId: str
   const business = requireWishScope(db, order.mode, 'payments');
   if (order.mode === 'real') {
     if (business!.vatMode !== 'kleinunternehmer') throw new CoreError('invalid_request', 'Pandesh only writes §19 UStG small-business invoices; with regular VAT use your accounting software');
+    // §34a UStDV: even the simplified small-business invoice names the Finanzamt's Steuernummer (or USt-IdNr / Kleinunternehmer-IdNr).
+    if (!business!.taxNumber) throw new CoreError('invalid_request', 'an invoice needs the Steuernummer the Finanzamt assigned (or a USt-IdNr / Kleinunternehmer-IdNr); record it in the business authorization first');
     if (!order.customerAddress) throw new CoreError('invalid_request', 'an invoice needs the customer\'s postal address');
   }
   const seller = order.mode === 'real' ? business! : { legalName: 'DEMO-Anbieter (fiktiv)', address: 'Keine Anschrift – Demonstration', email: 'demo@invalid', phone: null, taxNumber: null, paymentDetails: 'keine – Demonstration' };

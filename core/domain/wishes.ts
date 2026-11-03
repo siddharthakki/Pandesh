@@ -349,6 +349,12 @@ export function recordWishLedgerClaim(db: CoreDatabase, input: { goalId: string;
   if (input.orderId && (!order || order.goalId !== goal.id)) throw new CoreError('not_found', `order '${input.orderId}' does not belong to this goal`);
   const mode: WishMoneyMode = order?.mode ?? (input.mode === 'demo' ? 'demo' : 'real');
   if (input.mode && input.mode !== mode) throw new CoreError('invalid_request', `order '${input.orderId}' is a ${mode} order; its money is ${mode} money`);
+  // One payment reference is one payment: reporting it again returns the claim already recorded.
+  const evidenceRef = input.evidenceRef?.trim() || null;
+  if (evidenceRef) {
+    const again = db.get<Record<string, unknown>>("SELECT * FROM wish_ledger WHERE goalId = ? AND kind = ? AND amountCents = ? AND evidenceRef = ? AND status != 'rejected'", [goal.id, input.kind, input.amountCents, evidenceRef]);
+    if (again) return asLedger(again);
+  }
   const id = newId('wledger');
   db.run(
     'INSERT INTO wish_ledger (id, goalId, kind, amountCents, currency, description, evidenceKind, evidenceRef, status, recordedBy, createdAt, mode, orderId) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
