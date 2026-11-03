@@ -39,6 +39,7 @@ import { transitionAttempt, failAttempt, getAttempt, settleCancelledAttempt } fr
 import { createApproval, getApproval, listApprovalsForAttempt, expireApproval } from '../domain/approvals';
 import { classifyChatToolCall, decidePermission, frozenPermissionFor, READ_ONLY_CONSENT_TOOLS, recordPermissionDecision, STANDING_AUTHORIZATION_ACTOR } from '../domain/permissionModes';
 import { recordExecutionQuality } from '../domain/executionQuality';
+import { AUTHORIZE_MISSION_TOOL, buildWorkspaceWriteEnvelope, createPendingMissionAuthorization, evaluateAuthorizedDispatch, evaluateMissionAction, getMissionAuthorization, markMissionAuthorized, markMissionRejected, protectedWriteReason, recordAuthorizedAction } from './missionAuthorization';
 import { NON_WORKSPACE_MARKERS } from '../domain/taskToolSurface';
 import { auditPromises, classifyStatusRequest, composeStatusAnswer, hasActiveWorker, hasRecentGmailWork } from './assistantStatus';
 import { notificationCapability } from '../domain/notificationOutbox';
@@ -242,7 +243,7 @@ function mutateWithBroadcast<T>(
  * could not be created at all — neither is a refusal by the user.
  */
 export type PiToolApprovalOutcome =
-  | { outcome: 'approved' }
+  | { outcome: 'approved'; approvalId?: string }
   | { outcome: 'rejected' }
   | { outcome: 'timed_out' }
   | { outcome: 'not_requested'; reason: string };
@@ -903,6 +904,7 @@ export class PiAgentEngine implements EngineAdapter {
         workspaceRoot: selectedWorkspace || null,
       });
       if (permission.decision === 'auto_authorize') {
+        let autoApprovalId: string | undefined;
         try {
           mutateWithBroadcast(db, broadcaster, () => {
             const auto = createApproval(db, {
@@ -915,8 +917,9 @@ export class PiAgentEngine implements EngineAdapter {
               resolvedBy: STANDING_AUTHORIZATION_ACTOR,
             });
             recordPermissionDecision(db, { attemptId, toolName, arguments: summary, decision: permission, approvalId: auto.id });
+            autoApprovalId = auto.id;
           });
-          return { outcome: 'approved' };
+          return { outcome: 'approved', approvalId: autoApprovalId };
         } catch (err: any) {
           console.error('[piAgentEngine] Failed to record a standing-authorization approval:', err);
           // Fall through to the ordinary card: failing to auto-authorize must never authorize anything.
@@ -958,7 +961,7 @@ export class PiAgentEngine implements EngineAdapter {
           }
         });
       } catch {}
-      if (current.status === 'approved') return { outcome: 'approved' };
+      if (current.status === 'approved') return { outcome: 'approved', approvalId: approval.id };
       if (current.status === 'rejected') return { outcome: 'rejected' };
       // Nobody answered (or the turn was stopped while waiting). Retire the card
       // so it does not linger as an actionable approval for a turn that is over,
@@ -974,6 +977,95 @@ export class PiAgentEngine implements EngineAdapter {
         });
       } catch {}
       return { outcome: 'timed_out' };
+    }
+
+    type WriteGrant =
+      | { ok: true; source: 'mission_envelope' | 'human_approval'; reason: string; approvalId?: string; mission?: { id: string; digest: string; normalizedPath?: string; contentDigest?: string; contentBytes?: number } }
+      | { ok: false; reason: string; text: string };
+
+    /**
+     * Whether this turn may write `full`, and on whose authority. Search or read consent for a folder never grants a
+     * write, and neither does an Auto standing authorization. Inside the selected workspace, the first write asks the
+     * human to authorize a write envelope for this task (Core's mission authorization); later in-scope writes within
+     * its limits need no further card. Anything else is one human approval for that exact file. Unknown fails closed.
+     */
+    async function authorizeFileWrite(full: string, content: string): Promise<WriteGrant> {
+      const notDone = (reason: string, text: string): WriteGrant => ({ ok: false, reason, text });
+      if (frozenPermissionFor(db, [attemptId]).mode === 'plan') {
+        return notDone('Plan Only', 'NOT DONE (Plan Only mode): write_file would change something, so nothing was written. Describe this step in the plan instead.');
+      }
+      const bytes = Buffer.byteLength(content, 'utf8');
+      const rel = workspaceRelative(full);
+      let reviewNote = '';
+      if (selectedWorkspace && rel !== undefined) {
+        const writeArgs = { path: rel, content };
+        const envelope = buildWorkspaceWriteEnvelope({ workspaceRoot: selectedWorkspace, objective: requestText, model: selectedModel });
+        // Out-of-scope paths are refused before anyone is asked: no card can authorize them.
+        const scope = evaluateMissionAction({ envelope, toolName: 'write_file', arguments: writeArgs });
+        if (scope.decision === 'deny') return notDone(scope.reason, `Error: "${full}" cannot be written: ${scope.reason}. Nothing was written.`);
+        let mission = getMissionAuthorization(db, attemptId);
+        if (mission?.status === 'rejected') {
+          return notDone('the user declined file changes for this task', 'Not written: the user declined file changes in this workspace for this task. Nothing was changed. Ask the user how to proceed.');
+        }
+        if (!mission || mission.status !== 'authorized') {
+          try {
+            mission = mutateWithBroadcast(db, broadcaster, () => createPendingMissionAuthorization(db, attemptId, envelope));
+          } catch (err: any) {
+            return notDone('the write authorization could not be created', `Not written: Pandesh could not create the approval request (${err?.message ?? err}). Nothing was changed.`);
+          }
+          const limits = mission.envelope.fileChangeLimits;
+          const outcome = await requestToolApproval({
+            toolName: AUTHORIZE_MISSION_TOOL,
+            arguments: { digest: mission.digest, attemptId },
+            workspaceRoot: selectedWorkspace,
+            firstFile: rel,
+            cardText: [
+              `Pandesh wants to create or change files in ${selectedWorkspace} for this task.`,
+              `If you approve, it may write text files inside this folder until this reply finishes without asking for each one (up to ${limits.maxFiles} files, ${Math.round(limits.maxBytesPerFile / 1024)} KB each, ${Math.round(limits.maxTotalBytes / (1024 * 1024))} MB in total).`,
+              'Not covered: anything outside this folder, .git and .karkedikha, secrets and .env files, binary files, deleting or renaming, and running commands (those still ask).',
+              `First file: ${rel} (${bytes} bytes). Envelope ${mission.digest.slice(0, 19)}`,
+            ].join('\n'),
+          });
+          if (outcome.outcome !== 'approved') {
+            if (outcome.outcome === 'rejected') {
+              try { mutateWithBroadcast(db, broadcaster, () => { if (getMissionAuthorization(db, attemptId)?.status === 'pending') markMissionRejected(db, attemptId, actor); }); } catch {}
+              return notDone('the user declined file changes for this task', 'Not written: the user declined file changes in this workspace for this task. Nothing was changed. Ask the user how to proceed.');
+            }
+            return notDone(`write authorization ${outcome.outcome}`, `Not written: ${outcome.outcome === 'timed_out' ? 'no answer to the file-change approval was recorded' : 'the approval request could not be created'}. Nothing was changed. The request can be made again.`);
+          }
+          try {
+            mutateWithBroadcast(db, broadcaster, () => {
+              if (getMissionAuthorization(db, attemptId)?.status !== 'authorized') markMissionAuthorized(db, attemptId, `approval:${outcome.approvalId ?? 'unknown'}`);
+            });
+          } catch {}
+        }
+        const verdict = evaluateAuthorizedDispatch(db, { attemptId, toolName: 'write_file', arguments: writeArgs });
+        if (verdict.decision === 'auto_authorize' && verdict.authorization) {
+          return {
+            ok: true, source: 'mission_envelope', reason: verdict.reason,
+            mission: { id: verdict.authorization.id, digest: verdict.authorization.digest, normalizedPath: verdict.normalizedPath, contentDigest: verdict.contentDigest, contentBytes: verdict.contentBytes },
+          };
+        }
+        if (verdict.decision === 'deny') return notDone(verdict.reason, `Error: "${full}" cannot be written: ${verdict.reason}. Nothing was written.`);
+        reviewNote = `\nNot covered by this task's file authorization: ${verdict.reason}.`;
+      } else {
+        // Outside the selected workspace a folder the user let Pandesh search is a precondition, never the authority.
+        if (!isPathAuthorized(full)) {
+          return notDone('outside every authorized folder', `Error: Path "${full}" is outside the authorized workspace. Modification denied.`);
+        }
+        const protectedReason = protectedWriteReason(full) ?? (isCredentialFilePath(full) ? 'credential files are not authorized' : null);
+        if (protectedReason) return notDone(protectedReason, `Error: "${full}" cannot be written: ${protectedReason}. Nothing was written.`);
+      }
+      const outcome = await requestToolApproval({
+        toolName: 'write_file',
+        filePath: full,
+        arguments: { path: full, bytes },
+        workspaceRoot: selectedWorkspace || null,
+        cardText: `Pandesh wants to write ${full} (${bytes} bytes):${reviewNote}\n${redactCredentialShapes(content.slice(0, 600))}`,
+      });
+      if (outcome.outcome === 'approved') return { ok: true, source: 'human_approval', reason: `the user approved writing ${full}`, approvalId: outcome.approvalId };
+      if (outcome.outcome === 'rejected') return notDone('the user declined this write', `Not written: the user did not approve writing ${full}. Nothing was changed. Ask the user how to proceed.`);
+      return notDone(`approval ${outcome.outcome}`, `Not written: ${outcome.outcome === 'timed_out' ? 'no answer to the approval request was recorded' : 'the approval request could not be created'}. Nothing was changed. The request can be made again.`);
     }
 
     function getSystemDrives(): Array<{ drive: string; accessible: boolean }> {
@@ -2091,13 +2183,14 @@ export class PiAgentEngine implements EngineAdapter {
           const full = path.isAbsolute(raw)
             ? path.resolve(raw)
             : (selectedWorkspace ? path.resolve(selectedWorkspace, raw) : path.resolve(raw));
+          const refuse = (text: string, reason: string) => {
+            safeRecordRuntimeEvent(db, broadcaster, attemptId, 'file_write_refused', { path: full, reason }, actor);
+            return { content: [{ type: 'text', text }], isError: true };
+          };
+          if (typeof args.content !== 'string') return refuse('Error: write_file needs the full text content to write. Nothing was written.', 'no text content');
 
-          if (!isPathAuthorized(full)) {
-            return {
-              content: [{ type: 'text', text: `Error: Path "${full}" is outside the authorized workspace. Modification denied.` }],
-              isError: true,
-            };
-          }
+          const grant = await authorizeFileWrite(full, args.content);
+          if (!grant.ok) return refuse(grant.text, grant.reason);
 
           try {
             let before = '';
@@ -2105,6 +2198,38 @@ export class PiAgentEngine implements EngineAdapter {
             fs.mkdirSync(path.dirname(full), { recursive: true });
             fs.writeFileSync(full, args.content, 'utf8');
             const changeView = fileActivity(full, { diff: redactCredentialShapes(unifiedDiff(before, String(args.content ?? ''), workspaceRelative(full) ?? path.basename(full))) });
+            try {
+              mutateWithBroadcast(db, broadcaster, () => {
+                if (grant.mission) {
+                  recordAuthorizedAction(db, {
+                    authorizationId: grant.mission.id,
+                    attemptId,
+                    action: 'write_file',
+                    normalizedPath: grant.mission.normalizedPath,
+                    envelopeDigest: grant.mission.digest,
+                    contentDigest: grant.mission.contentDigest,
+                    contentBytes: grant.mission.contentBytes,
+                    policyDecision: 'auto_authorize',
+                    policyReason: grant.reason,
+                  });
+                }
+                recordRuntimeEvent(db, {
+                  domain: 'attempt', entityId: attemptId, eventType: 'file_write_authorized', actor,
+                  metadata: {
+                    path: full,
+                    authorizationSource: grant.source,
+                    reason: grant.reason,
+                    mode: frozenPermissionFor(db, [attemptId]).mode,
+                    approvalId: grant.approvalId ?? null,
+                    missionAuthorizationId: grant.mission?.id ?? null,
+                    envelopeDigest: grant.mission?.digest ?? null,
+                    contentBytes: Buffer.byteLength(args.content, 'utf8'),
+                  },
+                });
+              });
+            } catch (err) {
+              console.error('[piAgentEngine] Failed to audit an authorized write:', err);
+            }
             try {
               registerArtifact(db, {
                 attemptId,
@@ -2115,7 +2240,7 @@ export class PiAgentEngine implements EngineAdapter {
                 mimeType: 'text/plain',
                 absolutePath: full,
                 source: 'pi:write_file',
-                metadata: { summary: `Modified or created file: ${args.filePath}` },
+                metadata: { summary: `Modified or created file: ${args.filePath}`, authorizationSource: grant.source },
                 actor,
               });
             } catch {}
@@ -2213,9 +2338,26 @@ export class PiAgentEngine implements EngineAdapter {
               isError: true,
             };
           }
-          if (!isPathAuthorized(targetDir)) {
+          // OpenCode edits files and runs commands on its own, so it needs the selected workspace (search consent for a
+          // folder is not enough) and the human's approval for each delegation. No envelope or standing grant covers it.
+          const insideWorkspace = Boolean(selectedWorkspace) && (path.resolve(targetDir).toLowerCase() === selectedWorkspace!.toLowerCase() || workspaceRelative(path.resolve(targetDir)) !== undefined);
+          if (!insideWorkspace) {
             return {
-              content: [{ type: 'text', text: `Error: Workspace "${targetDir}" is outside authorized scope.` }],
+              content: [{ type: 'text', text: `Error: Workspace "${targetDir}" is outside authorized scope. OpenCode can only work in the selected workspace folder.` }],
+              isError: true,
+            };
+          }
+          const delegation = await requestToolApproval({
+            toolName: 'delegate_to_opencode',
+            objective: String(args.objective ?? '').slice(0, 2_000),
+            workspacePath: targetDir,
+            workspaceRoot: selectedWorkspace,
+            cardText: `Pandesh wants OpenCode to work in ${targetDir}. OpenCode can create and change files and run commands there:
+${String(args.objective ?? '').slice(0, 600)}`,
+          });
+          if (delegation.outcome !== 'approved') {
+            return {
+              content: [{ type: 'text', text: `Not delegated: ${delegation.outcome === 'rejected' ? 'the user did not approve handing this to OpenCode' : 'no approval was recorded'}. Nothing was changed. Ask the user how to proceed.` }],
               isError: true,
             };
           }

@@ -155,13 +155,15 @@ function scriptChainDigest(scripts: Record<string, string>, script: string): str
   return sha256(JSON.stringify([scripts[`pre${script}`] ?? null, scripts[script], scripts[`post${script}`] ?? null]));
 }
 
-/** Above this many files the workspace is too large to verify per action, so validation always asks. */
+/** Above this many files (dependencies included) the workspace is too large to verify per action, so validation always asks. */
 const WORKSPACE_DIGEST_MAX_ENTRIES = 50_000;
 
 /**
- * Path, size and modification time of every file in the workspace except .git and node_modules (too large to walk per
- * action; Pandesh's own writes there are caught from its file records). Validation scripts execute this content, so
- * any change after the grant (a new test, a rewritten config, a .npmrc) means the grant no longer covers the run.
+ * Path, size and modification time of every file in the workspace except .git, INCLUDING node_modules: validation
+ * scripts execute the workspace and its installed dependencies, so any change after the grant (a new test, a rewritten
+ * config, a .npmrc, a changed package) means the grant no longer covers the run. Pandesh's own writes are also caught
+ * from its file records. A symbolic link or junction points at content outside the pin, so it makes the workspace
+ * unverifiable (null), as does exceeding the entry cap: validation then asks the human.
  */
 function workspaceDigest(workspaceRoot: string): string | null {
   const hash = crypto.createHash('sha256');
@@ -177,8 +179,9 @@ function workspaceDigest(workspaceRoot: string): string | null {
     }
     dirents.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
     for (const d of dirents) {
-      if (d.name === '.git' || d.name === 'node_modules') continue;
+      if (d.name === '.git') continue;
       if ((entries += 1) > WORKSPACE_DIGEST_MAX_ENTRIES) return null;
+      if (d.isSymbolicLink()) return null;
       const r = rel ? `${rel}/${d.name}` : d.name;
       if (d.isDirectory()) {
         stack.push(r);
@@ -194,6 +197,21 @@ function workspaceDigest(workspaceRoot: string): string | null {
     }
   }
   return hash.digest('hex');
+}
+
+/**
+ * A node_modules folder in a parent of the workspace: Node and npm resolve packages and binaries from it, but it is not
+ * part of the workspace pin, so a script could run code nobody checked.
+ */
+function dependenciesAboveWorkspace(workspaceRoot: string): string | null {
+  let dir = path.dirname(path.resolve(workspaceRoot));
+  for (;;) {
+    const candidate = path.join(dir, 'node_modules');
+    if (fs.existsSync(candidate)) return candidate;
+    const parent = path.dirname(dir);
+    if (parent === dir) return null;
+    dir = parent;
+  }
 }
 
 /** Whether Pandesh itself recorded writing a file under the workspace (including node_modules) since `sinceIso`. */
@@ -243,7 +261,9 @@ export function createStandingAuthorization(db: CoreDatabase, input: {
       pins.npmScripts = Object.fromEntries(VALIDATION_SCRIPTS.map((s) => [s, scriptChainDigest(scripts, s)]).filter(([, d]) => d)) as Record<string, string>;
       if (Object.keys(pins.npmScripts).length === 0) throw new CoreError('invalid_request', 'this workspace has no test, lint, typecheck, build or compile script to authorize');
       const digest = workspaceDigest(workspaceRoot);
-      if (!digest) throw new CoreError('invalid_request', `this workspace is too large or unreadable to pin (more than ${WORKSPACE_DIGEST_MAX_ENTRIES} files outside node_modules)`);
+      if (!digest) throw new CoreError('invalid_request', `Auto cannot verify what this workspace's scripts would run (more than ${WORKSPACE_DIGEST_MAX_ENTRIES} files including node_modules, a symbolic link or junction, or an unreadable folder), so npm scripts here keep asking you`);
+      const above = dependenciesAboveWorkspace(workspaceRoot);
+      if (above) throw new CoreError('invalid_request', `Auto cannot verify ${above}, which this workspace's scripts could load, so npm scripts here keep asking you`);
       pins.workspaceDigest = digest;
     }
   }
@@ -440,7 +460,9 @@ export function classifyWorkspaceCommand(command: string, workspaceRoot: string,
     const pinned = pins.npmScripts?.[script];
     if (!pinned) return { category: null, reason: `the '${script}' script was not pinned when this authorization was granted` };
     if (scriptChainDigest(readPackageScripts(workspaceRoot), script) !== pinned) return { category: null, reason: `package.json '${script}' (or its pre/post script) changed since this authorization was granted` };
-    if (!pins.workspaceDigest || workspaceDigest(workspaceRoot) !== pins.workspaceDigest) return { category: null, reason: `workspace files changed since this authorization was granted, so '${script}' would run code you have not seen` };
+    const above = dependenciesAboveWorkspace(workspaceRoot);
+    if (above) return { category: null, reason: `${above} is outside the pinned workspace, so '${script}' could run dependencies nobody checked` };
+    if (!pins.workspaceDigest || workspaceDigest(workspaceRoot) !== pins.workspaceDigest) return { category: null, reason: `workspace files changed since this authorization was granted (installed dependencies included), or can no longer be verified, so '${script}' would run code you have not seen` };
     return { category: 'workspace_validation', detail: `npm ${script === 'test' ? 'test' : `run ${script}`}` };
   }
   return { category: null, reason: `'${exe}' is not a covered command` };
