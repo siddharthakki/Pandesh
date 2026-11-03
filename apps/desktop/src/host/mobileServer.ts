@@ -344,18 +344,6 @@ export class MobileServer {
       return;
     }
 
-    if (pathname === '/assets/pan-da-hero.png' || pathname === '/assets/pan-da-face.png') {
-      // Bundled host is apps/desktop/out/main.js; the renderer assets sit beside it.
-      const name = path.basename(pathname);
-      const assetPath = [path.resolve(__dirname, '..', 'renderer', 'assets', name), path.resolve(process.cwd(), 'apps', 'desktop', 'renderer', 'assets', name)]
-        .find((candidate) => fs.existsSync(candidate));
-      if (assetPath) {
-        res.writeHead(200, { 'Content-Type': 'image/png' });
-        fs.createReadStream(assetPath).pipe(res);
-        return;
-      }
-    }
-
     // Public Status Endpoint
     if (pathname === '/api/status' && req.method === 'GET') {
       const snap = this.session.snapshot();
@@ -763,7 +751,7 @@ export class MobileServer {
       box-shadow: 0 0 10px var(--accent-glow);
       overflow: hidden; background: #000;
     }
-    .brand-avatar img { width: 100%; height: 100%; object-fit: cover; }
+    .brand-avatar img, .brand-avatar svg { width: 100%; height: 100%; object-fit: cover; }
     .brand-title { font-size: 15px; font-weight: 700; letter-spacing: 0.5px; color: #fff; }
     .brand-sub { font-size: 11px; color: var(--accent); font-family: monospace; }
     .status-badge {
@@ -806,7 +794,7 @@ export class MobileServer {
       border-radius: 50%; border: 2px solid var(--accent);
       box-shadow: 0 0 16px var(--accent-glow); overflow: hidden;
     }
-    .pair-mascot img { width: 100%; height: 100%; object-fit: cover; }
+    .pair-mascot img, .pair-mascot svg { width: 100%; height: 100%; object-fit: cover; }
     .pair-title { font-size: 18px; font-weight: 700; margin-bottom: 8px; }
     .pair-desc { font-size: 13px; color: var(--muted); margin-bottom: 20px; line-height: 1.4; }
     .pair-input {
@@ -925,7 +913,7 @@ export class MobileServer {
   <header>
     <div class="brand-wrap">
       <div class="brand-avatar">
-        <img src="/assets/pan-da-hero.png" alt="PAN-DA" />
+        <svg viewBox="0 0 220 220" role="img" aria-label="PAN-DA"><circle cx="60" cy="50" r="31" fill="#0c1013"/><circle cx="160" cy="50" r="31" fill="#0c1013"/><ellipse cx="110" cy="116" rx="73" ry="69" fill="#f2f5f6"/><ellipse cx="79" cy="109" rx="21" ry="26" fill="#0c1013" transform="rotate(-9 79 109)"/><ellipse cx="141" cy="109" rx="21" ry="26" fill="#0c1013" transform="rotate(9 141 109)"/><circle cx="79" cy="111" r="9.5" fill="#2dd4bf"/><circle cx="141" cy="111" r="9.5" fill="#2dd4bf"/><ellipse cx="110" cy="138" rx="11" ry="8" fill="#0c1013"/><path d="M 97 150 Q 110 162 123 150" fill="none" stroke="#0c1013" stroke-width="3.4" stroke-linecap="round"/></svg>
       </div>
       <div>
         <div class="brand-title">KarkeDikha</div>
@@ -954,7 +942,7 @@ export class MobileServer {
   <div id="pair-screen" class="view-surface" style="padding: 24px 0;">
     <div class="pair-card">
       <div class="pair-mascot">
-        <img src="/assets/pan-da-face.png" alt="PAN-DA" />
+        <svg viewBox="0 0 220 220" role="img" aria-label="PAN-DA"><circle cx="60" cy="50" r="31" fill="#0c1013"/><circle cx="160" cy="50" r="31" fill="#0c1013"/><ellipse cx="110" cy="116" rx="73" ry="69" fill="#f2f5f6"/><ellipse cx="79" cy="109" rx="21" ry="26" fill="#0c1013" transform="rotate(-9 79 109)"/><ellipse cx="141" cy="109" rx="21" ry="26" fill="#0c1013" transform="rotate(9 141 109)"/><circle cx="79" cy="111" r="9.5" fill="#2dd4bf"/><circle cx="141" cy="111" r="9.5" fill="#2dd4bf"/><ellipse cx="110" cy="138" rx="11" ry="8" fill="#0c1013"/><path d="M 97 150 Q 110 162 123 150" fill="none" stroke="#0c1013" stroke-width="3.4" stroke-linecap="round"/></svg>
       </div>
       <div class="pair-title">Pair with KarkeDikha</div>
       <div class="pair-desc">Enter the 4-digit PIN displayed on your PC screen to securely connect this phone to Pandesh.</div>

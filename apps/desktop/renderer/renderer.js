@@ -929,12 +929,6 @@ function updatePandaAvatar(coreState, snapshot) {
   if (heroReactor) {
     heroReactor.dataset.presence = state;
   }
-
-  // The approved PAN-DA artwork is the only mascot image; states are CSS
-  // light/motion over it, driven by real runtime state.
-  if (pandaAvatar.getAttribute('src') !== 'assets/pan-da-hero.png') {
-    pandaAvatar.src = 'assets/pan-da-hero.png';
-  }
 }
 
 function updateCoreReactor(coreState, snapshot) {
@@ -8094,30 +8088,23 @@ function updateComposerStatus() {
  * nothing is faked: when there is no task, the task card is hidden.
  * ══════════════════════════════════════════════════════════════════════ */
 
-/** Which panda picture and label match each real runtime state. */
+/** Which label matches each real runtime state. */
 const PANDA_PRESENCE = {
-  idle: { src: 'assets/panda/mascot-idle.webp', label: 'Ready' },
-  listening: { src: 'assets/panda/mascot-idle.webp', label: 'Listening…' },
-  thinking: { src: 'assets/panda/mascot-thinking.webp', label: 'Thinking…' },
-  executing: { src: 'assets/panda/mascot-working.webp', label: 'Working…' },
-  validating: { src: 'assets/panda/mascot-working.webp', label: 'Validating…' },
-  recovering: { src: 'assets/panda/mascot-working.webp', label: 'Recovering…' },
-  creating: { src: 'assets/panda/mascot-working.webp', label: 'Creating…' },
-  waiting_for_approval: { src: 'assets/panda/action-approval.webp', label: 'Needs your approval' },
-  completed: { src: 'assets/panda/mascot-done.webp', label: 'Done' },
-  failed: { src: 'assets/panda/action-failed.webp', label: 'Needs attention' },
-  speaking: { src: 'assets/panda/mascot-excited.webp', label: 'Speaking…' },
+  idle: { label: 'Ready' },
+  listening: { label: 'Listening…' },
+  thinking: { label: 'Thinking…' },
+  executing: { label: 'Working…' },
+  validating: { label: 'Validating…' },
+  recovering: { label: 'Recovering…' },
+  creating: { label: 'Creating…' },
+  waiting_for_approval: { label: 'Needs your approval' },
+  completed: { label: 'Done' },
+  failed: { label: 'Needs attention' },
+  speaking: { label: 'Speaking…' },
 };
 
-/** The badge on the header panda: what Panda is doing right now. */
-const PANDA_ACTIVITY_BADGE = [
-  { match: /code|write|edit|patch|implement|refactor/, src: 'assets/panda/action-coding.webp' },
-  { match: /read|search|repo|file|inspect|list|find/, src: 'assets/panda/action-reading.webp' },
-  { match: /check|test|validat|verify|build/, src: 'assets/panda/action-testing.webp' },
-  { match: /review|audit/, src: 'assets/panda/action-reviewing.webp' },
-  { match: /delegat|spawn|handoff/, src: 'assets/panda/action-delegating.webp' },
-  { match: /think|plan|reason/, src: 'assets/panda/action-thinking.webp' },
-];
+/** Activity badge pictures for the header panda. None ship until there is licensed artwork, so the badge stays hidden. */
+const PANDA_ACTIVITY_BADGE = [];
 
 /** Fine-grained presence states collapse into the presence the user reads. */
 function normalizePresence(rawState) {
