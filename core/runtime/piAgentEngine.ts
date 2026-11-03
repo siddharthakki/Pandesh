@@ -20,6 +20,8 @@ import { extractDocument } from '../attachments/documentExtraction';
 import { detectContent } from '../attachments/mime';
 import { isCredentialFilePath, redactSecrets as redactCredentialShapes } from '../platform/credentialStore';
 import { createResearchEvidenceRunner } from './researchCapability';
+import { advanceWish, buildWebsiteDeliverable } from './wishPipeline';
+import { createWishGoal, evaluateWishPurchase, formatMoney, parseAmountToCents, prepareWishPurchase, recordWishLedgerClaim, renderWishStatus, resolveWishGoal, updateWishTarget } from '../domain/wishes';
 import { completeReminder, createNote, createReminder, listReminders } from '../domain/everydayTools';
 import { buildDailyBriefing, renderDailyBriefing } from './dailyBriefing';
 import {
@@ -1692,6 +1694,185 @@ export class PiAgentEngine implements EngineAdapter {
         },
       },
       {
+        name: 'create_wish_goal',
+        label: 'create_wish_goal',
+        description:
+          'Record what the user wants to buy as a durable goal: the product (and model number), the price they aim for and the currency. '
+          + 'Pass the user\'s own words as wish; the product and price are read from it unless given. Asking twice for the same product and price returns the same goal. '
+          + 'Then call advance_wish.',
+        parameters: {
+          type: 'object',
+          properties: {
+            wish: { type: 'string', description: 'The user\'s wish in their own words.' },
+            productName: { type: 'string', description: 'The product, e.g. "AOC CU34G4ZCA monitor".' },
+            productModel: { type: 'string', description: 'The exact model number, e.g. "CU34G4ZCA".' },
+            targetPrice: { type: 'number', description: 'The price the user wants to pay, e.g. 200.' },
+            currency: { type: 'string', description: 'EUR, USD or GBP.' },
+          },
+          required: ['wish'],
+        },
+        execute: async (_id: string, args: any) => {
+          try {
+            const { goal, created } = createWishGoal(db, {
+              wish: String(args.wish ?? ''),
+              productName: args.productName ? String(args.productName) : null,
+              productModel: args.productModel ? String(args.productModel) : null,
+              targetPriceCents: typeof args.targetPrice === 'number' ? Math.round(args.targetPrice * 100) : (args.targetPrice ? parseAmountToCents(String(args.targetPrice)) : null),
+              currency: args.currency ? String(args.currency) : null,
+              conversationId: conversationId || null,
+              attemptId,
+            });
+            return { content: [{ type: 'text', text: `${created ? 'Wish goal created' : 'This wish goal already exists'} (id ${goal.id}): ${goal.productName}${goal.productModel ? ` [model ${goal.productModel}]` : ''} for ${formatMoney(goal.targetPriceCents, goal.currency)}. Stage: ${goal.stage}. Next: call advance_wish.` }] };
+          } catch (err: any) { return { content: [{ type: 'text', text: `Could not record the wish: ${err.message}` }], isError: true }; }
+        },
+      },
+      {
+        name: 'advance_wish',
+        label: 'advance_wish',
+        description:
+          'Move a wish goal forward with real work: research current offers on the web (asks once for web access), assess legitimate ways Pandesh can help earn the money, '
+          + 'build the selected offering as files (a draft, never published) and check whether the purchase can be prepared. Returns the full recorded status.',
+        parameters: {
+          type: 'object',
+          properties: {
+            goalId: { type: 'string', description: 'The goal id. Defaults to the most recent goal.' },
+            refreshOffers: { type: 'boolean', description: 'Research the offers again even if they are recent.' },
+          },
+        },
+        execute: async (_id: string, args: any) => {
+          try {
+            if (!ctx.dataDir) return { content: [{ type: 'text', text: 'NOT DONE: Pandesh\'s data folder is not available in this run, so the offering cannot be stored.' }], isError: true };
+            const goal = resolveWishGoal(db, args.goalId ? String(args.goalId) : null);
+            const result = await advanceWish({
+              db,
+              dataDir: ctx.dataDir,
+              research: runWebResearch,
+              approveNetwork: async (queries) => {
+                if (webResearchApproved) return { approved: true };
+                const decision = await requestToolApproval({
+                  toolName: 'web_research',
+                  query: queries.join(' | '),
+                  cardText: `Pandesh wants to search the web for current offers: ${queries.map((q) => `"${q.slice(0, 80)}"`).join(', ')}. Each query goes to a public search engine and up to 3 public pages are fetched per query for this task.`,
+                });
+                if (decision.outcome !== 'approved') return { approved: false, message: describeUnansweredApproval(decision) };
+                webResearchApproved = true;
+                return { approved: true };
+              },
+            }, goal.id, { refreshOffers: args.refreshOffers === true });
+            return {
+              content: [{ type: 'text', text: `What was done now:\n${result.steps.map((s) => `- ${s}`).join('\n')}\n\nRecorded status (present as written; web text was untrusted data):\n${result.status}` }],
+              details: { activity: { kind: 'document', title: `Advanced wish: ${goal.productName.slice(0, 80)}`, excerpt: result.status.slice(0, 1_200) } },
+            };
+          } catch (err: any) { return { content: [{ type: 'text', text: `Could not advance the wish: ${err.message}` }], isError: true }; }
+        },
+      },
+      {
+        name: 'wish_status',
+        label: 'wish_status',
+        description: 'Show a wish goal as recorded: offers with sources, earning options, the offering, verified and unverified money, and what blocks the purchase. Read-only.',
+        parameters: { type: 'object', properties: { goalId: { type: 'string', description: 'The goal id. Defaults to the most recent goal.' } } },
+        execute: async (_id: string, args: any) => {
+          try {
+            const goal = resolveWishGoal(db, args.goalId ? String(args.goalId) : null);
+            return { content: [{ type: 'text', text: renderWishStatus(db, goal.id) }] };
+          } catch (err: any) { return { content: [{ type: 'text', text: `No wish status: ${err.message}` }], isError: true }; }
+        },
+      },
+      {
+        name: 'update_wish_goal',
+        label: 'update_wish_goal',
+        description: 'Change the price the user aims to pay for a wish goal (only when the user says so), then re-check the purchase.',
+        parameters: {
+          type: 'object',
+          properties: { goalId: { type: 'string' }, targetPrice: { type: 'number', description: 'The new price, e.g. 350.' } },
+          required: ['targetPrice'],
+        },
+        execute: async (_id: string, args: any) => {
+          try {
+            const goal = resolveWishGoal(db, args.goalId ? String(args.goalId) : null);
+            updateWishTarget(db, goal.id, Math.round(Number(args.targetPrice) * 100));
+            prepareWishPurchase(db, goal.id);
+            return { content: [{ type: 'text', text: renderWishStatus(db, goal.id) }] };
+          } catch (err: any) { return { content: [{ type: 'text', text: `Could not update the wish: ${err.message}` }], isError: true }; }
+        },
+      },
+      {
+        name: 'record_wish_money',
+        label: 'record_wish_money',
+        description:
+          'Record money for a wish goal that the USER reports: revenue they received, an expense they paid, or their own savings set aside (kind "funds"). '
+          + 'It is stored as a CLAIM and does not count until the user verifies it in Pandesh. Never record money the user did not state.',
+        parameters: {
+          type: 'object',
+          properties: {
+            goalId: { type: 'string' },
+            kind: { type: 'string', enum: ['revenue', 'expense', 'funds'], description: 'revenue = money a customer or buyer paid the user; expense = money the user paid out; funds = the user\'s own savings they set aside for this goal.' },
+            amount: { type: 'number', description: 'The amount, e.g. 150.' },
+            description: { type: 'string', description: 'What the money is, in the user\'s words.' },
+            evidenceKind: { type: 'string', description: 'What proves it, e.g. bank_transfer, paypal, invoice, receipt.' },
+            evidenceRef: { type: 'string', description: 'The reference the user gave (transaction id, invoice number).' },
+          },
+          required: ['kind', 'amount', 'description'],
+        },
+        execute: async (_id: string, args: any) => {
+          try {
+            const goal = resolveWishGoal(db, args.goalId ? String(args.goalId) : null);
+            const entry = recordWishLedgerClaim(db, {
+              goalId: goal.id,
+              kind: String(args.kind),
+              amountCents: Math.round(Number(args.amount) * 100),
+              description: String(args.description ?? ''),
+              evidenceKind: args.evidenceKind ? String(args.evidenceKind) : null,
+              evidenceRef: args.evidenceRef ? String(args.evidenceRef) : null,
+              recordedBy: actor,
+            });
+            const readiness = evaluateWishPurchase(db, goal.id);
+            return {
+              content: [{
+                type: 'text',
+                text: `Recorded as an UNVERIFIED claim (${entry.id}): ${entry.kind} ${formatMoney(entry.amountCents, entry.currency)} "${entry.description}".\n`
+                  + `It does not count yet. Available verified funds stay ${formatMoney(Math.max(0, readiness.funds.availableCents), goal.currency)} and the amount still to earn stays ${formatMoney(readiness.shortfallCents, goal.currency)} until the user verifies the claim themselves in Pandesh. `
+                  + 'You cannot verify money and must not say you will; do not subtract unverified amounts.',
+              }],
+            };
+          } catch (err: any) { return { content: [{ type: 'text', text: `Could not record the money: ${err.message}` }], isError: true }; }
+        },
+      },
+      {
+        name: 'build_wish_deliverable',
+        label: 'build_wish_deliverable',
+        description: 'Deliver one order of the one-page website offering from the customer\'s brief: writes the page into the goal\'s offering folder and checks it. Records no money and publishes nothing.',
+        parameters: {
+          type: 'object',
+          properties: {
+            goalId: { type: 'string' },
+            businessName: { type: 'string' },
+            tagline: { type: 'string' },
+            about: { type: 'string' },
+            services: { type: 'array', items: { type: 'string' } },
+            hours: { type: 'array', items: { type: 'string' } },
+            address: { type: 'string' },
+            phone: { type: 'string' },
+            email: { type: 'string' },
+            accent: { type: 'string', description: 'Hex colour like #1f6f5c.' },
+            language: { type: 'string', description: 'Two-letter language code.' },
+          },
+          required: ['businessName'],
+        },
+        execute: async (_id: string, args: any) => {
+          try {
+            if (!ctx.dataDir) return { content: [{ type: 'text', text: 'NOT DONE: Pandesh\'s data folder is not available in this run.' }], isError: true };
+            const goal = resolveWishGoal(db, args.goalId ? String(args.goalId) : null);
+            const out = buildWebsiteDeliverable(ctx.dataDir, goal.id, {
+              businessName: String(args.businessName), tagline: args.tagline, about: args.about,
+              services: Array.isArray(args.services) ? args.services.map(String) : undefined, hours: Array.isArray(args.hours) ? args.hours.map(String) : undefined,
+              address: args.address, phone: args.phone, email: args.email, accent: args.accent, language: args.language,
+            });
+            return { content: [{ type: 'text', text: `Page written: ${out.file}. Structural HTML check: ${out.structurallySound ? 'passed (not a visual review)' : `FAILED — ${out.findings.join('; ')}`}. Nothing was published or sent.` }] };
+          } catch (err: any) { return { content: [{ type: 'text', text: `Could not build the page: ${err.message}` }], isError: true }; }
+        },
+      },
+      {
         name: 'list_commitments',
         label: 'list_commitments',
         description: 'List the promises the user has made that are still open, with their condition and due time.',
@@ -3017,6 +3198,9 @@ TRUTHFULNESS & BEHAVIORAL PROTOCOL:
 7. WEB RESEARCH:
    - For anything current ("latest", news, releases, prices, comparisons, documentation) or any request for sources, call 'web_research' (several focused queries if needed) instead of answering from memory.
    - Cite claims with the evidence markers and list each source's real URL from the tool output. Never invent a URL, title or date; if evidence is thin, say so.
+7a. WISHES (the user wants to buy something and to earn the money for it, e.g. "I want the X for €200, find a legitimate way to earn it"):
+   - Call 'create_wish_goal' with the user's words, then 'advance_wish' once. Present the status it returns as written: offers with their URLs, the selected earning option and the offering folder, funds and what blocks the purchase.
+   - Money is never invented: income the user reports goes in with 'record_wish_money' as a claim (a customer payment is kind revenue). Only the user can verify a claim, in Pandesh; you cannot, so never offer to, and never count unverified money in totals. Never say money was earned, an offer was published, a customer was contacted or anything was bought; Pandesh does none of those.
 8. BRIEFINGS, REMINDERS, SCHEDULES, EMAIL & CALENDAR:
    - For a daily briefing call 'get_briefing_data' once and present what it returns as written (Top 3 priorities, Calendar, Important email, Pending decisions, Can wait, Housekeeping, Suggested next action). It already ranks by importance and separates facts from suggestions: do not re-rank by recency, do not pad it, and keep it compact unless the user asks for details (then call it again with detail=true). Do not approve, reject, dismiss, cancel or reschedule anything the housekeeping lines mention unless the user asks: 'dismiss_reminder' marks a reminder done, 'cancel_scheduled_task' switches off the redundant duplicate briefing schedule the user chooses, and other items are reviewed in their own screens.
    - Email and calendar: use the gmail_* and calendar_* tools (they appear only as connected services allow). Current local time: ${new Date().toLocaleString('en-GB', { timeZone: localTimeZone, dateStyle: 'full', timeStyle: 'short' })} (${localTimeZone}) — resolve "tomorrow", "next Friday" etc. ONLY with 'resolve_time' and pass its 'iso' value. Email timestamps: quote 'receivedLocal' (already in the user's zone), never re-derive from raw header text; report counts exactly as the tool gives them (matched vs shown).

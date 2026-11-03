@@ -1278,6 +1278,76 @@ CREATE TABLE IF NOT EXISTS standing_authorizations (
 CREATE INDEX IF NOT EXISTS idx_standing_authorizations_conversation ON standing_authorizations(conversationId, createdAt);
 `;
 
+/**
+ * Wish-to-Reality — a durable goal to buy something, funded only by money that is really there.
+ *
+ * Offers come from retrieved pages (URL, excerpt and hash are kept). The ledger separates a claim from the truth: an
+ * assistant can only record a 'claimed' entry; an entry counts towards available funds once a person verifies it.
+ * The purchase plan is prepared, never executed.
+ */
+const MIGRATION_42_WISH_GOALS = `
+CREATE TABLE IF NOT EXISTS wish_goals (
+  id TEXT PRIMARY KEY,
+  wish TEXT NOT NULL,
+  productName TEXT NOT NULL,
+  productModel TEXT,
+  targetPriceCents INTEGER NOT NULL,
+  currency TEXT NOT NULL DEFAULT 'EUR',
+  specsJson TEXT NOT NULL DEFAULT '{}',
+  status TEXT NOT NULL DEFAULT 'active',
+  stage TEXT NOT NULL DEFAULT 'research_offers',
+  selectedOpportunityId TEXT,
+  purchasePlanJson TEXT,
+  conversationId TEXT,
+  attemptId TEXT,
+  createdAt TEXT NOT NULL,
+  updatedAt TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS wish_offers (
+  id TEXT PRIMARY KEY,
+  goalId TEXT NOT NULL REFERENCES wish_goals(id),
+  sourceUrl TEXT NOT NULL,
+  sourceTitle TEXT,
+  priceCents INTEGER NOT NULL,
+  currency TEXT NOT NULL,
+  matchLevel TEXT NOT NULL,
+  basis TEXT NOT NULL,
+  excerpt TEXT NOT NULL,
+  evidenceHash TEXT NOT NULL,
+  retrievedAt TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_wish_offers_goal ON wish_offers(goalId, retrievedAt);
+CREATE TABLE IF NOT EXISTS wish_opportunities (
+  id TEXT PRIMARY KEY,
+  goalId TEXT NOT NULL REFERENCES wish_goals(id),
+  key TEXT NOT NULL,
+  title TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'candidate',
+  score REAL NOT NULL,
+  assessmentJson TEXT NOT NULL,
+  offeringJson TEXT,
+  createdAt TEXT NOT NULL,
+  updatedAt TEXT NOT NULL,
+  UNIQUE (goalId, key)
+);
+CREATE TABLE IF NOT EXISTS wish_ledger (
+  id TEXT PRIMARY KEY,
+  goalId TEXT NOT NULL REFERENCES wish_goals(id),
+  kind TEXT NOT NULL,
+  amountCents INTEGER NOT NULL,
+  currency TEXT NOT NULL,
+  description TEXT NOT NULL,
+  evidenceKind TEXT,
+  evidenceRef TEXT,
+  status TEXT NOT NULL DEFAULT 'claimed',
+  recordedBy TEXT NOT NULL,
+  verifiedBy TEXT,
+  createdAt TEXT NOT NULL,
+  verifiedAt TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_wish_ledger_goal ON wish_ledger(goalId, createdAt);
+`;
+
 const MIGRATION_36_BACKGROUND_TASKS = `
 CREATE TABLE IF NOT EXISTS background_tasks (
   id TEXT PRIMARY KEY,
@@ -1453,6 +1523,7 @@ export const MIGRATIONS: Migration[] = [
   { version: 39, description: 'Gmail inbox organization: durable multi-batch tasks with a verified manifest, checkpoint and retry state', sql: MIGRATION_39_GMAIL_ORGANIZE_TASKS },
   { version: 40, description: 'Notification outbox: durable notification intents with host-reported delivery status and the registered delivery channel', sql: MIGRATION_40_NOTIFICATION_OUTBOX },
   { version: 41, description: 'Chat permission modes per conversation and standing authorizations (scope, pins, expiry, revocation)', sql: MIGRATION_41_PERMISSION_MODES },
+  { version: 42, description: 'Wish-to-Reality: durable purchase goals, researched offers, earning opportunities and a verified funds ledger', sql: MIGRATION_42_WISH_GOALS },
 ];
 
 

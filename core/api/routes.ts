@@ -56,6 +56,7 @@ import * as commandQueue from '../domain/commandQueue';
 import * as karkeDikha from '../domain/karkeDikhaLifecycle';
 import * as backgroundTasks from '../domain/backgroundTasks';
 import * as notificationOutbox from '../domain/notificationOutbox';
+import * as wishes from '../domain/wishes';
 import * as permissionModes from '../domain/permissionModes';
 import { cancelBackgroundTaskWorker, resumeBackgroundTask } from '../runtime/backgroundWorker';
 import { latestRuntimeSequence, listRuntimeEventsAfter, recordRuntimeEvent } from '../domain/runtimeEvents';
@@ -1566,6 +1567,27 @@ export function buildRouter(
         body: permissionModes.revokeStandingAuthorization(ctx.db, match.params.id, ctx.actor, typeof body.reason === 'string' ? body.reason : 'revoked by the user'),
       })),
     );
+  });
+
+  // --- Wish-to-Reality: goals are read here; only a person verifies money (the model can only record a claim) ---
+  router.get('/v1/wishes', (ctx) => ({ status: 200, body: { goals: wishes.listWishGoals(ctx.db) } }));
+
+  router.get('/v1/wishes/:id', (ctx, match) => ({
+    status: 200,
+    body: { ...wishes.wishView(ctx.db, match.params.id), statusText: wishes.renderWishStatus(ctx.db, match.params.id) },
+  }));
+
+  router.post('/v1/wishes/:id/ledger/:entryId/verify', (ctx, match) => {
+    const key = requireIdempotencyKey(ctx);
+    const body = asRecord(ctx.body);
+    const resolution = body.resolution === 'verified' ? 'verified' : body.resolution === 'rejected' ? 'rejected' : null;
+    if (!resolution) throw new CoreError('invalid_request', "resolution must be 'verified' or 'rejected'");
+    return withIdempotency(ctx.db, { key, clientId: ctx.clientId, routeId: 'wishes.ledger.verify' }, ctx.body, () => {
+      if (!wishes.listWishLedger(ctx.db, match.params.id).some((e) => e.id === match.params.entryId)) throw new CoreError('not_found', 'ledger entry does not belong to this goal');
+      const entry = wishes.verifyWishLedgerEntry(ctx.db, match.params.entryId, resolution, ctx.actor);
+      const purchase = wishes.prepareWishPurchase(ctx.db, entry.goalId);
+      return { status: 200, body: { entry, readiness: purchase, statusText: wishes.renderWishStatus(ctx.db, entry.goalId) } };
+    });
   });
 
   // --- Notification outbox: the host reports what the operating system really did ---
