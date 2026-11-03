@@ -161,6 +161,7 @@ export function createImageStudioCapabilityAdapter(options: ImageStudioCapabilit
         output: JSON.stringify({ artifactIds: [artifact.id], message: `Generated a ${Math.round(((length - 1) / fps) * 10) / 10}s ${width}×${height} video` }),
         resultCategory: 'video_artifact_created',
         normalizedArguments: { prompt, seconds, width, height, startArtifactId: args.startArtifactId ?? null },
+        activity: { kind: 'video', title: prompt.slice(0, 120), artifactIds: [artifact.id] },
       };
     } catch (error) {
       const cancelled = ctx.signal?.aborted === true;
@@ -250,6 +251,7 @@ export function createImageStudioCapabilityAdapter(options: ImageStudioCapabilit
         output: JSON.stringify({ artifactIds, message: `Generated ${artifactIds.length} verified image${artifactIds.length === 1 ? '' : 's'}${reference ? ' from your reference image' : ''}` }),
         resultCategory: 'image_artifact_created',
         normalizedArguments: { prompt, width, height, steps, cfg, seed, checkpoint, outputCount, ...(reference ? { referenceArtifactId: args.referenceArtifactId, denoise } : {}) },
+        activity: { kind: 'image', title: prompt.slice(0, 120), artifactIds },
       };
     } catch (error) {
       const cancelled = ctx.signal?.aborted === true;

@@ -129,6 +129,17 @@ function scopeDetail(action: CapabilityActionRestoreEntry): string {
   const command = firstString(args.command);
   if (command) return bound(command);
   if (action.toolName === 'gmail_create_draft') return bound(mailDraftCard(args));
+  if (action.toolName === 'browser_submit') return bound(formSubmitCard(args));
+  if (action.toolName === 'inspect_page') {
+    const target = firstString(args.url, args.path) ?? '(nothing named)';
+    return bound(`Open this in Pandesh's local inspection browser and take a picture of it:
+${target}
+
+Only files in your workspace or a site running on this computer can be opened this way.`);
+  }
+  if (action.toolName === 'browser_open_site') {
+    return bound(`Let Pandesh's browser open this site and move around on it for this conversation:\n${firstString(args.url) ?? '(no address)'}\n\nNothing is sent to the site without a separate approval.`);
+  }
   try {
     return bound(JSON.stringify(args, null, 2) ?? '');
   } catch {
@@ -146,6 +157,19 @@ function mailDraftCard(args: Record<string, unknown>): string {
   const bcc = list(args.bcc);
   if (bcc) lines.push(`Bcc: ${bcc}`);
   lines.push(`Subject: ${firstString(args.subject) ?? '(no subject)'}`, '', firstString(args.bodyText, args.bodyHtml) ?? '(empty body)');
+  return lines.join('\n');
+}
+
+/** The exact values the browser holds (Core read them from the page) and where they go. */
+function formSubmitCard(args: Record<string, unknown>): string {
+  const fields = args.fields && typeof args.fields === 'object' && !Array.isArray(args.fields) ? Object.entries(args.fields as Record<string, unknown>) : [];
+  const destination = firstString(args.destination);
+  const lines = ['Send this form from Pandesh\'s browser:'];
+  if (destination) lines.push(`To: ${destination}`);
+  const page = firstString(args.page);
+  if (page) lines.push(`From page: ${page}`);
+  lines.push('', ...(fields.length ? fields.map(([k, v]) => `${k}: ${String(v)}`) : ['(no typed values)']));
+  lines.push('', 'Only these values are sent, once. Reject and nothing is submitted.');
   return lines.join('\n');
 }
 

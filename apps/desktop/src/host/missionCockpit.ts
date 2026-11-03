@@ -213,9 +213,10 @@ function coalesceCheckpoints(events: readonly DesktopActivityEvent[], nowMs: num
         at: started.at,
         endedAt: event.at,
         durationMs: duration(started.at, event.at),
-        title: humanTool(name, target),
+        title: browserStep(name, toolArguments(started), failed ? 'failed' : 'ok') ?? humanTool(name, target),
         detail: toolDetail(event.summary),
         outcome: failed ? 'failed' : cached ? 'cached' : 'ok',
+        tool: name,
       });
       continue;
     }
@@ -273,8 +274,9 @@ function coalesceCheckpoints(events: readonly DesktopActivityEvent[], nowMs: num
       id: `tool-open:${openTool.at}`,
       at: openTool.at,
       durationMs: Math.max(0, nowMs - Date.parse(openTool.at)),
-      title: humanTool(name, toolTarget(openTool)),
+      title: browserStep(name, toolArguments(openTool), 'running') ?? humanTool(name, toolTarget(openTool)),
       outcome: 'running',
+      tool: name,
     });
   }
 
@@ -322,6 +324,46 @@ function toolArguments(event: DesktopActivityEvent): Record<string, unknown> {
 function toolTarget(event: DesktopActivityEvent): string {
   const args = toolArguments(event);
   return String(args.path ?? args.query ?? args.check ?? '');
+}
+
+function hostName(value: unknown): string {
+  try {
+    return new URL(String(value)).hostname.replace(/^www\./, '');
+  } catch {
+    return 'the site';
+  }
+}
+
+function quoted(value: unknown): string {
+  const text = String(value ?? '').replace(/\s+/g, ' ').replace(/[\s:*]+$/, '').trim().slice(0, 50);
+  return text ? `“${text}”` : '';
+}
+
+/**
+ * A browser step as a person would say it: what is happening now, what was
+ * done, or what did not happen. Field values are never repeated here.
+ */
+export function browserStep(name: string, args: Record<string, unknown>, state: 'running' | 'ok' | 'failed'): string | null {
+  const pick = (running: string, ok: string, failed: string) => (state === 'running' ? running : state === 'ok' ? ok : failed);
+  const locator = (args.locator && typeof args.locator === 'object' ? args.locator : {}) as Record<string, unknown>;
+  const field = quoted(typeof args.locator === 'string' ? args.locator : locator.label ?? locator.name ?? locator.text ?? locator.placeholder) || 'a field';
+  const site = hostName(args.url);
+  switch (name) {
+    case 'browser_open_site': return pick(`Opening ${site}`, `Opened ${site}`, `Could not open ${site}`);
+    case 'browser_goto': return pick(`Going to ${site}`, `Went to ${site}`, `Could not go to ${site}`);
+    case 'browser_read': return pick('Reading the page', 'Read the page', 'Could not read the page');
+    case 'browser_click': {
+      const what = typeof args.linkIndex === 'number' ? `link ${args.linkIndex}` : field === 'a field' ? 'on the page' : field;
+      return pick(`Clicking ${what}`, `Clicked ${what}`, `Could not click ${what}`);
+    }
+    case 'browser_scroll': return pick(`Scrolling ${args.direction === 'up' ? 'up' : 'down'}`, `Scrolled ${args.direction === 'up' ? 'up' : 'down'}`, 'Could not scroll');
+    case 'browser_back': return pick('Going back', 'Went back a page', 'Could not go back');
+    case 'browser_fill': return pick(`Filling ${field}`, `Filled ${field}`, `Could not fill ${field}`);
+    case 'browser_submit': return pick('Sending the form', 'Sent the form', 'Form not sent');
+    case 'browser_stop': return pick('Closing the browser', 'Closed the browser', 'Could not close the browser');
+    case 'web_research': return pick(`Searching the web for ${quoted(args.query)}`, `Searched the web for ${quoted(args.query)}`, 'Web search failed');
+    default: return null;
+  }
 }
 
 function humanTool(name: string, target: string): string {
@@ -507,7 +549,7 @@ function inferCurrentAction(events: readonly DesktopActivityEvent[]): CockpitCur
     if (event.eventType === 'tool_invocation_started' || event.summary.startsWith('tool start:')) {
       if (!events.slice(i + 1).some((item) => isToolEnd(item)
         && (!event.invocationId || item.invocationId === event.invocationId))) {
-        return { title: humanTool(toolName(event), toolTarget(event)), startedAt: event.at };
+        return { title: browserStep(toolName(event), toolArguments(event), 'running') ?? humanTool(toolName(event), toolTarget(event)), startedAt: event.at };
       }
     }
   }

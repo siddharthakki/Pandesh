@@ -36,7 +36,7 @@ export interface ResidencyResult {
  * Loads `model` (if not already loaded) and pins it for the KKD keep-alive. Best-effort and bounded: a failure
  * never blocks the run, the engine's own request would simply pay the cold start.
  */
-export async function ensureModelResident(model: string, options: { baseUrl?: string; signal?: AbortSignal; timeoutMs?: number } = {}): Promise<ResidencyResult> {
+export async function ensureModelResident(model: string, options: { baseUrl?: string; signal?: AbortSignal; timeoutMs?: number; numCtx?: number } = {}): Promise<ResidencyResult> {
   const startedAt = Date.now();
   if (!model) return { ok: false, model, durationMs: 0, error: 'no model' };
   if (options.signal?.aborted) return { ok: false, model, durationMs: 0, error: 'aborted' };
@@ -46,7 +46,8 @@ export async function ensureModelResident(model: string, options: { baseUrl?: st
     const res = await fetch(`${ollamaBase(options.baseUrl)}/api/generate`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ model, keep_alive: resolveKeepAlive() }),
+      // Load at the window the engine will request; a different num_ctx would make Ollama reload on the first call.
+      body: JSON.stringify({ model, keep_alive: resolveKeepAlive(), ...(options.numCtx ? { options: { num_ctx: options.numCtx } } : {}) }),
       signal,
     });
     if (!res.ok) return { ok: false, model, durationMs: Date.now() - startedAt, error: `HTTP ${res.status}` };

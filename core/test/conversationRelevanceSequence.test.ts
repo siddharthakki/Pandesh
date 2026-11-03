@@ -17,7 +17,7 @@ import type { PowerShellRunner } from '../runtime/windowsPrinting';
 
 /**
  * Isolated reproduction of the P0 sequence: Gmail contract extraction -> weather -> device discovery -> print a test
- * page on the Brother printer -> an unrelated question. A scripted local OpenAI-compatible server stands in for Ollama
+ * page on the Brother printer -> an unrelated question. A scripted local server speaking Ollama's native /api/chat stands in for Ollama
  * and records the context the engine assembles for every model call; a fake PowerShell runner stands in for the Windows
  * spooler. Nothing here touches a real printer, the owner's profile or the network.
  */
@@ -31,8 +31,9 @@ let modelCalls: ModelCall[] = [];
 let previousUrl: string | undefined;
 let PiAgentEngineCtor: typeof import('../runtime/piAgentEngine').PiAgentEngine;
 
-function sse(res: http.ServerResponse, delta: Record<string, unknown>, finish: string | null) {
-  res.write(`data: ${JSON.stringify({ id: 'c1', object: 'chat.completion.chunk', created: 1, model: 'fake', choices: [{ index: 0, delta, finish_reason: finish }] })}\n\n`);
+/** One frame of Ollama's native /api/chat NDJSON stream (Pi's transport, see piOllamaNativeFetch). */
+function frame(res: http.ServerResponse, message: Record<string, unknown>, done: boolean) {
+  res.write(`${JSON.stringify({ model: 'fake', message: { role: 'assistant', content: '', ...message }, done, ...(done ? { done_reason: 'stop', prompt_eval_count: 1, eval_count: 1 } : {}) })}\n`);
 }
 
 function scriptedReply(call: ModelCall): { text?: string; tool?: { name: string; args: string } } {
@@ -56,7 +57,7 @@ beforeAll(async () => {
     req.on('data', (c) => { body += c; });
     req.on('end', () => {
       if (req.url?.startsWith('/api/generate')) { res.writeHead(200, { 'content-type': 'application/json' }); res.end('{}'); return; }
-      if (req.url?.includes('/chat/completions')) {
+      if (req.url?.startsWith('/api/chat')) {
         const payload = JSON.parse(body);
         const messages = payload.messages as ModelCall['messages'];
         const call: ModelCall = {
@@ -66,15 +67,10 @@ beforeAll(async () => {
         };
         modelCalls.push(call);
         const reply = scriptedReply(call);
-        res.writeHead(200, { 'content-type': 'text/event-stream' });
-        if (reply.tool) {
-          sse(res, { role: 'assistant', tool_calls: [{ index: 0, id: `call_${modelCalls.length}`, type: 'function', function: { name: reply.tool.name, arguments: reply.tool.args } }] }, null);
-          sse(res, {}, 'tool_calls');
-        } else {
-          sse(res, { role: 'assistant', content: reply.text }, null);
-          sse(res, {}, 'stop');
-        }
-        res.write('data: [DONE]\n\n');
+        res.writeHead(200, { 'content-type': 'application/x-ndjson' });
+        if (reply.tool) frame(res, { tool_calls: [{ function: { name: reply.tool.name, arguments: JSON.parse(reply.tool.args) } }] }, false);
+        else frame(res, { content: reply.text }, false);
+        frame(res, {}, true);
         res.end();
         return;
       }

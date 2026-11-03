@@ -44,6 +44,9 @@ function eventEvidence(value: Record<string, unknown> | undefined): Record<strin
     // a diff review from a commit; dropping it would force them back onto
     // parsing the truncated output.
     check: (evidence as { check?: unknown }).check ?? null,
+    // The workspace preview is bounded by its own contract and is what the
+    // desktop shows; it must survive a large tool output.
+    activity: (evidence as { activity?: unknown }).activity ?? null,
   };
 }
 

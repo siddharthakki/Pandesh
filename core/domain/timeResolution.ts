@@ -5,6 +5,8 @@
  */
 
 const WEEKDAYS = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
+/** Default clock times for a part of the day when the user gives no time ("tomorrow morning"). */
+const DAY_PART_TIMES = { morning: '09:00', afternoon: '14:00', evening: '18:00', night: '20:00' } as const;
 const WEEKDAY_SHORT: Record<string, number> = { sun: 0, mon: 1, tue: 2, tues: 2, wed: 3, thu: 4, thur: 4, thurs: 4, fri: 5, sat: 6 };
 
 export interface ZonedParts { year: number; month: number; day: number; hour: number; minute: number; second: number; weekday: number }
@@ -126,8 +128,14 @@ export function resolveTimeExpression(expression: string, nowMs: number, timeZon
 
   const clock = parseClock(raw);
   if ('error' in clock) return clock;
-  const text = clock.rest;
+  let text = clock.rest;
   let time = clock.time;
+  // "tomorrow morning", "friday evening": a day plus a part of the day. An explicit clock time wins.
+  const dayPart = /^(.+?)\s+(?:in the\s+)?(morning|afternoon|evening|night)$/.exec(text);
+  if (dayPart && dayPart[1] !== 'this') {
+    text = dayPart[1];
+    time = time ?? DAY_PART_TIMES[dayPart[2] as keyof typeof DAY_PART_TIMES];
+  }
   let date: string | null = null;
   let basis = '';
 

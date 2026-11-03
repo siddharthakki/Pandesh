@@ -5,7 +5,7 @@
  * already on disk (never npm-installs), and writes screenshots under
  * `<workspace>/.tmp/karkedikha-browser`.
  */
-import { spawn, type ChildProcess } from 'node:child_process';
+import { execFileSync, spawn, spawnSync, type ChildProcess } from 'node:child_process';
 import { LocalAutonomySecurityKernel } from '../security/kernel';
 import { createSanitizedChildEnvironment } from '../security/childEnvironment';
 import * as fs from 'node:fs';
@@ -163,7 +163,7 @@ export function resolveLivePageUrl(
   return resolveBrowserTargetUrl(rawUrl, env);
 }
 
-function sleep(ms: number): Promise<void> {
+export function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
@@ -229,7 +229,7 @@ export function startWorkspaceFileServer(workspaceRoot: string): Promise<{ url: 
   });
 }
 
-function freePort(): Promise<number> {
+export function freePort(): Promise<number> {
   return new Promise((resolve, reject) => {
     const probe = net.createServer();
     probe.listen(0, '127.0.0.1', () => {
@@ -246,17 +246,25 @@ interface CdpPending {
   reject: (err: Error) => void;
 }
 
-class CdpSession {
+export class CdpSession {
   private nextId = 1;
   private readonly pending = new Map<number, CdpPending>();
+  private readonly listeners = new Map<string, Array<(params: Record<string, unknown>, sessionId?: string) => void>>();
 
   constructor(private readonly ws: WebSocket) {
     ws.on('message', (raw) => {
       const msg = JSON.parse(String(raw)) as {
         id?: number;
+        method?: string;
+        params?: Record<string, unknown>;
+        sessionId?: string;
         error?: { message?: string };
         result?: Record<string, unknown>;
       };
+      if (msg.method) {
+        for (const listener of this.listeners.get(msg.method) ?? []) listener(msg.params ?? {}, msg.sessionId);
+        return;
+      }
       if (!msg.id || !this.pending.has(msg.id)) return;
       const waiter = this.pending.get(msg.id)!;
       this.pending.delete(msg.id);
@@ -273,12 +281,21 @@ class CdpSession {
     });
   }
 
+  /** Subscribes to a CDP event, e.g. 'Fetch.requestPaused'. */
+  on(method: string, listener: (params: Record<string, unknown>, sessionId?: string) => void): void {
+    this.listeners.set(method, [...(this.listeners.get(method) ?? []), listener]);
+  }
+
+  onClose(listener: () => void): void {
+    this.ws.once('close', listener);
+  }
+
   close(): void {
     this.ws.close();
   }
 }
 
-async function waitForDebugEndpoint(port: number, signal?: AbortSignal): Promise<string> {
+export async function waitForDebugEndpoint(port: number, signal?: AbortSignal): Promise<string> {
   const deadline = Date.now() + 15_000;
   let lastError = 'browser debug port did not become ready';
   while (Date.now() < deadline) {
@@ -297,7 +314,7 @@ async function waitForDebugEndpoint(port: number, signal?: AbortSignal): Promise
   throw new Error(`browser debug port did not become ready: ${lastError}`);
 }
 
-async function connectCdp(url: string): Promise<CdpSession> {
+export async function connectCdp(url: string): Promise<CdpSession> {
   const ws = new WebSocket(url);
   await new Promise<void>((resolve, reject) => {
     ws.once('open', () => resolve());
@@ -306,7 +323,7 @@ async function connectCdp(url: string): Promise<CdpSession> {
   return new CdpSession(ws);
 }
 
-async function evaluate(cdp: CdpSession, sessionId: string, expression: string): Promise<unknown> {
+export async function evaluate(cdp: CdpSession, sessionId: string, expression: string): Promise<unknown> {
   const result = await cdp.send('Runtime.evaluate', {
     expression,
     awaitPromise: true,
@@ -329,7 +346,7 @@ function keyEventParams(key: string): { key: string; code: string; text: string;
   return { key: ch, code: /^[a-zA-Z]$/.test(ch) ? `Key${ch.toUpperCase()}` : ch, text: ch, windowsVirtualKeyCode: ch.toUpperCase().charCodeAt(0) };
 }
 
-async function applyStep(cdp: CdpSession, sessionId: string, step: BrowserInspectStep): Promise<void> {
+export async function applyStep(cdp: CdpSession, sessionId: string, step: BrowserInspectStep): Promise<void> {
   if (step.action === 'wait') {
     await sleep(Math.min(Math.max(Number(step.ms) || 250, 0), 5_000));
     return;
@@ -442,7 +459,7 @@ function bound(text: string): string {
   return text.length > MAX_SNAPSHOT_CHARS ? `${text.slice(0, MAX_SNAPSHOT_CHARS)}\n…[truncated]` : text;
 }
 
-async function killProcessTree(child: ChildProcess): Promise<void> {
+export async function killProcessTree(child: ChildProcess): Promise<void> {
   if (child.pid && process.platform === 'win32') {
     await new Promise<void>((resolve) => {
       const killer = spawn('taskkill', ['/pid', String(child.pid), '/T', '/F'], {
@@ -455,6 +472,98 @@ async function killProcessTree(child: ChildProcess): Promise<void> {
     return;
   }
   child.kill('SIGTERM');
+}
+
+/**
+ * The real browser process behind a CDP connection. On Windows the spawned
+ * msedge.exe is a launcher that hands off to another PID and exits, so the
+ * child's own PID cannot be used to stop the browser.
+ */
+export async function browserProcessId(cdp: CdpSession): Promise<number | undefined> {
+  const info = await withTimeout(cdp.send('SystemInfo.getProcessInfo'), 3_000).catch(() => undefined);
+  const list = (info?.processInfo ?? []) as Array<{ type?: string; id?: number }>;
+  const id = list.find((p) => p.type === 'browser')?.id;
+  return Number.isInteger(id) && id! > 0 ? id : undefined;
+}
+
+/** The --user-data-dir a browser command line names, unquoted. */
+export function profileDirOf(commandLine: string | null): string | null {
+  const m = /--user-data-dir=(?:"([^"]+)"|(\S+))/.exec(commandLine ?? '');
+  return m ? (m[1] ?? m[2] ?? null) : null;
+}
+
+function sameProfile(a: string, b: string): boolean {
+  return path.resolve(a).toLowerCase() === path.resolve(b).toLowerCase();
+}
+
+/**
+ * Root browser PIDs (not renderers or helpers) whose command line names this
+ * exact managed profile. Only profiles under the Core-owned profile root are
+ * ever matched, so an ordinary user browser can never qualify.
+ */
+export function findBrowserRootsByProfile(profileDir: string): number[] {
+  if (process.platform !== 'win32' || !profileDir) return [];
+  if (!isInsideWorkspace(browserProfileRoot(), profileDir) || sameProfile(profileDir, browserProfileRoot())) return [];
+  const leaf = path.basename(profileDir).replace(/[^\w-]/g, '');
+  if (!leaf) return [];
+  const script = [
+    `Get-CimInstance Win32_Process -Filter "CommandLine LIKE '%--user-data-dir=%${leaf}%'" -ErrorAction SilentlyContinue |`,
+    '  ForEach-Object { @{ pid = $_.ProcessId; cmd = $_.CommandLine } } | ConvertTo-Json -Compress',
+  ].join('\n');
+  try {
+    const out = String(execFileSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', script], {
+      encoding: 'utf8', timeout: 8_000, windowsHide: true,
+    }) ?? '').trim();
+    if (!out) return [];
+    const parsed = JSON.parse(out) as { pid: number; cmd: string | null } | Array<{ pid: number; cmd: string | null }>;
+    return (Array.isArray(parsed) ? parsed : [parsed])
+      .filter((p) => !/\s--type=/.test(p.cmd ?? ''))
+      .filter((p) => { const dir = profileDirOf(p.cmd); return dir !== null && sameProfile(dir, profileDir); })
+      .map((p) => p.pid);
+  } catch {
+    return [];
+  }
+}
+
+export function killPidTreeSync(pid: number): void {
+  if (!Number.isInteger(pid) || pid <= 0) return;
+  if (process.platform === 'win32') {
+    spawnSync('taskkill', ['/PID', String(pid), '/T', '/F'], { windowsHide: true, stdio: 'ignore' });
+    return;
+  }
+  try { process.kill(pid, 'SIGKILL'); } catch {}
+}
+
+function pidAlive(pid: number): boolean {
+  try { process.kill(pid, 0); return true; }
+  catch (err) { return (err as NodeJS.ErrnoException).code === 'EPERM'; }
+}
+
+function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
+  return Promise.race([promise, new Promise<T>((_, reject) => setTimeout(() => reject(new Error('timeout')), ms))]);
+}
+
+/**
+ * Stops a managed browser: asks it to close over CDP, waits for the real
+ * browser process to exit, and only then force-kills that process tree (or,
+ * when its PID is unknown, the roots that own this exact profile).
+ */
+export async function closeManagedBrowser(
+  cdp: CdpSession | undefined,
+  child: ChildProcess,
+  profileDir: string,
+  browserPid?: number,
+): Promise<void> {
+  if (cdp) await withTimeout(cdp.send('Browser.close'), 2_000).catch(() => undefined);
+  cdp?.close();
+  if (browserPid) {
+    const deadline = Date.now() + 3_000;
+    while (pidAlive(browserPid) && Date.now() < deadline) await sleep(100);
+    if (pidAlive(browserPid)) killPidTreeSync(browserPid);
+  } else {
+    for (const pid of findBrowserRootsByProfile(profileDir)) killPidTreeSync(pid);
+  }
+  await killProcessTree(child);
 }
 
 async function withInspectedPage<T>(
@@ -515,8 +624,7 @@ async function withInspectedPage<T>(
     await evaluate(cdp, sessionId, 'window.__kdkVerificationLoadedAt = Date.now()');
     return await fn(cdp, sessionId, pageUrl);
   } finally {
-    cdp?.close();
-    await killProcessTree(child);
+    await closeManagedBrowser(cdp, child, profileDir, cdp ? await browserProcessId(cdp) : undefined);
     if (server) await server.close().catch(() => undefined);
     removeBrowserProfileDir(profileDir);
   }

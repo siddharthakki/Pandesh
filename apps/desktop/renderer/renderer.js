@@ -165,6 +165,18 @@ const contextDelivered = document.getElementById('context-delivered');
 const contextDeliveredEmpty = document.getElementById('context-delivered-empty');
 const contextPreview = document.getElementById('context-preview');
 const contextPreviewSection = document.getElementById('context-preview-section');
+const contextActivitySection = document.getElementById('context-activity-section');
+const contextActivityHeading = document.getElementById('context-activity-heading');
+const contextActivity = document.getElementById('context-activity');
+const contextHistorySection = document.getElementById('context-history-section');
+const contextHistory = document.getElementById('context-history');
+const contextApproval = document.getElementById('context-approval');
+const workspaceStop = document.getElementById('workspace-stop');
+const workspaceToggle = document.getElementById('btn-open-workspace');
+const workspaceToggleDot = document.getElementById('workspace-toggle-dot');
+const workspaceResizer = document.getElementById('workspace-resizer');
+const contextNow = document.getElementById('context-now');
+const contextDeliveredSection = document.getElementById('context-delivered-section');
 const conversationResultsTitle = document.getElementById('conversation-results-title');
 const conversationResultsFiles = document.getElementById('conversation-results-files');
 const conversationResultsPreview = document.getElementById('conversation-results-preview');
@@ -3397,12 +3409,72 @@ function cloudProviderLabel(cloud, providerId) {
   return (cloud?.providers ?? []).find((provider) => provider.id === providerId)?.displayName || providerId;
 }
 
+const cloudCards = new Map();
+let lastCloudState = null;
+
+const CLOUD_STATE_LABELS = {
+  'not-configured': 'Not configured',
+  'key-saved': 'Key saved',
+  failed: 'Connection failed',
+  'no-models': 'Connected, no usable models',
+  ready: 'Connected, models available',
+};
+
+function formatCheckedAt(iso) {
+  if (!iso) return 'Never checked';
+  const when = new Date(iso);
+  if (Number.isNaN(when.getTime())) return 'Never checked';
+  return `Last checked ${when.toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}`;
+}
+
+/** Why a provider that answered still offers nothing, in plain words. */
+function cloudFilteringExplanation(provider, listing) {
+  const excluded = listing.excluded ?? {};
+  const hidden = (excluded.paid ?? 0) + (excluded.unknown ?? 0) + (excluded.promotional ?? 0) + (excluded.trial ?? 0);
+  const total = (listing.pool?.length ?? 0) + hidden + (excluded.nonGenerative ?? 0);
+  const parts = [`Your key works: ${provider.displayName} listed ${total} model${total === 1 ? '' : 's'}, but none could be verified as free.`];
+  parts.push('Pandesh only offers a cloud model when the provider’s own data shows it is free (zero price or a free tier), so a cloud call can never cost money by surprise.');
+  if (provider.id === 'nvidia') {
+    parts.push('NVIDIA’s catalog does not mark individual models as free, so every NVIDIA model is held back until that can be verified. This is a filter, not a broken key.');
+  }
+  if (hidden > 0) {
+    parts.push(`Held back: ${excluded.paid ?? 0} paid, ${excluded.trial ?? 0} trial, ${excluded.promotional ?? 0} promotional, ${excluded.unknown ?? 0} unverified.`);
+  }
+  return parts.join(' ');
+}
+
+/** One of five explicit states, plus a short reason and when it was last checked. */
+function cloudProviderState(provider, cloud) {
+  const listing = cloud?.listings?.[provider.id] ?? null;
+  const test = cloud?.tests?.[provider.id] ?? null;
+  const checkedAt = [listing?.checkedAt, test?.checkedAt].filter(Boolean).sort().pop() ?? null;
+  if (!provider.configured) {
+    return { id: 'not-configured', label: CLOUD_STATE_LABELS['not-configured'], tone: 'offline', reason: 'No API key yet.', checkedAt };
+  }
+  if (listing && !listing.ok) {
+    const auth = listing.errorClass === 'auth';
+    return {
+      id: 'failed', label: CLOUD_STATE_LABELS.failed, tone: 'warn', checkedAt,
+      reason: auth ? 'The provider rejected this key. Check it and save again.' : `${listing.errorClass ?? 'error'}: ${cloudListingError(listing)}`,
+    };
+  }
+  if (listing && listing.ok && listing.pool.length === 0) {
+    return { id: 'no-models', label: CLOUD_STATE_LABELS['no-models'], tone: 'busy', reason: 'Key is valid, 0 free models found.', checkedAt };
+  }
+  if (listing && listing.ok) {
+    const n = listing.pool.length;
+    return { id: 'ready', label: CLOUD_STATE_LABELS.ready, tone: 'online', reason: `${n} free model${n === 1 ? '' : 's'} available.`, checkedAt };
+  }
+  return { id: 'key-saved', label: CLOUD_STATE_LABELS['key-saved'], tone: 'busy', reason: `Key saved${provider.keyHint ? ` (${provider.keyHint})` : ''}. Not tested yet.`, checkedAt };
+}
+
 /**
- * Settings → AI Models & Providers. Cards are built once per provider and updated in place so a
+ * Settings → Cloud Providers. Cards are built once per provider and updated in place so a
  * half-typed API key is never wiped by an unrelated snapshot refresh.
  */
 function renderCloudSettings(snapshot) {
   const cloud = snapshot?.cloud ?? null;
+  lastCloudState = cloud;
   if (cloudStateBadge) {
     const on = Boolean(cloud && !cloud.off && cloud.enabledProviders.length > 0);
     cloudStateBadge.textContent = !cloud ? 'Catalog unavailable' : on ? 'Free cloud on' : 'Cloud off';
@@ -3420,9 +3492,12 @@ function renderCloudSettings(snapshot) {
       cloudProviderList.replaceChildren(note);
       cloudCards.clear();
     }
+    renderConnectionsOverview();
     return;
   }
-  const ids = cloud.providers.map((provider) => provider.id);
+  // Providers you have set up come first; the rest stay as compact one-line rows in catalog order.
+  const sorted = [...cloud.providers].sort((a, b) => Number(b.configured) - Number(a.configured));
+  const ids = sorted.map((provider) => provider.id);
   for (const id of [...cloudCards.keys()]) {
     if (!ids.includes(id)) {
       cloudCards.get(id).root.remove();
@@ -3438,6 +3513,7 @@ function renderCloudSettings(snapshot) {
       cloudProviderList.replaceChildren(note);
       cloudCards.clear();
     }
+    renderConnectionsOverview();
     return;
   }
   cloudProviderList.dataset.signature = ids.join('|');
@@ -3445,10 +3521,9 @@ function renderCloudSettings(snapshot) {
   if (cloudProviderList.children.length !== ordered.length || ordered.some((node, index) => cloudProviderList.children[index] !== node)) {
     cloudProviderList.replaceChildren(...ordered);
   }
-  for (const provider of cloud.providers) updateCloudProviderCard(provider, cloud);
+  for (const provider of sorted) updateCloudProviderCard(provider, cloud);
+  renderConnectionsOverview();
 }
-
-const cloudCards = new Map();
 
 function buildCloudProviderCard(providerId) {
   if (!cloudProviderList) return null;
@@ -3456,20 +3531,24 @@ function buildCloudProviderCard(providerId) {
   root.className = 'cloud-provider';
   root.dataset.provider = providerId;
 
-  const head = document.createElement('div');
-  head.className = 'cloud-provider-head';
-  const title = document.createElement('h4');
+  const head = document.createElement('button');
+  head.type = 'button';
+  head.className = 'cloud-provider-head cp-head';
+  const title = document.createElement('span');
   title.className = 'cloud-provider-name';
   const badge = document.createElement('span');
   badge.className = 'int-badge';
+  badge.setAttribute('role', 'status');
   head.append(title, badge);
 
-  const meta = document.createElement('p');
-  meta.className = 'cloud-provider-meta';
+  const reason = document.createElement('p');
+  reason.className = 'cp-reason';
+  const checked = document.createElement('span');
+  checked.className = 'cp-checked';
+  reason.append(document.createTextNode(''), checked);
 
-  const warning = document.createElement('p');
-  warning.className = 'cloud-provider-warning';
-  warning.hidden = true;
+  const body = document.createElement('div');
+  body.className = 'cp-body';
 
   const keyRow = document.createElement('div');
   keyRow.className = 'cloud-key-row';
@@ -3478,16 +3557,12 @@ function buildCloudProviderCard(providerId) {
   keyInput.autocomplete = 'off';
   keyInput.spellcheck = false;
   keyInput.placeholder = 'Paste API key (stored encrypted on this PC)';
-  keyInput.setAttribute('aria-label', 'API key');
+  keyInput.setAttribute('aria-label', `${providerId} API key`);
   const saveKey = document.createElement('button');
   saveKey.type = 'button';
   saveKey.className = 'apex-chip';
   saveKey.textContent = 'Save key';
-  const clearKey = document.createElement('button');
-  clearKey.type = 'button';
-  clearKey.className = 'apex-chip';
-  clearKey.textContent = 'Clear';
-  keyRow.append(keyInput, saveKey, clearKey);
+  keyRow.append(keyInput, saveKey);
 
   const baseRow = document.createElement('label');
   baseRow.className = 'cloud-base-row';
@@ -3502,6 +3577,16 @@ function buildCloudProviderCard(providerId) {
 
   const actions = document.createElement('div');
   actions.className = 'cloud-provider-actions';
+  const mkBtn = (text) => {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'apex-chip';
+    button.textContent = text;
+    return button;
+  };
+  const testConn = mkBtn('Test connection');
+  const discover = mkBtn('Discover models');
+  const clearKey = mkBtn('Disconnect');
   const enabledLabel = document.createElement('label');
   enabledLabel.className = 'cloud-enabled';
   const enabled = document.createElement('input');
@@ -3509,16 +3594,17 @@ function buildCloudProviderCard(providerId) {
   const enabledText = document.createElement('span');
   enabledText.textContent = 'Enabled';
   enabledLabel.append(enabled, enabledText);
-  const discover = document.createElement('button');
-  discover.type = 'button';
-  discover.className = 'apex-chip';
-  discover.textContent = 'Discover free models';
   const keyLink = document.createElement('a');
   keyLink.className = 'cloud-key-link';
   keyLink.target = '_blank';
   keyLink.rel = 'noreferrer noopener';
   keyLink.textContent = 'Get a free key';
-  actions.append(enabledLabel, discover, keyLink);
+  actions.append(testConn, discover, clearKey, enabledLabel, keyLink);
+
+  // The per-card result line: what the last action actually did, right where it was clicked.
+  const note = document.createElement('p');
+  note.className = 'cp-note';
+  note.setAttribute('role', 'status');
 
   const listing = document.createElement('div');
   listing.className = 'cloud-listing';
@@ -3527,25 +3613,92 @@ function buildCloudProviderCard(providerId) {
   testResult.className = 'cloud-test-result';
   testResult.setAttribute('role', 'status');
 
-  root.append(head, meta, warning, keyRow, baseRow, actions, listing, testResult);
+  const info = document.createElement('details');
+  info.className = 'cp-info';
+  const infoSummary = document.createElement('summary');
+  infoSummary.textContent = 'Free tier, privacy and catalog details';
+  const meta = document.createElement('p');
+  meta.className = 'cloud-provider-meta';
+  const warning = document.createElement('p');
+  warning.className = 'cloud-provider-warning';
+  warning.hidden = true;
+  info.append(infoSummary, meta, warning);
+
+  body.append(keyRow, baseRow, actions, note, listing, testResult, info);
+  root.append(head, reason, body);
   cloudProviderList.appendChild(root);
 
-  const entry = { root, title, badge, meta, warning, keyInput, saveKey, clearKey, baseRow, baseInput, enabled, discover, keyLink, listing, testResult };
+  const entry = { root, head, title, badge, reason, checked, body, meta, warning, keyInput, saveKey, clearKey, testConn, discover, baseRow, baseInput, enabled, keyLink, note, listing, testResult, showAll: false, expanded: null };
   cloudCards.set(providerId, entry);
 
-  saveKey.addEventListener('click', async () => {
-    showOperationError(null);
-    saveKey.disabled = true;
-    try {
-      const state = await api.setCloudProviderKey(providerId, keyInput.value, baseInput.value.trim() || undefined);
-      keyInput.value = '';
-      if (cloudActionNote) cloudActionNote.textContent = `Saved and enabled ${cloudProviderLabel(state, providerId)}. Discover its free models next.`;
-      renderSnapshot(await api.getSnapshot());
-    } catch (error) {
-      showOperationError(error);
-    } finally {
-      saveKey.disabled = false;
+  const setNote = (text, tone) => {
+    note.textContent = text;
+    note.dataset.tone = tone ?? '';
+  };
+  const labelOf = (state) => cloudProviderLabel(state, providerId);
+  const refreshAll = async () => renderSnapshot(await api.getSnapshot());
+
+  head.addEventListener('click', () => {
+    entry.expanded = !root.classList.contains('is-open');
+    root.classList.toggle('is-open', entry.expanded);
+    head.setAttribute('aria-expanded', String(entry.expanded));
+  });
+
+  /** Reads the provider's live model list; the same call both proves the key and finds the free models. */
+  const runDiscovery = async () => {
+    const state = await api.discoverCloudModels(providerId);
+    const result = state.listings?.[providerId];
+    const provider = (state.providers ?? []).find((p) => p.id === providerId) ?? { id: providerId, displayName: labelOf(state) };
+    if (result?.ok && result.pool.length > 0) {
+      setNote(`Key valid. ${result.pool.length} free model${result.pool.length === 1 ? '' : 's'} found in ${result.latencyMs} ms.`, 'ok');
+    } else if (result?.ok) {
+      setNote(cloudFilteringExplanation(provider, result), 'warn');
+    } else {
+      setNote(`Connection failed — ${cloudListingError(result)}`, 'error');
     }
+    return state;
+  };
+
+  const busy = async (button, workingText, work) => {
+    showOperationError(null);
+    const original = button.textContent;
+    button.disabled = true;
+    button.textContent = workingText;
+    try {
+      await work();
+    } catch (error) {
+      setNote(error instanceof Error ? error.message : String(error), 'error');
+    } finally {
+      button.disabled = false;
+      button.textContent = original;
+      try { await refreshAll(); } catch { /* the next snapshot will catch up */ }
+    }
+  };
+
+  saveKey.addEventListener('click', () => {
+    if (!keyInput.value.trim()) { setNote('Paste an API key first.', 'warn'); return; }
+    void busy(saveKey, 'Saving…', async () => {
+      const saved = await api.setCloudProviderKey(providerId, keyInput.value, baseInput.value.trim() || undefined);
+      keyInput.value = '';
+      const hint = (saved.providers ?? []).find((p) => p.id === providerId)?.keyHint;
+      setNote(`Key saved${hint ? ` (${hint})` : ''}. Checking it with ${labelOf(saved)}…`, 'info');
+      await runDiscovery();
+    });
+  });
+
+  discover.addEventListener('click', () => { void busy(discover, 'Discovering…', runDiscovery); });
+
+  testConn.addEventListener('click', () => {
+    void busy(testConn, 'Testing…', async () => {
+      const state = await runDiscovery();
+      const result = state.listings?.[providerId];
+      if (!result?.ok || result.pool.length === 0) return;
+      const model = (state.selectedModel?.startsWith(`${providerId}::`) ? state.selectedModel.slice(providerId.length + 2) : null) ?? result.pool[0].id;
+      const tested = await api.testCloudProvider(providerId, model);
+      const outcome = tested.tests?.[providerId];
+      if (outcome?.ok) setNote(`Connected. ${model} replied in ${outcome.latencyMs} ms.`, 'ok');
+      else if (outcome) setNote(`Key valid, but the test message failed on ${model}: ${outcome.errorClass ?? 'error'}${outcome.error ? ` — ${outcome.error}` : ''}`, 'error');
+    });
   });
 
   clearKey.addEventListener('click', async () => {
@@ -3553,10 +3706,10 @@ function buildCloudProviderCard(providerId) {
     if (!window.confirm('Remove this provider key and turn the provider off? Cloud models from it will no longer be selectable.')) return;
     try {
       const state = await api.clearCloudProviderKey(providerId);
-      if (cloudActionNote) cloudActionNote.textContent = `${cloudProviderLabel(state, providerId)} key removed.`;
-      renderSnapshot(await api.getSnapshot());
+      setNote(`${labelOf(state)} disconnected. The key was removed from this PC.`, 'info');
+      await refreshAll();
     } catch (error) {
-      showOperationError(error);
+      setNote(error instanceof Error ? error.message : String(error), 'error');
     }
   });
 
@@ -3564,35 +3717,11 @@ function buildCloudProviderCard(providerId) {
     showOperationError(null);
     try {
       const state = await api.setCloudProviderEnabled(providerId, enabled.checked);
-      if (cloudActionNote) cloudActionNote.textContent = enabled.checked
-        ? `${cloudProviderLabel(state, providerId)} enabled for approved public text.`
-        : `${cloudProviderLabel(state, providerId)} disabled.`;
-      renderSnapshot(await api.getSnapshot());
+      setNote(enabled.checked ? `${labelOf(state)} enabled for approved public text.` : `${labelOf(state)} disabled.`, 'info');
+      await refreshAll();
     } catch (error) {
-      showOperationError(error);
+      setNote(error instanceof Error ? error.message : String(error), 'error');
       enabled.checked = !enabled.checked;
-    }
-  });
-
-  discover.addEventListener('click', async () => {
-    showOperationError(null);
-    discover.disabled = true;
-    const original = discover.textContent;
-    discover.textContent = 'Discovering…';
-    try {
-      const state = await api.discoverCloudModels(providerId);
-      const listingState = state.listings?.[providerId];
-      if (cloudActionNote) {
-        cloudActionNote.textContent = listingState?.ok
-          ? `${cloudProviderLabel(state, providerId)}: ${listingState.pool.length} free model${listingState.pool.length === 1 ? '' : 's'} in ${listingState.latencyMs} ms.`
-          : `${cloudProviderLabel(state, providerId)}: discovery failed — ${cloudListingError(listingState)}`;
-      }
-      renderSnapshot(await api.getSnapshot());
-    } catch (error) {
-      showOperationError(error);
-    } finally {
-      discover.disabled = false;
-      discover.textContent = original;
     }
   });
 
@@ -3616,10 +3745,18 @@ function cloudListingError(listing) {
 function updateCloudProviderCard(provider, cloud) {
   const entry = cloudCards.get(provider.id);
   if (!entry) return;
+  const state = cloudProviderState(provider, cloud);
+  entry.root.dataset.state = state.id;
   entry.title.textContent = provider.displayName;
-  const on = provider.enabled && provider.configured;
-  entry.badge.textContent = !provider.configured ? 'No key' : on ? 'Enabled' : 'Off';
-  entry.badge.className = `int-badge ${on ? 'online' : provider.configured ? 'busy' : 'offline'}`;
+  entry.badge.textContent = state.label;
+  entry.badge.className = `int-badge ${state.tone}`;
+  entry.reason.firstChild.textContent = state.reason;
+  entry.checked.textContent = state.id === 'not-configured' ? '' : ` · ${formatCheckedAt(state.checkedAt)}`;
+  // Cards you have set up open by default; untouched, unconfigured providers stay one line.
+  const open = entry.expanded ?? provider.configured;
+  entry.root.classList.toggle('is-open', open);
+  entry.head.setAttribute('aria-expanded', String(open));
+
   entry.meta.textContent = `Free tier: ${provider.freeTier?.kind ?? 'unknown'}`
     + ` · ${cloudPaymentLabel(provider.paymentMethodRequired)}`
     + ` · Catalog verified ${provider.lastVerifiedAt || 'unknown'}`
@@ -3641,9 +3778,13 @@ function updateCloudProviderCard(provider, cloud) {
       ? 'Server address (on this PC or your own network; any key text works if your server has none)'
       : 'Endpoint (include your account id)';
   }
+  entry.saveKey.textContent = provider.configured ? 'Replace key' : 'Save key';
+  entry.keyInput.placeholder = provider.configured ? `Key saved${provider.keyHint ? ` (${provider.keyHint})` : ''} — paste a new one to replace it` : 'Paste API key (stored encrypted on this PC)';
   entry.enabled.checked = provider.enabled;
   entry.enabled.disabled = !provider.configured;
+  entry.testConn.disabled = !provider.configured;
   entry.discover.disabled = !provider.configured;
+  entry.clearKey.disabled = !provider.configured;
   entry.keyLink.href = provider.apiKeysUrl || provider.signupUrl || provider.docsUrl || '#';
   entry.keyLink.textContent = provider.freeTier?.kind === 'free-forever' ? 'Get a free key' : 'Free-tier details';
 
@@ -3652,9 +3793,12 @@ function updateCloudProviderCard(provider, cloud) {
   const selected = cloud?.selectedModel ?? null;
   const signature = JSON.stringify({
     models: (listing?.pool ?? []).map((model) => [model.id, model.displayName, model.contextWindow ?? null, model.vision, model.tools]),
+    others: listing?.others?.length ?? 0,
+    showAll: entry.showAll,
     ok: listing?.ok ?? null,
     error: listing?.error ?? null,
     latency: listing?.latencyMs ?? null,
+    configured: provider.configured,
     test,
     selected,
   });
@@ -3666,8 +3810,8 @@ function updateCloudProviderCard(provider, cloud) {
     const hint = document.createElement('p');
     hint.className = 'muted cloud-listing-hint';
     hint.textContent = provider.configured
-      ? 'Press “Discover free models” to read this provider’s live model list and keep only verified free ones.'
-      : 'Add a key to discover this provider’s free models.';
+      ? 'Press “Test connection” to check the key, or “Discover models” to read the live model list and keep only verified free ones.'
+      : 'Add a key to connect this provider.';
     children.push(hint);
   } else if (!listing.ok) {
     const error = document.createElement('p');
@@ -3676,15 +3820,15 @@ function updateCloudProviderCard(provider, cloud) {
     children.push(error);
   } else if (listing.pool.length === 0) {
     const empty = document.createElement('p');
-    empty.className = 'cloud-listing-error';
-    empty.textContent = 'No verified free generative models were returned. Nothing from this provider can be selected.';
+    empty.className = 'cloud-listing-empty';
+    empty.textContent = cloudFilteringExplanation(provider, listing);
     children.push(empty);
   } else {
     const summary = document.createElement('p');
     summary.className = 'cloud-listing-summary';
     const excluded = listing.excluded ?? {};
     summary.textContent = `${listing.pool.length} free model${listing.pool.length === 1 ? '' : 's'} · ${listing.latencyMs} ms`
-      + ` · excluded ${excluded.paid ?? 0} paid, ${excluded.trial ?? 0} trial, ${excluded.promotional ?? 0} promotional, ${excluded.unknown ?? 0} unknown`;
+      + ` · held back ${excluded.paid ?? 0} paid, ${excluded.trial ?? 0} trial, ${excluded.promotional ?? 0} promotional, ${excluded.unknown ?? 0} unverified`;
     children.push(summary);
     const list = document.createElement('ul');
     list.className = 'cloud-model-list';
@@ -3701,7 +3845,8 @@ function updateCloudProviderCard(provider, cloud) {
         showOperationError(null);
         try {
           renderSnapshot(await api.selectCloudModel(encoded));
-          if (cloudActionNote) cloudActionNote.textContent = `${provider.displayName} ${model.displayName || model.id} selected. Each send asks you to approve its exact text.`;
+          entry.note.textContent = `${model.displayName || model.id} selected. Each send asks you to approve its exact text.`;
+          entry.note.dataset.tone = 'ok';
         } catch (error) {
           showOperationError(error);
         }
@@ -3731,9 +3876,11 @@ function updateCloudProviderCard(provider, cloud) {
           const state = await api.testCloudProvider(provider.id, model.id);
           const result = state.tests?.[provider.id];
           if (result?.ok) {
-            if (cloudActionNote) cloudActionNote.textContent = `${provider.displayName} ${model.id}: replied in ${result.latencyMs} ms${result.replyPreview ? ` (“${result.replyPreview}”)` : ''}.`;
+            entry.note.textContent = `${model.id} replied in ${result.latencyMs} ms${result.replyPreview ? ` (“${result.replyPreview}”)` : ''}.`;
+            entry.note.dataset.tone = 'ok';
           } else if (result) {
-            if (cloudActionNote) cloudActionNote.textContent = `${provider.displayName} ${model.id}: ${result.errorClass ?? 'error'} — ${result.error ?? 'no reply'}`;
+            entry.note.textContent = `${model.id}: ${result.errorClass ?? 'error'} — ${result.error ?? 'no reply'}`;
+            entry.note.dataset.tone = 'error';
           }
         } catch (error) {
           showOperationError(error);
@@ -3747,6 +3894,39 @@ function updateCloudProviderCard(provider, cloud) {
       list.appendChild(item);
     }
     children.push(list);
+  }
+
+  // Everything the provider listed, for reference. These can never be selected: only verified-free models can.
+  if (listing?.ok && (listing.others?.length ?? 0) > 0) {
+    const toggle = document.createElement('label');
+    toggle.className = 'cp-showall';
+    const box = document.createElement('input');
+    box.type = 'checkbox';
+    box.checked = entry.showAll;
+    box.addEventListener('change', () => {
+      entry.showAll = box.checked;
+      updateCloudProviderCard(provider, lastCloudState);
+    });
+    const text = document.createElement('span');
+    text.textContent = `Show all ${listing.pool.length + listing.others.length} discovered models (view only, not selectable)`;
+    toggle.append(box, text);
+    children.push(toggle);
+    if (entry.showAll) {
+      const reasons = { paid: 'paid', unknown: 'free status unverified', promotional: 'promotional', trial: 'trial' };
+      const all = document.createElement('ul');
+      all.className = 'cp-all-models';
+      for (const model of listing.others) {
+        const item = document.createElement('li');
+        const name = document.createElement('span');
+        name.textContent = model.displayName || model.id;
+        const why = document.createElement('span');
+        why.className = 'cp-all-why';
+        why.textContent = reasons[model.reason] ?? model.reason;
+        item.append(name, why);
+        all.appendChild(item);
+      }
+      children.push(all);
+    }
   }
   entry.listing.replaceChildren(...children);
 
@@ -3766,6 +3946,136 @@ function updateCloudProviderCard(provider, cloud) {
     entry.testResult.className = 'cloud-test-result';
     entry.testResult.textContent = '';
   }
+}
+
+/* ── Connections: tabs and the "what works / what needs me" overview ───────────────── */
+
+function showConnTab(name) {
+  document.querySelectorAll('[data-conn-tab]').forEach((tab) => {
+    const active = tab.getAttribute('data-conn-tab') === name;
+    tab.classList.toggle('is-active', active);
+    tab.setAttribute('aria-selected', String(active));
+  });
+  document.querySelectorAll('[data-conn-panel]').forEach((panel) => {
+    panel.hidden = panel.getAttribute('data-conn-panel') !== name;
+  });
+}
+
+let connOverviewQueued = false;
+
+function wireConnectionTabs() {
+  document.querySelectorAll('[data-conn-tab]').forEach((tab) => {
+    tab.addEventListener('click', () => showConnTab(tab.getAttribute('data-conn-tab')));
+  });
+  document.querySelectorAll('[data-conn-tab-go]').forEach((button) => {
+    button.addEventListener('click', () => showConnTab(button.getAttribute('data-conn-tab-go')));
+  });
+  // Rebuild the overview whenever any status badge elsewhere on the page changes.
+  const queue = () => {
+    if (connOverviewQueued) return;
+    connOverviewQueued = true;
+    requestAnimationFrame(() => { connOverviewQueued = false; renderConnectionsOverview(); });
+  };
+  const observer = new MutationObserver(queue);
+  for (const id of ['integ-google-badge', 'integ-mobile-badge', 'integ-studio-badge', 'integ-models-badge', 'integ-voice-badge']) {
+    const node = document.getElementById(id);
+    if (node) observer.observe(node, { childList: true, characterData: true, subtree: true, attributes: true, attributeFilter: ['class'] });
+  }
+  renderConnectionsOverview();
+}
+
+/** ok = working now, attention = broken or half-done, idle = simply not set up. */
+function badgeTone(node) {
+  const text = (node?.textContent ?? '').trim();
+  const cls = node?.className ?? '';
+  if (/needs attention|failed|error|unreachable/i.test(text) || /\bwarn\b/.test(cls)) return 'attention';
+  if (/not connected|setup needed|checking|probing|offline|waiting|—/i.test(text)) return 'idle';
+  if (/\bonline\b/.test(cls) || /connected|ready|active|live/i.test(text)) return 'ok';
+  return 'idle';
+}
+
+function renderConnectionsOverview() {
+  const list = document.getElementById('conn-connected-list');
+  if (!list) return;
+  const rows = [];
+  const fromBadge = (name, detail, badgeId, tab) => {
+    const node = document.getElementById(badgeId);
+    rows.push({ name, detail, status: node?.textContent?.trim() || 'Checking…', tone: badgeTone(node), tab });
+  };
+  fromBadge('Local AI (Ollama)', 'Runs on your GPU. Nothing leaves this PC.', 'integ-models-badge', 'advanced');
+  fromBadge('Google (Gmail & Calendar)', 'Read, draft and organize mail; manage events after you approve.', 'integ-google-badge', 'configure');
+  fromBadge('Pandesh Mobile', 'Your phone on the same Wi-Fi.', 'integ-mobile-badge', 'configure');
+  fromBadge('Image Studio', 'Local ComfyUI image generation.', 'integ-studio-badge', 'configure');
+  fromBadge('Voice & speech', 'Local speech recognition and spoken replies.', 'integ-voice-badge', 'configure');
+  const cloud = lastCloudState;
+  let unconfiguredProviders = 0;
+  for (const provider of cloud?.providers ?? []) {
+    if (!provider.configured) { unconfiguredProviders += 1; continue; }
+    const state = cloudProviderState(provider, cloud);
+    rows.push({
+      name: provider.displayName,
+      detail: `${state.reason}${state.checkedAt ? ` ${formatCheckedAt(state.checkedAt)}.` : ''}`,
+      status: state.label,
+      tone: state.id === 'ready' ? 'ok' : state.id === 'failed' || state.id === 'no-models' ? 'attention' : 'idle',
+      tab: 'cloud',
+    });
+  }
+
+  const ok = rows.filter((row) => row.tone === 'ok');
+  const attention = rows.filter((row) => row.tone === 'attention');
+  const idle = rows.filter((row) => row.tone === 'idle');
+  const setText = (id, value) => { const node = document.getElementById(id); if (node) node.textContent = value; };
+  setText('conn-count-ok', String(ok.length));
+  setText('conn-count-attn', String(attention.length));
+  document.getElementById('conn-tile-attn')?.classList.toggle('is-alert', attention.length > 0);
+  const cloudOn = Boolean(cloud && !cloud.off && cloud.enabledProviders.length > 0);
+  setText('conn-privacy-mode', cloudOn ? 'Local + free cloud' : 'Local only');
+
+  const makeRow = (row) => {
+    const item = document.createElement('div');
+    item.className = `conn-row is-${row.tone}`;
+    const text = document.createElement('div');
+    text.className = 'conn-row-text';
+    const name = document.createElement('strong');
+    name.textContent = row.name;
+    const detail = document.createElement('span');
+    detail.textContent = row.detail;
+    text.append(name, detail);
+    const status = document.createElement('span');
+    status.className = 'conn-row-status';
+    status.textContent = row.status;
+    const go = document.createElement('button');
+    go.type = 'button';
+    go.className = 'apex-chip';
+    go.textContent = row.tone === 'ok' ? 'Manage' : row.tone === 'attention' ? 'Fix' : 'Set up';
+    go.addEventListener('click', () => showConnTab(row.tab));
+    item.append(text, status, go);
+    return item;
+  };
+  const group = (title, items) => {
+    if (items.length === 0) return null;
+    const section = document.createElement('section');
+    section.className = 'conn-group';
+    const heading = document.createElement('h3');
+    heading.className = 'conn-group-title';
+    heading.textContent = `${title} (${items.length})`;
+    section.append(heading, ...items.map(makeRow));
+    return section;
+  };
+  const parts = [group('Needs attention', attention), group('Connected', ok), group('Not set up yet', idle)].filter(Boolean);
+  if (unconfiguredProviders > 0) {
+    const more = document.createElement('p');
+    more.className = 'muted conn-more';
+    more.textContent = `${unconfiguredProviders} optional cloud provider${unconfiguredProviders === 1 ? '' : 's'} available. `;
+    const link = document.createElement('button');
+    link.type = 'button';
+    link.className = 'link-btn';
+    link.textContent = 'Browse Cloud Providers';
+    link.addEventListener('click', () => showConnTab('cloud'));
+    more.appendChild(link);
+    parts.push(more);
+  }
+  list.replaceChildren(...parts);
 }
 
 /**
@@ -6541,6 +6851,7 @@ function wireAboutPanel() {
       void applyAppMetadata();
       const integrations = document.querySelector('[data-surface="integrations"]');
       if (integrations) integrations.click();
+      showConnTab('advanced');
       const about = document.getElementById('about-card');
       if (about) about.scrollIntoView({ block: 'center' });
     });
@@ -6554,6 +6865,7 @@ function wireAboutPanel() {
 
 void applyAppMetadata();
 wireAboutPanel();
+wireConnectionTabs();
 void refreshConversationsRail();
 void refreshIntegrationsView();
 void refreshTasksMissionsView();
@@ -6842,7 +7154,17 @@ async function refreshLiveTelemetry() {
     const t = (tasks || []).find((x) => !['completed', 'failed', 'cancelled'].includes(x.status));
     if (!t) { line.hidden = true; return; }
     const elapsed = formatElapsed(Date.now() - Date.parse(t.startedAt || t.createdAt));
-    line.textContent = `${t.worker}${t.model ? ` · ${t.model}` : ''} · ${elapsed} · ${describeModelPhase(t)}`;
+    const technical = `${t.worker}${t.model ? ` · ${t.model}` : ''} · ${elapsed} · ${describeModelPhase(t)}`;
+    // One plain sentence about the step happening now; the model telemetry
+    // stays one hover away instead of competing with the task card.
+    const action = lastSnapshot?.cockpit?.currentAction?.title;
+    const awaiting = Boolean(lastSnapshot?.awaitingApproval || lastSnapshot?.pendingApproval || lastSnapshot?.cockpit?.pendingApproval);
+    const plain = t.status === 'cancelling' ? 'Stopping…'
+      : awaiting ? 'Waiting for your approval — nothing runs until you decide.'
+        : action && action !== 'AI response' ? `${action}…`
+          : 'Deciding the next step…';
+    line.textContent = `${plain} · ${elapsed}`;
+    line.title = technical;
     line.hidden = false;
   } catch { line.hidden = true; } finally { liveTelemetryBusy = false; }
 }
@@ -7157,13 +7479,24 @@ async function refreshIntegrationsView() {
       if (urlEl) urlEl.textContent = pairInfo.url || `http://${pairInfo.ip}:3030/?pair=${pairInfo.code}`;
       if (statusEl) {
         const liveCount = Number(pairInfo.connectedClients ?? pairInfo.pairedCount ?? 0);
-        statusEl.textContent = liveCount > 0
-          ? `${liveCount} device(s) connected`
-          : 'Ready for pairing (Local Wi-Fi)';
+        statusEl.textContent = pairInfo.listening === false
+          ? `Not running (port ${pairInfo.port} unavailable)`
+          : liveCount > 0
+            ? `${liveCount} device(s) connected`
+            : 'Ready for pairing (Local Wi-Fi)';
+      }
+      const mobileBadge = document.getElementById('integ-mobile-badge');
+      if (mobileBadge) {
+        const live = Number(pairInfo.connectedClients ?? pairInfo.pairedCount ?? 0);
+        const listening = pairInfo.listening !== false && Boolean(pairInfo.code);
+        mobileBadge.textContent = !listening ? 'Not running' : live > 0 ? `${live} phone${live === 1 ? '' : 's'} connected` : 'Ready to pair';
+        mobileBadge.className = `int-badge ${listening ? 'online' : 'warn'}`;
       }
     }
   } catch (err) {
     console.warn('Mobile pairing probe failed', err);
+    const mobileBadge = document.getElementById('integ-mobile-badge');
+    if (mobileBadge) { mobileBadge.textContent = 'Check failed'; mobileBadge.className = 'int-badge warn'; }
   }
 
   // 2. Image Studio
@@ -7232,7 +7565,23 @@ document.querySelectorAll('.sidebar-nav-item').forEach((btn) => {
 // can be dismissed, and a delivered result can be previewed in place.
 document.getElementById('rail-brand')?.addEventListener('click', () => switchSurface('assistant'));
 workspaceContextClose?.addEventListener('click', () => {
-  if (workspaceContext) workspaceContext.hidden = true;
+  // Hiding the workspace never touches the task: it keeps running, and the
+  // header button brings the workspace back.
+  workspaceClosedByUser = true;
+  workspaceClosedAtActivityId = viewedWorkspaceActivities().at(-1)?.id ?? null;
+  updateContextPanelVisibility();
+});
+workspaceToggle?.addEventListener('click', () => {
+  workspaceClosedByUser = Boolean(workspaceContext && !workspaceContext.hidden);
+  if (workspaceClosedByUser) workspaceClosedAtActivityId = viewedWorkspaceActivities().at(-1)?.id ?? null;
+  updateContextPanelVisibility();
+});
+workspaceStop?.addEventListener('click', () => { void requestStop(); });
+document.getElementById('context-approval-review')?.addEventListener('click', () => {
+  // Approvals are decided only on the existing approval card.
+  const card = document.getElementById('approval-panel');
+  if (card && !card.hidden) card.scrollIntoView({ block: 'center', behavior: 'smooth' });
+  else switchSurface('tasks');
 });
 conversationResultsList?.addEventListener('click', (event) => {
   const target = event.target;
@@ -7547,10 +7896,11 @@ function updateComposerStatus() {
   }
   if (el.textContent !== text) el.textContent = text;
   el.dataset.state = state;
-  // One live status per request: while the task card is showing it, the
-  // composer does not repeat it, and an idle "Ready" says nothing.
+  // One live status per request: the task card or the live line below (the
+  // step happening now) says it once, and an idle "Ready" says nothing.
+  const telemetryShown = document.getElementById('live-telemetry')?.hidden === false;
   const cardShowsIt = (state === 'working' || state === 'approval') && workspaceTaskCard && !workspaceTaskCard.hidden;
-  el.hidden = state === 'idle' || cardShowsIt;
+  el.hidden = state === 'idle' || cardShowsIt || (state === 'working' && telemetryShown);
 }
 
 /* ══════════════════════════════════════════════════════════════════════
@@ -7788,27 +8138,64 @@ function taskCardStatusSentence(snapshot, running, outcome, awaitingApproval) {
 }
 
 /** The real activity events, newest last, exactly as the runtime reported them. */
+/** Bookkeeping checkpoints, said the way a person would. */
+const TASK_STEP_WORDS = {
+  'Mission submitted': 'Started',
+  'Waiting for authorization': 'Waiting for your approval',
+  'Authorization approved': 'You approved',
+  'Mission completed': 'Done',
+};
+
 function renderTaskCardSteps(cockpit, running, awaitingApproval = false) {
   if (!taskCardSteps) return;
-  let checkpoints = (cockpit?.checkpoints ?? []).slice(-5);
+  const all = cockpit?.checkpoints ?? [];
+  // Model turns between tools are not steps of the task; one "Deciding the
+  // next step" stands in for them only while nothing else is happening.
+  const approvedLater = (index) => all.slice(index + 1).some((later) => later.title === 'Authorization approved');
+  let checkpoints = all.filter((item, index) => (item.title !== 'AI response'
+    || (running && index === all.length - 1 && item.outcome === 'running'))
+    && !(item.title === 'Waiting for authorization' && approvedLater(index)));
   if (awaitingApproval) {
     checkpoints = checkpoints.filter((item) => item.title !== 'Mission completed');
   }
-  const signature = `${running}|${awaitingApproval}|${checkpoints.map((item) => `${item.title}|${item.outcome ?? ''}`).join('~')}`;
+  const shown = checkpoints.slice(-6);
+  const signature = `${running}|${awaitingApproval}|${all.map((item) => `${item.title}|${item.outcome ?? ''}|${item.count ?? 1}`).join('~')}`;
   if (taskCardSteps.dataset.signature === signature) return;
   taskCardSteps.dataset.signature = signature;
-  taskCardSteps.replaceChildren(...checkpoints.map((item, index) => {
+  const rows = shown.map((item, index) => {
     const row = document.createElement('li');
-    const isLast = index === checkpoints.length - 1;
+    const isLast = index === shown.length - 1;
     if (item.outcome) row.dataset.outcome = item.outcome;
     else if (isLast && running) row.dataset.outcome = 'active';
     const label = document.createElement('span');
-    // The title is the human step ("Read notes.txt", "AI response"). The raw
-    // detail can carry internal attempt ids, so it stays out of the card.
-    label.textContent = item.title;
+    // Plain words only; the raw detail can carry internal ids.
+    const words = item.title === 'AI response' ? 'Deciding the next step' : (TASK_STEP_WORDS[item.title] ?? item.title);
+    label.textContent = item.count > 1 ? `${words} (×${item.count})` : words;
     row.appendChild(label);
+    if (item.outcome === 'failed' && item.detail) {
+      const why = document.createElement('span');
+      why.className = 'task-step-why';
+      why.textContent = item.detail;
+      row.appendChild(why);
+    }
     return row;
-  }));
+  });
+  // Every recorded step, tool names included, for whoever wants to look.
+  const details = document.createElement('li');
+  details.className = 'task-step-details';
+  const box = document.createElement('details');
+  const summary = document.createElement('summary');
+  summary.textContent = `Details (${all.length} steps)`;
+  const list = document.createElement('ol');
+  for (const item of all) {
+    const line = document.createElement('li');
+    line.textContent = [item.tool ?? item.title, item.outcome ?? '', item.count > 1 ? `×${item.count}` : '', item.detail ?? ''].filter(Boolean).join(' · ');
+    list.appendChild(line);
+  }
+  box.open = taskCardSteps.querySelector('.task-step-details details')?.open ?? false;
+  box.append(summary, list);
+  details.appendChild(box);
+  taskCardSteps.replaceChildren(...rows, ...(all.length ? [details] : []));
 }
 
 /**
@@ -7870,15 +8257,625 @@ function renderWorkspaceContext(snapshot) {
     }
   }
   if (contextDeliveredEmpty) contextDeliveredEmpty.hidden = changed.length > 0;
+  renderWorkspaceActivity(snapshot);
   updateContextPanelVisibility();
 }
 
-/** The panel is only there when it has something real to show. */
+/**
+ * The panel is only there when it has something real to show, and stays
+ * closed once the person closed it — until a new step starts.
+ */
 function updateContextPanelVisibility() {
   if (!workspaceContext) return;
   const changed = lastSnapshot?.cockpit?.filesChanged?.length ?? 0;
   const hasPreview = Boolean(contextPreviewArtifactId);
-  workspaceContext.hidden = !(changed > 0 || hasPreview);
+  const activities = viewedWorkspaceActivities();
+  const hasContent = changed > 0 || hasPreview || activities.length > 0;
+  workspaceContext.hidden = !hasContent || workspaceClosedByUser;
+  workspaceContext.classList.toggle('has-activity', activities.length > 0);
+  if (workspaceToggle) {
+    workspaceToggle.hidden = !hasContent;
+    workspaceToggle.setAttribute('aria-expanded', String(!workspaceContext.hidden));
+    workspaceToggle.title = workspaceContext.hidden ? 'Show what Pandesh is doing and what it produced' : 'Hide the workspace (the task keeps running)';
+  }
+  if (workspaceToggleDot) {
+    workspaceToggleDot.hidden = !(workspaceContext.hidden && activities.some((item) => item.state === 'running'));
+  }
+}
+
+// ── Live activity ────────────────────────────────────────────────────────
+// Every step here is a real Core tool invocation (or a host capability call)
+// reported by the desktop host; the renderer only draws it. Page text, file
+// names and diffs are untrusted, so everything is set as text — never HTML.
+
+/** The step the person picked to inspect; null follows the current step. */
+let workspaceSelectedActivityId = null;
+/** The newest step seen, so a new one can reopen a closed workspace once. */
+let workspaceLatestSeenId = null;
+let workspaceClosedByUser = false;
+let workspaceClosedAtActivityId = null;
+/** Which conversation the workspace shows, and since when. */
+let workspaceViewConversationId;
+let workspaceViewSince = Date.now();
+/** Lazily loaded previews by artifact id (bounded). */
+const workspacePreviewCache = new Map();
+const WORKSPACE_PREVIEW_CACHE_LIMIT = 24;
+/** Previews that could not be loaded, by artifact id → when; retried, never cached. */
+const workspacePreviewFailures = new Map();
+
+const ACTIVITY_KIND_LABEL = { browser: 'Browser', code: 'Code', document: 'Document', image: 'Image', video: 'Video', tool: 'Tool' };
+const ACTIVITY_STATE_LABEL = { running: 'Running', completed: 'Completed', failed: 'Failed', cancelled: 'Cancelled' };
+
+function viewedWorkspaceActivities() {
+  const conversationId = viewingConversationId || lastSnapshot?.activeConversationId || lastSnapshot?.selectedConversationId || null;
+  if (!conversationId) return [];
+  return (lastSnapshot?.workspaceActivities ?? []).filter((item) => item.conversationId === conversationId);
+}
+
+/** The current step: the newest one still running, otherwise the newest. */
+function currentWorkspaceActivity(items) {
+  return [...items].reverse().find((item) => item.state === 'running') ?? items[items.length - 1] ?? null;
+}
+
+function renderWorkspaceActivity(snapshot) {
+  if (!contextActivity) return;
+  const items = viewedWorkspaceActivities();
+  const current = currentWorkspaceActivity(items);
+
+  // A new step opens the workspace (again, if the person closed it for an
+  // earlier step). History restored after a reload, a restart or a switch of
+  // conversation stays behind the header button instead of popping open.
+  const conversationId = viewingConversationId || snapshot?.activeConversationId || snapshot?.selectedConversationId || null;
+  if (conversationId !== workspaceViewConversationId) {
+    workspaceViewConversationId = conversationId;
+    workspaceViewSince = Date.now();
+    workspaceLatestSeenId = null;
+    workspaceClosedAtActivityId = null;
+    workspaceSelectedActivityId = null;
+    workspaceClosedByUser = false;
+  }
+  const newest = items[items.length - 1] ?? null;
+  if (newest && newest.id !== workspaceLatestSeenId) {
+    const restored = workspaceLatestSeenId === null && newest.state !== 'running'
+      && Date.parse(newest.startedAt) < workspaceViewSince - 30_000;
+    workspaceLatestSeenId = newest.id;
+    if (restored) {
+      workspaceClosedByUser = true;
+    } else if (newest.id !== workspaceClosedAtActivityId) {
+      workspaceClosedByUser = false;
+      workspaceSelectedActivityId = null;
+    }
+  }
+
+  const awaitingApproval = Boolean(snapshot?.awaitingApproval || snapshot?.pendingApproval || snapshot?.cockpit?.pendingApproval || snapshot?.pendingImageApproval);
+  if (contextApproval) contextApproval.hidden = !awaitingApproval;
+  if (workspaceStop) workspaceStop.hidden = !snapshot?.running;
+  renderWorkspaceNow(current, awaitingApproval, Boolean(snapshot?.running));
+  if (contextDeliveredSection) contextDeliveredSection.hidden = items.length > 0 && !(snapshot?.cockpit?.filesChanged?.length);
+
+  const selected = items.find((item) => item.id === workspaceSelectedActivityId) ?? current;
+  if (contextActivitySection) contextActivitySection.hidden = !selected;
+  if (contextActivityHeading) {
+    contextActivityHeading.textContent = selected && selected.id !== current?.id ? 'Earlier step' : (snapshot?.running ? 'Now' : 'Latest');
+  }
+  if (selected?.kind === 'browser') {
+    renderBrowserView(selected, items, snapshot?.coreState === 'connected');
+    renderWorkspaceHistory(items, selected, current);
+    return;
+  }
+  // Previews come from Core: redraw once it is connected, and retry a preview
+  // that failed earlier (after a restart Core may answer a moment later).
+  const coreReady = snapshot?.coreState === 'connected';
+  const retryDue = [...workspacePreviewFailures.values()].some((at) => Date.now() - at > 5_000);
+  const detailSignature = selected ? JSON.stringify([selected.id, selected.state, selected.endedAt, selected.detail, selected.preview, coreReady]) : '';
+  if (retryDue) {
+    workspacePreviewFailures.clear();
+    contextActivity.dataset.signature = '';
+  }
+  if (contextActivity.dataset.signature !== detailSignature) {
+    contextActivity.dataset.signature = detailSignature;
+    contextActivity.replaceChildren(...(selected ? buildActivityDetail(selected) : []));
+  }
+  renderWorkspaceHistory(items, selected, current);
+}
+
+/** One plain sentence on top of the workspace: what is happening right now. */
+function renderWorkspaceNow(current, awaitingApproval, running) {
+  if (!contextNow) return;
+  let state = current?.state ?? '';
+  let text = '';
+  if (awaitingApproval) {
+    state = 'approval';
+    text = 'Waiting for your approval — nothing happens until you decide.';
+  } else if (current) {
+    if (current.state === 'running') text = `${current.title}…`;
+    else if (current.state === 'failed') text = `${current.title}${current.detail ? ` — ${current.detail}` : ''}`;
+    else if (current.state === 'cancelled') text = `Stopped: ${current.title}`;
+    else text = running ? `${current.title} · deciding the next step…` : current.title;
+  }
+  const signature = `${state}|${text}`;
+  if (contextNow.dataset.signature === signature) return;
+  contextNow.dataset.signature = signature;
+  contextNow.dataset.state = state;
+  if (!text) {
+    contextNow.replaceChildren();
+    return;
+  }
+  const dot = document.createElement('span');
+  dot.className = 'now-dot';
+  const words = document.createElement('span');
+  words.textContent = text;
+  contextNow.replaceChildren(dot, words);
+}
+
+function renderWorkspaceHistory(items, selected, current) {
+  if (contextHistorySection) contextHistorySection.hidden = items.length < 2;
+  const historySignature = JSON.stringify([selected?.id ?? null, items.map((item) => [item.id, item.state, item.title])]);
+  if (contextHistory && contextHistory.dataset.signature !== historySignature) {
+    contextHistory.dataset.signature = historySignature;
+    contextHistory.replaceChildren(...[...items].reverse().map((item) => {
+      const row = document.createElement('li');
+      const button = document.createElement('button');
+      button.type = 'button';
+      if (item.id === selected?.id) button.setAttribute('aria-current', 'true');
+      const dot = document.createElement('span');
+      dot.className = 'history-dot';
+      dot.dataset.state = item.state;
+      dot.title = ACTIVITY_STATE_LABEL[item.state] ?? item.state;
+      const title = document.createElement('span');
+      title.className = 'history-title';
+      title.textContent = item.title;
+      const time = document.createElement('span');
+      time.className = 'history-time';
+      time.textContent = formatActivityTime(item.startedAt);
+      button.append(dot, title, time);
+      button.addEventListener('click', () => {
+        workspaceSelectedActivityId = item.id === current?.id ? null : item.id;
+        renderWorkspaceActivity(lastSnapshot);
+      });
+      row.appendChild(button);
+      return row;
+    }));
+  }
+}
+
+// ── Browser view ─────────────────────────────────────────────────────────
+// Pandesh browses in its own background browser session; this frame shows the
+// picture that session took after each step (Core screenshots, never a second
+// browser and never a reconstruction). It is updated in place so the panel
+// does not jump while the conversation is being read or typed in.
+
+let browserView = null;
+
+function browserViewNodes() {
+  if (browserView) return browserView;
+  const root = document.createElement('div');
+  root.className = 'browser-view';
+  const frame = document.createElement('div');
+  frame.className = 'browser-frame';
+  const bar = document.createElement('div');
+  bar.className = 'browser-bar';
+  const address = document.createElement('div');
+  address.className = 'browser-address';
+  const title = document.createElement('span');
+  title.className = 'browser-address-title';
+  const url = document.createElement('span');
+  url.className = 'browser-address-url';
+  address.append(title, url);
+  const enlarge = document.createElement('button');
+  enlarge.type = 'button';
+  enlarge.className = 'browser-bar-btn';
+  enlarge.textContent = 'Enlarge';
+  enlarge.title = 'Show this picture full size';
+  const open = document.createElement('a');
+  open.className = 'browser-bar-btn';
+  open.textContent = 'Open in your browser ↗';
+  open.target = '_blank';
+  open.rel = 'noopener noreferrer';
+  open.title = 'Opens this address in your own browser, in a separate window. Pandesh keeps working in its own session.';
+  bar.append(address, enlarge, open);
+  const viewport = document.createElement('div');
+  viewport.className = 'browser-viewport';
+  viewport.title = 'Click to enlarge';
+  const img = document.createElement('img');
+  img.alt = '';
+  img.hidden = true;
+  const note = document.createElement('div');
+  note.className = 'browser-viewport-note';
+  const badge = document.createElement('span');
+  badge.className = 'browser-viewport-badge';
+  badge.hidden = true;
+  viewport.append(img, note, badge);
+  const caption = document.createElement('p');
+  caption.className = 'browser-caption';
+  frame.append(bar, viewport, caption);
+  const strip = document.createElement('div');
+  strip.className = 'browser-strip';
+  strip.setAttribute('aria-label', 'Pictures of earlier browser steps');
+  const more = document.createElement('div');
+  root.append(frame, strip, more);
+  const showLarge = () => {
+    if (img.hidden || !img.src) return;
+    openWorkspaceLightbox(img.src, `${title.textContent} — ${url.textContent}`);
+  };
+  enlarge.addEventListener('click', showLarge);
+  viewport.addEventListener('click', showLarge);
+  browserView = { root, title, url, open, enlarge, viewport, img, note, badge, caption, strip, more };
+  return browserView;
+}
+
+/** Loads a Core artifact preview once (bounded cache), or null when it cannot be shown. */
+function loadWorkspacePreview(artifactId) {
+  const cached = workspacePreviewCache.get(artifactId);
+  if (cached) return Promise.resolve(cached);
+  if (typeof api?.loadArtifactPreview !== 'function' || lastSnapshot?.coreState !== 'connected') return Promise.resolve(null);
+  // A picture that just failed is retried on the panel's own schedule, not on every redraw.
+  if (Date.now() - (workspacePreviewFailures.get(artifactId) ?? 0) < 5_000) return Promise.resolve(null);
+  return api.loadArtifactPreview(artifactId).then((preview) => {
+    workspacePreviewCache.set(artifactId, preview);
+    if (workspacePreviewCache.size > WORKSPACE_PREVIEW_CACHE_LIMIT) {
+      workspacePreviewCache.delete(workspacePreviewCache.keys().next().value);
+    }
+    return preview;
+  }).catch(() => {
+    workspacePreviewFailures.set(artifactId, Date.now());
+    return null;
+  });
+}
+
+function renderBrowserView(selected, items, coreReady) {
+  const view = browserViewNodes();
+  if (contextActivity.firstChild !== view.root || contextActivity.childNodes.length !== 1) {
+    contextActivity.replaceChildren(view.root);
+  }
+  contextActivity.dataset.signature = 'browser';
+  const browserItems = items.filter((item) => item.kind === 'browser');
+  const index = browserItems.findIndex((item) => item.id === selected.id);
+  const shotOf = (item) => (Array.isArray(item?.preview?.artifactIds) ? item.preview.artifactIds[0] : null);
+  // The picture for this step; while it runs (or if it failed without one),
+  // the newest earlier picture of the same browser, clearly marked as older.
+  let frameItem = shotOf(selected) ? selected : null;
+  if (!frameItem) {
+    for (let i = index - 1; i >= 0; i -= 1) {
+      if (shotOf(browserItems[i])) { frameItem = browserItems[i]; break; }
+    }
+  }
+  const stale = Boolean(frameItem && frameItem.id !== selected.id);
+  const page = selected.preview?.url ? selected.preview : (frameItem?.preview ?? {});
+  const address = safeWebUrl(page.url);
+  view.title.textContent = page.title && page.title !== address ? page.title : (address ? new URL(address).hostname : 'Pandesh’s browser');
+  view.url.textContent = address ?? '';
+  view.url.title = address ?? '';
+  view.open.hidden = !address;
+  if (address) view.open.href = address;
+  view.viewport.dataset.stale = String(stale);
+  view.badge.hidden = !stale;
+  view.badge.textContent = selected.state === 'running' ? 'Updating…' : 'Picture from the step before';
+
+  const artifactId = shotOf(frameItem);
+  if (!artifactId) {
+    view.img.hidden = true;
+    view.img.removeAttribute('src');
+    view.img.dataset.artifactId = '';
+    view.note.hidden = false;
+    view.note.textContent = selected.state === 'running' ? 'Starting Pandesh’s browser…' : 'No picture was taken for this step.';
+  } else if (view.img.dataset.artifactId !== artifactId) {
+    view.img.dataset.artifactId = artifactId;
+    if (view.img.hidden) {
+      view.note.hidden = false;
+      view.note.textContent = coreReady ? 'Loading the picture…' : 'The picture appears when Pandesh is connected…';
+    }
+    void loadWorkspacePreview(artifactId).then((preview) => {
+      if (view.img.dataset.artifactId !== artifactId) return;
+      if (typeof preview?.dataUrl === 'string' && preview.dataUrl.startsWith('data:image/')) {
+        view.img.src = preview.dataUrl;
+        view.img.alt = `Pandesh’s browser showing ${page.title || address || 'a page'}`;
+        view.img.hidden = false;
+        view.note.hidden = true;
+      } else {
+        view.img.dataset.artifactId = '';
+        view.note.hidden = false;
+        view.note.textContent = coreReady ? 'This picture is no longer available.' : 'The picture appears when Pandesh is connected…';
+      }
+    });
+  }
+  const when = formatActivityTime(frameItem?.endedAt || frameItem?.startedAt || selected.startedAt);
+  view.caption.textContent = frameItem
+    ? `Pandesh’s browser after: ${frameItem.title}${when ? ` · ${when}` : ''}. A picture is taken after every step; it is not a live control.`
+    : 'Pandesh’s browser runs in the background; a picture appears here after each step.';
+
+  // Earlier pictures of this browsing, newest last, to step through.
+  const stripItems = browserItems.slice(-14);
+  const stripSignature = JSON.stringify([selected.id, stripItems.map((item) => [item.id, item.state, shotOf(item)])]);
+  if (view.strip.dataset.signature !== stripSignature) {
+    view.strip.dataset.signature = stripSignature;
+    view.strip.hidden = stripItems.length < 2;
+    view.strip.replaceChildren(...stripItems.map((item) => {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.dataset.state = item.state;
+      button.title = item.title;
+      if (item.id === selected.id) button.setAttribute('aria-current', 'true');
+      const shot = document.createElement('img');
+      shot.className = 'strip-shot';
+      shot.alt = '';
+      const id = shotOf(item);
+      if (id) void loadWorkspacePreview(id).then((preview) => { if (preview?.dataUrl) shot.src = preview.dataUrl; });
+      const label = document.createElement('span');
+      label.className = 'strip-label';
+      label.textContent = item.title;
+      button.append(shot, label);
+      button.addEventListener('click', () => {
+        const latest = currentWorkspaceActivity(viewedWorkspaceActivities());
+        workspaceSelectedActivityId = item.id === latest?.id ? null : item.id;
+        renderWorkspaceActivity(lastSnapshot);
+      });
+      return button;
+    }));
+    const active = view.strip.querySelector('[aria-current="true"]');
+    if (active) view.strip.scrollLeft = Math.max(0, active.offsetLeft - view.strip.clientWidth + active.offsetWidth + 8);
+  }
+
+  // The page's own words stay one click away.
+  const excerpt = page.excerpt && !stale ? page.excerpt : '';
+  const moreSignature = JSON.stringify([selected.id, selected.state, selected.detail, excerpt]);
+  if (view.more.dataset.signature !== moreSignature) {
+    view.more.dataset.signature = moreSignature;
+    const parts = [];
+    if (selected.detail && (selected.state === 'failed' || selected.state === 'cancelled')) {
+      const detail = document.createElement('p');
+      detail.className = 'activity-detail';
+      detail.dataset.tone = 'bad';
+      detail.textContent = selected.detail;
+      parts.push(detail);
+    }
+    if (excerpt) {
+      const box = document.createElement('details');
+      box.className = 'activity-more';
+      const summary = document.createElement('summary');
+      summary.textContent = 'Text Pandesh read on this page';
+      const text = document.createElement('pre');
+      text.className = 'activity-text';
+      text.textContent = excerpt;
+      box.append(summary, text);
+      parts.push(box);
+    }
+    view.more.replaceChildren(...parts);
+  }
+}
+
+function openWorkspaceLightbox(src, caption) {
+  const box = document.createElement('div');
+  box.className = 'workspace-lightbox';
+  box.setAttribute('role', 'dialog');
+  box.setAttribute('aria-label', 'Enlarged picture');
+  const img = document.createElement('img');
+  img.src = src;
+  img.alt = caption;
+  const text = document.createElement('p');
+  text.textContent = caption;
+  box.append(img, text);
+  const close = () => { box.remove(); document.removeEventListener('keydown', onKey, true); };
+  const onKey = (event) => { if (event.key === 'Escape') { event.stopPropagation(); close(); } };
+  box.addEventListener('click', close);
+  document.addEventListener('keydown', onKey, true);
+  document.body.appendChild(box);
+}
+
+// The workspace width is the person's: dragged, kept across restarts.
+const WORKSPACE_WIDTH_KEY = 'pandesh.workspaceWidthPct';
+function applyWorkspaceWidth(pct) {
+  if (!workspaceContext) return;
+  if (Number.isFinite(pct)) workspaceContext.style.setProperty('--workspace-width', `${Math.min(72, Math.max(26, pct))}%`);
+  else workspaceContext.style.removeProperty('--workspace-width');
+}
+try { applyWorkspaceWidth(Number.parseFloat(localStorage.getItem(WORKSPACE_WIDTH_KEY) ?? '')); } catch { /* default width */ }
+function saveWorkspaceWidth() {
+  try {
+    const value = workspaceContext?.style.getPropertyValue('--workspace-width');
+    if (value) localStorage.setItem(WORKSPACE_WIDTH_KEY, String(Number.parseFloat(value)));
+    else localStorage.removeItem(WORKSPACE_WIDTH_KEY);
+  } catch { /* the width just is not remembered */ }
+}
+workspaceResizer?.addEventListener('pointerdown', (event) => {
+  const layout = workspaceContext?.parentElement;
+  if (!layout) return;
+  event.preventDefault();
+  workspaceResizer.setPointerCapture(event.pointerId);
+  workspaceContext.classList.add('resizing');
+  const rect = layout.getBoundingClientRect();
+  const move = (e) => applyWorkspaceWidth(((rect.right - e.clientX) / rect.width) * 100);
+  const up = () => {
+    workspaceResizer.removeEventListener('pointermove', move);
+    workspaceResizer.removeEventListener('pointerup', up);
+    workspaceResizer.removeEventListener('pointercancel', up);
+    workspaceContext.classList.remove('resizing');
+    saveWorkspaceWidth();
+  };
+  workspaceResizer.addEventListener('pointermove', move);
+  workspaceResizer.addEventListener('pointerup', up);
+  workspaceResizer.addEventListener('pointercancel', up);
+});
+workspaceResizer?.addEventListener('dblclick', () => { applyWorkspaceWidth(NaN); saveWorkspaceWidth(); });
+workspaceResizer?.addEventListener('keydown', (event) => {
+  if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return;
+  event.preventDefault();
+  const layout = workspaceContext?.parentElement;
+  if (!layout) return;
+  const now = (workspaceContext.getBoundingClientRect().width / layout.getBoundingClientRect().width) * 100;
+  applyWorkspaceWidth(now + (event.key === 'ArrowLeft' ? 3 : -3));
+  saveWorkspaceWidth();
+});
+
+function formatActivityTime(iso) {
+  const at = Date.parse(iso);
+  if (!Number.isFinite(at)) return '';
+  return new Date(at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+}
+
+/** Only a credential-free http(s) address is ever made clickable. */
+function safeWebUrl(value) {
+  try {
+    const url = new URL(String(value));
+    if ((url.protocol !== 'http:' && url.protocol !== 'https:') || url.username || url.password) return null;
+    return url.toString();
+  } catch {
+    return null;
+  }
+}
+
+function activityButton(label, onClick) {
+  const button = document.createElement('button');
+  button.type = 'button';
+  button.className = 'apex-chip';
+  button.textContent = label;
+  button.addEventListener('click', () => { void Promise.resolve().then(onClick).catch(showOperationError); });
+  return button;
+}
+
+function buildActivityDetail(item) {
+  const nodes = [];
+  const preview = item.preview ?? {};
+  const meta = document.createElement('div');
+  meta.className = 'activity-meta';
+  const kind = document.createElement('span');
+  kind.className = 'activity-kind';
+  kind.textContent = ACTIVITY_KIND_LABEL[item.kind] ?? 'Tool';
+  const state = document.createElement('span');
+  state.className = 'activity-state';
+  state.dataset.state = item.state;
+  state.textContent = ACTIVITY_STATE_LABEL[item.state] ?? item.state;
+  const tool = document.createElement('span');
+  tool.className = 'activity-tool';
+  tool.textContent = item.capability;
+  meta.append(kind, state, tool);
+  nodes.push(meta);
+
+  const title = document.createElement('p');
+  title.className = 'activity-title';
+  title.textContent = item.title;
+  nodes.push(title);
+
+  const actions = document.createElement('div');
+  actions.className = 'context-preview-actions';
+  const url = safeWebUrl(preview.url);
+  if (url) {
+    // Opens in the system browser through the window's validated link handler.
+    const link = document.createElement('a');
+    link.className = 'activity-url';
+    link.href = url;
+    link.target = '_blank';
+    link.rel = 'noopener noreferrer';
+    link.textContent = url;
+    link.title = 'Open in your browser';
+    nodes.push(link);
+    if (preview.title && preview.title !== item.title) {
+      const page = document.createElement('p');
+      page.className = 'activity-detail';
+      page.textContent = preview.title;
+      nodes.push(page);
+    }
+  }
+
+  const artifactIds = Array.isArray(preview.artifactIds) ? preview.artifactIds : [];
+  if (artifactIds.length) {
+    const grid = document.createElement('div');
+    if (artifactIds.length > 1) grid.className = 'activity-media-grid';
+    for (const artifactId of artifactIds) grid.appendChild(activityArtifactPreview(artifactId, item));
+    nodes.push(grid);
+    if (item.kind === 'image' || item.kind === 'video') {
+      actions.append(
+        activityButton('Open', () => api.openArtifactFile(artifactIds[0])),
+        activityButton('Show in folder', () => api.openArtifactFolder(artifactIds[0])),
+      );
+    }
+  }
+
+  if (preview.path && (item.kind === 'code' || item.kind === 'document')) {
+    const file = document.createElement('div');
+    file.className = 'activity-tool';
+    file.textContent = preview.path;
+    nodes.push(file);
+    actions.appendChild(activityButton('Open file', () => api.openWorkspaceFile(preview.path)));
+  }
+  if (item.id.startsWith('doc-')) actions.appendChild(activityButton('Open original', () => api.openActivityDocument(item.id)));
+
+  if (preview.diff) {
+    const diff = document.createElement('pre');
+    diff.className = 'activity-diff';
+    diff.setAttribute('aria-label', 'Changes');
+    for (const line of String(preview.diff).split('\n')) {
+      const span = document.createElement('span');
+      span.textContent = line || ' ';
+      if (line.startsWith('+') && !line.startsWith('+++')) span.className = 'diff-add';
+      else if (line.startsWith('-') && !line.startsWith('---')) span.className = 'diff-del';
+      else if (line.startsWith('@@')) span.className = 'diff-hunk';
+      diff.appendChild(span);
+    }
+    nodes.push(diff);
+  }
+  if (item.detail) {
+    const detail = document.createElement('p');
+    detail.className = 'activity-detail';
+    if (item.state === 'failed' || item.state === 'cancelled') detail.dataset.tone = 'bad';
+    detail.textContent = item.detail;
+    nodes.push(detail);
+  }
+  if (preview.excerpt && !preview.diff) {
+    const text = document.createElement('pre');
+    text.className = 'activity-text';
+    text.textContent = preview.excerpt;
+    nodes.push(text);
+  }
+  if (actions.childElementCount) nodes.push(actions);
+  return nodes;
+}
+
+/** A verified Core artifact (screenshot, image or video), loaded only when shown. */
+function activityArtifactPreview(artifactId, item) {
+  const holder = document.createElement('div');
+  const draw = (preview) => {
+    holder.replaceChildren();
+    if (preview?.fileUrl) {
+      const video = document.createElement('video');
+      video.className = 'activity-media';
+      video.controls = true;
+      video.preload = 'metadata';
+      video.src = preview.fileUrl;
+      holder.appendChild(video);
+    } else if (typeof preview?.dataUrl === 'string' && preview.dataUrl.startsWith('data:image/')) {
+      const img = document.createElement('img');
+      img.className = item.kind === 'browser' ? 'activity-shot' : 'activity-media';
+      img.alt = item.kind === 'browser' ? `Screenshot of ${item.preview?.title || 'the page'}` : (item.preview?.title || 'Generated image');
+      img.src = preview.dataUrl;
+      holder.appendChild(img);
+    }
+  };
+  const cached = workspacePreviewCache.get(artifactId);
+  if (cached) {
+    draw(cached);
+    return holder;
+  }
+  const note = document.createElement('p');
+  note.className = 'activity-detail';
+  note.textContent = 'Loading preview…';
+  holder.appendChild(note);
+  if (typeof api?.loadArtifactPreview !== 'function') return holder;
+  if (lastSnapshot?.coreState !== 'connected') {
+    note.textContent = 'Preview appears when Pandesh is connected…';
+    return holder;
+  }
+  api.loadArtifactPreview(artifactId).then((preview) => {
+    workspacePreviewCache.set(artifactId, preview);
+    if (workspacePreviewCache.size > WORKSPACE_PREVIEW_CACHE_LIMIT) {
+      workspacePreviewCache.delete(workspacePreviewCache.keys().next().value);
+    }
+    draw(preview);
+  }).catch((err) => {
+    workspacePreviewFailures.set(artifactId, Date.now());
+    note.textContent = `Preview unavailable: ${err?.message ?? err}`;
+  });
+  return holder;
 }
 
 /** Preview a delivered result inside the context panel. */

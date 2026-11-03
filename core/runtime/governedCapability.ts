@@ -80,7 +80,7 @@ export interface GovernedCapabilityAdapter {
    * approval binds "this exact process", and execution can re-verify it
    * instead of trusting a bare PID that may have been recycled.
    */
-  prepare?(toolName: string, args: Record<string, unknown>): Promise<Record<string, unknown>>;
+  prepare?(toolName: string, args: Record<string, unknown>, context?: { correlationId?: string }): Promise<Record<string, unknown>>;
   run(call: ModelToolCall, ctx: ToolExecutionContext): Promise<ToolExecutionResult>;
 }
 
@@ -145,10 +145,10 @@ export class GovernedCapabilityRegistry implements ToolRunner {
   }
 
   /** The owning adapter's request-time enrichment, when it declares one. */
-  async prepare(toolName: string, args: Record<string, unknown>): Promise<Record<string, unknown>> {
+  async prepare(toolName: string, args: Record<string, unknown>, context?: { correlationId?: string }): Promise<Record<string, unknown>> {
     const adapter = this.adaptersByTool.get(toolName);
     if (!adapter?.prepare) return args;
-    const res = await adapter.prepare(toolName, args);
+    const res = await adapter.prepare(toolName, args, context);
     if (res && typeof res === 'object' && 'ok' in res && 'arguments' in res && res.arguments && typeof res.arguments === 'object' && !Array.isArray(res.arguments)) {
       return res.arguments as Record<string, unknown>;
     }

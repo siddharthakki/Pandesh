@@ -11,6 +11,7 @@
  *   KARKEDIKHA_CORE_PORT      - optional fixed port (default: OS-assigned ephemeral)
  *   KARKEDIKHA_OPENROUTER_API_KEY - host-injected OpenRouter key (never logged)
  */
+import * as path from 'node:path';
 import { execFile } from 'node:child_process';
 import * as crypto from 'node:crypto';
 import * as fs from 'node:fs';
@@ -46,6 +47,7 @@ import { createMemoryCapabilityAdapter } from './runtime/memoryCapability';
 import { createBrowserCapabilityAdapter } from './runtime/browserCapability';
 import { createImageStudioCapabilityAdapter } from './runtime/imageStudioCapability';
 import { resolveHostBrowserBin } from './runtime/hostBrowserBin';
+import { closeAllBrowserSessions, reapOrphanedBrowsers } from './runtime/browserSession';
 import { buildConnectorAdapters, CONNECTOR_CREDENTIAL_ENV } from './runtime/connectors/connectorDefinitions';
 import type { ConnectorAdapter } from './runtime/connectors/connectorCapability';
 import { createGwsGmailProbe, createGwsGmailExecutor, createGwsGmailPrepare, defaultGwsGmailConfigDir, type GwsGmailAdapterConfig, type GwsGmailDraftBindingStore } from './runtime/connectors/gwsGmailAdapter';
@@ -270,7 +272,7 @@ function buildCapabilityRegistry(dataDir: string, db: CoreDatabase, connectors: 
     .register(research)
     .register(memory)
     .register(createImageStudioCapabilityAdapter({ db, studioRoot: imageStudioRoot }))
-    .register(createBrowserCapabilityAdapter({ browserBin: resolveHostBrowserBin() }))
+    .register(createBrowserCapabilityAdapter({ browserBin: resolveHostBrowserBin(), db, previewDir: path.join(dataDir, 'activity-previews', 'browser'), dataDir }))
     .register(createComputerUseCapabilityAdapter({ dataDir }))
     .register(createHermesSkillCapabilityAdapter())
     .register(createWeatherCapabilityAdapter())
@@ -427,6 +429,16 @@ async function main(): Promise<void> {
   const singletonHandle = singleton.handle;
   singletonHandle.startHeartbeat();
 
+  // Reap host browsers left behind when a previous Core process crashed. Uses
+  // the existing browser lifecycle (process records + killProcessTree) so a
+  // session never outlives the Core that governs its network guard.
+  try {
+    const reaped = reapOrphanedBrowsers(dataDir);
+    if (reaped.reaped > 0) redactedLog(`browser recovery: reaped ${reaped.reaped} orphaned browser process(es)${reaped.errors.length ? ` (${reaped.errors.join('; ')})` : ''}`);
+  } catch (err) {
+    redactedLog(`browser recovery: failed to reap orphaned browsers: ${err instanceof Error ? err.message : String(err)}`);
+  }
+
   // Register this Core instance as a Pandesh-managed service so launcher and
   // port tools can discover its endpoint and prove ownership (PID + start).
   try {
@@ -484,6 +496,7 @@ async function main(): Promise<void> {
     if (shuttingDown) return;
     shuttingDown = true;
     wsHandle.close();
+    await closeAllBrowserSessions();
     await api.close();
     singletonHandle.release();
     removeDiscoveryRecord(paths.discoveryRecordPath);

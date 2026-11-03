@@ -23,6 +23,8 @@ export interface MobilePairingInfo {
   url: string;
   pairedCount: number;
   connectedClients: number;
+  /** True only while the HTTP server is actually bound; a pairing code exists either way. */
+  listening: boolean;
 }
 
 /** The phone never sees Kandev's own identifiers or addresses. */
@@ -142,6 +144,7 @@ export class MobileServer {
       url: `http://${ip}:${this.port}/?pair=${this.pairingCode}`,
       pairedCount: liveSockets,
       connectedClients: liveSockets,
+      listening: this.isRunning(),
     };
   }
 
@@ -581,7 +584,7 @@ export class MobileServer {
         res.end(JSON.stringify({ error: 'No active approval' }));
         return;
       }
-      const resolution = body.resolution === 'rejected' ? 'rejected' : 'approved';
+      const resolution = body.resolution === 'approved' ? 'approved' : 'rejected';
       await this.session.resolvePending(approvalId, resolution);
       const updatedSnap = this.session.snapshot();
       this.broadcastSse('snapshot_update', updatedSnap);

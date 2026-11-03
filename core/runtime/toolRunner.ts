@@ -14,7 +14,8 @@ import * as path from 'node:path';
 import type { ModelToolDefinition, ModelToolCall } from './modelBackend';
 import { recoverRepositoryPath, type RepositoryPathRecoveryResult } from './repositoryPathRecovery';
 import { isCredentialFilePath, redactSecrets } from '../platform/credentialStore';
-import { describeBaseline, missingParentDirectories, readBaselineIdentity, sameBaseline, sha256OfBuffer, type WriteBaselineIdentity } from './writeProposal';
+import { buildUnifiedDiff, describeBaseline, missingParentDirectories, readBaselineIdentity, sameBaseline, sha256OfBuffer, type WriteBaselineIdentity } from './writeProposal';
+import type { ToolActivity } from '../shared/toolActivity';
 import { resolveAnchoredEdit } from './textEditProposal';
 import {
   defaultCommandPolicyEnvelope,
@@ -104,6 +105,8 @@ export interface ToolExecutionResult {
   normalizedArguments?: Record<string, unknown>;
   /** Structured repository-boundary/correction evidence persisted by Core. */
   pathRecovery?: RepositoryPathRecoveryResult;
+  /** What the contextual workspace shows for this call (see core/shared/toolActivity.ts). */
+  activity?: ToolActivity;
 }
 
 export interface ToolRunner {
@@ -117,6 +120,29 @@ const DEFAULT_COMMAND_TIMEOUT_MS = 60_000;
 
 function bound(text: string): string {
   return text.length > MAX_OUTPUT_CHARS ? `${text.slice(0, MAX_OUTPUT_CHARS)}\n…[truncated]` : text;
+}
+
+const CODE_EXTENSIONS = /\.(?:[cm]?[jt]sx?|py|rs|go|java|kt|cs|cpp|cc|c|h|hpp|rb|php|swift|css|scss|html?|vue|svelte|json|ya?ml|toml|sh|ps1|sql)$/i;
+
+/** The workspace view of a file this runner read: path and a short excerpt. */
+function readActivity(selected: string, text: string): ToolActivity {
+  return {
+    kind: CODE_EXTENSIONS.test(selected) ? 'code' : 'document',
+    title: path.basename(selected),
+    path: selected,
+    excerpt: redactSecrets(text.slice(0, 1_200)),
+  };
+}
+
+/** The workspace view of a file this runner changed: path and the real diff. */
+function changeActivity(selected: string, before: string, after: string): ToolActivity {
+  const split = (value: string) => (value ? value.replace(/\r\n/g, '\n').split('\n') : []);
+  return {
+    kind: 'code',
+    title: path.basename(selected),
+    path: selected,
+    diff: redactSecrets(buildUnifiedDiff(split(before), split(after), selected).diff),
+  };
 }
 
 interface LineRange { startLine?: number; endLine?: number }
@@ -348,6 +374,7 @@ export class CoreToolRunner implements ToolRunner {
         resultCategory: recovery.status === 'corrected' ? 'path_corrected' : 'read_succeeded',
         normalizedArguments,
         pathRecovery: recovery,
+        activity: readActivity(recovery.selected ?? rel, text),
       };
     } catch (err) {
       return {
@@ -419,6 +446,8 @@ export class CoreToolRunner implements ToolRunner {
           pathRecovery: recovery,
         };
       }
+      let before = '';
+      try { before = fs.readFileSync(recovery.resolvedPath, 'utf8'); } catch { before = ''; }
       fs.writeFileSync(recovery.resolvedPath, content, 'utf8');
       return {
         status: 'succeeded',
@@ -427,6 +456,7 @@ export class CoreToolRunner implements ToolRunner {
         resultCategory: recovery.status === 'corrected' ? 'path_corrected' : 'write_succeeded',
         normalizedArguments,
         pathRecovery: recovery,
+        activity: changeActivity(recovery.selected ?? rel, before, content),
       };
     } catch (err) {
       rollbackCreatedDirectories(created);
@@ -510,6 +540,7 @@ export class CoreToolRunner implements ToolRunner {
         resultCategory: recovery.status === 'corrected' ? 'path_corrected' : 'write_succeeded',
         normalizedArguments,
         pathRecovery: recovery,
+        activity: changeActivity(recovery.selected ?? rel, buffer.toString('utf8'), resolved.content),
       };
     } catch (err) {
       return {

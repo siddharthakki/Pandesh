@@ -125,6 +125,18 @@ describe('what a turn actually did', () => {
     expect(outcome.reason).toContain('did not happen');
   });
 
+  it('calls a declined web form submission unverified, and an approved one verified', () => {
+    const declined = evaluateTurnOutcome([
+      call('browser_fill', 'Page: (untitled)\nURL: https://httpbin.org/forms/post'),
+      call('browser_submit', 'NOT DONE: the user declined this action, so nothing was done. Do not claim it happened and do not retry it unless they ask again.', true),
+    ]);
+    expect(declined.verdict).toBe('unverified');
+    expect(declined.refused).toEqual(['browser_submit']);
+
+    const sent = evaluateTurnOutcome([call('browser_submit', 'Page: (untitled)\nURL: https://httpbin.org/post')]);
+    expect(sent.verdict).toBe('verified');
+  });
+
   it("calls Pi's declined run_checks unverified, but a failing check an attempted failure", () => {
     const declined = evaluateTurnOutcome([
       call('run_checks', 'Not run: the user did not approve this command (deletes files or folders). Nothing was changed. Ask the user how to proceed.', true),

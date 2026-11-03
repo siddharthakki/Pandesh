@@ -2,14 +2,14 @@ import * as http from 'node:http';
 import type { AddressInfo } from 'node:net';
 
 /**
- * A scripted local OpenAI-compatible server that stands in for Ollama in Pi engine tests. It records the context the
+ * A scripted local server speaking Ollama's native /api/chat (Pi's transport) that stands in for Ollama in Pi engine tests. It records the context the
  * engine assembles for every model call (system prompt, messages, offered tool names) and answers with whatever the
  * test's script returns: plain text or one tool call. Nothing leaves the machine.
  */
 
 export interface ScriptedModelCall {
   system: string;
-  messages: Array<{ role: string; content: unknown; tool_calls?: Array<{ function: { name: string; arguments: string } }> }>;
+  messages: Array<{ role: string; content: unknown; tool_calls?: Array<{ function: { name: string; arguments: unknown } }> }>;
   tools: string[];
 }
 
@@ -21,8 +21,8 @@ export interface ScriptedOllama {
   close(): Promise<void>;
 }
 
-function sse(res: http.ServerResponse, delta: Record<string, unknown>, finish: string | null) {
-  res.write(`data: ${JSON.stringify({ id: 'c1', object: 'chat.completion.chunk', created: 1, model: 'fake', choices: [{ index: 0, delta, finish_reason: finish }] })}\n\n`);
+function frame(res: http.ServerResponse, message: Record<string, unknown>, done: boolean) {
+  res.write(`${JSON.stringify({ model: 'fake', message: { role: 'assistant', content: '', ...message }, done, ...(done ? { done_reason: 'stop', prompt_eval_count: 1, eval_count: 1 } : {}) })}\n`);
 }
 
 /** The text of the last user message in a call, lower-cased (what most scripts branch on). */
@@ -45,7 +45,7 @@ export async function startScriptedOllama(script: (call: ScriptedModelCall) => S
     req.on('data', (c) => { body += c; });
     req.on('end', () => {
       if (req.url?.startsWith('/api/generate')) { res.writeHead(200, { 'content-type': 'application/json' }); res.end('{}'); return; }
-      if (!req.url?.includes('/chat/completions')) { res.writeHead(404); res.end(); return; }
+      if (!req.url?.startsWith('/api/chat')) { res.writeHead(404); res.end(); return; }
       const payload = JSON.parse(body);
       const messages = payload.messages as ScriptedModelCall['messages'];
       const call: ScriptedModelCall = {
@@ -55,15 +55,10 @@ export async function startScriptedOllama(script: (call: ScriptedModelCall) => S
       };
       calls.push(call);
       const reply = script(call);
-      res.writeHead(200, { 'content-type': 'text/event-stream' });
-      if ('tool' in reply) {
-        sse(res, { role: 'assistant', tool_calls: [{ index: 0, id: `call_${calls.length}`, type: 'function', function: { name: reply.tool.name, arguments: JSON.stringify(reply.tool.args) } }] }, null);
-        sse(res, {}, 'tool_calls');
-      } else {
-        sse(res, { role: 'assistant', content: reply.text }, null);
-        sse(res, {}, 'stop');
-      }
-      res.write('data: [DONE]\n\n');
+      res.writeHead(200, { 'content-type': 'application/x-ndjson' });
+      if ('tool' in reply) frame(res, { tool_calls: [{ function: { name: reply.tool.name, arguments: reply.tool.args } }] }, false);
+      else frame(res, { content: reply.text }, false);
+      frame(res, {}, true);
       res.end();
     });
   });

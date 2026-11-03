@@ -70,10 +70,13 @@ import {
   type DesktopTaskScope,
 } from './desktopTaskScope';
 import { resolveHostBrowserBin } from '../../../../core/runtime/hostBrowserBin';
+import { reapOrphanedBrowsers } from '../../../../core/runtime/browserSession';
 import { AUTO_CHAT_MODEL, AUTO_RECOVERY_MODEL, AUTO_FALLBACK_MODEL } from '../../../../core/domain/modelRouting';
 import { getOrCreateDesktopClientId, getOrCreateDesktopToken, getOrCreateHostToken } from './desktopToken';
 import { readLastWorkspace, writeLastWorkspace } from './desktopSessionCursor';
 import { emptyMissionCockpit, projectMissionCockpit } from './missionCockpit';
+import { WorkspaceActivityLog, activityTitle } from './workspaceActivity';
+import { BROWSER_SCREENSHOT_SOURCE, sanitizeToolActivity } from '../../../../core/shared/toolActivity';
 import {
   classifyTurnOutcomeKind,
   detectImageGenerationIntent,
@@ -111,6 +114,7 @@ import {
 } from './desktopLocalSpeechResponse';
 import type {
   DesktopActivityEvent,
+  DesktopWorkspaceActivity,
   DesktopApprovalCard,
   DesktopApprovalResolution,
   DesktopLocalSpeechResponseStatus,
@@ -248,6 +252,8 @@ export class DesktopSession {
   private coreBuild: DesktopSnapshot['coreBuild'];
   private approvedApproval: DesktopApprovalCard | null = null;
   private cockpitEvents: DesktopActivityEvent[] = [];
+  /** The contextual workspace's bounded, persisted record of real steps. */
+  private readonly workspaceActivity: WorkspaceActivityLog;
   private missionStartedAt: string | null = null;
   private selectedWorker = 'local-core';
   private selectedInferenceProvider: 'ollama' | 'openrouter' | 'cloud' = 'ollama';
@@ -349,6 +355,7 @@ export class DesktopSession {
     this.token = getOrCreateDesktopToken(this.dataDir);
     this.clientId = getOrCreateDesktopClientId(this.dataDir);
     this.attachmentStaging = new AttachmentStaging(path.join(this.dataDir, 'attachment-staging'));
+    this.workspaceActivity = new WorkspaceActivityLog(path.join(this.dataDir, 'workspace-activity', 'activities.json'));
     this.operatorSelectedModel = readSelectedModel(this.dataDir);
     this.selectedConversationId = readSelectedConversation(this.dataDir);
     this.localSpeech = probeDesktopLocalSpeech(this.options.productRoot);
@@ -839,6 +846,7 @@ export class DesktopSession {
       selectedConversationId: this.selectedConversationId,
       // A host-side placeholder (image_*) is not a Core conversation; exposing it makes the UI open a conversation that does not exist.
       activeConversationId: this.active && !isPlaceholderConversationId(this.active.conversationId) ? this.active.conversationId : null,
+      workspaceActivities: this.workspaceActivitiesForView(),
       cockpit: this.active
         ? projectMissionCockpit(this.cockpitEvents, {
           requestId: this.active.requestId,
@@ -2126,6 +2134,7 @@ export class DesktopSession {
         const uploaded = await client.uploadAttachmentBytes(record.id, stream, item.byteSize);
         if (uploaded.status !== 'ready') throw new Error(uploaded.errorMessageRedacted ?? 'Core did not accept the file');
         attachmentIds.push(uploaded.id);
+        if (item.kind === 'document') this.recordDocumentActivity(conversationId, item, uploaded);
       } catch (err) {
         throw new Error(`Could not attach "${item.name}": ${err instanceof Error ? err.message : String(err)}`);
       } finally {
@@ -2809,6 +2818,17 @@ export class DesktopSession {
           this.options.log?.(`Owned Core cleanup error: ${(err as Error).message}`);
         }
       }
+
+      // A force-stopped Core never runs its exit hook, so its headless Edge
+      // would outlive it. Core's own reaper kills only browsers whose launcher
+      // Core is dead and whose real browser process still owns its recorded
+      // managed profile.
+      try {
+        const reaped = reapOrphanedBrowsers(this.dataDir);
+        if (reaped.reaped > 0) this.options.log?.(`Reaped ${reaped.reaped} browser process(es) left by the stopped Core`);
+      } catch (err) {
+        this.options.log?.(`Browser reap after Core shutdown failed: ${(err as Error).message}`);
+      }
     }
 
     // 3. Regular cleanup of session timers and client
@@ -3287,7 +3307,10 @@ export class DesktopSession {
 
   async listArtifacts(conversationId?: string): Promise<DesktopArtifactView[]> {
     const result = await this.requireClient().listArtifacts(conversationId);
-    return result.artifacts.map((record) => this.projectArtifact(record));
+    // A page screenshot is a preview of work in the workspace, not a result.
+    return result.artifacts
+      .filter((record) => record.source !== BROWSER_SCREENSHOT_SOURCE)
+      .map((record) => this.projectArtifact(record));
   }
 
   private async verifiedArtifact(id: string): Promise<{ record: import('../../../../core/shared/wireTypes').ArtifactRecord; bytes: Buffer }> {
@@ -3308,6 +3331,54 @@ export class DesktopSession {
     if (record.kind !== 'image' || !record.mimeType.startsWith('image/')) throw new Error('Preview is available for images and videos only');
     if (record.byteSize > 12 * 1024 * 1024) throw new Error('Image is too large for an in-app preview');
     return { artifact: this.projectArtifact(record), dataUrl: `data:${record.mimeType};base64,${bytes.toString('base64')}` };
+  }
+
+  /**
+   * A document the person attached: Core's real extraction (or its honest
+   * failure) becomes a workspace activity, and a private copy is kept so the
+   * original can be opened in its own app later.
+   */
+  private recordDocumentActivity(
+    conversationId: string,
+    item: { name: string; filePath: string },
+    uploaded: import('../../../../core/shared/wireTypes').AttachmentRecord,
+  ): void {
+    const id = `doc-${uploaded.id}`;
+    try {
+      const ext = path.extname(item.name).toLowerCase();
+      const dir = path.join(this.dataDir, 'workspace-activity', 'documents');
+      fs.mkdirSync(dir, { recursive: true });
+      fs.copyFileSync(item.filePath, path.join(dir, `${id}${/^\.[a-z0-9]{1,8}$/.test(ext) ? ext : '.bin'}`));
+    } catch (err) {
+      this.options.log?.(`document copy for the workspace failed: ${(err as Error).message}`);
+    }
+    const extraction = uploaded.extraction;
+    const text = extraction?.sections.map((section) => section.text).join('\n').trim() ?? '';
+    const pages = extraction?.pageCount ? `${extraction.pageCount} page${extraction.pageCount === 1 ? '' : 's'}` : '';
+    this.workspaceActivity.begin({ id, conversationId, taskId: null, capability: 'attach_document', title: `Opened ${item.name}`, kind: 'document' });
+    this.workspaceActivity.settle(id, text ? 'completed' : 'failed', {
+      preview: { kind: 'document', title: item.name, ...(text ? { excerpt: text } : {}) },
+      detail: text
+        ? [pages, `${text.length.toLocaleString('en-US')} characters extracted locally`].filter(Boolean).join(' · ')
+        : `No text could be extracted (${uploaded.localProcessingCapability}).`,
+    });
+  }
+
+  /** Activities for the conversations the window can show: the selected one and the running one. */
+  private workspaceActivitiesForView(): DesktopWorkspaceActivity[] {
+    const ids = [...new Set([this.selectedConversationId, this.active?.conversationId].filter((id): id is string => Boolean(id)))];
+    return ids.flatMap((id) => this.workspaceActivity.list(id));
+  }
+
+  /** The private copy of a document the person attached, for opening it in its own app. */
+  activityDocumentPath(activityId: string): string {
+    if (!/^doc-[\w-]{1,80}$/.test(activityId)) throw new Error('Unknown document');
+    const dir = path.join(this.dataDir, 'workspace-activity', 'documents');
+    const name = fs.existsSync(dir) ? fs.readdirSync(dir).find((entry) => entry.startsWith(`${activityId}.`)) : undefined;
+    if (!name) throw new Error('The original document is no longer available');
+    const file = path.join(dir, name);
+    if (path.relative(dir, file).startsWith('..')) throw new Error('Unknown document');
+    return file;
   }
 
   async artifactPath(id: string): Promise<string> {
@@ -3432,8 +3503,18 @@ export class DesktopSession {
     }
     const ensure = this.options.ensureImageStudio
       ?? ((onStatus?: (text: string) => void) => ensureImageStudioServices({}, onStatus));
+    const activityId = `host-${held.approval.id}`;
     try {
       await ensure((summary) => this.emit({ kind: 'status', at: nowIso(), summary, eventType: 'image_generation_startup' }));
+      // Shown as running only now: after the person approved and the local
+      // Studio is up, when the generation is really starting.
+      this.workspaceActivity.begin({
+        id: activityId,
+        conversationId: held.correlationId,
+        taskId: held.approval.attemptId,
+        capability: held.toolName ?? 'image_generate',
+        title: activityTitle(held.toolName ?? 'image_generate', held.arguments),
+      });
       this.emit({ kind: 'status', at: nowIso(), summary: held.toolName === 'video_generate' ? 'Generating video locally (a few minutes)…' : 'Generating image locally…', eventType: 'image_generation_running' });
       const result = await client.dispatchCapability({
         correlationId: held.correlationId,
@@ -3442,6 +3523,12 @@ export class DesktopSession {
         cwd: this.folder ?? this.dataDir,
       });
       const view = toImageGenerationResult(result);
+      this.workspaceActivity.settle(activityId, view.outcome === 'executed' ? 'completed' : 'failed', view.outcome === 'executed'
+        ? {
+          preview: (result.outcome === 'executed' ? result.toolInvocation.evidence?.['activity'] : undefined)
+            ?? { kind: held.toolName === 'video_generate' ? 'video' : 'image', title: String(held.arguments.prompt ?? ''), artifactIds: view.artifactIds },
+        }
+        : { detail: 'reason' in view ? view.reason : `Generation ${view.outcome}` });
       const promptText = String(held.arguments.prompt ?? 'image');
       await this.recordConversationMessage(held.correlationId, 'assistant', view.outcome === 'executed'
         ? [held.toolName === 'video_generate' ? 'Here is your video (LTX-Video, generated locally):' : `Here ${view.artifactIds.length > 1 ? `are your ${view.artifactIds.length} images` : 'is your image'} (${String(held.arguments.checkpoint ?? 'local model')}):`, '', ...view.artifactIds.map((id) => `![${promptText.replace(/[[\]]/g, '')}](artifact:${id})`), '', view.message].join('\n')
@@ -3460,6 +3547,7 @@ export class DesktopSession {
       return view;
     } catch (error) {
       const reason = compactCapabilityFailure(error);
+      this.workspaceActivity.settle(activityId, 'failed', { detail: reason });
       if (this.isImageTurnFor(held.approval.attemptId)) {
         this.active!.terminal = true;
         this.lastTurnOutcome = 'failed';
@@ -4331,6 +4419,7 @@ export class DesktopSession {
         invocationStatus: status,
         toolArgs: event.metadata?.['argsSummary'] as Record<string, unknown> | undefined,
         check: toolCheck(event.metadata),
+        activity: toolActivity(event.metadata),
         summary,
       });
       this.recordEvidence({ type: 'runtime-event', event });
@@ -4592,6 +4681,12 @@ export class DesktopSession {
         this.cockpitEvents.push(event);
       }
     }
+    if (event.kind !== 'token') {
+      const conversationId = this.active && event.attemptId === this.active.attemptId
+        ? this.active.conversationId
+        : event.conversationId ?? null;
+      this.workspaceActivity.observe(event, conversationId);
+    }
     for (const listener of this.listeners) listener(event);
   }
 
@@ -4838,6 +4933,15 @@ function toolOutput(metadata: Record<string, unknown> | undefined): string {
   if (typeof raw !== 'string' || !raw.trim()) return '';
   const compact = raw.replace(/\s+/g, ' ').trim();
   return compact.length > 240 ? `${compact.slice(0, 240)}…` : compact;
+}
+
+/** The bounded preview the tool published: relayed on a governed call's
+ * completion, or inside a direct call's evidence. */
+function toolActivity(metadata: Record<string, unknown> | undefined): DesktopActivityEvent['activity'] {
+  const evidence = metadata?.['evidence'];
+  const raw = metadata?.['activity']
+    ?? (typeof evidence === 'object' && evidence ? (evidence as Record<string, unknown>)['activity'] : undefined);
+  return sanitizeToolActivity(raw);
 }
 
 /** Core's structured check evidence, when this event carries it. Records

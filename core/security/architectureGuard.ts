@@ -34,6 +34,9 @@ export const AUTHORITATIVE_PROCESS_SPAWN_ALLOWLIST: ReadonlySet<string> = new Se
   'core/runtime/connectors/gwsTransport.ts',
   'core/runtime/githubCapability.ts',
   'core/runtime/browserInspection.ts',
+  // Launches the host browser (path from the host-pinned env var or fixed install paths, never model input)
+  // with a fixed argv and no shell, and force-kills only the PIDs it recorded itself (taskkill, no shell).
+  'core/runtime/browserSession.ts',
   'core/runtime/missionLoop.ts',
   'core/runtime/missionDiffReview.ts',
   'core/runtime/missionSearch.ts',
