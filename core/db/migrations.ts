@@ -1214,6 +1214,20 @@ CREATE TABLE IF NOT EXISTS gmail_change_plans (
 CREATE INDEX IF NOT EXISTS idx_gmail_change_plans_account ON gmail_change_plans(accountEmail, createdAt);
 `;
 
+// Durable Gmail-organization tasks: the verified manifest of message ids, per-message state, batch history and
+// retry checkpoint, so a restart resumes instead of planning again. Sender/subject/date only, never a body.
+const MIGRATION_39_GMAIL_ORGANIZE_TASKS = `
+CREATE TABLE IF NOT EXISTS gmail_organize_tasks (
+  taskId TEXT PRIMARY KEY,
+  accountEmail TEXT NOT NULL,
+  status TEXT NOT NULL,
+  taskJson TEXT NOT NULL,
+  createdAt TEXT NOT NULL,
+  updatedAt TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_gmail_organize_tasks_account ON gmail_organize_tasks(accountEmail, status);
+`;
+
 const MIGRATION_36_BACKGROUND_TASKS = `
 CREATE TABLE IF NOT EXISTS background_tasks (
   id TEXT PRIMARY KEY,
@@ -1386,6 +1400,7 @@ export const MIGRATIONS: Migration[] = [
   { version: 36, description: 'Pandesh background delegated tasks: durable background worker execution, checkpoints and delivery ledger', sql: MIGRATION_36_BACKGROUND_TASKS },
   { version: 37, description: 'Panda bridge: browser pairings, relayed tasks (source reference, consent, routing) and durable checkpoints', sql: MIGRATION_37_PANDA_BRIDGE },
   { version: 38, description: 'Master operator: durable multi-step runs with per-step tool selection, approvals, evidence and an event trail', sql: MIGRATION_38_OPERATOR },
+  { version: 39, description: 'Gmail inbox organization: durable multi-batch tasks with a verified manifest, checkpoint and retry state', sql: MIGRATION_39_GMAIL_ORGANIZE_TASKS },
 ];
 
 

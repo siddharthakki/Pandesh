@@ -54,7 +54,7 @@ import { createGwsGmailProbe, createGwsGmailExecutor, createGwsGmailPrepare, def
 import { getGmailAccessToken, getGmailAccountEmail, googleScopeGranted } from './runtime/connectors/gmailAccessTokenStore';
 import { CALENDAR_EVENTS_SCOPE, createGwsCalendarExecutor, createGwsCalendarPrepare, createGwsCalendarProbe, defaultGwsCalendarConfigDir } from './runtime/connectors/gwsCalendarAdapter';
 import { recordGmailDraftBinding, getGmailDraftBinding } from './domain/gmailDrafts';
-import { createGmailOrganizeStore } from './domain/gmailChangePlans';
+import { createGmailOrganizeStore, createGmailTaskStore } from './domain/gmailChangePlans';
 import { GMAIL_MODIFY_SCOPE } from './runtime/connectors/gmailOrganize';
 import { recordRuntimeEvent } from './domain/runtimeEvents';
 import { configureDailyBriefRoutine, getDailyBriefRoutine } from './domain/assistantRoutine';
@@ -215,6 +215,7 @@ function buildConnectorRegistry(dataDir: string, db: CoreDatabase): Map<Connecto
     bindings,
     organize: {
       store: createGmailOrganizeStore(db),
+      tasks: createGmailTaskStore(db),
       // Incremental consent: inbox changes need gmail.modify, which Desktop requests only when the user opts in.
       hasModifyScope: () => googleScopeGranted(GMAIL_MODIFY_SCOPE),
       onProgress: (event) => {

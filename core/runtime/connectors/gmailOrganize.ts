@@ -30,6 +30,7 @@ const DEFAULT_TIME_BUDGET_MS = 75_000;
 const PLAN_TTL_MS = 24 * 60 * 60 * 1000;
 const MAX_LABEL_NAME = 100;
 const PLAN_ID_PREFIX = 'gplan_';
+const CARD_MESSAGE_LIMIT = 50;
 
 export const CATEGORY_LABELS: Record<string, string> = {
   personal: 'CATEGORY_PERSONAL',
@@ -73,6 +74,8 @@ export interface PlanVerification {
   checked: number;
   matched: number;
   mismatched: Array<{ id: string; expected: string[]; actual: string[] }>;
+  /** Ids Gmail re-read as carrying exactly the expected labels. */
+  matchedIds?: string[];
   missing: string[];
   failedLookups: number;
 }
@@ -93,6 +96,9 @@ export interface GmailChangePlan {
   createdLabelIds?: Record<string, string>;
   verification?: PlanVerification;
   undoVerification?: PlanVerification;
+  /** Set when this plan is one batch of a durable Gmail-organization task (`gmailTask.ts`). */
+  taskId?: string;
+  taskBatch?: { index: number; label: string };
 }
 
 export interface GmailOrganizeStore {
@@ -109,6 +115,8 @@ export interface OrganizeEnv {
   nowMs?: () => number;
   /** Optional progress sink (wired to Core's runtime events). Never carries message content. */
   onProgress?: (event: { tool: string; phase: string; done: number; total?: number }) => void;
+  /** Called after a plan is applied, fails to apply or is undone, so a task owning the plan can checkpoint. */
+  afterPlanSettled?: (plan: GmailChangePlan, event: 'applied' | 'apply_failed' | 'undone', detail?: string) => string | void;
 }
 
 // ───────────────────────────── header + classification ─────────────────────────────
@@ -268,6 +276,14 @@ function coverageStatement(input: { examined: number; failed: number; estimate: 
   return `PARTIAL: examined ${examined}${total}; ${reason}. Do not describe this as the whole mailbox or the whole period.`;
 }
 
+/** Listing and header reading for the durable task (`gmailTask.ts`), under the same bounds and retry behaviour. */
+export const listIdsForTask = (env: OrganizeEnv, query: string, cap: number, deadlineMs: number): Promise<ListedIds> => listMessageIds(env, 'gmail_create_task', query, cap, deadlineMs);
+export const readHeadersForTask = (env: OrganizeEnv, stubs: Array<{ id: string; threadId?: string }>, deadlineMs: number) => readMetadata(env, 'gmail_create_task', stubs, classifyContext(env.accountEmail, {}), deadlineMs);
+export async function userLabelIndex(env: OrganizeEnv): Promise<{ ok: true; byName: Map<string, string> } | { ok: false; result: ToolExecutionResult }> {
+  const labels = await loadUserLabels(env, 'gmail_create_task');
+  return labels.ok ? { ok: true, byName: labels.catalog.byName } : labels;
+}
+
 // ──────────────────────────────── analyze ────────────────────────────────
 
 export async function analyzeInbox(rawArgs: Record<string, unknown>, env: OrganizeEnv): Promise<ToolExecutionResult> {
@@ -370,6 +386,16 @@ function describeOperation(op: { addLabelIds: string[]; removeLabelIds: string[]
   return parts.join('; ');
 }
 
+/** Bank, statement, security and payment mail is never archived automatically: it stays in the inbox. */
+const PROTECTED_SENDER_LABELS = new Set(['iifl', 'kotak', 'icici', 'hdfc', 'commerzbank', 'n26', 'ing', 'revolut', 'paypal', 'wise']);
+const PROTECTED_SUBJECT = /\b(?:statements?|security alert|sign[- ]?in|log[- ]?in|verification code|one[- ]time|otp|password|suspicious|fraud|transactions?|payments?|invoices?|receipts?|tax|account (?:alert|activity|notice)|card)\b/i;
+
+export function isProtectedFinancialMail(from: string, subject: string): boolean {
+  const labels = parseSender(from).domain.split('.');
+  const bank = labels.some((l) => [...PROTECTED_SENDER_LABELS].some((p) => l === p || (p.length >= 4 && l.startsWith(p))));
+  return bank || PROTECTED_SUBJECT.test(subject);
+}
+
 function digestOf(accountEmail: string, op: PlanOperation, messages: PlannedMessage[]): string {
   const canonical = JSON.stringify({
     a: accountEmail.toLowerCase(),
@@ -451,9 +477,12 @@ export async function planChanges(rawArgs: Record<string, unknown>, env: Organiz
   const addLabelIds = [...add];
   const removeLabelIds = [...remove];
   // Only messages the change would actually alter belong in the plan.
-  const planned = read.messages.filter((m) => addLabelIds.some((id) => !m.priorLabelIds.includes(id)) || removeLabelIds.some((id) => m.priorLabelIds.includes(id)) || createLabels.length > 0);
+  const candidates = archive ? read.messages.filter((m) => !isProtectedFinancialMail(m.from, m.subject)) : read.messages;
+  const heldBack = read.messages.length - candidates.length;
+  const planned = candidates.filter((m) => addLabelIds.some((id) => !m.priorLabelIds.includes(id)) || removeLabelIds.some((id) => m.priorLabelIds.includes(id)) || createLabels.length > 0);
   if (planned.length === 0) {
-    return succeeded('gmail_plan_empty', { query, planId: null, message: `All ${read.messages.length} matching messages already have this state, so there is nothing to change.`, nothingChanged: true });
+    const why = heldBack ? `${heldBack} bank, statement or security messages were held back from archiving and the rest` : `All ${read.messages.length} matching messages`;
+    return succeeded('gmail_plan_empty', { query, planId: null, heldBack, message: `${why} already have this state, so there is nothing to change.`, nothingChanged: true });
   }
   const summary = describeOperation({ addLabelIds, removeLabelIds, createLabels, category: categoryRaw, archive, addNames, removeNames });
   const operation: PlanOperation = { addLabelIds, removeLabelIds, createLabels, summary };
@@ -479,7 +508,10 @@ export async function planChanges(rawArgs: Record<string, unknown>, env: Organiz
     status: 'planned',
     change: summary,
     willChange: plan.messages.length,
-    alreadyInThatState: read.messages.length - planned.length,
+    alreadyInThatState: candidates.length - planned.length,
+    alreadyInThatStateIds: candidates.filter((m) => !planned.includes(m)).map((m) => m.id),
+    unreadableIds: stubs.filter((st) => !read.messages.some((m) => m.id === st.id)).map((st) => st.id),
+    ...(heldBack ? { heldBack, heldBackNote: `${heldBack} bank, statement or security message(s) were left in the inbox: those are never archived automatically.` } : {}),
     coverage: { ...plan.coverage },
     bySender: topCounts(plan.messages.map((m) => parseSender(m.from).address), 10),
     byClass: topCounts(plan.messages.map((m) => m.class), 7),
@@ -525,15 +557,16 @@ export function prepareOrganizeAction(toolName: 'gmail_apply_plan' | 'gmail_undo
     const digest = trimmedNonEmptyString(args.planDigest);
     if (digest && digest !== plan.digest) return { ok: false, reason: 'the plan changed since it was previewed; make a new preview' };
   }
+  const shown = plan.taskId ? CARD_MESSAGE_LIMIT : 8;
   const lines = apply
     ? [
       `Organize your Gmail (${plan.accountEmail}):`,
       `• ${plan.operation.summary}`,
       `• ${plan.messages.length} message${plan.messages.length === 1 ? '' : 's'} from ${new Set(plan.messages.map((m) => parseSender(m.from).address)).size} sender(s), found with: ${plan.query}`,
-      `• ${plan.coverage.statement}`,
-      ...plan.messages.slice(0, 8).map((m) => `    - ${parseSender(m.from).name} — ${m.subject || '(no subject)'}`),
-      ...(plan.messages.length > 8 ? [`    … and ${plan.messages.length - 8} more`] : []),
-      'Nothing is deleted. The labels each message has now are saved, so this can be undone afterwards.',
+      ...(plan.taskId ? [] : [`• ${plan.coverage.statement}`]),
+      ...plan.messages.slice(0, shown).map((m) => `    - ${plan.taskId ? `${m.id} · ` : ''}${parseSender(m.from).name} — ${m.subject || '(no subject)'}`),
+      ...(plan.messages.length > shown ? [`    … and ${plan.messages.length - shown} more`] : []),
+      'Nothing is deleted or archived; the label is only added. The labels each message has now are saved, so this can be undone afterwards.',
     ]
     : [
       `Undo a Gmail change (${plan.accountEmail}):`,
@@ -574,7 +607,7 @@ async function verifyMessages(env: OrganizeEnv, tool: string, messages: PlannedM
     verification.checked += 1;
     const actual = ((outcome.data as { labelIds?: string[] } | null)?.labelIds ?? []).filter((l) => touched.has(l)).sort();
     const want = expected(m).filter((l) => touched.has(l)).sort();
-    if (actual.length === want.length && actual.every((l, i) => l === want[i])) verification.matched += 1;
+    if (actual.length === want.length && actual.every((l, i) => l === want[i])) { verification.matched += 1; (verification.matchedIds ??= []).push(m.id); }
     else verification.mismatched.push({ id: m.id, expected: want, actual });
   }
   return verification;
@@ -641,7 +674,13 @@ export async function applyPlan(rawArgs: Record<string, unknown>, env: OrganizeE
 
   const modified = await batchModify(env, 'gmail_apply_plan', plan.messages.map((m) => m.id), addIds, removeIds);
   if (!modified.ok) {
+    if (modified.modified === 0) {
+      // Gmail changed nothing, so the approved plan is still intact and can simply be retried.
+      env.afterPlanSettled?.(plan, 'apply_failed', modified.reason);
+      return { status: 'failed', exitCode: null, output: `NOT DONE. Gmail refused the change and nothing was modified: ${modified.reason}. The plan is unchanged and can be retried.`, resultCategory: modified.reason.includes('retryAfterMs') ? 'gws_rate_limited' : 'gmail_modify_failed' };
+    }
     env.store.update(planId, { status: 'applied_unverified', appliedAt: new Date((env.nowMs ?? Date.now)()).toISOString(), createdLabelIds: created.created });
+    env.afterPlanSettled?.(plan, 'apply_failed', modified.reason);
     return { status: 'failed', exitCode: null, output: `PARTIALLY DONE: Gmail refused part of the change after ${modified.modified} of ${plan.messages.length} messages: ${modified.reason}. Run gmail_undo_plan to restore the labels, or re-check the messages.`, resultCategory: 'gmail_modify_failed' };
   }
   const verification = await verifyMessages(env, 'gmail_apply_plan', plan.messages, (m) => expectedAfterApply(m, { add: addIds, remove: removeIds }), touched);
@@ -652,6 +691,8 @@ export async function applyPlan(rawArgs: Record<string, unknown>, env: OrganizeE
     createdLabelIds: created.created,
     verification,
   });
+  const settled = env.store.get(planId);
+  const progress = settled ? env.afterPlanSettled?.(settled, 'applied') : undefined;
   return succeeded(verified ? 'gmail_apply_verified' : 'gmail_apply_unverified', {
     planId,
     verified,
@@ -659,6 +700,7 @@ export async function applyPlan(rawArgs: Record<string, unknown>, env: OrganizeE
     verification: verificationSummary(verification, plan.messages.length),
     details: verification,
     change: plan.operation.summary,
+    ...(progress ? { progress } : {}),
     undo: `Call gmail_undo_plan with planId ${planId} to restore the previous labels.`,
     note: verified ? 'Every changed message was re-read from Gmail and matches.' : 'Gmail accepted the change but not every message could be verified; say so plainly.',
   });
@@ -698,7 +740,8 @@ export async function undoPlan(rawArgs: Record<string, unknown>, env: OrganizeEn
   }
   const verification = await verifyMessages(env, 'gmail_undo_plan', plan.messages, (m) => [...m.priorLabelIds].sort(), touched);
   const verified = verification.matched + verification.missing.length === plan.messages.length && verification.mismatched.length === 0 && verification.failedLookups === 0;
-  env.store.update(planId, { status: verified ? 'undone' : 'undo_unverified', undoneAt: new Date((env.nowMs ?? Date.now)()).toISOString(), undoVerification: verification });
+  const undone = env.store.update(planId, { status: verified ? 'undone' : 'undo_unverified', undoneAt: new Date((env.nowMs ?? Date.now)()).toISOString(), undoVerification: verification });
+  if (undone) env.afterPlanSettled?.(undone, 'undone');
   return succeeded(verified ? 'gmail_undo_verified' : 'gmail_undo_unverified', {
     planId,
     verified,
@@ -709,4 +752,4 @@ export async function undoPlan(rawArgs: Record<string, unknown>, env: OrganizeEn
   });
 }
 
-export const ORGANIZE_TOOL_NAMES = new Set(['gmail_analyze_inbox', 'gmail_plan_changes', 'gmail_apply_plan', 'gmail_undo_plan']);
+export const ORGANIZE_TOOL_NAMES = new Set(['gmail_analyze_inbox', 'gmail_plan_changes', 'gmail_apply_plan', 'gmail_undo_plan', 'gmail_create_task', 'gmail_task_next_batch', 'gmail_task_status']);

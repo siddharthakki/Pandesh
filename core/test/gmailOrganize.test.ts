@@ -375,8 +375,10 @@ describe('safety: nothing destructive, nothing without permission', () => {
     const preview = parse(await exec('gmail_plan_changes', { query: 'from:shop', operation: { moveToCategory: 'promotions' } }, ctx));
     const applied = await exec('gmail_apply_plan', { planId: preview.planId, planDigest: preview.planDigest }, ctx);
     expect(applied.status).toBe('failed');
-    expect(applied.output).toMatch(/PARTIALLY DONE/);
+    // Gmail changed nothing, so the approved plan stays intact and retryable (it is not marked applied).
+    expect(applied.output).toMatch(/NOT DONE.*nothing was modified/);
     expect(applied.output).toMatch(/insufficientPermissions/);
+    expect(store.plans.get(preview.planId)?.status).toBe('planned');
   });
 });
 

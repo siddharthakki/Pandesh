@@ -112,6 +112,28 @@ function connectorConfigs(overrides: ConnectorAdapterOverrides = {}): ConnectorA
           }, ['operation']),
         },
         {
+          name: 'gmail_create_task',
+          tier: 'read',
+          description: 'Create ONE durable Gmail-organization task from sender->label rules, e.g. rules [{label:"Finance",senders:["IIFL","Kotak"]},{label:"Travel",senders:["Conficar"]}]. Lists the real Gmail message ids in the connected account and saves them with a checkpoint, so it resumes after a restart. Changes nothing in Gmail. Calling it again with the same rules returns the existing task: never ask the user to re-confirm or plan again. Counts are verified message ids, never estimates. Then call gmail_task_next_batch.',
+          parameters: objectParams({
+            rules: { type: 'array', items: { type: 'object', properties: { label: { type: 'string' }, senders: { type: 'array', items: { type: 'string' } } } } },
+            scope: { type: 'string', description: 'Optional extra Gmail search terms, e.g. "newer_than:1y".' },
+            batchSize: { type: 'number', description: 'Messages per approved batch. Default 25, max 50.' },
+          }, ['rules']),
+        },
+        {
+          name: 'gmail_task_next_batch',
+          tier: 'read',
+          description: 'Prepare the next small batch of a task as a plan (or return the batch already waiting after a restart). Returns planId, planDigest and the exact messages. Changes nothing; then call gmail_apply_plan for it, once per batch. Labels are only added: never archive bank statements, security alerts or financial mail.',
+          parameters: objectParams({ taskId: { type: 'string', description: 'Defaults to the active task.' } }, []),
+        },
+        {
+          name: 'gmail_task_status',
+          tier: 'read',
+          description: 'Progress of a Gmail-organization task. Report its "progress" text as given: it states a total only when that total is verified.',
+          parameters: objectParams({ taskId: { type: 'string' } }, []),
+        },
+        {
           name: 'gmail_apply_plan',
           tier: 'execute',
           description: 'Apply a previewed plan from gmail_plan_changes: changes labels on exactly those messages after the user approves the exact change, then re-reads every message to verify. Requires the Google gmail.modify permission. Reversible with gmail_undo_plan. Call only when the user asked to make the change.',

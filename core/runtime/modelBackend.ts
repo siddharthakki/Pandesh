@@ -14,6 +14,7 @@ import {
 } from './ollamaStreamTransport';
 import { CAPABILITY_UNSUPPORTED_PATTERN } from '../platform/autoReroute';
 import { parseInlineToolCalls, type InlineToolCallsResult } from './inlineToolCalls';
+import { createReasoningFilter } from './reasoningMarkers';
 import {
   assertPromptFitsContext,
   benchmarkSamplingOptions,
@@ -306,6 +307,7 @@ export class OllamaModelBackend implements ModelBackend {
     const streamed = attemptResult!;
 
     let content = '';
+    const reasoning = createReasoningFilter();
     let actualModel = request.model;
     let promptTokens: number | null | undefined;
     let completionTokens: number | null | undefined;
@@ -331,8 +333,8 @@ export class OllamaModelBackend implements ModelBackend {
             firstChunkRawLogged = true;
             console.log(`[karkedikha-core ${new Date().toISOString()}] model=${request.model} stage=ollama_first_chunk_raw`);
           }
-          content += delta;
-          onToken(delta);
+          const visible = reasoning.push(delta);
+          if (visible) { content += visible; onToken(visible); }
         }
         for (const tc of frame.message?.tool_calls ?? []) {
           if (tc?.function?.name) {
@@ -361,6 +363,9 @@ export class OllamaModelBackend implements ModelBackend {
     } finally {
       streamed.destroy();
     }
+
+    const tail = reasoning.flush();
+    if (tail) { content += tail; onToken(tail); }
 
     console.log(
       `[karkedikha-core ${new Date().toISOString()}] model=${actualModel} loadMs=${loadDurationMs ?? -1} promptEvalMs=${promptEvalMs ?? -1} `
