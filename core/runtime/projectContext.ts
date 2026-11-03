@@ -49,11 +49,18 @@ const DEICTIC_PROJECT = new RegExp(`\\b(?:this|the|current|active|selected|my|ou
 const INSPECTION_QUESTION = /\b(?:what(?:'s| is| does| do)?|which|describe|explain|summari[sz]e|tell me|overview|purpose|about|written|language|languages|stack|framework|structure|contain|contains|run|start|launch|build|install|set ?up|use|entry ?point|main file|depend)/i;
 const PRONOUN_FOLLOW_UP = /\b(?:what (?:language|languages|programming language)\b[^.?!]{0,30}\b(?:written|built|coded|use[sd]?)|written in|(?:tech(?:nology)?|programming)\s+stack|which (?:framework|language)s?|how (?:do|can|should|would) (?:i|we) (?:run|start|launch|build|install|set up|use)\s+(?:it|this|that|the (?:app|project|thing))|how (?:is|does) (?:it|this) (?:run|start|work|structured)|how to (?:run|start|launch|build|install) (?:it|this|the (?:app|project)))\b/i;
 
+/**
+ * Topics of the personal assistant itself. A bare pronoun follow-up ("how does it work?") that is about one of these
+ * is a question about Pandesh, never about a project folder, so it must not need a workspace.
+ */
+const ASSISTANT_TOPIC = /\b(?:notif\w*|reminders?|gmail|e-?mails?|inbox|calendar|tasks?|schedul\w*|briefings?|background|labels?|approvals?|batch(?:es)?|tray|toast|alerts?|status|your)\b/i;
+
 /** True when the request asks about the selected project itself ("this project", "here", "how do I run it"). */
 export function isProjectInspectionRequest(text: string): boolean {
   const t = String(text || '').trim();
   if (!t || t.length > 600) return false;
   if (DEICTIC_PROJECT.test(t) && INSPECTION_QUESTION.test(t)) return true;
+  if (ASSISTANT_TOPIC.test(t)) return false;
   return PRONOUN_FOLLOW_UP.test(t);
 }
 

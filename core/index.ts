@@ -56,6 +56,8 @@ import { getGmailAccessToken, getGmailAccountEmail, googleScopeGranted } from '.
 import { CALENDAR_EVENTS_SCOPE, createGwsCalendarExecutor, createGwsCalendarPrepare, createGwsCalendarProbe, defaultGwsCalendarConfigDir } from './runtime/connectors/gwsCalendarAdapter';
 import { recordGmailDraftBinding, getGmailDraftBinding } from './domain/gmailDrafts';
 import { createGmailOrganizeStore, createGmailTaskStore } from './domain/gmailChangePlans';
+import { terminalNotice } from './runtime/connectors/gmailTask';
+import { enqueueNotification, notificationCapability } from './domain/notificationOutbox';
 import { GMAIL_MODIFY_SCOPE } from './runtime/connectors/gmailOrganize';
 import { recordRuntimeEvent } from './domain/runtimeEvents';
 import { configureDailyBriefRoutine, getDailyBriefRoutine } from './domain/assistantRoutine';
@@ -216,7 +218,12 @@ function buildConnectorRegistry(dataDir: string, db: CoreDatabase): Map<Connecto
     bindings,
     organize: {
       store: createGmailOrganizeStore(db),
-      tasks: createGmailTaskStore(db),
+      tasks: createGmailTaskStore(db, (task) => {
+        // A task that finished (verified in Gmail) or is stuck is the only thing worth a notification.
+        const notice = terminalNotice(task, Date.now());
+        if (notice) enqueueNotification(db, notice);
+      }),
+      notifyCapability: () => notificationCapability(db),
       // Incremental consent: inbox changes need gmail.modify, which Desktop requests only when the user opts in.
       hasModifyScope: () => googleScopeGranted(GMAIL_MODIFY_SCOPE),
       onProgress: (event) => {

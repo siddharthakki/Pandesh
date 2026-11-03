@@ -55,6 +55,7 @@ import * as everydayTools from '../domain/everydayTools';
 import * as commandQueue from '../domain/commandQueue';
 import * as karkeDikha from '../domain/karkeDikhaLifecycle';
 import * as backgroundTasks from '../domain/backgroundTasks';
+import * as notificationOutbox from '../domain/notificationOutbox';
 import { cancelBackgroundTaskWorker, resumeBackgroundTask } from '../runtime/backgroundWorker';
 import { latestRuntimeSequence, listRuntimeEventsAfter, recordRuntimeEvent } from '../domain/runtimeEvents';
 import { isTerminalAttemptStatus } from '../domain/attemptTransitions';
@@ -1514,6 +1515,56 @@ export function buildRouter(
         return { status: 200, body: result.task };
       }),
     );
+  });
+
+  // --- Notification outbox: the host reports what the operating system really did ---
+  router.get('/v1/notifications', (ctx) => ({
+    status: 200,
+    body: { ...notificationOutbox.notificationReport(ctx.db), deliverable: notificationOutbox.listDeliverable(ctx.db) },
+  }));
+
+  router.post('/v1/notifications/channel', (ctx) => {
+    const key = requireIdempotencyKey(ctx);
+    const body = asRecord(ctx.body);
+    return withIdempotency(ctx.db, { key, clientId: ctx.clientId, routeId: 'notifications.channel' }, ctx.body, () => ({
+      status: 200,
+      body: notificationOutbox.registerChannel(ctx.db, {
+        channel: requireString(body, 'channel'),
+        supported: body.supported === true,
+        detail: typeof body.detail === 'string' ? body.detail : '',
+      }),
+    }));
+  });
+
+  router.post('/v1/notifications/test', (ctx) => {
+    const key = requireIdempotencyKey(ctx);
+    return withIdempotency(ctx.db, { key, clientId: ctx.clientId, routeId: 'notifications.test' }, ctx.body, () =>
+      withRuntimeBroadcast(ctx, broadcaster, () => {
+        const capability = notificationOutbox.notificationCapability(ctx.db);
+        const { record } = notificationOutbox.enqueueNotification(ctx.db, {
+          kind: 'test',
+          sourceId: `test_${key}`,
+          title: 'Pandesh test notification',
+          body: 'If you can read this, Pandesh can notify you on this computer.',
+        });
+        return { status: 201, body: { notification: record, capability } };
+      }),
+    );
+  });
+
+  router.post('/v1/notifications/:id/delivery', (ctx, match) => {
+    const key = requireIdempotencyKey(ctx);
+    const body = asRecord(ctx.body);
+    const status = body.status === 'delivered' ? 'delivered' : body.status === 'failed' ? 'failed' : null;
+    if (!status) throw new CoreError('invalid_request', "status must be 'delivered' or 'failed'");
+    return withIdempotency(ctx.db, { key, clientId: ctx.clientId, routeId: `notifications.delivery:${match.params.id}` }, ctx.body, () => ({
+      status: 200,
+      body: notificationOutbox.recordDelivery(ctx.db, match.params.id, {
+        status,
+        via: typeof body.via === 'string' && body.via ? body.via : 'unknown',
+        error: typeof body.error === 'string' ? body.error : undefined,
+      }),
+    }));
   });
 
   router.post('/v1/karke-dikha/attempts/:id/execution-quality', (ctx, match) => {

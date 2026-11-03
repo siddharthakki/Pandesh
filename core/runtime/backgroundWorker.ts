@@ -50,6 +50,7 @@ import type { ConnectorAdapter } from './connectors/connectorCapability';
 import type { ConnectorId } from '../shared/wireTypes';
 import { CoreError } from '../domain/errors';
 import { nowIso } from '../domain/ids';
+import { enqueueNotification } from '../domain/notificationOutbox';
 
 export const BACKGROUND_WORKER_ACTOR = 'core:background_worker';
 export const BACKGROUND_WORKER_CLIENT_ID = 'core:background_worker';
@@ -348,6 +349,9 @@ export async function runBackgroundTask(
         error: err?.message || String(err),
         completedAt: nowIso(),
       });
+      try {
+        enqueueNotification(db, { kind: 'task_failed', sourceId: taskId, title: 'A background task failed', body: String(err?.message || err).slice(0, 300) });
+      } catch { /* advisory */ }
       failAttempt(db, task.attemptId, {
         actor: BACKGROUND_WORKER_ACTOR,
         failureReason: err?.message || 'Background worker encountered an unhandled error',
@@ -985,6 +989,15 @@ async function executeGmailContractExtraction(
     },
   });
 
+  // The notification is queued durably; it counts as delivered only when the desktop reports it (see notificationOutbox).
+  try {
+    enqueueNotification(db, {
+      kind: 'task_completed',
+      sourceId: task.id,
+      title: isPartial ? 'Partial Gmail Contract Inventory Ready' : 'Gmail Contract Extraction Completed',
+      body: isPartial ? 'Partial contract inventory table delivered to your conversation.' : 'Contract inventory table delivered to your conversation.',
+    });
+  } catch { /* the result is already in the conversation; a queueing problem must not undo it */ }
   updateBackgroundTask(db, task.id, { notificationSent: true });
 
   if (broadcaster && typeof broadcaster.publishRuntime === 'function') {

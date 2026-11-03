@@ -40,7 +40,8 @@ export function createGmailOrganizeStore(db: CoreDatabase, nowMs: () => number =
 }
 
 /** Durable store for Gmail-organization tasks (`gmail_organize_tasks`, migration 39). */
-export function createGmailTaskStore(db: CoreDatabase): GmailTaskStore {
+/** `onSaved` runs after every durable save, so a task reaching a state the user must hear about is noticed once, in one place. */
+export function createGmailTaskStore(db: CoreDatabase, onSaved?: (task: GmailOrganizeTask) => void): GmailTaskStore {
   return {
     save(task: GmailOrganizeTask): void {
       db.run(
@@ -49,6 +50,7 @@ export function createGmailTaskStore(db: CoreDatabase): GmailTaskStore {
          ON CONFLICT(taskId) DO UPDATE SET status = excluded.status, taskJson = excluded.taskJson, updatedAt = excluded.updatedAt`,
         [task.taskId, task.accountEmail, task.status, JSON.stringify(task), task.createdAt, task.updatedAt],
       );
+      try { onSaved?.(task); } catch { /* a notification problem never loses task progress */ }
     },
     get(taskId: string): GmailOrganizeTask | undefined {
       const row = db.get<{ taskJson: string }>('SELECT taskJson FROM gmail_organize_tasks WHERE taskId = ?', [taskId]);

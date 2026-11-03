@@ -574,11 +574,32 @@ function showImageGenerationNotification(title: string, body: string): void {
   notification.show();
 }
 
-function showBackgroundTaskNotification(title: string, body: string): void {
-  if (!Notification.isSupported()) return;
-  const notification = new Notification({ title, body, silent: false });
-  notification.on('click', () => showJarvisWindow());
-  notification.show();
+/**
+ * Shows one outbox notification and waits for the operating system's own answer: 'show' means Windows accepted the
+ * toast, 'failed' carries its error. Silence for 8 s is reported as a failure, never as success.
+ */
+function deliverOutboxNotification(input: { id: string; title: string; body: string }): Promise<{ ok: boolean; via: string; error?: string }> {
+  const via = 'windows_toast';
+  if (!Notification.isSupported()) return Promise.resolve({ ok: false, via, error: 'desktop notifications are not supported on this system' });
+  return new Promise((resolve) => {
+    let settled = false;
+    const done = (result: { ok: boolean; via: string; error?: string }) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve(result);
+    };
+    const notification = new Notification({ title: input.title, body: input.body, silent: false });
+    const timer = setTimeout(() => done({ ok: false, via, error: 'Windows did not confirm showing the notification within 8 seconds' }), 8_000);
+    notification.on('show', () => done({ ok: true, via }));
+    notification.on('failed', (_event, error) => done({ ok: false, via, error: String(error || 'Windows reported the notification failed') }));
+    notification.on('click', () => showJarvisWindow());
+    try {
+      notification.show();
+    } catch (err) {
+      done({ ok: false, via, error: (err as Error).message });
+    }
+  });
 }
 
 async function ensureMainWindow(): Promise<BrowserWindow> {
@@ -700,6 +721,11 @@ async function createWindow(): Promise<void> {
     onReminderNotificationClick: (id) => showReminderFromNotification(id),
     notifyQueueConfirm: async (input) => showDesktopQueueConfirmNotification(input),
     onQueueConfirmNotificationClick: (id) => showQueueConfirmFromNotification(id),
+    deliverNotification: (input) => deliverOutboxNotification(input),
+    notificationChannel: () => ({
+      supported: Notification.isSupported(),
+      detail: Notification.isSupported() ? 'Windows desktop notifications (toast)' : 'desktop notifications unsupported on this system',
+    }),
   });
   session.onEvent((event) => {
     sendToRenderer(DESKTOP_CHANNELS.event, event);
@@ -714,11 +740,6 @@ async function createWindow(): Promise<void> {
         title: event.summary || 'Your daily brief is ready',
         body: event.text || 'Open KarkeDikha to read it.',
       });
-    } else if (event.eventType === 'background_task_completed') {
-      showBackgroundTaskNotification(
-        String((event as any).title || event.summary || 'Gmail Contract Extraction Completed'),
-        String((event as any).text || 'Contract inventory table generated and delivered to conversation.'),
-      );
     }
     if (
       event.kind === 'status'

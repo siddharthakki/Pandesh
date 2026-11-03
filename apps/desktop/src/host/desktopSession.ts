@@ -191,6 +191,13 @@ export interface DesktopSessionOptions {
     revision: number;
   }) => void | Promise<void>;
   onQueueConfirmNotificationClick?: (commandId: string) => void;
+  /**
+   * Shows one outbox notification through the operating system and resolves with what really happened. Only a
+   * resolved `ok: true` is ever reported to Core as delivered.
+   */
+  deliverNotification?: (input: { id: string; kind: string; title: string; body: string }) => Promise<{ ok: boolean; via: string; error?: string }>;
+  /** What this host can honestly say about its notification channel. */
+  notificationChannel?: () => { supported: boolean; detail: string };
   ensureImageStudio?: (onStatus?: (text: string) => void) => Promise<ImageStudioServiceStatus>;
   probeImageStudio?: () => Promise<ImageStudioServiceStatus>;
   /** How long a Stop waits for Core to confirm the attempt reached a terminal
@@ -1305,6 +1312,7 @@ export class DesktopSession {
       log: this.options.log,
     });
     await this.refreshEverydayTools();
+    this.startNotificationDelivery();
     await this.reconcileRemindersAfterResume('startup');
     await this.refreshCommandQueue();
     await this.requireClient().reconcileCommandQueue();
@@ -2840,12 +2848,67 @@ export class DesktopSession {
       clearInterval(this.queueOfferTimer);
       this.queueOfferTimer = null;
     }
+    if (this.notificationTimer) {
+      clearInterval(this.notificationTimer);
+      this.notificationTimer = null;
+    }
     this.reminderScheduler?.dispose();
     this.reminderScheduler = null;
     void this.pocketTts?.dispose();
     this.pocketTts = null;
     this.client?.dispose();
     this.client = undefined;
+  }
+
+  private notificationTimer: NodeJS.Timeout | null = null;
+  private notificationDrainRunning = false;
+
+  /**
+   * Registers this host's notification channel with Core and delivers whatever is waiting in the outbox. Runs at start
+   * (so anything queued while the app was closed is shown now), on every new outbox row, and on a short heartbeat that
+   * also keeps the channel registration fresh. Each row is reported back as delivered or failed, never assumed.
+   */
+  private startNotificationDelivery(): void {
+    if (!this.options.deliverNotification) return;
+    if (this.notificationTimer) clearInterval(this.notificationTimer);
+    void this.drainNotifications();
+    this.notificationTimer = setInterval(() => void this.drainNotifications(), 30_000);
+  }
+
+  async drainNotifications(): Promise<{ delivered: number; failed: number }> {
+    const result = { delivered: 0, failed: 0 };
+    const deliver = this.options.deliverNotification;
+    if (!deliver || this.notificationDrainRunning || !this.client) return result;
+    this.notificationDrainRunning = true;
+    try {
+      const channel = this.options.notificationChannel?.() ?? { supported: true, detail: 'Windows desktop notification' };
+      await this.client.registerNotificationChannel({ channel: 'desktop', supported: channel.supported, detail: channel.detail });
+      const { deliverable } = await this.client.getNotifications();
+      for (const item of deliverable) {
+        let report: { ok: boolean; via: string; error?: string };
+        try {
+          report = channel.supported ? await deliver({ id: item.id, kind: item.kind, title: item.title, body: item.body }) : { ok: false, via: 'none', error: 'desktop notifications are not supported on this system' };
+        } catch (err) {
+          report = { ok: false, via: 'desktop', error: (err as Error).message };
+        }
+        await this.client.reportNotificationDelivery(item.id, report.ok ? { status: 'delivered', via: report.via } : { status: 'failed', via: report.via, error: report.error ?? 'delivery failed' });
+        if (report.ok) result.delivered += 1; else result.failed += 1;
+        this.options.log?.(`notification ${item.id} (${item.kind}) ${report.ok ? 'delivered' : 'failed'} via ${report.via}${report.error ? `: ${report.error}` : ''}`);
+      }
+    } catch (err) {
+      this.options.log?.(`notification drain failed: ${(err as Error).message}`);
+    } finally {
+      this.notificationDrainRunning = false;
+    }
+    return result;
+  }
+
+  /** Queues one real test notification and delivers it now. Returns the recorded outcome, not an assumption. */
+  async sendTestNotification(): Promise<{ queued: boolean; delivered: number; failed: number; capability: Record<string, unknown> }> {
+    const client = this.requireClient();
+    const queued = await client.enqueueTestNotification();
+    const outcome = await this.drainNotifications();
+    return { queued: true, ...outcome, capability: queued.capability };
   }
 
   async refreshEverydayTools(): Promise<EverydayToolsSnapshot> {
@@ -4347,6 +4410,10 @@ export class DesktopSession {
         summary: 'This task was interrupted when Core restarted. It is not running. Resume it from Tasks to be asked again.',
       });
       this.drainSubmissionQueue();
+      return;
+    }
+    if (event.domain === 'notification' && event.eventType === 'notification_enqueued') {
+      void this.drainNotifications();
       return;
     }
     if (event.domain === 'assistant_routine' && event.eventType === 'daily_brief_delivered') {

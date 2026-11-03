@@ -1228,6 +1228,33 @@ CREATE TABLE IF NOT EXISTS gmail_organize_tasks (
 CREATE INDEX IF NOT EXISTS idx_gmail_organize_tasks_account ON gmail_organize_tasks(accountEmail, status);
 `;
 
+// Notification outbox: what Pandesh intends to notify, and the host's own report of what happened. A row is
+// delivered only when the desktop host reports it; channels record which host can deliver right now.
+const MIGRATION_40_NOTIFICATION_OUTBOX = `
+CREATE TABLE IF NOT EXISTS notification_outbox (
+  id TEXT PRIMARY KEY,
+  kind TEXT NOT NULL,
+  sourceId TEXT NOT NULL,
+  title TEXT NOT NULL,
+  body TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'pending',
+  attempts INTEGER NOT NULL DEFAULT 0,
+  lastError TEXT,
+  deliveredVia TEXT,
+  createdAt TEXT NOT NULL,
+  deliveredAt TEXT,
+  UNIQUE (kind, sourceId)
+);
+CREATE INDEX IF NOT EXISTS idx_notification_outbox_status ON notification_outbox(status, createdAt);
+CREATE TABLE IF NOT EXISTS notification_channels (
+  channel TEXT PRIMARY KEY,
+  supported INTEGER NOT NULL,
+  detail TEXT NOT NULL,
+  registeredAt TEXT NOT NULL,
+  lastSeenAt TEXT NOT NULL
+);
+`;
+
 const MIGRATION_36_BACKGROUND_TASKS = `
 CREATE TABLE IF NOT EXISTS background_tasks (
   id TEXT PRIMARY KEY,
@@ -1401,6 +1428,7 @@ export const MIGRATIONS: Migration[] = [
   { version: 37, description: 'Panda bridge: browser pairings, relayed tasks (source reference, consent, routing) and durable checkpoints', sql: MIGRATION_37_PANDA_BRIDGE },
   { version: 38, description: 'Master operator: durable multi-step runs with per-step tool selection, approvals, evidence and an event trail', sql: MIGRATION_38_OPERATOR },
   { version: 39, description: 'Gmail inbox organization: durable multi-batch tasks with a verified manifest, checkpoint and retry state', sql: MIGRATION_39_GMAIL_ORGANIZE_TASKS },
+  { version: 40, description: 'Notification outbox: durable notification intents with host-reported delivery status and the registered delivery channel', sql: MIGRATION_40_NOTIFICATION_OUTBOX },
 ];
 
 

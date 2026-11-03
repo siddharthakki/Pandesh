@@ -40,10 +40,31 @@ export interface ReasoningFilter {
   flush(): string;
 }
 
+/**
+ * Some runtimes drop the opening `<|channel>` token but keep the rest, so a reply starts with "thought", a newline, the reasoning, then `<channel|>`.
+ * Only a reply that begins exactly that way is treated as reasoning, and only once the closing marker is seen.
+ */
+const LEAD = 'thought\n';
+
 export function createReasoningFilter(): ReasoningFilter {
   let buffer = '';
   let hidden = false;
+  let lead: 'unknown' | 'holding' | 'done' = 'unknown';
   const drain = (final: boolean): string => {
+    if (lead === 'unknown') {
+      if (buffer.length < LEAD.length && LEAD.startsWith(buffer) && !final) return '';
+      lead = buffer.startsWith(LEAD) ? 'holding' : 'done';
+    }
+    if (lead === 'holding') {
+      const end = buffer.indexOf('<channel|>');
+      if (end < 0) {
+        if (!final) return '';
+        lead = 'done';
+      } else {
+        buffer = buffer.slice(end + '<channel|>'.length);
+        lead = 'done';
+      }
+    }
     let out = '';
     for (;;) {
       if (hidden) {
@@ -74,7 +95,7 @@ export function createReasoningFilter(): ReasoningFilter {
   };
   return {
     push(delta: string): string { buffer += delta; return drain(false); },
-    flush(): string { const rest = drain(true); buffer = ''; hidden = false; return rest; },
+    flush(): string { const rest = drain(true); buffer = ''; hidden = false; lead = 'unknown'; return rest; },
   };
 }
 

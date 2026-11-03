@@ -230,6 +230,27 @@ describe('batches', () => {
     expect(waiting.processed).toBe(0);
   });
 
+  it('a failed apply is reported as paused with no worker, never as running or completed', async () => {
+    const fake = fakeGmail(mailbox(), { rateLimitBatchOnce: new Date(Date.now() + 600_000).toISOString() });
+    const t = setup(fake, { organize: { store: stores().plans, tasks: stores().tasks, hasModifyScope: () => true, notifyCapability: () => ({ canNotify: false, statement: 'No desktop connected.' }) } });
+    const created = parse(await t.run('gmail_create_task', { rules: RULES, batchSize: 3 }));
+    expect(created.state).toBe('queued');
+    expect(created.worker).toBe('none');
+    expect(created.autonomous).toBe(false);
+    expect(created.willContinueOnItsOwn).toBe(false);
+    expect(created.notifyWhenDone).toBe(false);
+    const batch = parse(await t.run('gmail_task_next_batch', { taskId: created.taskId }));
+    expect(batch.state).toBe('awaiting_approval');
+    const failed = await t.run('gmail_apply_plan', { planId: batch.planId, planDigest: batch.planDigest });
+    expect(failed.status).toBe('failed');
+    const status = parse(await t.run('gmail_task_status', { taskId: created.taskId }));
+    expect(status.state).toBe('paused');
+    expect(status.processed).toBe(0);
+    expect(status.progress).toMatch(/^0 of 14|^0 of 12|^0 messages/);
+    expect(status.stateReason).toMatch(/Nothing retries by itself/);
+    expect([...fake.mailbox.values()].every((m) => !m.labelIds.some((l) => l.startsWith('Label_')))).toBe(true);
+  });
+
   it('undoes an applied batch from the saved labels and the task counts it as unprocessed again', async () => {
     const fake = fakeGmail(mailbox());
     const t = setup(fake);
@@ -265,6 +286,12 @@ describe('reasoning markers', () => {
   it('drops thought blocks and stray markers, in one piece or split across chunks', () => {
     expect(stripReasoningMarkers('<|channel>thought\nplan it<channel|>Done: 4 of 12.')).toBe('Done: 4 of 12.');
     expect(stripReasoningMarkers('<think>hmm</think>Answer')).toBe('Answer');
+    expect(stripReasoningMarkers('thought\n<channel|>The second attempt hit a rate limit.')).toBe('The second attempt hit a rate limit.');
+    expect(stripReasoningMarkers('thought\nplan: retry later<channel|>Done.')).toBe('Done.');
+    expect(stripReasoningMarkers('thought about it')).toBe('thought about it');
+    expect(stripReasoningMarkers('thought\nno closing marker')).toBe('thought\nno closing marker');
+    const lead = createReasoningFilter();
+    expect(lead.push('thou') + lead.push('ght\npl') + lead.push('an<chan') + lead.push('nel|>Hi') + lead.flush()).toBe('Hi');
     expect(stripReasoningMarkers('Answer<channel|>')).toBe('Answer');
     const filter = createReasoningFilter();
     const pieces = ['Hel', 'lo <|chan', 'nel>tho', 'ught secret <chan', 'nel|>wor', 'ld'];

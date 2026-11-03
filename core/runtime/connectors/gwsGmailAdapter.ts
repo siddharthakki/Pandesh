@@ -83,6 +83,8 @@ export interface GwsGmailAdapterConfig {
   bindings: GwsGmailDraftBindingStore;
   /** Inbox organization (analysis, bulk preview, approved label changes, undo). Absent = those tools report not available. */
   organize?: {
+    /** What the user may be told about notifications right now (from the delivery outbox); absent = nothing verified. */
+    notifyCapability?: () => { canNotify: boolean; statement: string };
     store: GmailOrganizeStore;
     /** Durable multi-batch tasks. Absent = the task tools report not available. */
     tasks?: GmailTaskStore;
@@ -716,7 +718,7 @@ export function createGwsGmailExecutor(config: GwsGmailAdapterConfig): Connector
           if (toolName === 'gmail_apply_plan') return await applyPlan(args, env);
           if (toolName === 'gmail_undo_plan') return await undoPlan(args, env);
           if (!config.organize.tasks) return { status: 'failed', exitCode: null, output: 'Gmail tasks are not available in this build; no action was taken', resultCategory: 'connector_not_implemented' };
-          const taskEnv = { ...env, tasks: config.organize.tasks };
+          const taskEnv = { ...env, tasks: config.organize.tasks, ...(config.organize.notifyCapability ? { notifyCapability: config.organize.notifyCapability } : {}) };
           if (toolName === 'gmail_create_task') return await createTask(args, taskEnv);
           if (toolName === 'gmail_task_next_batch') return await nextBatch(args, taskEnv);
           return await taskStatus(args, taskEnv);

@@ -39,6 +39,8 @@ import { transitionAttempt, failAttempt, getAttempt, settleCancelledAttempt } fr
 import { createApproval, getApproval, listApprovalsForAttempt, expireApproval } from '../domain/approvals';
 import { recordExecutionQuality } from '../domain/executionQuality';
 import { NON_WORKSPACE_MARKERS } from '../domain/taskToolSurface';
+import { auditPromises, classifyStatusRequest, composeStatusAnswer, hasActiveWorker, hasRecentGmailWork } from './assistantStatus';
+import { notificationCapability } from '../domain/notificationOutbox';
 import { boundConversationContext, isExplicitResumeRequest, isSmallTalk, selectRelevantTask, LATEST_REQUEST_AUTHORITATIVE } from '../domain/conversationRelevance';
 import type { PowerShellRunner } from './windowsPrinting';
 import { listInstalledPrinters, resolvePrinter, submitTestPage, hasPriorPrintSubmission, isShellPrintCommand, PRINT_SUBMITTING_EVENT, PRINT_FAILED_EVENT } from './windowsPrinting';
@@ -2669,6 +2671,28 @@ export class PiAgentEngine implements EngineAdapter {
       safeRecordRuntimeEvent(db, broadcaster, attemptId, 'step_finish', { step: 1, engine: 'pi', durationMs: Date.now() - startTime, outcome: 'unverified', reason: 'project_unavailable' }, actor);
       return { success: false, reply };
     }
+    // Questions about Pandesh itself (notifications, Gmail progress, running tasks, reminders) are answered from the
+    // recorded state, with no model and no workspace: a model's prose is exactly where invented progress came from.
+    const statusTopics = classifyStatusRequest(requestText, hasRecentGmailWork(db, Date.now()));
+    if (statusTopics && !projectInspection) {
+      const reply = composeStatusAnswer(db, statusTopics);
+      let replyRecord: any = null;
+      try {
+        mutateWithBroadcast(db, broadcaster, () => {
+          replyRecord = appendMessage(db, conversationId, { role: 'assistant', content: reply, actor });
+        });
+      } catch {}
+      safeRecordRuntimeEvent(db, broadcaster, attemptId, 'assistant_status_answered', { topics: statusTopics, workspace: ctx.workspaceRoot ?? null }, actor);
+      try {
+        mutateWithBroadcast(db, broadcaster, () => {
+          ensureTaskOutcome(db, { attemptId, conversationId: conversationId || null, requestId, objective: objectiveFromRequest(requestText) });
+          finalizeTaskOutcome(db, attemptId, { verdict: 'conversational', reason: 'Answered from the recorded Pandesh state; no action was taken', performed: [], refused: [], failed: [] }, { answerMessageId: replyRecord?.id ?? null });
+        });
+      } catch {}
+      try { mutateWithBroadcast(db, broadcaster, () => { transitionAttempt(db, attemptId, { toStatus: 'completed', fenceToken, actor }); }); } catch {}
+      safeRecordRuntimeEvent(db, broadcaster, attemptId, 'step_finish', { step: 1, engine: 'pi', durationMs: Date.now() - startTime, outcome: 'completed' }, actor);
+      return { success: true, reply };
+    }
     if (projectEvidence) {
       safeRecordRuntimeEvent(db, broadcaster, attemptId, 'project_context_resolved', {
         project: projectEvidence.name,
@@ -3311,6 +3335,13 @@ TRUTHFULNESS & BEHAVIORAL PROTOCOL:
       for (const link of phoneShares) if (!finalReply.includes(link)) finalReply += `\n\n${link}`;
     } else if (/\b(?:sent|delivered|shared)\b[^.\n]{0,60}\bphone\b|\bphone\b[^.\n]{0,60}\b(?:sent|delivered|shared)\b/i.test(finalReply)) {
       finalReply += '\n\nCorrection: nothing was sent to your phone in this turn — no file was shared to the paired phone.';
+    }
+
+    // A reply may not promise background work or a notification that nothing is set up to deliver.
+    {
+      const capability = notificationCapability(db);
+      const correction = auditPromises(finalReply, { activeWorker: hasActiveWorker(db, conversationId), canNotify: capability.canNotify, notifyStatement: capability.statement });
+      if (correction) finalReply += "\n\n" + correction;
     }
 
     // A project question is answered only from the selected project's own files: a reply that asks which project, or that

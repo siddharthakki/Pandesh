@@ -68,7 +68,46 @@ export interface GmailTaskStore {
   findActive(accountEmail: string): GmailOrganizeTask[];
 }
 
-type TaskEnv = OrganizeEnv & { tasks: GmailTaskStore };
+/** What the user can be told about notifications right now; supplied by the host wiring, never assumed. */
+export interface NotifyCapability { canNotify: boolean; statement: string }
+
+type TaskEnv = OrganizeEnv & { tasks: GmailTaskStore; notifyCapability?: () => NotifyCapability };
+
+/**
+ * Honest task states. There is no background worker for these tasks: each batch needs the user's approval and a
+ * model turn to start it, so a task is never "running". It is waiting for something, and the state says for what.
+ */
+export type TaskState = 'queued' | 'awaiting_approval' | 'paused' | 'blocked' | 'completed';
+
+function unresolved(task: GmailOrganizeTask): TaskMessage[] {
+  return task.messages.filter((m) => m.state === 'pending' || m.state === 'undone');
+}
+
+export function taskState(task: GmailOrganizeTask, nowMs: number): { state: TaskState; reason: string } {
+  const open = unresolved(task);
+  if (open.length === 0) return { state: 'completed', reason: 'Every message was checked in Gmail: it carries the label or no longer exists.' };
+  if (open.every((m) => m.attempts >= MAX_ATTEMPTS)) {
+    return { state: 'blocked', reason: `${open.length} message(s) failed ${MAX_ATTEMPTS} attempts and were not labeled${task.lastError ? `: ${task.lastError}` : ''}` };
+  }
+  if (task.retryNotBefore && Date.parse(task.retryNotBefore) > nowMs) {
+    return { state: 'paused', reason: `Google rate-limited the last batch; it can be retried after ${task.retryNotBefore}. Nothing retries by itself: ask Pandesh to continue then.` };
+  }
+  const last = task.batches[task.batches.length - 1];
+  if (last?.status === 'failed' && !task.retryNotBefore) {
+    return { state: 'blocked', reason: `The last batch failed and nothing was changed${task.lastError ? `: ${task.lastError}` : ''}` };
+  }
+  if (task.currentPlanId) return { state: 'awaiting_approval', reason: 'A batch is prepared and waits for your approval. Nothing happens until you approve it.' };
+  return { state: 'queued', reason: last?.status === 'failed' ? 'The wait after the last rate limit is over; the batch can be retried.' : 'Nothing has been labeled yet, or the next batch has not been prepared.' };
+}
+
+/** The notification a task owes the user once it can no longer move without them; null while it is still moving. */
+export function terminalNotice(task: GmailOrganizeTask, nowMs: number): { kind: 'task_completed' | 'task_blocked'; sourceId: string; title: string; body: string } | null {
+  const { state, reason } = taskState(task, nowMs);
+  const p = progressOf(task);
+  if (state === 'completed') return { kind: 'task_completed', sourceId: task.taskId, title: 'Gmail organization finished', body: `${p.text}. Verified in Gmail.` };
+  if (state === 'blocked') return { kind: 'task_blocked', sourceId: task.taskId, title: 'Gmail organization needs you', body: `${p.text}. ${reason}`.slice(0, 380) };
+  return null;
+}
 
 function iso(env: OrganizeEnv): string { return new Date((env.nowMs ?? Date.now)()).toISOString(); }
 
@@ -112,8 +151,10 @@ function plain(result: ToolExecutionResult): Record<string, unknown> | null {
   try { return JSON.parse(result.output) as Record<string, unknown>; } catch { return null; }
 }
 
-function snapshot(task: GmailOrganizeTask): Record<string, unknown> {
+function snapshot(task: GmailOrganizeTask, env?: { nowMs?: () => number; notifyCapability?: () => NotifyCapability }): Record<string, unknown> {
   const p = progressOf(task);
+  const { state, reason } = taskState(task, (env?.nowMs ?? Date.now)());
+  const notify = env?.notifyCapability?.();
   const byLabel = task.rules.map((r, i) => {
     const mine = task.messages.filter((m) => m.rule === i);
     return { label: r.label, senders: r.senders, found: mine.length, processed: mine.filter((m) => m.state === 'done' || m.state === 'already').length, remaining: mine.filter((m) => m.state === 'pending' || m.state === 'undone').length };
@@ -121,6 +162,14 @@ function snapshot(task: GmailOrganizeTask): Record<string, unknown> {
   return {
     taskId: task.taskId,
     status: task.status,
+    state,
+    stateReason: reason,
+    // No worker owns this task: it moves only when the user approves a batch and a turn starts it.
+    worker: 'none',
+    autonomous: false,
+    willContinueOnItsOwn: false,
+    notifyWhenDone: notify ? notify.canNotify : false,
+    notifyNote: notify ? notify.statement : 'Notifications are not verified for this task; do not promise one.',
     account: task.accountEmail,
     progress: p.text,
     processed: p.processed,
@@ -146,7 +195,7 @@ export async function createTask(rawArgs: Record<string, unknown>, env: TaskEnv)
 
   // A repeated request resumes the task that already exists: it never starts planning over.
   const existing = env.tasks.findActive(env.accountEmail).find((t) => sameRules(t.rules, normalized.rules) && t.scope === scope);
-  if (existing) return succeeded('gmail_task_resumed', { ...snapshot(existing), resumed: true, next: 'This task already exists. Do not ask the user again; call gmail_task_next_batch with this taskId.' });
+  if (existing) return succeeded('gmail_task_resumed', { ...snapshot(existing, env), resumed: true, next: 'This task already exists. Do not ask the user again; call gmail_task_next_batch with this taskId.' });
 
   const started = (env.nowMs ?? Date.now)();
   const deadline = started + 150_000;
@@ -193,7 +242,7 @@ export async function createTask(rawArgs: Record<string, unknown>, env: TaskEnv)
   };
   env.tasks.save(task);
   return succeeded('gmail_task_created', {
-    ...snapshot(task),
+    ...snapshot(task, env),
     coverage: task.coverage,
     ignoredNotFromThoseSenders: excluded,
     matchedMoreThanOneRule: duplicates,
@@ -205,7 +254,7 @@ export async function createTask(rawArgs: Record<string, unknown>, env: TaskEnv)
 export async function taskStatus(rawArgs: Record<string, unknown>, env: TaskEnv): Promise<ToolExecutionResult> {
   const found = loadTask(rawArgs, env);
   if (!found.ok) return found.result;
-  return succeeded('gmail_task_status', snapshot(found.task));
+  return succeeded('gmail_task_status', snapshot(found.task, env));
 }
 
 function loadTask(rawArgs: Record<string, unknown>, env: TaskEnv): { ok: true; task: GmailOrganizeTask } | { ok: false; result: ToolExecutionResult } {
@@ -226,23 +275,26 @@ export async function nextBatch(rawArgs: Record<string, unknown>, env: TaskEnv):
   if (!env.hasModifyScope()) return { status: 'failed', exitCode: null, output: 'NOT DONE. Inbox organization needs one extra Google permission (gmail.modify). Open Connections → Google → "Allow inbox organization", approve it in the browser, then try again. Nothing was changed.', resultCategory: 'gmail_modify_scope_missing' };
   const now = (env.nowMs ?? Date.now)();
   if (task.retryNotBefore && Date.parse(task.retryNotBefore) > now) {
-    return succeeded('gmail_task_waiting', { ...snapshot(task), waiting: true, message: `Google asked us to wait until ${task.retryNotBefore}. Nothing was changed. Resume then; do not start over.` });
+    return succeeded('gmail_task_waiting', { ...snapshot(task, env), waiting: true, message: `Google asked us to wait until ${task.retryNotBefore}. Nothing was changed. Resume then; do not start over.` });
   }
 
   if (task.currentPlanId) {
     const open = env.store.get(task.currentPlanId);
     if (open && open.status === 'planned' && Date.parse(open.expiresAt) > now) {
-      return succeeded('gmail_task_batch_ready', { ...snapshot(task), resumed: true, planId: open.planId, planDigest: open.digest, willChange: open.messages.length, change: open.operation.summary, next: 'This batch is already prepared. Call gmail_apply_plan with planId and planDigest; the approval card lists the exact messages.' });
+      return succeeded('gmail_task_batch_ready', { ...snapshot(task, env), resumed: true, planId: open.planId, planDigest: open.digest, willChange: open.messages.length, change: open.operation.summary, next: 'This batch is already prepared. Call gmail_apply_plan with planId and planDigest; the approval card lists the exact messages.' });
     }
     task.currentPlanId = undefined;
   }
 
   const pending = task.messages.filter((m) => (m.state === 'pending' || m.state === 'undone') && m.attempts < MAX_ATTEMPTS);
   if (pending.length === 0) {
-    task.status = 'complete';
+    // Complete only when every message is verified done, already labeled, or gone. Messages that ran out of
+    // attempts are NOT done: the task stays open and blocked.
+    task.status = unresolved(task).length === 0 ? 'complete' : 'active';
     task.updatedAt = iso(env);
     env.tasks.save(task);
-    return succeeded('gmail_task_complete', { ...snapshot(task), message: 'Nothing is left to label.' });
+    if (task.status === 'complete') return succeeded('gmail_task_complete', { ...snapshot(task, env), message: 'Nothing is left to label; every message was checked in Gmail.' });
+    return succeeded('gmail_task_blocked', { ...snapshot(task, env), message: 'Some messages could not be labeled after repeated attempts. The task is NOT complete.' });
   }
   const rule = pending[0].rule;
   const batch = pending.filter((m) => m.rule === rule).slice(0, task.batchSize);
@@ -267,9 +319,9 @@ export async function nextBatch(rawArgs: Record<string, unknown>, env: TaskEnv):
   }
   task.updatedAt = iso(env);
   env.tasks.save(task);
-  if (!planId) return succeeded('gmail_task_batch_empty', { ...snapshot(task), message: 'Every message in that batch already carries the label or could not be read. Call gmail_task_next_batch again.' });
+  if (!planId) return succeeded('gmail_task_batch_empty', { ...snapshot(task, env), message: 'Every message in that batch already carries the label or could not be read. Call gmail_task_next_batch again.' });
   return succeeded('gmail_task_batch_ready', {
-    ...snapshot(task),
+    ...snapshot(task, env),
     planId,
     planDigest: body.planDigest,
     label,
@@ -311,7 +363,7 @@ export function settleTaskBatch(tasks: GmailTaskStore, nowMs: () => number, plan
     if (wait) task.retryNotBefore = new Date(nowMs() + Number(wait[1])).toISOString();
     if (record) record.status = 'failed';
   }
-  if (!task.messages.some((m) => (m.state === 'pending' || m.state === 'undone') && m.attempts < MAX_ATTEMPTS)) task.status = 'complete';
+  task.status = unresolved(task).length === 0 ? 'complete' : 'active';
   task.updatedAt = at;
   tasks.save(task);
   return event === 'applied' ? progressOf(task).text : undefined;
