@@ -37,6 +37,7 @@ import { resolveTimeExpression, localWallTimeToIso as zonedWallToIso, utcOffsetL
 import { cancelScheduledTask, createScheduledTask, listScheduledTasks } from '../domain/scheduledTasks';
 import { transitionAttempt, failAttempt, getAttempt, settleCancelledAttempt } from '../domain/attempts';
 import { createApproval, getApproval, listApprovalsForAttempt, expireApproval } from '../domain/approvals';
+import { classifyChatToolCall, decidePermission, frozenPermissionFor, READ_ONLY_CONSENT_TOOLS, recordPermissionDecision, STANDING_AUTHORIZATION_ACTOR } from '../domain/permissionModes';
 import { recordExecutionQuality } from '../domain/executionQuality';
 import { NON_WORKSPACE_MARKERS } from '../domain/taskToolSurface';
 import { auditPromises, classifyStatusRequest, composeStatusAnswer, hasActiveWorker, hasRecentGmailWork } from './assistantStatus';
@@ -891,6 +892,36 @@ export class PiAgentEngine implements EngineAdapter {
     type ToolApprovalOutcome = PiToolApprovalOutcome;
 
     async function requestToolApproval(summary: Record<string, unknown>, timeoutMs = 15 * 60_000): Promise<ToolApprovalOutcome> {
+      // Auto: a standing authorization in force when this turn started may cover this exact action. Core decides from
+      // the actual tool and arguments; the approval is recorded as Core's, never as a person's click.
+      const toolName = String(summary.toolName ?? '');
+      const permission = decidePermission(db, {
+        attemptIds: [attemptId],
+        toolName,
+        arguments: summary,
+        mutating: !READ_ONLY_CONSENT_TOOLS.has(toolName),
+        workspaceRoot: selectedWorkspace || null,
+      });
+      if (permission.decision === 'auto_authorize') {
+        try {
+          mutateWithBroadcast(db, broadcaster, () => {
+            const auto = createApproval(db, {
+              attemptId,
+              kind: 'mutation',
+              summary: { ...summary, policyDecision: 'auto_authorize', policyReason: permission.reason, standingAuthorizationId: permission.authorizationId, standingAuthorizationCategory: permission.category },
+              presentation: summary,
+              actor: STANDING_AUTHORIZATION_ACTOR,
+              initialResolution: 'approved',
+              resolvedBy: STANDING_AUTHORIZATION_ACTOR,
+            });
+            recordPermissionDecision(db, { attemptId, toolName, arguments: summary, decision: permission, approvalId: auto.id });
+          });
+          return { outcome: 'approved' };
+        } catch (err: any) {
+          console.error('[piAgentEngine] Failed to record a standing-authorization approval:', err);
+          // Fall through to the ordinary card: failing to auto-authorize must never authorize anything.
+        }
+      }
       let approval: any;
       try {
         mutateWithBroadcast(db, broadcaster, () => {
@@ -2115,18 +2146,24 @@ export class PiAgentEngine implements EngineAdapter {
               isError: true,
             };
           }
+          // Only plain read commands (dir, git status/diff/log/show) run unasked. Anything else runs code in the workspace
+          // (tests, scripts, builds), so it needs approval, or in Auto a standing authorization Core matches to the exact
+          // command and the pinned package.json scripts. Destructive commands always ask.
           const destructive = destructiveCommandReason(String(args.command || ''));
-          if (destructive) {
+          const readOnlyCommand = !destructive && classifyChatToolCall('run_checks', { command: String(args.command || '') }, new Set(), targetDir) === 'read';
+          if (!readOnlyCommand) {
+            const risk = destructive ?? 'runs code in this workspace (tests, scripts or programs)';
             const approved = await requestToolApproval({
               toolName: 'run_checks',
               command: String(args.command),
               workingDirectory: targetDir,
-              risk: destructive,
-              cardText: `Pandesh wants to run a command that ${destructive} in ${targetDir}:\n${String(args.command).slice(0, 600)}`,
+              risk,
+              ...(destructive ? { alwaysAsk: true } : {}),
+              cardText: `Pandesh wants to run a command that ${risk} in ${targetDir}:\n${String(args.command).slice(0, 600)}`,
             });
             if (approved.outcome !== 'approved') {
               return {
-                content: [{ type: 'text', text: `Not run: the user did not approve this command (${destructive}). Nothing was changed. Ask the user how to proceed.` }],
+                content: [{ type: 'text', text: `Not run: the user did not approve this command (${risk}). Nothing was changed. Ask the user how to proceed.` }],
                 isError: true,
               };
             }
@@ -2933,6 +2970,31 @@ TRUTHFULNESS & BEHAVIORAL PROTOCOL:
       });
     } catch (err) {
       console.warn('[piAgentEngine] startModelInvocation warning:', err);
+    }
+
+    // Plan Only (frozen on this turn): every tool that could change something is refused at execution, whatever the
+    // model asks, including tools that never request approval. Unknown tools count as changes.
+    if (frozenPermissionFor(db, [attemptId]).mode === 'plan') {
+      const bridgeReadOnly = new Set<string>([
+        ...(ctx.connectors?.definitions ?? []).filter((d) => d.tier === 'read').map((d) => d.name),
+        ...(ctx.memory?.definitions ?? []).filter((d) => d.consequential === false).map((d) => d.name),
+        ...(ctx.capabilities?.definitions ?? []).filter((d) => d.consequential === false).map((d) => d.name),
+      ]);
+      for (let i = 0; i < tools.length; i += 1) {
+        const tool = tools[i];
+        const original = tool.execute;
+        tools[i] = {
+          ...tool,
+          execute: async (id: string, args: any, ...rest: any[]) => {
+            const a = (args && typeof args === 'object') ? args : {};
+            if (classifyChatToolCall(tool.name, a, bridgeReadOnly, selectedWorkspace || null) === 'read') return original(id, args, ...rest);
+            const decision = { decision: 'deny' as const, mode: 'plan' as const, reason: `Plan Only: ${tool.name} would change something, so it was not done. Nothing was changed.` };
+            try { mutateWithBroadcast(db, broadcaster, () => recordPermissionDecision(db, { attemptId, toolName: tool.name, arguments: a, decision })); } catch {}
+            return { content: [{ type: 'text', text: `NOT DONE (Plan Only mode): ${tool.name} would change something, so it was not run and nothing was changed. Describe this step in the plan instead; the user can switch to Ask or Auto to carry it out.` }], isError: true };
+          },
+        };
+      }
+      systemPrompt += '\n\nPLAN ONLY MODE: research, read and reason, then give the user a concrete step-by-step plan. Do not create, change, send, schedule, print or run anything that changes state; such tools are refused in this mode.';
     }
 
     const agent = new Agent({

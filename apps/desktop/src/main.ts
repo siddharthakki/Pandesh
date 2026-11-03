@@ -1011,6 +1011,21 @@ function registerIpc(): void {
     if (!session) throw new Error('desktop session is not started');
     return session.summarizeGmailThread(Array.isArray(messages) ? messages : []);
   });
+  ipcMain.handle(DESKTOP_CHANNELS.setPermissionMode, async (_event, mode: unknown, grant: unknown) => {
+    if (!session) throw new Error('desktop session is not started');
+    if (mode !== 'ask' && mode !== 'auto' && mode !== 'plan') throw new Error('unknown permission mode');
+    const g = grant && typeof grant === 'object' ? grant as Record<string, unknown> : null;
+    const parsed = g ? { categories: Array.isArray(g.categories) ? g.categories.map(String) : [], expiresInMinutes: Number(g.expiresInMinutes) } : undefined;
+    const snapshot = await session.setPermissionMode(mode, parsed);
+    sendSnapshot();
+    return snapshot;
+  });
+  ipcMain.handle(DESKTOP_CHANNELS.revokeAuthorization, async (_event, id: unknown) => {
+    if (!session) throw new Error('desktop session is not started');
+    const snapshot = await session.revokeAuthorization(String(id));
+    sendSnapshot();
+    return snapshot;
+  });
   ipcMain.handle(DESKTOP_CHANNELS.retryGmailProbe, async () => {
     if (!session) throw new Error('desktop session is not started');
     const result = await session.retryGmailProbe();

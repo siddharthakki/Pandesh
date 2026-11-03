@@ -19,6 +19,8 @@ import { recordExecutionQuality } from './executionQuality';
 import { appendMessage } from './conversations';
 import { recordConversationTurn } from './conversationLedger';
 import { linkAttachmentsToMessage } from './attachments';
+import { freezeRequestPermission } from './permissionModes';
+import { recordRuntimeEvent } from './runtimeEvents';
 import { routeModel } from './modelRouting';
 import { contextWindowEventMetadata, getAttemptContext, sanitizeModelSelectionWindow } from './attemptContext';
 import type { InstalledModelsCatalog } from '../runtime/ollamaCatalog';
@@ -191,6 +193,10 @@ export function submitRequest(db: CoreDatabase, input: SubmitRequestInput): Subm
       hasStory: Boolean(input.storyId),
     });
 
+    // The permission mode and standing authorizations are Core's to freeze; a client-supplied value is discarded.
+    const frozen = freezeRequestPermission(db, { conversationId: input.conversationId, clientPolicy: input.toolPermissionPolicy, actor: input.clientId });
+    const toolPermissionPolicy = frozen.policy as ToolPermissionPolicy;
+
     const request = createRequest(db, {
       clientId: input.clientId,
       currentMessage: input.currentMessage,
@@ -204,7 +210,7 @@ export function submitRequest(db: CoreDatabase, input: SubmitRequestInput): Subm
       repositoryLocationId: input.repositoryLocationId ?? null,
       requestedProvider: input.requestedProvider ?? null,
       requestedModel: input.requestedModel ?? null,
-      toolPermissionPolicy: input.toolPermissionPolicy ?? {},
+      toolPermissionPolicy,
       contextPolicy,
       correlationId: input.correlationId,
       idempotencyKey: input.idempotencyKey ?? null,
@@ -286,8 +292,16 @@ export function submitRequest(db: CoreDatabase, input: SubmitRequestInput): Subm
           decision.resolvedMode === 'saath_kar'
             ? input.effectiveAllowedTools ?? input.toolPermissionPolicy?.allowedTools
             : input.toolPermissionPolicy?.allowedTools ?? [],
-        approvalPolicy: input.toolPermissionPolicy ?? {},
+        approvalPolicy: toolPermissionPolicy,
       },
+    });
+    recordRuntimeEvent(db, {
+      domain: 'attempt',
+      entityId: attempt.id,
+      eventType: frozen.strippedKeys.length ? 'permission_escalation_rejected' : 'permission_frozen',
+      actor: input.clientId,
+      clientId: input.clientId,
+      metadata: { mode: frozen.permission.mode, authorizationIds: frozen.permission.authorizationIds, ...(frozen.strippedKeys.length ? { ignoredClientKeys: frozen.strippedKeys } : {}) },
     });
     if (input.conversationId) {
       recordConversationTurn(db, {

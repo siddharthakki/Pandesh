@@ -1255,6 +1255,29 @@ CREATE TABLE IF NOT EXISTS notification_channels (
 );
 `;
 
+const MIGRATION_41_PERMISSION_MODES = `
+CREATE TABLE IF NOT EXISTS conversation_permission_modes (
+  conversationId TEXT PRIMARY KEY,
+  mode TEXT NOT NULL CHECK (mode IN ('ask', 'auto', 'plan')),
+  updatedAt TEXT NOT NULL,
+  updatedBy TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS standing_authorizations (
+  id TEXT PRIMARY KEY,
+  conversationId TEXT NOT NULL,
+  workspaceRoot TEXT,
+  categoriesJson TEXT NOT NULL,
+  pinsJson TEXT NOT NULL DEFAULT '{}',
+  createdAt TEXT NOT NULL,
+  createdBy TEXT NOT NULL,
+  expiresAt TEXT NOT NULL,
+  revokedAt TEXT,
+  revokedBy TEXT,
+  revokeReason TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_standing_authorizations_conversation ON standing_authorizations(conversationId, createdAt);
+`;
+
 const MIGRATION_36_BACKGROUND_TASKS = `
 CREATE TABLE IF NOT EXISTS background_tasks (
   id TEXT PRIMARY KEY,
@@ -1429,6 +1452,7 @@ export const MIGRATIONS: Migration[] = [
   { version: 38, description: 'Master operator: durable multi-step runs with per-step tool selection, approvals, evidence and an event trail', sql: MIGRATION_38_OPERATOR },
   { version: 39, description: 'Gmail inbox organization: durable multi-batch tasks with a verified manifest, checkpoint and retry state', sql: MIGRATION_39_GMAIL_ORGANIZE_TASKS },
   { version: 40, description: 'Notification outbox: durable notification intents with host-reported delivery status and the registered delivery channel', sql: MIGRATION_40_NOTIFICATION_OUTBOX },
+  { version: 41, description: 'Chat permission modes per conversation and standing authorizations (scope, pins, expiry, revocation)', sql: MIGRATION_41_PERMISSION_MODES },
 ];
 
 

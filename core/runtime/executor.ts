@@ -4287,7 +4287,7 @@ export class RuntimeExecutor {
       model: context.selectedModel,
       fenceToken,
       signal,
-      connectors: this.buildPiConnectorBridge(request.conversationId || attemptId, request.clientId, workspaceRoot, signal, request.currentMessage),
+      connectors: this.buildPiConnectorBridge(request.conversationId || attemptId, request.clientId, workspaceRoot, signal, request.currentMessage, attemptId),
       memory: this.buildPiMemoryBridge(request.conversationId || attemptId, request.clientId, workspaceRoot, signal),
       capabilities: this.buildPiCapabilityBridge(request.conversationId || attemptId, request.clientId, workspaceRoot, signal, attemptId),
     });
@@ -4361,7 +4361,7 @@ export class RuntimeExecutor {
 
   /** Gmail + Google Calendar for the chat agent, dispatched through the same governed
    * path (tier gate, exact-action approval, verified result) as every other connector call. */
-  private buildPiConnectorBridge(correlationId: string, clientId: string, workspaceRoot: string | undefined, signal: AbortSignal, requestText?: string): PiConnectorBridge | undefined {
+  private buildPiConnectorBridge(correlationId: string, clientId: string, workspaceRoot: string | undefined, signal: AbortSignal, requestText?: string, permissionScope?: string): PiConnectorBridge | undefined {
     const registry = this.governedCapabilities;
     if (!registry) return undefined;
     const adapters = [...this.connectorRegistry.values()].filter((a) => a.connectorId === 'gmail' || a.connectorId === 'google_calendar');
@@ -4382,6 +4382,7 @@ export class RuntimeExecutor {
         clientId,
         signal,
         ...(requestText ? { requestText } : {}),
+        ...(permissionScope ? { permissionScope } : {}),
       }),
       describeServices: () => adapters.map((adapter) => {
         const health = adapter.health();

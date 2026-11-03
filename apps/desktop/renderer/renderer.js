@@ -4191,6 +4191,7 @@ function updateContextualWorkbenchTabs(snapshot) {
 }
 
 function renderSnapshot(snapshot) {
+  try { renderPermission(snapshot); } catch (err) { console.warn('[permission] render failed', err); }
   if (!snapshot) return;
   const previousOutcome = lastSnapshot?.lastTurnOutcome ?? null;
   const previousRunning = Boolean(lastSnapshot?.running);
@@ -4447,6 +4448,133 @@ inferenceProvider?.addEventListener('change', async () => {
     await refresh();
     showOperationError(err);
   }
+});
+
+// --- Chat permission mode (Ask / Auto / Plan only). Core stores and enforces it; this only shows and chooses. ---
+const permissionSelect = document.getElementById('permission-mode-select');
+const permissionPanel = document.getElementById('permission-panel');
+const permissionScope = document.getElementById('permission-scope');
+const permissionGrant = document.getElementById('permission-grant');
+const permissionCategories = document.getElementById('permission-categories');
+const permissionExpiry = document.getElementById('permission-expiry');
+const PERMISSION_LABELS = { ask: 'Ask permission', auto: 'Auto (governed)', plan: 'Plan only' };
+const WORKSPACE_PERMISSION_CATEGORIES = new Set(['workspace_read_commands', 'workspace_validation', 'workspace_git_commit', 'workspace_inspect_page']);
+
+function permissionTime(iso) {
+  try { return new Date(iso).toLocaleString([], { weekday: 'short', hour: '2-digit', minute: '2-digit' }); } catch { return iso; }
+}
+
+function permissionLine(parts) {
+  const line = document.createElement('div');
+  for (const part of parts) {
+    if (typeof part === 'string') line.append(part);
+    else line.append(part);
+  }
+  return line;
+}
+
+function strong(text) {
+  const b = document.createElement('b');
+  b.textContent = text;
+  return b;
+}
+
+function renderPermission(snapshot) {
+  const p = snapshot?.permission;
+  if (!permissionSelect || !p) return;
+  if (permissionGrant?.hidden !== false) permissionSelect.value = p.mode;
+  permissionSelect.dataset.mode = p.mode;
+  const lines = [];
+  if (p.activeTurnMode && p.activeTurnMode !== p.mode) {
+    lines.push(permissionLine(['The running task keeps ', strong(PERMISSION_LABELS[p.activeTurnMode]), ', fixed when it started; your change applies to the next message.']));
+  } else if (p.activeTurnMode) {
+    lines.push(permissionLine(['This task runs in ', strong(PERMISSION_LABELS[p.activeTurnMode]), ' mode.']));
+  }
+  if (p.mode === 'plan') lines.push(permissionLine([strong('Plan only:'), ' Pandesh researches and plans. Nothing is created, changed, sent or run.']));
+  if (p.mode === 'auto') {
+    if (p.authorizations.length === 0) lines.push(permissionLine([strong('Auto'), ' has no active authorization, so everything still asks you.']));
+    for (const a of p.authorizations) {
+      const where = a.workspaceRoot ? ` in ${a.workspaceRoot}` : '';
+      const scripts = a.pinnedScripts?.length ? ` (pinned npm scripts: ${a.pinnedScripts.join(', ')})` : '';
+      const revoke = document.createElement('button');
+      revoke.type = 'button';
+      revoke.dataset.revoke = a.id;
+      revoke.textContent = 'Revoke';
+      const list = document.createElement('ul');
+      for (const c of a.categories) {
+        const li = document.createElement('li');
+        li.textContent = p.categories?.[c] || c;
+        list.append(li);
+      }
+      lines.push(permissionLine([strong('Auto'), ` until ${permissionTime(a.expiresAt)}${where}${scripts}`, revoke, list]));
+    }
+  }
+  if (p.pending) lines.push(permissionLine([strong(PERMISSION_LABELS[p.mode]), ' applies from your next message.']));
+  if (permissionScope) permissionScope.replaceChildren(...lines);
+  if (permissionPanel) permissionPanel.hidden = lines.length === 0 && permissionGrant?.hidden !== false;
+}
+
+function openPermissionGrant(snapshot) {
+  const cats = snapshot?.permission?.categories ?? {};
+  const hasFolder = Boolean(snapshot?.folder);
+  const rows = Object.entries(cats).map(([id, text]) => {
+    const disabled = WORKSPACE_PERMISSION_CATEGORIES.has(id) && !hasFolder;
+    const label = document.createElement('label');
+    const box = document.createElement('input');
+    box.type = 'checkbox';
+    box.value = id;
+    box.disabled = disabled;
+    const span = document.createElement('span');
+    span.textContent = `${text}${disabled ? ' (select a workspace folder first)' : ''}`;
+    label.append(box, ' ', span);
+    return label;
+  });
+  permissionCategories.replaceChildren(...rows);
+  permissionGrant.hidden = false;
+  permissionPanel.hidden = false;
+}
+
+permissionSelect?.addEventListener('change', async () => {
+  showOperationError(null);
+  const mode = permissionSelect.value;
+  if (mode === 'auto') {
+    openPermissionGrant(lastSnapshot);
+    return;
+  }
+  try {
+    if (permissionGrant) permissionGrant.hidden = true;
+    renderSnapshot(await api.setPermissionMode(mode));
+  } catch (err) {
+    await refresh();
+    showOperationError(err);
+  }
+});
+
+permissionGrant?.addEventListener('submit', async (event) => {
+  event.preventDefault();
+  showOperationError(null);
+  const categories = [...permissionCategories.querySelectorAll('input:checked')].map((el) => el.value);
+  if (categories.length === 0) { showOperationError(new Error('Tick at least one thing Auto may do, or choose Ask.')); return; }
+  try {
+    const snap = await api.setPermissionMode('auto', { categories, expiresInMinutes: Number(permissionExpiry.value) });
+    permissionGrant.hidden = true;
+    renderSnapshot(snap);
+  } catch (err) {
+    await refresh();
+    showOperationError(err);
+  }
+});
+
+document.getElementById('permission-grant-cancel')?.addEventListener('click', () => {
+  permissionGrant.hidden = true;
+  renderPermission(lastSnapshot);
+});
+
+permissionScope?.addEventListener('click', async (event) => {
+  const id = event.target?.closest?.('[data-revoke]')?.getAttribute('data-revoke');
+  if (!id) return;
+  showOperationError(null);
+  try { renderSnapshot(await api.revokeAuthorization(id)); } catch (err) { showOperationError(err); }
 });
 
 modelSelect?.addEventListener('change', async () => {

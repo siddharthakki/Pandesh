@@ -1,0 +1,495 @@
+/**
+ * Chat permission modes (Ask / Auto / Plan Only) and standing authorizations.
+ *
+ * The mode is a per-conversation setting that Core freezes into every request at submission; a later change never
+ * alters a turn that is already running. Authority never comes from the mode alone:
+ *
+ *  - Ask:       today's behaviour. Protected operations stop for the human.
+ *  - Auto:      a protected operation proceeds without a card ONLY when an active, unexpired standing authorization that
+ *               was in force when the turn started matches the actual tool, arguments, workspace and files on disk.
+ *               Anything else is still reviewed. A model's opinion never authorizes anything.
+ *  - Plan Only: no mutation of any kind, including tools that never ask for approval. Read-only work keeps its existing
+ *               privacy and external-transfer consent.
+ *
+ * Every decision here is deterministic and reuses the existing approval record (`createApproval` with
+ * `initialResolution`) and runtime-event audit trail; nothing executes from this module.
+ */
+import * as crypto from 'node:crypto';
+import * as fs from 'node:fs';
+import * as path from 'node:path';
+import type { CoreDatabase } from '../db/connection';
+import { CoreError } from './errors';
+import { newId, nowIso } from './ids';
+import { recordRuntimeEvent } from './runtimeEvents';
+import { getAttemptContext } from './attemptContext';
+import { classifyPrivacy } from './operatorPlan';
+
+export type PermissionMode = 'ask' | 'auto' | 'plan';
+export const PERMISSION_MODES: readonly PermissionMode[] = ['ask', 'auto', 'plan'];
+
+/** Actor recorded on approvals Core resolves itself under a permission mode. */
+export const STANDING_AUTHORIZATION_ACTOR = 'core:standing_authorization';
+export const PLAN_ONLY_ACTOR = 'core:permission_mode:plan_only';
+
+/**
+ * What a standing authorization can cover in Milestone 1. Deliberately narrow: no file edits (those stay with the
+ * human or a frozen mission envelope), no network, no installs, no outbound messages, no money.
+ */
+export const AUTHORIZATION_CATEGORIES = {
+  workspace_read_commands: 'Read-only commands in the trusted workspace: dir, git status/diff/log/show',
+  workspace_validation: 'The package.json validation scripts pinned when you granted this (test, lint, typecheck, build, compile)',
+  workspace_git_commit: 'git add and git commit inside the trusted workspace, only while the repository has no git hooks',
+  workspace_inspect_page: 'Inspecting an HTML page that lives inside the trusted workspace',
+  web_research_public: 'Public web searches whose query contains no personal or confidential data',
+} as const;
+export type AuthorizationCategory = keyof typeof AUTHORIZATION_CATEGORIES;
+
+const WORKSPACE_CATEGORIES: readonly AuthorizationCategory[] = ['workspace_read_commands', 'workspace_validation', 'workspace_git_commit', 'workspace_inspect_page'];
+const VALIDATION_SCRIPTS = ['test', 'lint', 'typecheck', 'build', 'compile'] as const;
+/** The longest a standing authorization may last; the desktop offers shorter choices. */
+export const MAX_AUTHORIZATION_MINUTES = 24 * 60;
+
+export interface StandingAuthorization {
+  id: string;
+  conversationId: string;
+  workspaceRoot: string | null;
+  categories: AuthorizationCategory[];
+  /** Facts Core read from disk at grant time; a later mismatch means the grant no longer applies. */
+  pins: { npmScripts?: Record<string, string> };
+  createdAt: string;
+  createdBy: string;
+  expiresAt: string;
+  revokedAt: string | null;
+  revokedBy: string | null;
+  revokeReason: string | null;
+}
+
+/** The permission a request was submitted under. Frozen into the request and attempt context; never client-supplied. */
+export interface FrozenPermission {
+  mode: PermissionMode;
+  /** Standing authorizations that were active when the turn started. Later grants never widen a running turn. */
+  authorizationIds: string[];
+  conversationId: string | null;
+  frozenAt: string;
+}
+
+const ASK: FrozenPermission = { mode: 'ask', authorizationIds: [], conversationId: null, frozenAt: '' };
+
+// ------------------------------------------------------------------ mode per conversation
+
+export function getConversationPermissionMode(db: CoreDatabase, conversationId: string): PermissionMode {
+  const row = db.get<{ mode: string }>('SELECT mode FROM conversation_permission_modes WHERE conversationId = ?', [conversationId]);
+  return PERMISSION_MODES.includes(row?.mode as PermissionMode) ? (row!.mode as PermissionMode) : 'ask';
+}
+
+/**
+ * Changes the mode for the conversation's NEXT turns. Leaving Auto also revokes the conversation's standing
+ * authorizations, so the change narrows authority immediately and never leaves a grant behind.
+ */
+export function setConversationPermissionMode(db: CoreDatabase, conversationId: string, mode: PermissionMode, actor: string): { mode: PermissionMode; revoked: string[] } {
+  if (!PERMISSION_MODES.includes(mode)) throw new CoreError('invalid_request', `permission mode '${String(mode)}' is invalid`);
+  return db.transaction(() => {
+    if (!db.get('SELECT id FROM conversations WHERE id = ?', [conversationId])) throw new CoreError('not_found', `conversation '${conversationId}' not found`);
+    const previous = getConversationPermissionMode(db, conversationId);
+    db.run(
+      `INSERT INTO conversation_permission_modes (conversationId, mode, updatedAt, updatedBy) VALUES (?, ?, ?, ?)
+       ON CONFLICT(conversationId) DO UPDATE SET mode = excluded.mode, updatedAt = excluded.updatedAt, updatedBy = excluded.updatedBy`,
+      [conversationId, mode, nowIso(), actor],
+    );
+    const revoked = mode === 'auto' ? [] : listStandingAuthorizations(db, conversationId).filter((a) => isActive(a)).map((a) => revokeStandingAuthorization(db, a.id, actor, `mode changed to ${mode}`).id);
+    recordRuntimeEvent(db, { domain: 'conversation', entityId: conversationId, eventType: 'permission_mode_changed', actor, metadata: { from: previous, to: mode, revoked } });
+    return { mode, revoked };
+  });
+}
+
+// ------------------------------------------------------------------ standing authorizations
+
+function rowToAuthorization(row: Record<string, unknown>): StandingAuthorization {
+  return {
+    id: String(row.id),
+    conversationId: String(row.conversationId),
+    workspaceRoot: (row.workspaceRoot as string) ?? null,
+    categories: JSON.parse(String(row.categoriesJson)) as AuthorizationCategory[],
+    pins: JSON.parse(String(row.pinsJson ?? '{}')),
+    createdAt: String(row.createdAt),
+    createdBy: String(row.createdBy),
+    expiresAt: String(row.expiresAt),
+    revokedAt: (row.revokedAt as string) ?? null,
+    revokedBy: (row.revokedBy as string) ?? null,
+    revokeReason: (row.revokeReason as string) ?? null,
+  };
+}
+
+export function isActive(auth: StandingAuthorization, nowMs = Date.now()): boolean {
+  return !auth.revokedAt && Date.parse(auth.expiresAt) > nowMs;
+}
+
+export function getStandingAuthorization(db: CoreDatabase, id: string): StandingAuthorization {
+  const row = db.get<Record<string, unknown>>('SELECT * FROM standing_authorizations WHERE id = ?', [id]);
+  if (!row) throw new CoreError('not_found', `standing authorization '${id}' not found`);
+  return rowToAuthorization(row);
+}
+
+export function listStandingAuthorizations(db: CoreDatabase, conversationId: string): StandingAuthorization[] {
+  return db.all<Record<string, unknown>>('SELECT * FROM standing_authorizations WHERE conversationId = ? ORDER BY createdAt DESC', [conversationId]).map(rowToAuthorization);
+}
+
+function sha256(text: string): string {
+  return crypto.createHash('sha256').update(text).digest('hex');
+}
+
+function readPackageScripts(workspaceRoot: string): Record<string, string> {
+  try {
+    const parsed = JSON.parse(fs.readFileSync(path.join(workspaceRoot, 'package.json'), 'utf8')) as { scripts?: Record<string, unknown> };
+    return Object.fromEntries(Object.entries(parsed.scripts ?? {}).filter(([, v]) => typeof v === 'string')) as Record<string, string>;
+  } catch {
+    return {};
+  }
+}
+
+/** The exact text npm would run for `script`, including its pre/post hooks. */
+function scriptChainDigest(scripts: Record<string, string>, script: string): string | null {
+  if (typeof scripts[script] !== 'string') return null;
+  return sha256(JSON.stringify([scripts[`pre${script}`] ?? null, scripts[script], scripts[`post${script}`] ?? null]));
+}
+
+function canonicalDir(p: string): string | null {
+  try {
+    const real = fs.realpathSync.native(path.resolve(p));
+    return fs.statSync(real).isDirectory() ? real : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Grants a standing authorization for one conversation. Core reads the workspace itself: the npm scripts that may run
+ * are pinned by their exact text, so editing package.json afterwards voids the grant for those scripts.
+ */
+export function createStandingAuthorization(db: CoreDatabase, input: {
+  conversationId: string;
+  categories: string[];
+  workspaceRoot?: string | null;
+  expiresInMinutes: number;
+  actor: string;
+}): StandingAuthorization {
+  const categories = [...new Set(input.categories)];
+  if (categories.length === 0) throw new CoreError('invalid_request', 'choose at least one thing to authorize');
+  for (const c of categories) if (!Object.hasOwn(AUTHORIZATION_CATEGORIES, c)) throw new CoreError('invalid_request', `'${c}' is not something a standing authorization can cover`);
+  const minutes = Number(input.expiresInMinutes);
+  if (!Number.isFinite(minutes) || minutes < 1 || minutes > MAX_AUTHORIZATION_MINUTES) throw new CoreError('invalid_request', `expiry must be between 1 and ${MAX_AUTHORIZATION_MINUTES} minutes`);
+  const needsWorkspace = categories.some((c) => WORKSPACE_CATEGORIES.includes(c as AuthorizationCategory));
+  let workspaceRoot: string | null = null;
+  const pins: StandingAuthorization['pins'] = {};
+  if (needsWorkspace) {
+    workspaceRoot = input.workspaceRoot ? canonicalDir(input.workspaceRoot) : null;
+    if (!workspaceRoot) throw new CoreError('invalid_request', 'workspace authorizations need an existing workspace folder');
+    if (path.parse(workspaceRoot).root === workspaceRoot) throw new CoreError('invalid_request', 'a drive root cannot be a trusted workspace');
+    if (categories.includes('workspace_validation')) {
+      const scripts = readPackageScripts(workspaceRoot);
+      pins.npmScripts = Object.fromEntries(VALIDATION_SCRIPTS.map((s) => [s, scriptChainDigest(scripts, s)]).filter(([, d]) => d)) as Record<string, string>;
+      if (Object.keys(pins.npmScripts).length === 0) throw new CoreError('invalid_request', 'this workspace has no test, lint, typecheck, build or compile script to authorize');
+    }
+  }
+  return db.transaction(() => {
+    if (!db.get('SELECT id FROM conversations WHERE id = ?', [input.conversationId])) throw new CoreError('not_found', `conversation '${input.conversationId}' not found`);
+    const id = newId('sauth');
+    const now = new Date();
+    const expiresAt = new Date(now.getTime() + minutes * 60_000).toISOString();
+    db.run(
+      `INSERT INTO standing_authorizations (id, conversationId, workspaceRoot, categoriesJson, pinsJson, createdAt, createdBy, expiresAt)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      [id, input.conversationId, workspaceRoot, JSON.stringify(categories), JSON.stringify(pins), now.toISOString(), input.actor, expiresAt],
+    );
+    recordRuntimeEvent(db, { domain: 'authorization', entityId: id, eventType: 'standing_authorization_granted', actor: input.actor, metadata: { conversationId: input.conversationId, categories, workspaceRoot, expiresAt, pinnedScripts: Object.keys(pins.npmScripts ?? {}) } });
+    return getStandingAuthorization(db, id);
+  });
+}
+
+export function revokeStandingAuthorization(db: CoreDatabase, id: string, actor: string, reason = 'revoked by the user'): StandingAuthorization {
+  const current = getStandingAuthorization(db, id);
+  if (current.revokedAt) return current;
+  db.run('UPDATE standing_authorizations SET revokedAt = ?, revokedBy = ?, revokeReason = ? WHERE id = ?', [nowIso(), actor, reason.slice(0, 200), id]);
+  recordRuntimeEvent(db, { domain: 'authorization', entityId: id, eventType: 'standing_authorization_revoked', actor, metadata: { conversationId: current.conversationId, reason } });
+  return getStandingAuthorization(db, id);
+}
+
+// ------------------------------------------------------------------ freezing at submission
+
+/** Keys a client may never set on a request's tool permission policy: Core derives them. */
+const CORE_OWNED_POLICY_KEYS = ['permission', 'machineControlAuthorized'] as const;
+
+/**
+ * Builds the tool permission policy Core stores on a new request: whatever the client sent, minus every key that could
+ * grant authority, plus the conversation's current mode and the authorizations active right now.
+ */
+export function freezeRequestPermission(db: CoreDatabase, input: {
+  conversationId: string | null | undefined;
+  clientPolicy: Record<string, unknown> | undefined;
+  actor: string;
+}): { policy: Record<string, unknown>; permission: FrozenPermission; strippedKeys: string[] } {
+  const clientPolicy = { ...(input.clientPolicy ?? {}) };
+  const strippedKeys = CORE_OWNED_POLICY_KEYS.filter((k) => Object.hasOwn(clientPolicy, k));
+  for (const k of strippedKeys) delete clientPolicy[k];
+  const conversationId = input.conversationId ?? null;
+  const mode = conversationId ? getConversationPermissionMode(db, conversationId) : 'ask';
+  const authorizationIds = conversationId && mode === 'auto'
+    ? listStandingAuthorizations(db, conversationId).filter((a) => isActive(a)).map((a) => a.id)
+    : [];
+  const permission: FrozenPermission = { mode, authorizationIds, conversationId, frozenAt: nowIso() };
+  return { policy: { ...clientPolicy, permission }, permission, strippedKeys };
+}
+
+/** The permission frozen on the first of these attempts that has one; anything without a frozen permission is Ask. */
+export function frozenPermissionFor(db: CoreDatabase, attemptIds: Array<string | null | undefined>): FrozenPermission {
+  for (const id of attemptIds) {
+    if (!id) continue;
+    try {
+      const p = (getAttemptContext(db, id).approvalPolicy as Record<string, unknown> | undefined)?.permission as FrozenPermission | undefined;
+      if (p && PERMISSION_MODES.includes(p.mode)) return { ...ASK, ...p, authorizationIds: Array.isArray(p.authorizationIds) ? p.authorizationIds : [] };
+    } catch {
+      // No frozen context for this identity (e.g. a capability anchor): keep looking.
+    }
+  }
+  return ASK;
+}
+
+// ------------------------------------------------------------------ deterministic action checks
+
+/** Shell syntax that could chain, redirect, substitute or expand. Any of it means "not a single plain command". */
+const SHELL_SYNTAX = /[;&|<>`$()%^!\r\n]|\{|\}/;
+
+function tokens(command: string): string[] | null {
+  const t = command.trim();
+  if (!t || SHELL_SYNTAX.test(t)) return null;
+  const out: string[] = [];
+  for (const m of t.matchAll(/"([^"]*)"|(\S+)/g)) out.push(m[1] ?? m[2]);
+  return out;
+}
+
+/** A relative path that stays inside the workspace (no drive, no root, no parent segments). */
+function staysInside(p: string): boolean {
+  return !/^[a-zA-Z]:|^[\\/]|^~/.test(p) && !p.split(/[\\/]/).includes('..');
+}
+
+const GIT_REV = /^(?:[0-9a-f]{4,40}|HEAD(?:~\d{1,3})?)$/;
+
+function gitConfigIsPlain(workspaceRoot: string): { ok: boolean; reason?: string } {
+  const gitDir = path.join(workspaceRoot, '.git');
+  try {
+    if (!fs.statSync(gitDir).isDirectory()) return { ok: false, reason: 'the workspace .git is not a plain directory' };
+  } catch {
+    return { ok: false, reason: 'the workspace is not a git repository' };
+  }
+  const runsPrograms = (config: string) => /^\s*(?:hookspath|fsmonitor|external|textconv|pager|sshcommand|editor)\s*=/im.test(config) || /^\s*\[(?:diff|filter|merge)\s+"/im.test(config);
+  try {
+    if (runsPrograms(fs.readFileSync(path.join(gitDir, 'config'), 'utf8'))) {
+      return { ok: false, reason: 'the repository config runs external programs (hooks path, diff/filter drivers, fsmonitor or pager)' };
+    }
+  } catch {
+    return { ok: false, reason: 'the repository config could not be read' };
+  }
+  // The user's own global git config (e.g. a Git LFS filter) is the user's machine setup, not workspace content, and is
+  // trusted like any installed tool. Only what the repository itself can carry is checked here.
+  return { ok: true };
+}
+
+function gitHooksPresent(workspaceRoot: string): boolean {
+  try {
+    return fs.readdirSync(path.join(workspaceRoot, '.git', 'hooks')).some((f) => !f.endsWith('.sample'));
+  } catch {
+    return false;
+  }
+}
+
+type CommandMatch = { category: AuthorizationCategory; detail: string } | { category: null; reason: string };
+
+/** Classifies one command line against the workspace categories. Unrecognised means unauthorized. */
+export function classifyWorkspaceCommand(command: string, workspaceRoot: string, pins: StandingAuthorization['pins']): CommandMatch {
+  const t = tokens(command);
+  if (!t) return { category: null, reason: 'the command uses shell syntax (chaining, redirection, variables or substitution)' };
+  const [exe, ...args] = t;
+  const bin = exe.toLowerCase().replace(/\.(?:exe|cmd)$/, '');
+  if (bin === 'dir') {
+    if (args.every((a) => /^\/[a-z]$/i.test(a) || staysInside(a))) return { category: 'workspace_read_commands', detail: 'dir' };
+    return { category: null, reason: 'dir points outside the workspace' };
+  }
+  if (bin === 'git') {
+    const [sub, ...rest] = args;
+    const plain = gitConfigIsPlain(workspaceRoot);
+    if (!plain.ok) return { category: null, reason: plain.reason! };
+    if (sub === 'status' && rest.every((a) => ['--short', '-s', '--porcelain', '-b', '--branch'].includes(a))) return { category: 'workspace_read_commands', detail: 'git status' };
+    if (sub === 'diff' && rest.every((a) => ['--stat', '--cached', '--staged', '--name-only', '--name-status'].includes(a) || GIT_REV.test(a))) return { category: 'workspace_read_commands', detail: 'git diff' };
+    if (sub === 'log' && rest.every((a) => ['--oneline', '--stat'].includes(a) || /^-n?\d{1,3}$/.test(a) || /^--max-count=\d{1,3}$/.test(a))) return { category: 'workspace_read_commands', detail: 'git log' };
+    if (sub === 'show' && rest.every((a) => ['--stat', '--name-only'].includes(a) || GIT_REV.test(a))) return { category: 'workspace_read_commands', detail: 'git show' };
+    if (sub === 'add' || sub === 'commit') {
+      if (gitHooksPresent(workspaceRoot)) return { category: null, reason: 'the repository has git hooks, which would run code on add/commit' };
+      if (sub === 'add' && rest.length > 0 && rest.every((a) => a === '-A' || a === '--all' || (!a.startsWith('-') && staysInside(a)))) return { category: 'workspace_git_commit', detail: 'git add' };
+      if (sub === 'commit' && rest.length === 2 && rest[0] === '-m' && rest[1].trim()) return { category: 'workspace_git_commit', detail: 'git commit -m' };
+    }
+    return { category: null, reason: `git ${sub ?? ''} with these arguments is not covered` };
+  }
+  if (bin === 'npm') {
+    const script = args[0] === 'test' && args.length === 1 ? 'test' : args[0] === 'run' && args.length === 2 ? args[1] : null;
+    if (!script || !(VALIDATION_SCRIPTS as readonly string[]).includes(script)) return { category: null, reason: 'only npm test or npm run test/lint/typecheck/build/compile without extra arguments is covered' };
+    const pinned = pins.npmScripts?.[script];
+    if (!pinned) return { category: null, reason: `the '${script}' script was not pinned when this authorization was granted` };
+    if (scriptChainDigest(readPackageScripts(workspaceRoot), script) !== pinned) return { category: null, reason: `package.json '${script}' (or its pre/post script) changed since this authorization was granted` };
+    return { category: 'workspace_validation', detail: `npm ${script === 'test' ? 'test' : `run ${script}`}` };
+  }
+  return { category: null, reason: `'${exe}' is not a covered command` };
+}
+
+/** Actions that always need the human, whatever the mode or authorization says (requirement: explicit approval). */
+export function alwaysEscalateReason(toolName: string, args: Record<string, unknown>): string | null {
+  const name = toolName.toLowerCase();
+  if (/^gmail_(send|apply|undo|create_draft|create_task|task_next)/.test(name) || /send|email|whatsapp|sms|phone/.test(name)) return 'outbound messages always need your explicit approval';
+  if (/purchase|payment|checkout|order|pay_|transfer|invoice|contract|subscribe/.test(name)) return 'purchases, payments and contracts always need your explicit approval';
+  if (/delete|trash|remove|kill|terminate|stop_service|uninstall|format/.test(name)) return 'destructive operations always need your explicit approval';
+  if (/^(propose_file_change|propose_text_edit|write_file|authorize_mission|print_test_page|delegate_to_opencode)$/.test(name)) return `${toolName} always needs your explicit approval (or a frozen mission envelope)`;
+  if (/^calendar_/.test(name) && !/^calendar_(list|get|search|find)/.test(name)) return 'calendar changes always need your explicit approval';
+  if (args.alwaysAsk === true) return 'destructive operations always need your explicit approval';
+  const command = typeof args.command === 'string' ? args.command : '';
+  if (command && /\b(git\s+(push|remote|fetch|pull|clone|reset|clean|checkout|rebase)|npm\s+(publish|install|i|ci|uninstall)|pip\s+install|curl|wget|invoke-webrequest|rm\s|del\s|rmdir|format|shutdown)\b/i.test(command)) {
+    return 'network, install and destructive commands always need your explicit approval';
+  }
+  return null;
+}
+
+export interface PermissionDecision {
+  decision: 'auto_authorize' | 'review' | 'deny';
+  reason: string;
+  mode: PermissionMode;
+  authorizationId?: string;
+  category?: AuthorizationCategory;
+}
+
+/**
+ * The one decision for a protected action. `mutating` is the caller's own deterministic classification (dispatch risk
+ * or the chat tool table); unknown actions must be passed as mutating.
+ */
+export function decidePermission(db: CoreDatabase, input: {
+  attemptIds: Array<string | null | undefined>;
+  toolName: string;
+  arguments: Record<string, unknown>;
+  mutating: boolean;
+  workspaceRoot?: string | null;
+  nowMs?: number;
+}): PermissionDecision {
+  const permission = frozenPermissionFor(db, input.attemptIds);
+  const mode = permission.mode;
+  if (mode === 'plan') {
+    return input.mutating
+      ? { decision: 'deny', mode, reason: `Plan Only: ${input.toolName} would change something, so it was not done. Nothing was changed.` }
+      : { decision: 'review', mode, reason: 'Plan Only allows read-only work under its usual consent' };
+  }
+  if (mode !== 'auto') return { decision: 'review', mode, reason: 'Ask mode: this needs your approval' };
+  const escalate = alwaysEscalateReason(input.toolName, input.arguments);
+  if (escalate) return { decision: 'review', mode, reason: escalate };
+  const nowMs = input.nowMs ?? Date.now();
+  let lastReason = 'no standing authorization was in force when this turn started';
+  for (const id of permission.authorizationIds) {
+    let auth: StandingAuthorization;
+    try { auth = getStandingAuthorization(db, id); } catch { continue; }
+    if (auth.revokedAt) { lastReason = `standing authorization ${id} was revoked`; continue; }
+    if (Date.parse(auth.expiresAt) <= nowMs) { lastReason = `standing authorization ${id} expired at ${auth.expiresAt}`; continue; }
+    if (permission.conversationId && auth.conversationId !== permission.conversationId) continue;
+    const match = matchAuthorization(auth, input);
+    if (match.category) {
+      return { decision: 'auto_authorize', mode, authorizationId: auth.id, category: match.category, reason: `covered by standing authorization ${auth.id} (${match.category}: ${match.detail}), valid until ${auth.expiresAt}` };
+    }
+    lastReason = match.reason;
+  }
+  return { decision: 'review', mode, reason: lastReason };
+}
+
+function sameDir(a: string, b: string): boolean {
+  const ca = canonicalDir(a);
+  const cb = canonicalDir(b);
+  return Boolean(ca && cb && ca.toLowerCase() === cb.toLowerCase());
+}
+
+function matchAuthorization(auth: StandingAuthorization, input: { toolName: string; arguments: Record<string, unknown>; workspaceRoot?: string | null }): CommandMatch {
+  const has = (c: AuthorizationCategory) => auth.categories.includes(c);
+  if (input.toolName === 'run_command' || input.toolName === 'run_checks') {
+    // run_checks names its own working directory; run_command runs in the dispatch workspace.
+    const where = input.toolName === 'run_checks' ? String(input.arguments.workingDirectory ?? '') : input.workspaceRoot;
+    if (!auth.workspaceRoot || !where || !sameDir(auth.workspaceRoot, where)) return { category: null, reason: 'the command does not run in the trusted workspace' };
+    if (typeof input.arguments.cwd === 'string' && !sameDir(path.resolve(auth.workspaceRoot, input.arguments.cwd), auth.workspaceRoot)) return { category: null, reason: 'the command changes directory away from the workspace root' };
+    const m = classifyWorkspaceCommand(String(input.arguments.command ?? ''), auth.workspaceRoot, auth.pins);
+    if (m.category && !has(m.category)) return { category: null, reason: `${m.detail} needs '${m.category}', which this authorization does not include` };
+    return m;
+  }
+  if (input.toolName === 'inspect_page') {
+    if (!has('workspace_inspect_page')) return { category: null, reason: 'page inspection is not authorized' };
+    const p = String(input.arguments.path ?? '');
+    if (!auth.workspaceRoot || !input.workspaceRoot || !sameDir(auth.workspaceRoot, input.workspaceRoot)) return { category: null, reason: 'the page is not in the trusted workspace' };
+    if (!p || /^[a-z]+:\/\//i.test(p) || !staysInside(p) || !/\.html?$/i.test(p)) return { category: null, reason: 'only a workspace-relative .html page is covered' };
+    return { category: 'workspace_inspect_page', detail: p };
+  }
+  if (input.toolName === 'web_research') {
+    if (!has('web_research_public')) return { category: null, reason: 'web research is not authorized' };
+    const query = String(input.arguments.query ?? '');
+    const privacy = classifyPrivacy(query, 'public_research');
+    if (privacy.privacy !== 'public') return { category: null, reason: `the search query may contain private data (${privacy.reasons.join(', ')})` };
+    return { category: 'web_research_public', detail: 'public query' };
+  }
+  return { category: null, reason: `${input.toolName} is not covered by any standing authorization` };
+}
+
+/** Chat tools that only read (some still ask their own consent, e.g. web access). Anything not listed is a mutation. */
+const CHAT_READ_TOOLS: ReadonlySet<string> = new Set([
+  'get_system_info', 'list_system_drives', 'request_search_permission', 'find_project_roots', 'search_files', 'resolve_time',
+  'dev_stories_status', 'list_reminders', 'list_commitments', 'list_scheduled_tasks', 'get_briefing_data', 'web_research',
+  'find_duplicate_files', 'list_directory', 'get_project_context', 'read_file', 'search_recent_projects', 'list_printers',
+]);
+/** Pandesh's own record of what this turn did; it changes nothing outside the turn. */
+const CHAT_BOOKKEEPING_TOOLS: ReadonlySet<string> = new Set(['update_task_outcome']);
+
+/**
+ * Plan Only's view of one chat tool call. `bridgeReadOnly` lists bridge tools (connectors, memory, capabilities) whose
+ * own registry classifies them read-only. Unknown tools are mutations: fail closed.
+ */
+export function classifyChatToolCall(toolName: string, args: Record<string, unknown>, bridgeReadOnly: ReadonlySet<string>, workspaceRoot: string | null): 'read' | 'mutating' {
+  if (CHAT_READ_TOOLS.has(toolName) || CHAT_BOOKKEEPING_TOOLS.has(toolName) || bridgeReadOnly.has(toolName)) return 'read';
+  if (toolName === 'run_checks') {
+    const dir = typeof args.workspacePath === 'string' && args.workspacePath ? args.workspacePath : workspaceRoot;
+    if (!dir) return 'mutating';
+    return classifyWorkspaceCommand(String(args.command ?? ''), dir, {}).category === 'workspace_read_commands' ? 'read' : 'mutating';
+  }
+  return 'mutating';
+}
+
+/** Approval cards that only ask consent for read-only access or a public lookup; Plan Only keeps them as cards. */
+export const READ_ONLY_CONSENT_TOOLS: ReadonlySet<string> = new Set(['request_search_permission', 'web_research']);
+
+/**
+ * Safety net for every approval site: in a Plan Only turn a mutation or delivery approval is recorded as already
+ * rejected by Core, so no client can approve it. Returns the rejection to apply, or null.
+ */
+export function planOnlyApprovalVeto(db: CoreDatabase, input: { attemptId: string; kind: string; summary: Record<string, unknown> }): { reason: string } | null {
+  if (input.kind !== 'mutation' && input.kind !== 'delivery') return null;
+  if (READ_ONLY_CONSENT_TOOLS.has(String(input.summary.toolName ?? ''))) return null;
+  const scope = typeof input.summary.scopeIdentity === 'string' ? input.summary.scopeIdentity : null;
+  if (frozenPermissionFor(db, [scope, input.attemptId]).mode !== 'plan') return null;
+  return { reason: `Plan Only: ${String(input.summary.toolName ?? input.kind)} would change something, so it was not done. Nothing was changed.` };
+}
+
+/** Records that Core, not a person, authorized an action, with everything needed to audit why. */
+export function recordPermissionDecision(db: CoreDatabase, input: { attemptId: string; toolName: string; arguments: Record<string, unknown>; decision: PermissionDecision; approvalId?: string | null }): void {
+  recordRuntimeEvent(db, {
+    domain: 'attempt',
+    entityId: input.attemptId,
+    eventType: input.decision.decision === 'auto_authorize' ? 'permission_auto_authorized' : input.decision.decision === 'deny' ? 'permission_mode_blocked' : 'permission_review_required',
+    actor: input.decision.decision === 'deny' ? PLAN_ONLY_ACTOR : STANDING_AUTHORIZATION_ACTOR,
+    metadata: {
+      toolName: input.toolName,
+      argumentsDigest: sha256(JSON.stringify(input.arguments ?? {})).slice(0, 32),
+      mode: input.decision.mode,
+      authorizationId: input.decision.authorizationId ?? null,
+      category: input.decision.category ?? null,
+      reason: input.decision.reason,
+      approvalId: input.approvalId ?? null,
+    },
+  });
+}

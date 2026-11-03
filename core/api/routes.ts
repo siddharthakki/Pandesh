@@ -56,6 +56,7 @@ import * as commandQueue from '../domain/commandQueue';
 import * as karkeDikha from '../domain/karkeDikhaLifecycle';
 import * as backgroundTasks from '../domain/backgroundTasks';
 import * as notificationOutbox from '../domain/notificationOutbox';
+import * as permissionModes from '../domain/permissionModes';
 import { cancelBackgroundTaskWorker, resumeBackgroundTask } from '../runtime/backgroundWorker';
 import { latestRuntimeSequence, listRuntimeEventsAfter, recordRuntimeEvent } from '../domain/runtimeEvents';
 import { isTerminalAttemptStatus } from '../domain/attemptTransitions';
@@ -1514,6 +1515,56 @@ export function buildRouter(
         });
         return { status: 200, body: result.task };
       }),
+    );
+  });
+
+  // --- Chat permission modes and standing authorizations (Core decides; clients only record the user's choice) ---
+  router.get('/v1/conversations/:id/permission', (ctx, match) => ({
+    status: 200,
+    body: {
+      mode: permissionModes.getConversationPermissionMode(ctx.db, match.params.id),
+      authorizations: permissionModes.listStandingAuthorizations(ctx.db, match.params.id).map((a) => ({ ...a, active: permissionModes.isActive(a) })),
+      categories: permissionModes.AUTHORIZATION_CATEGORIES,
+      maxMinutes: permissionModes.MAX_AUTHORIZATION_MINUTES,
+    },
+  }));
+
+  router.post('/v1/conversations/:id/permission-mode', (ctx, match) => {
+    const key = requireIdempotencyKey(ctx);
+    const body = asRecord(ctx.body);
+    return withIdempotency(ctx.db, { key, clientId: ctx.clientId, routeId: `permission.mode:${match.params.id}` }, ctx.body, () =>
+      withRuntimeBroadcast(ctx, broadcaster, () => ({
+        status: 200,
+        body: permissionModes.setConversationPermissionMode(ctx.db, match.params.id, requireString(body, 'mode') as permissionModes.PermissionMode, ctx.actor),
+      })),
+    );
+  });
+
+  router.post('/v1/conversations/:id/authorizations', (ctx, match) => {
+    const key = requireIdempotencyKey(ctx);
+    const body = asRecord(ctx.body);
+    return withIdempotency(ctx.db, { key, clientId: ctx.clientId, routeId: `permission.grant:${match.params.id}` }, ctx.body, () =>
+      withRuntimeBroadcast(ctx, broadcaster, () => ({
+        status: 201,
+        body: permissionModes.createStandingAuthorization(ctx.db, {
+          conversationId: match.params.id,
+          categories: Array.isArray(body.categories) ? body.categories.map(String) : [],
+          workspaceRoot: typeof body.workspaceRoot === 'string' ? body.workspaceRoot : null,
+          expiresInMinutes: Number(body.expiresInMinutes),
+          actor: ctx.actor,
+        }),
+      })),
+    );
+  });
+
+  router.post('/v1/authorizations/:id/revoke', (ctx, match) => {
+    const key = requireIdempotencyKey(ctx);
+    const body = asRecord(ctx.body);
+    return withIdempotency(ctx.db, { key, clientId: ctx.clientId, routeId: `permission.revoke:${match.params.id}` }, ctx.body, () =>
+      withRuntimeBroadcast(ctx, broadcaster, () => ({
+        status: 200,
+        body: permissionModes.revokeStandingAuthorization(ctx.db, match.params.id, ctx.actor, typeof body.reason === 'string' ? body.reason : 'revoked by the user'),
+      })),
     );
   });
 

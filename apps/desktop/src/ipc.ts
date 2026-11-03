@@ -74,6 +74,8 @@ export const DESKTOP_CHANNELS = {
   resolveGmailApproval: 'desktop:resolveGmailApproval',
   summarizeGmailThread: 'desktop:summarizeGmailThread',
   retryGmailProbe: 'desktop:retryGmailProbe',
+  setPermissionMode: 'desktop:setPermissionMode',
+  revokeAuthorization: 'desktop:revokeAuthorization',
   /** Incremental consent: the separate gmail.modify permission that lets Pandesh organize mail. */
   allowInboxOrganization: 'desktop:allowInboxOrganization',
   /** Google onboarding: the operator's own OAuth Desktop client, stored encrypted by the host. */
@@ -520,6 +522,26 @@ export interface DesktopCloudPublicTextPreview {
   reason?: string;
 }
 
+/** Chat permission mode for a conversation. Core stores and enforces it; the renderer only shows and chooses. */
+export type DesktopPermissionMode = 'ask' | 'auto' | 'plan';
+export interface DesktopPermissionGrant {
+  /** Core category ids (see core/domain/permissionModes.ts AUTHORIZATION_CATEGORIES). */
+  categories: string[];
+  expiresInMinutes: number;
+}
+export interface DesktopPermissionState {
+  conversationId: string | null;
+  mode: DesktopPermissionMode;
+  /** Active standing authorizations only. */
+  authorizations: Array<{ id: string; categories: string[]; workspaceRoot: string | null; expiresAt: string; pinnedScripts: string[] }>;
+  /** Category id -> plain description, from Core. */
+  categories: Record<string, string>;
+  /** True while the mode waits for the next message to create its conversation. */
+  pending: boolean;
+  /** The mode the running or resumed turn was frozen with, or null when nothing runs. */
+  activeTurnMode?: DesktopPermissionMode | null;
+}
+
 export interface DesktopSnapshot {
   coreState: DesktopCoreState;
   coreDetail?: string;
@@ -611,6 +633,8 @@ export interface DesktopSnapshot {
    * explicitly opened/selected in the rail — persists across restart. Null
    * until a conversation has ever been opened or submitted. */
   selectedConversationId: string | null;
+  /** Permission mode of the selected conversation (or the one chosen for the next new conversation). */
+  permission: DesktopPermissionState;
   /** The conversation the currently running/last turn actually used. The
    * renderer feeds live turn updates into the transcript pane only when this
    * equals `selectedConversationId` — otherwise the operator is viewing a
@@ -1090,6 +1114,7 @@ export const RENDERER_VISIBLE_KEYS: readonly (keyof DesktopSnapshot)[] = [
   'speechInterrupt',
   'hostTelemetry',
   'selectedConversationId',
+  'permission',
   'activeConversationId',
   'workspaceActivities',
   'contextEnvelope',

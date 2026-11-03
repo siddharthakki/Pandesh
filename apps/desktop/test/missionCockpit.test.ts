@@ -35,6 +35,18 @@ describe('mission cockpit projection', () => {
     expect(view.metrics.actualSpendUsd).toBeCloseTo(0.0012, 6);
   });
 
+  it('shows permission-mode decisions as Core checkpoints, not as user approvals', () => {
+    const at = RECORDED_START;
+    const events = [
+      eventFromSummary('Auto: run_checks authorized by standing authorization sauth_1 (workspace_validation) — no prompt', at),
+      eventFromSummary('Plan Only: create_reminder was not run; nothing was changed', at),
+    ];
+    const titles = projectMissionCockpit(events, cockpitInput()).checkpoints.map((c) => c.title);
+    expect(titles).toContain('Authorized by standing authorization');
+    expect(titles).toContain('Blocked by Plan Only');
+    expect(titles).not.toContain('Authorization approved');
+  });
+
   it('pairs Core completions by identity and counts only observed non-cached actions', () => {
     const at = RECORDED_START;
     const events = [

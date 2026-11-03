@@ -13,11 +13,6 @@ import { GovernedCapabilityRegistry, createWorkspaceCapabilityAdapter } from '..
 import { CORE_POLICY_ACTOR } from '../runtime/commandPolicy';
 import { CoreError } from '../domain/errors';
 import type { ApprovalRecord } from '../shared/wireTypes';
-import {
-  authorizeDesktopTaskScope,
-  classifyDesktopApproval,
-  describeDesktopTaskScope,
-} from '../../apps/desktop/src/host/desktopTaskScope';
 import { copyMissingHelperFixture } from './missionFixture';
 
 let dir: string;
@@ -188,14 +183,6 @@ describe('Core is the final approval authority', () => {
   it('does not let a host auto-approval override a Core denial', async () => {
     const marker = `core-host-override-${Date.now()}`;
     const command = kdikhaInstall(marker);
-    const hostScope = authorizeDesktopTaskScope(describeDesktopTaskScope(workspace)!);
-    const hostDecision = classifyDesktopApproval(hostScope, {
-      toolName: 'run_command',
-      paths: [],
-      scope: `run_command ${command}`,
-      detail: command,
-    });
-    expect(hostDecision).toBe('prompt');
 
     const attemptId = ensureCapabilityAttempt(db, {
       correlationId: 'legacy-client',

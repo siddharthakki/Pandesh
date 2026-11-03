@@ -65,7 +65,6 @@ import {
 } from './desktopApproval';
 import {
   authorizeDesktopTaskScope,
-  classifyDesktopApproval,
   describeDesktopTaskScope,
   type DesktopTaskScope,
 } from './desktopTaskScope';
@@ -122,6 +121,9 @@ import type {
   DesktopOpenRouterKeyResult,
   DesktopOpenRouterStatus,
   DesktopSnapshot,
+  DesktopPermissionGrant,
+  DesktopPermissionMode,
+  DesktopPermissionState,
   DesktopSpeakResult,
   DesktopTranscribeResult,
   DesktopWakeAudioMeta,
@@ -234,6 +236,12 @@ interface MediaPlan {
   arguments: Record<string, unknown>;
   /** The image attached to this message, to be registered as the edit/animation reference. */
   attachedImage?: StagedForSend;
+}
+
+/** The permission mode Core froze on a request (Ask when the request predates permission modes). */
+function frozenModeOf(request: { toolPermissionPolicy?: Record<string, unknown> } | null | undefined): DesktopPermissionMode {
+  const mode = (request?.toolPermissionPolicy?.permission as { mode?: string } | undefined)?.mode;
+  return mode === 'auto' || mode === 'plan' ? mode : 'ask';
 }
 
 export class DesktopSession {
@@ -851,6 +859,7 @@ export class DesktopSession {
       stagedAttachments: this.attachmentStaging.list(),
       modelNote: this.modelNote,
       selectedConversationId: this.selectedConversationId,
+      permission: this.permissionFor(this.selectedConversationId),
       // A host-side placeholder (image_*) is not a Core conversation; exposing it makes the UI open a conversation that does not exist.
       activeConversationId: this.active && !isPlaceholderConversationId(this.active.conversationId) ? this.active.conversationId : null,
       workspaceActivities: this.workspaceActivitiesForView(),
@@ -2103,6 +2112,12 @@ export class DesktopSession {
         title: text.slice(0, 80),
       });
       conversationId = conversation.id;
+      // The mode picked before this conversation existed must be in Core before the turn is submitted and frozen.
+      if (this.pendingPermission) {
+        const pending = this.pendingPermission;
+        this.pendingPermission = null;
+        await this.applyPermission(conversationId, pending.mode, pending.grant);
+      }
     }
     // Continuing an opened conversation must keep using the same Core
     // conversation ID; submitting from the default (never-opened) state
@@ -3287,6 +3302,89 @@ export class DesktopSession {
     return { title: conversation.title?.trim() || 'Jarvis conversation', content: exported.content };
   }
 
+  // --- Chat permission mode (Ask / Auto / Plan Only). Core stores and enforces it; the host only relays the choice. ---
+  private permission: DesktopPermissionState = { conversationId: null, mode: 'ask', authorizations: [], categories: {}, pending: false };
+  /** A mode chosen before the conversation exists; applied right after the next submit creates it, before Core freezes the turn. */
+  private pendingPermission: { mode: DesktopPermissionMode; grant?: DesktopPermissionGrant } | null = null;
+
+  private permissionLookupFailedFor: string | null = null;
+  /** The mode the running (or resumed) turn was frozen with, read once from Core's own request record. */
+  private activeModeCache: { attemptId: string; mode: DesktopPermissionMode } | null = null;
+  private activeModeFetchFor: string | null = null;
+
+  private activeTurnMode(): DesktopPermissionMode | null {
+    const active = this.active;
+    if (!active || active.terminal) return null;
+    if (this.activeModeCache?.attemptId === active.attemptId) return this.activeModeCache.mode;
+    if (this.client && this.activeModeFetchFor !== active.attemptId) {
+      this.activeModeFetchFor = active.attemptId;
+      const client = this.client;
+      // Never throws into snapshot(): a missing or failing lookup only leaves the mode unknown.
+      void Promise.resolve().then(() => client.getRequest(active.requestId)).then((request) => {
+        this.activeModeCache = { attemptId: active.attemptId, mode: frozenModeOf(request as { toolPermissionPolicy?: Record<string, unknown> }) };
+        this.emit({ kind: 'status', at: nowIso(), attemptId: active.attemptId, summary: `This task runs in ${this.activeModeCache.mode} mode (fixed when it started)` });
+      }).catch(() => undefined);
+    }
+    return null;
+  }
+
+  /** The permission shown for the selected conversation; a changed selection triggers one refresh from Core. */
+  private permissionFor(conversationId: string | null): DesktopPermissionState {
+    if (conversationId !== this.permission.conversationId && this.client && conversationId !== this.permissionLookupFailedFor) {
+      void this.refreshPermission().catch((err) => {
+        this.permissionLookupFailedFor = conversationId;
+        this.options.log?.(`permission lookup failed for ${conversationId}: ${(err as Error).message}`);
+      });
+    }
+    return { ...this.permission, activeTurnMode: this.activeTurnMode() };
+  }
+
+  async refreshPermission(): Promise<void> {
+    const conversationId = this.selectedConversationId;
+    if (!conversationId || !this.client) {
+      this.permission = { conversationId: null, mode: this.pendingPermission?.mode ?? 'ask', authorizations: [], categories: this.permission.categories, pending: Boolean(this.pendingPermission) };
+    } else {
+      const state = await this.client.getConversationPermission(conversationId);
+      this.permission = {
+        conversationId,
+        mode: state.mode,
+        authorizations: state.authorizations.filter((a) => a.active).map((a) => ({
+          id: a.id, categories: a.categories, workspaceRoot: a.workspaceRoot, expiresAt: a.expiresAt, pinnedScripts: Object.keys(a.pins?.npmScripts ?? {}),
+        })),
+        categories: state.categories,
+        pending: false,
+      };
+    }
+    this.emit({ kind: 'status', at: nowIso(), summary: `Permission mode: ${this.permission.mode}` });
+  }
+
+  /** Sets the mode for the conversation's next turns, and in Auto records the standing authorization the user granted. */
+  async setPermissionMode(mode: DesktopPermissionMode, grant?: DesktopPermissionGrant): Promise<DesktopSnapshot> {
+    if (mode === 'auto' && (!grant || grant.categories.length === 0)) throw new Error('Auto needs at least one thing you authorize and an expiry.');
+    const conversationId = this.selectedConversationId;
+    if (!conversationId) {
+      this.pendingPermission = { mode, ...(grant ? { grant } : {}) };
+    } else {
+      await this.applyPermission(conversationId, mode, grant);
+    }
+    await this.refreshPermission();
+    return this.snapshot();
+  }
+
+  async revokeAuthorization(id: string): Promise<DesktopSnapshot> {
+    await this.requireClient().revokeStandingAuthorization(id, 'revoked by the user in Pandesh');
+    await this.refreshPermission();
+    return this.snapshot();
+  }
+
+  private async applyPermission(conversationId: string, mode: DesktopPermissionMode, grant?: DesktopPermissionGrant): Promise<void> {
+    const client = this.requireClient();
+    await client.setConversationPermissionMode(conversationId, mode);
+    if (mode === 'auto' && grant) {
+      await client.grantStandingAuthorization(conversationId, { categories: grant.categories, workspaceRoot: this.folder, expiresInMinutes: grant.expiresInMinutes });
+    }
+  }
+
   /** Clears the selection so the next submit lazily creates a brand-new Core
    * conversation — never inherits the previous objective or context. */
   async newConversation(): Promise<void> {
@@ -4381,6 +4479,24 @@ export class DesktopSession {
   }
 
   private async handleRuntimeEvent(event: RuntimeEventRecord): Promise<void> {
+    // Core decided an action under the turn's permission mode: show who authorized it, never as the user's click.
+    if (event.domain === 'attempt' && (event.eventType === 'permission_auto_authorized' || event.eventType === 'permission_mode_blocked')
+      && this.active && this.active.attemptId === event.entityId) {
+      const m = (event.metadata ?? {}) as Record<string, unknown>;
+      this.emit({
+        kind: 'status',
+        at: event.createdAt,
+        attemptId: event.entityId,
+        summary: event.eventType === 'permission_auto_authorized'
+          ? `Auto: ${String(m.toolName)} authorized by standing authorization ${String(m.authorizationId)} (${String(m.category)}) — no prompt`
+          : `Plan Only: ${String(m.toolName)} was not run; nothing was changed`,
+      });
+      return;
+    }
+    if (event.domain === 'authorization' || (event.domain === 'conversation' && event.eventType === 'permission_mode_changed')) {
+      void this.refreshPermission();
+      return;
+    }
     if (event.domain === 'approval' && (event.eventType === 'approval_requested' || event.eventType === 'approval_resolved' || event.eventType === 'approval_superseded' || event.eventType === 'approval_expired')) {
       // A pending approval changed somewhere (this turn or another surface).
       // Home must re-read Core so the card appears and disappears truthfully.
@@ -4602,17 +4718,6 @@ export class DesktopSession {
       requestedActionDigest: this.pending.envelope.requestedActionDigest,
       frozenContextHash: this.pending.envelope.frozenContextHash,
     });
-    if (classifyDesktopApproval(this.taskScope, this.pending.card) === 'auto_approve') {
-      this.emit({
-        kind: 'status',
-        at: nowIso(),
-        attemptId: active.attemptId,
-        requestId: active.requestId,
-        summary: `In-scope Core gate auto-authorized: ${this.pending.card.scope}`,
-      });
-      await this.resolvePending(this.pending.card.approvalId, 'approved');
-      return;
-    }
     this.emit({
       kind: 'approval',
       at: nowIso(),

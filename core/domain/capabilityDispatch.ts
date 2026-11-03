@@ -46,6 +46,7 @@ import type {
 import type { GovernedCapabilityRegistry } from '../runtime/governedCapability';
 import { LocalAutonomySecurityKernel } from '../security/kernel';
 import type { ExecutionGrant } from '../security/types';
+import { decidePermission, recordPermissionDecision, STANDING_AUTHORIZATION_ACTOR } from './permissionModes';
 import { parseBaselineIdentity, type WriteBaselineIdentity, type WriteProposalPresentation } from '../runtime/writeProposal';
 import {
   CORE_POLICY_ACTOR,
@@ -318,6 +319,9 @@ export interface DispatchCapabilityInput {
    * action to suppress a later explicit user resubmission. HTTP callers never
    * supply this field. */
   scopeIdentity?: string;
+  /** Core-owned identity of the attempt whose frozen permission mode governs this action, when it is not the
+   * scopeIdentity (the chat engine's connector bridge). Never part of the approval summary; HTTP callers never set it. */
+  permissionScope?: string;
   toolName: string;
   arguments: Record<string, unknown>;
   cwd: string;
@@ -768,6 +772,25 @@ export async function dispatchCapability(db: CoreDatabase, registry: GovernedCap
     return { outcome: 'denied', attemptId, reason: machineControl.reason };
   }
 
+  // Chat permission mode frozen on the real turn: Plan Only refuses every non-read action here; Auto is applied below,
+  // only after every explicit denial has had its say.
+  const permission = decidePermission(db, {
+    attemptIds: [input.permissionScope, input.scopeIdentity, attemptId],
+    toolName: input.toolName,
+    arguments: input.arguments,
+    mutating: classification.risk !== 'read_only',
+    workspaceRoot: envelope.workspaceRoot,
+  });
+  if (permission.decision === 'deny') {
+    if (existing?.status === 'pending') {
+      forceRejectForbiddenApproval(db, existing, input, { ...policy, decision: 'deny', reason: permission.reason });
+    } else if (!existing) {
+      recordPolicyDenial(db, input, attemptId, summary, envelope, { ...policy, decision: 'deny', reason: permission.reason }, actionArguments);
+    }
+    recordPermissionDecision(db, { attemptId: input.permissionScope ?? input.scopeIdentity ?? attemptId, toolName: input.toolName, arguments: input.arguments, decision: permission });
+    return { outcome: 'denied', attemptId, reason: permission.reason };
+  }
+
   const missionAttemptId = input.scopeIdentity ?? '';
   if (missionAttemptId && input.toolName !== AUTHORIZE_MISSION_TOOL && classification.risk !== 'read_only') {
     const mission = evaluateAuthorizedDispatch(db, {
@@ -879,6 +902,34 @@ export async function dispatchCapability(db: CoreDatabase, registry: GovernedCap
   }
   if (existing?.status === 'pending') {
     return { outcome: 'approval_required', attemptId, approval: existing };
+  }
+
+  // Auto: an active standing authorization that was in force when the turn started matches this exact action.
+  if (!existing && permission.decision === 'auto_authorize') {
+    const approval = createApproval(db, {
+      attemptId,
+      kind: 'mutation',
+      summary: {
+        ...summary,
+        policyDecision: 'auto_authorize',
+        policyReason: permission.reason,
+        standingAuthorizationId: permission.authorizationId,
+        standingAuthorizationCategory: permission.category,
+      },
+      ...(actionArguments ? { actionArguments } : {}),
+      presentation: input.proposal
+        ? { ...input.proposal.presentation }
+        : input.connectorPresentation
+          ? { ...input.connectorPresentation }
+          : undefined,
+      actor: STANDING_AUTHORIZATION_ACTOR,
+      clientId: input.clientId,
+      initialResolution: 'approved',
+      resolvedBy: STANDING_AUTHORIZATION_ACTOR,
+    });
+    recordPermissionDecision(db, { attemptId: input.permissionScope ?? input.scopeIdentity ?? attemptId, toolName: input.toolName, arguments: input.arguments, decision: permission, approvalId: approval.id });
+    const invocation = await executeAndRecord(db, registry, attemptId, input, undefined, approval.id, input.proposal?.expectedBaseline, envelope);
+    return { outcome: 'executed', attemptId, toolInvocation: invocation };
   }
 
   const attempt = getAttempt(db, attemptId);
