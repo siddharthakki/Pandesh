@@ -13,6 +13,9 @@
  *   - verification of money. An assistant can record a 'claimed' entry; only a person (an API client, never Core or
  *     the model) can mark it verified. Unverified revenue never counts as available funds. Claimed expenses do count
  *     against funds, because over-counting money is the failure that matters.
+ *   - demonstration money. An entry recorded in 'demo' mode is shown on its own line and never counts, verified or not.
+ *     Real revenue counts only when it is reconciled: verified by a person with the payment's bank/PayPal reference
+ *     against an order whose invoice was issued for exactly that amount (see wishOrders.ts).
  */
 import type { CoreDatabase } from '../db/connection';
 import { CoreError } from './errors';
@@ -22,6 +25,7 @@ export const WISH_STAGES = ['research_offers', 'assess_opportunities', 'develop_
 export type WishStage = (typeof WISH_STAGES)[number];
 export const WISH_LEDGER_KINDS = ['revenue', 'expense', 'funds'] as const;
 export type WishLedgerKind = (typeof WISH_LEDGER_KINDS)[number];
+export type WishMoneyMode = 'real' | 'demo';
 /** An offer older than this is not good enough to buy on. */
 export const WISH_OFFER_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 const MAX_WISH_CHARS = 1_000;
@@ -80,6 +84,10 @@ export interface WishLedgerEntry {
   evidenceKind: string | null;
   evidenceRef: string | null;
   status: 'claimed' | 'verified' | 'rejected';
+  mode: WishMoneyMode;
+  orderId: string | null;
+  /** The bank/PayPal reference a person reconciled the payment with. */
+  paymentReference: string | null;
   recordedBy: string;
   verifiedBy: string | null;
   createdAt: string;
@@ -87,13 +95,20 @@ export interface WishLedgerEntry {
 }
 
 export interface WishFunds {
-  /** Verified revenue + verified own funds − every expense not rejected (claimed or verified). */
+  /** Real money only: reconciled revenue + verified own funds − real expenses (claimed or verified) − the tax reserve. */
   availableCents: number;
+  /** Real revenue verified by a person against an invoiced order with a payment reference. */
   verifiedRevenueCents: number;
   verifiedOwnFundsCents: number;
   expensesCents: number;
-  /** Revenue or funds recorded but not yet verified by a person. Never counted. */
+  /** Set aside for income tax on the profit, at the rate the person recorded in the business authorization. */
+  taxReserveCents: number;
+  /** Real revenue or funds recorded but not yet verified by a person. Never counted. */
   unverifiedInCents: number;
+  /** Real revenue a person marked verified that is not reconciled to an invoiced order. Never counted. */
+  unreconciledRevenueCents: number;
+  /** Demonstration money (any status). Never counted. */
+  demoRevenueCents: number;
 }
 
 export interface WishPurchasePlan {
@@ -192,7 +207,8 @@ function asLedger(row: Record<string, unknown>): WishLedgerEntry {
   return {
     id: String(row.id), goalId: String(row.goalId), kind: row.kind as WishLedgerKind, amountCents: Number(row.amountCents), currency: String(row.currency),
     description: String(row.description), evidenceKind: (row.evidenceKind as string) ?? null, evidenceRef: (row.evidenceRef as string) ?? null,
-    status: row.status as WishLedgerEntry['status'], recordedBy: String(row.recordedBy), verifiedBy: (row.verifiedBy as string) ?? null,
+    status: row.status as WishLedgerEntry['status'], mode: (row.mode as WishMoneyMode) ?? 'real', orderId: (row.orderId as string) ?? null,
+    paymentReference: (row.paymentReference as string) ?? null, recordedBy: String(row.recordedBy), verifiedBy: (row.verifiedBy as string) ?? null,
     createdAt: String(row.createdAt), verifiedAt: (row.verifiedAt as string) ?? null,
   };
 }
@@ -320,7 +336,7 @@ export function setWishOffering(db: CoreDatabase, opportunityId: string, offerin
 }
 
 /** Records money as a claim. Nothing recorded here counts as income until a person verifies it. */
-export function recordWishLedgerClaim(db: CoreDatabase, input: { goalId: string; kind: string; amountCents: number; currency?: string | null; description: string; evidenceKind?: string | null; evidenceRef?: string | null; recordedBy: string }): WishLedgerEntry {
+export function recordWishLedgerClaim(db: CoreDatabase, input: { goalId: string; kind: string; amountCents: number; currency?: string | null; description: string; evidenceKind?: string | null; evidenceRef?: string | null; recordedBy: string; mode?: WishMoneyMode; orderId?: string | null }): WishLedgerEntry {
   const goal = getWishGoal(db, input.goalId);
   if (!(WISH_LEDGER_KINDS as readonly string[]).includes(input.kind)) throw new CoreError('invalid_request', `kind must be one of ${WISH_LEDGER_KINDS.join(', ')}`);
   if (!Number.isInteger(input.amountCents) || input.amountCents <= 0) throw new CoreError('invalid_request', 'amount must be a positive amount of money');
@@ -328,10 +344,15 @@ export function recordWishLedgerClaim(db: CoreDatabase, input: { goalId: string;
   if (currency !== goal.currency) throw new CoreError('invalid_request', `the goal is in ${goal.currency}; record amounts in ${goal.currency}`);
   const description = String(input.description ?? '').trim().slice(0, 500);
   if (!description) throw new CoreError('invalid_request', 'say what the money is');
+  // Money for an order takes the order's mode: a payment on a demonstration order is demonstration money.
+  const order = input.orderId ? db.get<{ goalId: string; mode: WishMoneyMode }>('SELECT goalId, mode FROM wish_orders WHERE id = ?', [input.orderId]) : undefined;
+  if (input.orderId && (!order || order.goalId !== goal.id)) throw new CoreError('not_found', `order '${input.orderId}' does not belong to this goal`);
+  const mode: WishMoneyMode = order?.mode ?? (input.mode === 'demo' ? 'demo' : 'real');
+  if (input.mode && input.mode !== mode) throw new CoreError('invalid_request', `order '${input.orderId}' is a ${mode} order; its money is ${mode} money`);
   const id = newId('wledger');
   db.run(
-    'INSERT INTO wish_ledger (id, goalId, kind, amountCents, currency, description, evidenceKind, evidenceRef, status, recordedBy, createdAt) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-    [id, goal.id, input.kind, input.amountCents, currency, description, input.evidenceKind ?? null, input.evidenceRef ?? null, 'claimed', input.recordedBy, nowIso()],
+    'INSERT INTO wish_ledger (id, goalId, kind, amountCents, currency, description, evidenceKind, evidenceRef, status, recordedBy, createdAt, mode, orderId) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+    [id, goal.id, input.kind, input.amountCents, currency, description, input.evidenceKind ?? null, input.evidenceRef ?? null, 'claimed', input.recordedBy, nowIso(), mode, input.orderId ?? null],
   );
   return asLedger(db.get<Record<string, unknown>>('SELECT * FROM wish_ledger WHERE id = ?', [id])!);
 }
@@ -341,13 +362,29 @@ export function isAssistantActor(actor: string): boolean {
   return /^(core|karkedikha|pi|model|assistant|agent)(:|$)/i.test(actor.trim()) || actor.trim() === '';
 }
 
-export function verifyWishLedgerEntry(db: CoreDatabase, entryId: string, resolution: 'verified' | 'rejected', actor: string): WishLedgerEntry {
+/**
+ * A person resolves a claim. Verifying revenue is a reconciliation: the person gives the payment's reference from their
+ * bank/PayPal statement, and the entry must belong to an order whose invoice was issued for exactly this amount. The
+ * order is then marked paid.
+ */
+export function verifyWishLedgerEntry(db: CoreDatabase, entryId: string, resolution: 'verified' | 'rejected', actor: string, opts: { paymentReference?: string | null } = {}): WishLedgerEntry {
   if (isAssistantActor(actor)) throw new CoreError('forbidden', 'only a person can verify money; an assistant can only record a claim');
   return db.transaction(() => {
     const row = db.get<Record<string, unknown>>('SELECT * FROM wish_ledger WHERE id = ?', [entryId]);
     if (!row) throw new CoreError('not_found', `ledger entry '${entryId}' not found`);
     if (row.status !== 'claimed') throw new CoreError('invalid_transition', `ledger entry is already ${String(row.status)}`);
-    db.run('UPDATE wish_ledger SET status = ?, verifiedBy = ?, verifiedAt = ? WHERE id = ?', [resolution, actor, nowIso(), entryId]);
+    const reference = String(opts.paymentReference ?? '').trim().slice(0, 200) || null;
+    const now = nowIso();
+    if (resolution === 'verified' && row.kind === 'revenue') {
+      if (!reference) throw new CoreError('invalid_request', 'give the payment reference from your bank or PayPal statement to reconcile this revenue');
+      const order = row.orderId ? db.get<{ id: string; invoiceNumber: string | null; priceCents: number; eventsJson: string }>('SELECT id, invoiceNumber, priceCents, eventsJson FROM wish_orders WHERE id = ?', [String(row.orderId)]) : undefined;
+      if (!order) throw new CoreError('invalid_request', 'revenue can only be reconciled against a customer order; this entry has none');
+      if (!order.invoiceNumber) throw new CoreError('invalid_request', `order ${order.id} has no issued invoice yet`);
+      if (order.priceCents !== Number(row.amountCents)) throw new CoreError('invalid_request', `the payment (${formatMoney(Number(row.amountCents), String(row.currency))}) does not match invoice ${order.invoiceNumber} (${formatMoney(order.priceCents, String(row.currency))})`);
+      const events = [...JSON.parse(order.eventsJson || '[]'), { at: now, by: 'human', step: `payment reconciled (${reference})` }];
+      db.run("UPDATE wish_orders SET status = 'paid', eventsJson = ?, updatedAt = ? WHERE id = ?", [JSON.stringify(events), now, order.id]);
+    }
+    db.run('UPDATE wish_ledger SET status = ?, verifiedBy = ?, verifiedAt = ?, paymentReference = ? WHERE id = ?', [resolution, actor, now, reference, entryId]);
     return asLedger(db.get<Record<string, unknown>>('SELECT * FROM wish_ledger WHERE id = ?', [entryId])!);
   });
 }
@@ -355,14 +392,24 @@ export function listWishLedger(db: CoreDatabase, goalId: string): WishLedgerEntr
   return db.all<Record<string, unknown>>('SELECT * FROM wish_ledger WHERE goalId = ? ORDER BY createdAt', [goalId]).map(asLedger);
 }
 
+const isReconciled = (e: WishLedgerEntry) => e.kind === 'revenue' && e.status === 'verified' && Boolean(e.paymentReference && e.orderId);
+
 export function wishFunds(db: CoreDatabase, goalId: string): WishFunds {
   const entries = listWishLedger(db, goalId);
-  const sum = (pred: (e: WishLedgerEntry) => boolean) => entries.filter(pred).reduce((acc, e) => acc + e.amountCents, 0);
-  const verifiedRevenueCents = sum((e) => e.kind === 'revenue' && e.status === 'verified');
-  const verifiedOwnFundsCents = sum((e) => e.kind === 'funds' && e.status === 'verified');
-  const expensesCents = sum((e) => e.kind === 'expense' && e.status !== 'rejected');
-  const unverifiedInCents = sum((e) => e.kind !== 'expense' && e.status === 'claimed');
-  return { availableCents: verifiedRevenueCents + verifiedOwnFundsCents - expensesCents, verifiedRevenueCents, verifiedOwnFundsCents, expensesCents, unverifiedInCents };
+  const real = entries.filter((e) => e.mode === 'real');
+  const sum = (list: WishLedgerEntry[], pred: (e: WishLedgerEntry) => boolean) => list.filter(pred).reduce((acc, e) => acc + e.amountCents, 0);
+  const verifiedRevenueCents = sum(real, isReconciled);
+  const verifiedOwnFundsCents = sum(real, (e) => e.kind === 'funds' && e.status === 'verified');
+  const expensesCents = sum(real, (e) => e.kind === 'expense' && e.status !== 'rejected');
+  const unverifiedInCents = sum(real, (e) => e.kind !== 'expense' && e.status === 'claimed');
+  const unreconciledRevenueCents = sum(real, (e) => e.kind === 'revenue' && e.status === 'verified' && !isReconciled(e));
+  const demoRevenueCents = sum(entries.filter((e) => e.mode === 'demo'), (e) => e.kind === 'revenue' && e.status !== 'rejected');
+  const reserveBps = db.get<{ taxReserveBps: number }>("SELECT taxReserveBps FROM wish_business WHERE id = 'default'")?.taxReserveBps ?? 0;
+  const taxReserveCents = Math.ceil((Math.max(0, verifiedRevenueCents - expensesCents) * reserveBps) / 10_000);
+  return {
+    availableCents: verifiedRevenueCents + verifiedOwnFundsCents - expensesCents - taxReserveCents,
+    verifiedRevenueCents, verifiedOwnFundsCents, expensesCents, taxReserveCents, unverifiedInCents, unreconciledRevenueCents, demoRevenueCents,
+  };
 }
 
 /**
@@ -383,7 +430,8 @@ export function evaluateWishPurchase(db: CoreDatabase, goalId: string, nowMs = D
   if (bestExactOffer && bestExactOffer.priceCents > goal.targetPriceCents) {
     blockers.push(`The lowest exact offer is ${formatMoney(bestExactOffer.priceCents, goal.currency)}, above the target of ${formatMoney(goal.targetPriceCents, goal.currency)}.`);
   }
-  const priceToPay = bestExactOffer?.priceCents ?? goal.targetPriceCents;
+  // The target is the spending limit: nothing above it is bought, so more than the target never has to be earned.
+  const priceToPay = Math.min(bestExactOffer?.priceCents ?? goal.targetPriceCents, goal.targetPriceCents);
   if (funds.availableCents < priceToPay) {
     blockers.push(`Verified funds are ${formatMoney(Math.max(0, funds.availableCents), goal.currency)}; ${formatMoney(priceToPay, goal.currency)} is needed.`);
   }
@@ -459,9 +507,10 @@ export function renderWishStatus(db: CoreDatabase, goalId: string, nowMs = Date.
     lines.push(`Offering for "${selected.title}": ${off.folder} — ${off.files?.join(', ')}. ${off.validation ?? ''} Published: ${off.published ? 'yes' : 'NO (draft; needs your authorization)'}.`);
   }
   const f = readiness.funds;
-  lines.push(`Funds: available ${m(f.availableCents)} (verified revenue ${m(f.verifiedRevenueCents)}, verified own funds ${m(f.verifiedOwnFundsCents)}, expenses ${m(f.expensesCents)}); unverified claims not counted: ${m(f.unverifiedInCents)}.`);
+  lines.push(`Funds (real money only): available ${m(f.availableCents)} (reconciled revenue ${m(f.verifiedRevenueCents)}, verified own funds ${m(f.verifiedOwnFundsCents)}, expenses ${m(f.expensesCents)}, income-tax reserve ${m(f.taxReserveCents)}); not counted: unverified ${m(f.unverifiedInCents)}, verified but not reconciled to an invoice ${m(f.unreconciledRevenueCents)}.`);
+  if (f.demoRevenueCents) lines.push(`Demonstration money (simulated, NEVER counted): ${m(f.demoRevenueCents)}.`);
   const claims = ledger.filter((e) => e.status === 'claimed');
-  if (claims.length) lines.push(`Waiting for your verification: ${claims.map((e) => `${e.id} ${e.kind} ${m(e.amountCents)} "${e.description}"`).join('; ')}`);
+  if (claims.length) lines.push(`Waiting for your verification: ${claims.map((e) => `${e.id} ${e.mode === 'demo' ? 'DEMO ' : ''}${e.kind} ${m(e.amountCents)} "${e.description}"`).join('; ')}`);
   if (goal.purchasePlan) {
     lines.push(`PURCHASE PREPARED (not executed): ${m(goal.purchasePlan.priceCents)} at ${goal.purchasePlan.sourceUrl}. Steps: ${goal.purchasePlan.steps.join(' ')}`);
   } else {

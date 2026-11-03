@@ -20,8 +20,10 @@ import { extractDocument } from '../attachments/documentExtraction';
 import { detectContent } from '../attachments/mime';
 import { isCredentialFilePath, redactSecrets as redactCredentialShapes } from '../platform/credentialStore';
 import { createResearchEvidenceRunner } from './researchCapability';
-import { advanceWish, buildWebsiteDeliverable } from './wishPipeline';
-import { createWishGoal, evaluateWishPurchase, formatMoney, parseAmountToCents, prepareWishPurchase, recordWishLedgerClaim, renderWishStatus, resolveWishGoal, updateWishTarget } from '../domain/wishes';
+import { advanceWish, buildWebsiteDeliverable, renderWishStatus } from './wishPipeline';
+import { fulfilWishOrder, invoiceWishOrder, markWishOrderDelivered } from './wishFulfilment';
+import { createWishGoal, evaluateWishPurchase, formatMoney, parseAmountToCents, prepareWishPurchase, recordWishLedgerClaim, resolveWishGoal, updateWishTarget } from '../domain/wishes';
+import { acceptWishOrder, addWishOrderEvent, createWishOrder, getWishOrder } from '../domain/wishOrders';
 import { completeReminder, createNote, createReminder, listReminders } from '../domain/everydayTools';
 import { buildDailyBriefing, renderDailyBriefing } from './dailyBriefing';
 import {
@@ -1811,6 +1813,7 @@ export class PiAgentEngine implements EngineAdapter {
             description: { type: 'string', description: 'What the money is, in the user\'s words.' },
             evidenceKind: { type: 'string', description: 'What proves it, e.g. bank_transfer, paypal, invoice, receipt.' },
             evidenceRef: { type: 'string', description: 'The reference the user gave (transaction id, invoice number).' },
+            orderId: { type: 'string', description: 'For a customer payment: the order it pays (a demo order\'s money is demo money and never counts).' },
           },
           required: ['kind', 'amount', 'description'],
         },
@@ -1824,6 +1827,7 @@ export class PiAgentEngine implements EngineAdapter {
               description: String(args.description ?? ''),
               evidenceKind: args.evidenceKind ? String(args.evidenceKind) : null,
               evidenceRef: args.evidenceRef ? String(args.evidenceRef) : null,
+              orderId: args.orderId ? String(args.orderId) : null,
               recordedBy: actor,
             });
             const readiness = evaluateWishPurchase(db, goal.id);
@@ -1870,6 +1874,65 @@ export class PiAgentEngine implements EngineAdapter {
             });
             return { content: [{ type: 'text', text: `Page written: ${out.file}. Structural HTML check: ${out.structurallySound ? 'passed (not a visual review)' : `FAILED — ${out.findings.join('; ')}`}. Nothing was published or sent.` }] };
           } catch (err: any) { return { content: [{ type: 'text', text: `Could not build the page: ${err.message}` }], isError: true }; }
+        },
+      },
+      {
+        name: 'wish_order',
+        label: 'wish_order',
+        description:
+          'Run one customer order of the website offering, step by step, as the user reports what happened. '
+          + 'new_lead: a prospect asked about the service (channel: personal_network, referral, inbound_listing, association_with_permission, walk_in; demo=true for a simulated customer). '
+          + 'accept: the customer accepted and sent the questionnaire answers (brief). build: Pandesh builds the site, Impressum and privacy pages, runs the quality checks and writes the handover. '
+          + 'delivered: the user sent the site and the customer accepted it. invoice: Pandesh writes the invoice (the user sends it). log_step: time the user spent on a step. '
+          + 'Real orders are refused until the user has recorded the business authorization in Pandesh. Pandesh never contacts customers, publishes, sends invoices or collects money.',
+        parameters: {
+          type: 'object',
+          properties: {
+            action: { type: 'string', enum: ['new_lead', 'accept', 'build', 'delivered', 'invoice', 'log_step'] },
+            goalId: { type: 'string' },
+            orderId: { type: 'string', description: 'Required for every action except new_lead.' },
+            demo: { type: 'boolean', description: 'new_lead: a simulated customer. Its money never counts.' },
+            channel: { type: 'string', description: 'new_lead: how the prospect came.' },
+            customerName: { type: 'string' },
+            customerEmail: { type: 'string' },
+            customerAddress: { type: 'string', description: 'Postal address for the invoice.' },
+            price: { type: 'number', description: 'new_lead: the agreed price, e.g. 290.' },
+            brief: { type: 'object', description: 'accept: the questionnaire answers: businessName, tagline, area, highlights[], about, services[], hours[], address, phone, email, accent, language, impressum {name, address, phone, email, extra[]}, privacyPolicy (the customer\'s own text).' },
+            step: { type: 'string', description: 'log_step: what the user did.' },
+            minutes: { type: 'number', description: 'delivered/log_step: minutes the user spent.' },
+          },
+          required: ['action'],
+        },
+        execute: async (_id: string, args: any) => {
+          try {
+            if (!ctx.dataDir) return { content: [{ type: 'text', text: 'NOT DONE: Pandesh\'s data folder is not available in this run.' }], isError: true };
+            const goal = resolveWishGoal(db, args.goalId ? String(args.goalId) : null);
+            const orderId = String(args.orderId ?? '');
+            const minutes = Number.isFinite(Number(args.minutes)) && Number(args.minutes) > 0 ? Math.round(Number(args.minutes)) : undefined;
+            const order = args.action === 'new_lead'
+              ? createWishOrder(db, {
+                goalId: goal.id, mode: args.demo === true ? 'demo' : 'real', channel: args.demo === true ? 'demo' : String(args.channel ?? ''),
+                customerName: String(args.customerName ?? ''), customerEmail: args.customerEmail ? String(args.customerEmail) : null,
+                customerAddress: args.customerAddress ? String(args.customerAddress) : null, priceCents: Math.round(Number(args.price ?? 290) * 100),
+              })
+              : args.action === 'accept' ? acceptWishOrder(db, orderId, (args.brief ?? {}) as Record<string, unknown>)
+                : args.action === 'build' ? fulfilWishOrder(db, ctx.dataDir, orderId)
+                  : args.action === 'delivered' ? markWishOrderDelivered(db, orderId, minutes)
+                    : args.action === 'invoice' ? invoiceWishOrder(db, ctx.dataDir, orderId, goal)
+                      : args.action === 'log_step' ? (getWishOrder(db, orderId), addWishOrderEvent(db, orderId, { by: 'human', step: String(args.step ?? 'work').slice(0, 200), ...(minutes ? { minutes } : {}) }))
+                        : null;
+            if (!order) return { content: [{ type: 'text', text: `Unknown action '${String(args.action)}'.` }], isError: true };
+            const last = order.events[order.events.length - 1];
+            return {
+              content: [{
+                type: 'text',
+                text: `${order.mode === 'demo' ? 'DEMO ' : ''}order ${order.id} (${order.customerName}): ${order.status}. Last step: ${last?.step}.`
+                  + `${order.qc ? `\nQuality checks: ${order.qc.checks.map((c) => `${c.ok ? 'OK' : 'FAIL'} ${c.detail}`).join('; ')}` : ''}`
+                  + `${order.folder ? `\nFiles: ${order.folder}` : ''}${order.invoiceFile ? `\nInvoice: ${order.invoiceFile}` : ''}`
+                  + '\nNothing was sent, published or collected; the user does that.',
+              }],
+            };
+          } catch (err: any) { return { content: [{ type: 'text', text: `Order step not done: ${err.message}` }], isError: true }; }
         },
       },
       {
@@ -3201,6 +3264,7 @@ TRUTHFULNESS & BEHAVIORAL PROTOCOL:
 7a. WISHES (the user wants to buy something and to earn the money for it, e.g. "I want the X for €200, find a legitimate way to earn it"):
    - Call 'create_wish_goal' with the user's words, then 'advance_wish' once. Present the status it returns as written: offers with their URLs, the selected earning option and the offering folder, funds and what blocks the purchase.
    - Money is never invented: income the user reports goes in with 'record_wish_money' as a claim (a customer payment is kind revenue). Only the user can verify a claim, in Pandesh; you cannot, so never offer to, and never count unverified money in totals. Never say money was earned, an offer was published, a customer was contacted or anything was bought; Pandesh does none of those.
+   - Customer orders go through 'wish_order' as the user reports each step. Real orders need the business authorization the user records in Pandesh; if a step is refused as NOT AUTHORIZED, say so and offer a demo order instead. Demo money is never purchasing power.
 8. BRIEFINGS, REMINDERS, SCHEDULES, EMAIL & CALENDAR:
    - For a daily briefing call 'get_briefing_data' once and present what it returns as written (Top 3 priorities, Calendar, Important email, Pending decisions, Can wait, Housekeeping, Suggested next action). It already ranks by importance and separates facts from suggestions: do not re-rank by recency, do not pad it, and keep it compact unless the user asks for details (then call it again with detail=true). Do not approve, reject, dismiss, cancel or reschedule anything the housekeeping lines mention unless the user asks: 'dismiss_reminder' marks a reminder done, 'cancel_scheduled_task' switches off the redundant duplicate briefing schedule the user chooses, and other items are reviewed in their own screens.
    - Email and calendar: use the gmail_* and calendar_* tools (they appear only as connected services allow). Current local time: ${new Date().toLocaleString('en-GB', { timeZone: localTimeZone, dateStyle: 'full', timeStyle: 'short' })} (${localTimeZone}) — resolve "tomorrow", "next Friday" etc. ONLY with 'resolve_time' and pass its 'iso' value. Email timestamps: quote 'receivedLocal' (already in the user's zone), never re-derive from raw header text; report counts exactly as the tool gives them (matched vs shown).

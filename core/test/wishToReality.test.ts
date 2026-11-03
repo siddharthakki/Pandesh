@@ -13,9 +13,11 @@ import type { CoreDatabase } from '../db/connection';
 import { openCoreDatabase } from '../db/openCore';
 import {
   createWishGoal, evaluateWishPurchase, getWishGoal, listWishLedger, listWishOffers, listWishOpportunities, parseWish,
-  prepareWishPurchase, recordWishLedgerClaim, renderWishStatus, resolveWishGoal, updateWishTarget, verifyWishLedgerEntry, wishFunds,
+  prepareWishPurchase, recordWishLedgerClaim, resolveWishGoal, updateWishTarget, verifyWishLedgerEntry, wishFunds,
 } from '../domain/wishes';
-import { advanceWish, buildWebsiteDeliverable, extractOffers, parseEvidenceSources, renderOnePageSite } from '../runtime/wishPipeline';
+import { advanceWish, buildWebsiteDeliverable, extractOffers, parseEvidenceSources, renderOnePageSite, renderWishStatus } from '../runtime/wishPipeline';
+import { fulfilWishOrder, invoiceWishOrder, markWishOrderDelivered } from '../runtime/wishFulfilment';
+import { acceptWishOrder, authorizeWishBusiness, createWishOrder, getWishOrder, wishCommerceFigures } from '../domain/wishOrders';
 import { classifyChatToolCall } from '../domain/permissionModes';
 
 const WISH = 'Pandesh, I want the AOC CU34G4ZCA monitor for €200. Find a legitimate way to earn enough money to buy it.';
@@ -100,13 +102,17 @@ describe('advancing the goal end to end', () => {
     const offering = opps.find((o) => o.status === 'selected')!.offering as { folder: string; sampleStructurallySound: boolean; published: boolean };
     expect(offering.published).toBe(false);
     expect(offering.sampleStructurallySound).toBe(true);
-    expect(fs.readFileSync(path.join(offering.folder, 'OFFER.md'), 'utf8')).toMatch(/DRAFT — NOT PUBLISHED/);
-    expect(fs.readFileSync(path.join(offering.folder, 'sample', 'index.html'), 'utf8')).toMatch(/Not a real business/);
+    expect(fs.readFileSync(path.join(offering.folder, 'ANGEBOT.md'), 'utf8')).toMatch(/ENTWURF – NICHT VERÖFFENTLICHT/);
+    expect(fs.readFileSync(path.join(offering.folder, 'sample', 'index.html'), 'utf8')).toMatch(/Kein echtes Unternehmen/);
+    expect(fs.existsSync(path.join(offering.folder, 'sample', 'impressum.html'))).toBe(true);
+    expect(fs.readFileSync(path.join(offering.folder, 'ENTWURF-ANSPRACHE.md'), 'utf8')).toMatch(/§ 7 UWG/);
 
-    // The exact model costs €347.89 against a €200 target and nothing has been earned: no purchase plan.
+    // The exact model costs €347.89 against a €200 limit and nothing has been earned: no purchase plan. Only the €200
+    // limit has to be earned, because nothing above it is ever bought.
     expect(after.purchasePlan).toBeNull();
     expect(result.status).toMatch(/lowest exact offer is €347\.89, above the target of €200\.00/);
-    expect(result.status).toMatch(/Still to earn: €347\.89/);
+    expect(result.status).toMatch(/Still to earn: €200\.00/);
+    expect(result.status).toMatch(/Business authorization: NONE recorded/);
     expect(result.steps.some((s) => /Purchase not prepared/.test(s))).toBe(true);
   });
 
@@ -120,17 +126,20 @@ describe('advancing the goal end to end', () => {
 });
 
 describe('money is never invented', () => {
-  it('a claim does not count; only a person can verify it; claimed expenses still count against funds', () => {
+  it('a claim does not count; only a person can verify it; revenue needs an invoiced order; claimed expenses still count', () => {
     const { goal } = createWishGoal(db, { wish: WISH });
     const claim = recordWishLedgerClaim(db, { goalId: goal.id, kind: 'revenue', amountCents: 15_000, description: 'Website for Café Rosa', recordedBy: 'karkedikha:pi' });
     expect(wishFunds(db, goal.id).availableCents).toBe(0);
     expect(wishFunds(db, goal.id).unverifiedInCents).toBe(15_000);
     for (const actor of ['karkedikha:pi', 'core:wish', 'pi', '']) {
-      expect(() => verifyWishLedgerEntry(db, claim.id, 'verified', actor)).toThrow(/only a person/);
+      expect(() => verifyWishLedgerEntry(db, claim.id, 'verified', actor, { paymentReference: 'X' })).toThrow(/only a person/);
     }
-    verifyWishLedgerEntry(db, claim.id, 'verified', 'client:desktop-1');
-    recordWishLedgerClaim(db, { goalId: goal.id, kind: 'expense', amountCents: 1_000, description: 'Domain for a demo', recordedBy: 'karkedikha:pi' });
-    expect(wishFunds(db, goal.id)).toMatchObject({ availableCents: 14_000, verifiedRevenueCents: 15_000, expensesCents: 1_000 });
+    expect(() => verifyWishLedgerEntry(db, claim.id, 'verified', 'client:desktop-1')).toThrow(/payment reference/);
+    expect(() => verifyWishLedgerEntry(db, claim.id, 'verified', 'client:desktop-1', { paymentReference: 'SEPA 123' })).toThrow(/only be reconciled against a customer order/);
+    const savings = recordWishLedgerClaim(db, { goalId: goal.id, kind: 'funds', amountCents: 5_000, description: 'my savings', recordedBy: 'karkedikha:pi' });
+    verifyWishLedgerEntry(db, savings.id, 'verified', 'client:desktop-1');
+    recordWishLedgerClaim(db, { goalId: goal.id, kind: 'expense', amountCents: 1_000, description: 'Gewerbeanmeldung', recordedBy: 'karkedikha:pi' });
+    expect(wishFunds(db, goal.id)).toMatchObject({ availableCents: 4_000, verifiedRevenueCents: 0, verifiedOwnFundsCents: 5_000, expensesCents: 1_000 });
   });
 
   it('the purchase is prepared (never executed) only when a fresh exact offer meets the target and verified funds cover it', async () => {
@@ -141,10 +150,8 @@ describe('money is never invented', () => {
     updateWishTarget(db, goal.id, 35_000);
     expect(prepareWishPurchase(db, goal.id, t0).plan).toBeNull(); // price ok now, but no verified money
 
-    for (const amount of [15_000, 15_000, 5_000]) {
-      const e = recordWishLedgerClaim(db, { goalId: goal.id, kind: 'revenue', amountCents: amount, description: 'website order', recordedBy: 'karkedikha:pi' });
-      verifyWishLedgerEntry(db, e.id, 'verified', 'client:desktop-1');
-    }
+    const e = recordWishLedgerClaim(db, { goalId: goal.id, kind: 'funds', amountCents: 35_000, description: 'savings set aside', recordedBy: 'karkedikha:pi' });
+    verifyWishLedgerEntry(db, e.id, 'verified', 'client:desktop-1');
     const prepared = prepareWishPurchase(db, goal.id, t0);
     expect(prepared.plan).toMatchObject({ executed: false, priceCents: 34_789, sourceUrl: 'https://geizhals.at/aoc-cu34g4zca-a3892227.html' });
     expect(getWishGoal(db, goal.id).status).toBe('purchase_prepared');
@@ -161,7 +168,7 @@ describe('money is never invented', () => {
 describe('permission modes', () => {
   it('wish_status is read-only; every wish tool that changes something is a mutation (Plan Only blocks it)', () => {
     expect(classifyChatToolCall('wish_status', {}, new Set(), null)).toBe('read');
-    for (const tool of ['create_wish_goal', 'advance_wish', 'record_wish_money', 'update_wish_goal', 'build_wish_deliverable']) {
+    for (const tool of ['create_wish_goal', 'advance_wish', 'record_wish_money', 'update_wish_goal', 'build_wish_deliverable', 'wish_order']) {
       expect(classifyChatToolCall(tool, {}, new Set(), null)).toBe('mutating');
     }
   });
@@ -170,5 +177,87 @@ describe('permission modes', () => {
     const html = renderOnePageSite({ businessName: '<script>x</script>', tagline: '"q"', email: 'bad"@x.com' });
     expect(html).not.toContain('<script>x');
     expect(html).not.toContain('mailto:bad"');
+  });
+});
+
+// ---------------------------------------------------------------- real customers, real money
+
+const PRIVACY = Array.from({ length: 6 }, (_, i) => `Absatz ${i + 1}: Diese Website setzt keine Cookies und lädt nichts von anderen Servern. Verantwortlich ist die im Impressum genannte Person; Sie haben das Recht auf Auskunft, Berichtigung und Löschung.`).join('\n\n');
+const realBrief = (email: string) => ({
+  businessName: 'Kindertagespflege Sonnenblume', tagline: 'Betreuung für Kinder von 1 bis 3', language: 'de', services: ['Mo–Fr 7–15 Uhr'],
+  phone: '+49 341 1234567', email,
+  impressum: { name: 'Maria Muster', address: 'Lindenweg 4, 04109 Leipzig', email },
+  privacyPolicy: PRIVACY,
+});
+const T0 = Date.parse('2026-11-03T20:00:00Z');
+
+describe('demonstration money is never purchasing power', () => {
+  it('a full demo order runs without authorization, and its reconciled payment is shown apart and never counts', () => {
+    const { goal } = createWishGoal(db, { wish: WISH });
+    expect(() => createWishOrder(db, { goalId: goal.id, mode: 'real', channel: 'personal_network', customerName: 'Real Person', priceCents: 29_000 })).toThrow(/NOT AUTHORIZED/);
+
+    let order = createWishOrder(db, { goalId: goal.id, mode: 'demo', channel: 'demo', customerName: 'Demo-Kundin (fiktiv)', customerAddress: 'Fiktivweg 1, 00000 Nirgendwo', priceCents: 29_000 });
+    order = acceptWishOrder(db, order.id, realBrief('demo@example.com'));
+    order = fulfilWishOrder(db, dir, order.id);
+    expect(order.status).toBe('built');
+    expect(fs.readFileSync(path.join(order.folder!, 'site', 'index.html'), 'utf8')).toMatch(/Kein echtes Unternehmen/);
+    order = markWishOrderDelivered(db, order.id, 20);
+    order = invoiceWishOrder(db, dir, order.id, goal, T0);
+    expect(order.invoiceNumber).toBe('DEMO-2026-001');
+    expect(fs.readFileSync(order.invoiceFile!, 'utf8')).toMatch(/KEINE GÜLTIGE RECHNUNG/);
+
+    const pay = recordWishLedgerClaim(db, { goalId: goal.id, kind: 'revenue', amountCents: 29_000, description: 'demo payment', orderId: order.id, recordedBy: 'karkedikha:pi' });
+    expect(pay.mode).toBe('demo');
+    verifyWishLedgerEntry(db, pay.id, 'verified', 'client:desktop-1', { paymentReference: 'DEMO-REF' });
+    expect(getWishOrder(db, order.id).status).toBe('paid');
+    expect(wishFunds(db, goal.id)).toMatchObject({ availableCents: 0, verifiedRevenueCents: 0, demoRevenueCents: 29_000 });
+    const status = renderWishStatus(db, goal.id, T0);
+    expect(status).toMatch(/Demonstration money \(simulated, NEVER counted\): €290\.00/);
+    expect(status).toMatch(/Still to earn: €200\.00/);
+    expect(wishCommerceFigures(db, goal.id, 'real').leads).toBe(0);
+  });
+});
+
+describe('a real order after the owner authorizes the business', () => {
+  it('only a person authorizes; unlawful channels are refused; placeholders fail QC; payment must match the invoice', () => {
+    const { goal } = createWishGoal(db, { wish: WISH });
+    const authorization = {
+      legalName: 'Sid Example', address: 'Hauptstr. 1, 04109 Leipzig', email: 'sid@mail.de', vatMode: 'kleinunternehmer', taxNumber: '231/123/45678',
+      registration: 'Gewerbeanmeldung Leipzig 2026-11-10; Fragebogen ELSTER 2026-11-11', taxReservePercent: 25, paymentDetails: 'IBAN DE00 0000 0000 0000 0000 00, Sid Example',
+      scopes: { publish: true, contact: true, contract: true, payments: true },
+    };
+    expect(() => authorizeWishBusiness(db, authorization, 'karkedikha:pi')).toThrow(/only a person/);
+    authorizeWishBusiness(db, authorization, 'client:desktop-1');
+    expect(() => createWishOrder(db, { goalId: goal.id, mode: 'real', channel: 'cold_email', customerName: 'X', priceCents: 29_000 })).toThrow(/not permitted channels/);
+
+    let order = createWishOrder(db, { goalId: goal.id, mode: 'real', channel: 'personal_network', customerName: 'Maria Muster', customerAddress: 'Lindenweg 4, 04109 Leipzig', priceCents: 29_000 });
+    order = acceptWishOrder(db, order.id, realBrief('maria@example.com'));
+    order = fulfilWishOrder(db, dir, order.id);
+    expect(order.status).toBe('qc_failed');
+    expect(order.qc!.checks.find((c) => !c.ok)?.detail).toMatch(/placeholder/);
+    expect(() => markWishOrderDelivered(db, order.id)).toThrow(/passed QC/);
+
+    order = acceptWishOrder(db, order.id, realBrief('maria.muster@web.de'));
+    order = fulfilWishOrder(db, dir, order.id);
+    expect(order.qc!.checks.filter((c) => !c.ok)).toEqual([]);
+    order = markWishOrderDelivered(db, order.id, 30);
+    order = invoiceWishOrder(db, dir, order.id, goal, T0);
+    expect(order.invoiceNumber).toBe('RE-2026-001');
+    const invoice = fs.readFileSync(order.invoiceFile!, 'utf8');
+    expect(invoice).toMatch(/§ 19 UStG wird keine Umsatzsteuer berechnet/);
+    expect(invoice).toMatch(/231\/123\/45678/);
+    expect(invoice).toMatch(/290,00 €/);
+
+    const wrong = recordWishLedgerClaim(db, { goalId: goal.id, kind: 'revenue', amountCents: 25_000, description: 'Zahlung Maria', orderId: order.id, recordedBy: 'karkedikha:pi' });
+    expect(() => verifyWishLedgerEntry(db, wrong.id, 'verified', 'client:desktop-1', { paymentReference: 'SEPA 991' })).toThrow(/does not match invoice RE-2026-001/);
+    verifyWishLedgerEntry(db, wrong.id, 'rejected', 'client:desktop-1');
+    const paid = recordWishLedgerClaim(db, { goalId: goal.id, kind: 'revenue', amountCents: 29_000, description: 'Zahlung Maria', orderId: order.id, recordedBy: 'karkedikha:pi' });
+    verifyWishLedgerEntry(db, paid.id, 'verified', 'client:desktop-1', { paymentReference: 'SEPA 992' });
+    recordWishLedgerClaim(db, { goalId: goal.id, kind: 'expense', amountCents: 5_000, description: 'Gewerbeanmeldung', recordedBy: 'karkedikha:pi' });
+
+    // (290 − 50) × 75% after the income-tax reserve: €180 of real purchasing power, €20 still to earn for the €200 limit.
+    expect(wishFunds(db, goal.id)).toMatchObject({ verifiedRevenueCents: 29_000, expensesCents: 5_000, taxReserveCents: 6_000, availableCents: 18_000 });
+    expect(evaluateWishPurchase(db, goal.id).shortfallCents).toBe(2_000);
+    expect(wishCommerceFigures(db, goal.id, 'real')).toMatchObject({ leads: 1, paidOrders: 1, revenueCents: 29_000, costsCents: 5_000, acquisitionCostPerCustomerCents: 5_000, humanMinutes: 30 });
   });
 });

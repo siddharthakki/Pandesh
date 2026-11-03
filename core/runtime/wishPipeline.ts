@@ -11,19 +11,23 @@
  * ledger, and an offer is only "exact" when the page itself names the exact model.
  */
 import * as crypto from 'node:crypto';
-import * as fs from 'node:fs';
-import * as path from 'node:path';
 import type { CoreDatabase } from '../db/connection';
 import type { ToolExecutionResult } from './toolRunner';
-import { validateStaticHtml } from './staticHtmlValidation';
+import { WEBSITE_OFFERING, developWebsiteOffering } from './wishFulfilment';
+import { renderWishCommerce } from '../domain/wishOrders';
 import {
   type WishGoal, type WishOffer, evaluateWishPurchase, formatMoney, getWishGoal, listWishOpportunities, parseAmountToCents,
-  prepareWishPurchase, renderWishStatus, replaceWishOffers, replaceWishOpportunities, selectWishOpportunity, setWishOffering,
+  prepareWishPurchase, renderWishStatus as renderGoalStatus, replaceWishOffers, replaceWishOpportunities, selectWishOpportunity, setWishOffering,
   setWishSpecs, setWishStage,
 } from '../domain/wishes';
 
 const CURRENCY_MARK: Record<string, string> = { EUR: '(?:€|EUR)', USD: '(?:\\$|USD)', GBP: '(?:£|GBP)' };
 const AMOUNT = '(\\d{1,3}(?:[.\\s]\\d{3})*(?:,\\d{2})|\\d{1,3}(?:,\\d{3})*(?:\\.\\d{2})|\\d+(?:[.,]\\d{2})?)';
+
+/** The goal's full status: the purchase side (wishes.ts) and the customers and real money (wishOrders.ts). */
+export function renderWishStatus(db: CoreDatabase, goalId: string, nowMs = Date.now()): string {
+  return [renderGoalStatus(db, goalId, nowMs), ...renderWishCommerce(db, goalId)].join('\n');
+}
 
 const compact = (s: string) => s.toLowerCase().replace(/[^a-z0-9]/g, '');
 
@@ -135,14 +139,14 @@ interface OpportunityTemplate {
 export const OPPORTUNITY_TEMPLATES: OpportunityTemplate[] = [
   {
     key: 'one_page_websites',
-    title: 'One-page websites for local small businesses',
-    pandeshDoes: 'Builds the complete page from a customer brief (texts, layout, opening hours, contact links) and checks it with the static HTML validator.',
-    youDo: 'Find the customer, agree the price, hand over the files or publish them, and collect payment yourself.',
-    unitPriceCents: 15_000,
-    pandeshShare: 0.8,
-    hoursPerUnitForYou: 1,
-    capability: 'built-in site generator + static HTML validation (write_file path not needed)',
-    risks: 'Customer must own the texts and photos they provide; register a small business/side income as your country requires.',
+    title: 'One-page websites for childminders (Kindertagespflege) in Germany',
+    pandeshDoes: 'Records leads and orders, builds the site with Impressum and privacy pages from the intake answers, runs the quality checks, writes the handover and the §19 UStG invoice.',
+    youDo: 'Register the business, talk to prospects through permitted channels, review and send the site, send the invoice, confirm the payment with its bank reference.',
+    unitPriceCents: WEBSITE_OFFERING.priceCents,
+    pandeshShare: 0.7,
+    hoursPerUnitForYou: 1.5,
+    capability: 'built-in site generator + quality checks + invoice writer',
+    risks: 'Demand at this price is unproven until real conversations; registration (Gewerbe/Finanzamt) is required before the first sale; the customer supplies and answers for their own Impressum and privacy text.',
   },
   {
     key: 'cv_cover_letters',
@@ -221,7 +225,9 @@ export function assessOpportunities(shortfallCents: number): Array<{ key: string
         pandeshDoes: t.pandeshDoes,
         youDo: t.youDo,
         unitPriceCents: t.unitPriceCents || null,
-        priceBasis: t.unitPriceCents ? 'proposed price — confirm before offering it to anyone' : 'unknown until you name the items',
+        priceBasis: t.key === 'one_page_websites'
+          ? 'opening price to test: German freelancers quote ~€500–1,500 per one-pager (vendor guides, 2026-11-03); this offer is narrower; no niche price data found'
+          : t.unitPriceCents ? 'proposed price — confirm before offering it to anyone' : 'unknown until you name the items',
         unitsNeeded,
         yourHours,
         capability: t.capability,
@@ -231,160 +237,9 @@ export function assessOpportunities(shortfallCents: number): Array<{ key: string
   });
 }
 
-// ---------------------------------------------------------------- the website offering
+// ---------------------------------------------------------------- the website offering (built in wishFulfilment.ts)
 
-export interface SiteBrief {
-  businessName: string;
-  tagline?: string;
-  about?: string;
-  services?: string[];
-  hours?: string[];
-  address?: string;
-  phone?: string;
-  email?: string;
-  accent?: string;
-  language?: string;
-  /** Marks a demonstration page so it can never be mistaken for a real business. */
-  sample?: boolean;
-}
-
-const esc = (s: string) => s.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]!));
-
-/** A complete, self-contained, responsive one-page site (no external requests) from a customer brief. */
-export function renderOnePageSite(brief: SiteBrief): string {
-  const name = esc(brief.businessName.trim().slice(0, 120) || 'Business');
-  const accent = /^#[0-9a-f]{6}$/i.test(brief.accent ?? '') ? brief.accent! : '#1f6f5c';
-  const lang = /^[a-z]{2}$/.test(brief.language ?? '') ? brief.language! : 'en';
-  const list = (items?: string[]) => (items ?? []).filter(Boolean).slice(0, 20).map((i) => `<li>${esc(i)}</li>`).join('');
-  const tel = brief.phone ? `<a href="tel:${esc(brief.phone.replace(/[^\d+]/g, ''))}">${esc(brief.phone)}</a>` : '';
-  const mail = brief.email && /^[^\s@<>"]+@[^\s@<>"]+\.[a-z]{2,}$/i.test(brief.email) ? `<a href="mailto:${esc(brief.email)}">${esc(brief.email)}</a>` : '';
-  return `<!doctype html>
-<html lang="${lang}">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>${name}</title>
-<meta name="description" content="${esc((brief.tagline ?? brief.about ?? name).slice(0, 160))}">
-<style>
-:root { --accent: ${accent}; --ink: #1d2327; --muted: #5b6770; --bg: #fbfaf7; --card: #ffffff; }
-* { box-sizing: border-box; }
-body { margin: 0; font: 17px/1.6 system-ui, -apple-system, "Segoe UI", sans-serif; color: var(--ink); background: var(--bg); }
-header { background: var(--accent); color: #fff; padding: 56px 20px 48px; text-align: center; }
-header h1 { margin: 0 0 8px; font-size: clamp(28px, 6vw, 44px); line-height: 1.15; }
-header p { margin: 0; opacity: .92; }
-main { max-width: 860px; margin: 0 auto; padding: 32px 20px 56px; display: grid; gap: 20px; }
-section { background: var(--card); border-radius: 12px; padding: 22px 24px; box-shadow: 0 1px 3px rgba(0,0,0,.08); }
-h2 { margin: 0 0 10px; font-size: 21px; color: var(--accent); }
-ul { margin: 0; padding-left: 20px; }
-a { color: var(--accent); }
-.sample { background: #fff4c2; color: #4a3b00; text-align: center; padding: 8px 16px; font-size: 14px; }
-footer { text-align: center; color: var(--muted); font-size: 14px; padding: 0 20px 32px; }
-</style>
-</head>
-<body>
-${brief.sample ? '<p class="sample">Sample page made by Pandesh to show the service. Not a real business.</p>\n' : ''}<header>
-<h1>${name}</h1>
-${brief.tagline ? `<p>${esc(brief.tagline)}</p>` : ''}
-</header>
-<main>
-${brief.about ? `<section aria-labelledby="about"><h2 id="about">About us</h2><p>${esc(brief.about)}</p></section>` : ''}
-${brief.services?.length ? `<section aria-labelledby="services"><h2 id="services">What we offer</h2><ul>${list(brief.services)}</ul></section>` : ''}
-${brief.hours?.length ? `<section aria-labelledby="hours"><h2 id="hours">Opening hours</h2><ul>${list(brief.hours)}</ul></section>` : ''}
-${brief.address || tel || mail ? `<section aria-labelledby="contact"><h2 id="contact">Contact</h2>${brief.address ? `<p>${esc(brief.address)}</p>` : ''}${tel ? `<p>Phone: ${tel}</p>` : ''}${mail ? `<p>Email: ${mail}</p>` : ''}</section>` : ''}
-</main>
-<footer>&copy; ${new Date().getFullYear()} ${name}</footer>
-</body>
-</html>
-`;
-}
-
-const SAMPLE_BRIEF: SiteBrief = {
-  businessName: 'Sample Bakery Lindenhof',
-  tagline: 'Fresh bread every morning since 1998',
-  about: 'A family bakery baking sourdough, rolls and seasonal cakes on site every morning.',
-  services: ['Sourdough and rye bread', 'Breakfast rolls from 6:30', 'Cakes to order for birthdays and weddings'],
-  hours: ['Mon–Fri 6:30–18:00', 'Sat 7:00–13:00', 'Sun closed'],
-  address: 'Example Street 1, 12345 Sample Town',
-  phone: '+49 000 000000',
-  email: 'hello@example.com',
-  accent: '#8a4b14',
-  sample: true,
-};
-
-function writeValidatedSite(folder: string, relative: string, brief: SiteBrief): { file: string; structurallySound: boolean; findings: string[] } {
-  const full = path.join(folder, ...relative.split('/'));
-  fs.mkdirSync(path.dirname(full), { recursive: true });
-  fs.writeFileSync(full, renderOnePageSite(brief), 'utf8');
-  const check = validateStaticHtml(folder, relative);
-  return { file: full, structurallySound: check.structurallySound, findings: check.findings };
-}
-
-export function wishFolder(dataDir: string, goalId: string): string {
-  if (!/^wish_[\w-]+$/.test(goalId)) throw new Error('invalid goal id');
-  return path.join(dataDir, 'wishes', goalId);
-}
-
-/** Builds the website offering as files in Pandesh's own data folder. Nothing is published. */
-export function developWebsiteOffering(dataDir: string, goal: WishGoal, unitPriceCents: number, unitsNeeded: number): Record<string, unknown> {
-  const folder = path.join(wishFolder(dataDir, goal.id), 'offering-one-page-websites');
-  fs.mkdirSync(folder, { recursive: true });
-  const price = formatMoney(unitPriceCents, goal.currency);
-  fs.writeFileSync(path.join(folder, 'OFFER.md'), `# One-page website for your business — ${price}
-
-DRAFT — NOT PUBLISHED. Nothing here has been offered to anyone. Review and authorize before using it.
-
-## What you get
-- A single, fast page with your name, what you offer, opening hours and contact links (phone and email tap-to-call/mail).
-- Works on phones and computers; no tracking, no external scripts, no monthly fee.
-- One round of changes included. Delivered as files you own (index.html), ready for any web host.
-
-## How it works
-1. You answer the questions in intake-questions.md (10 minutes).
-2. You receive the page within 2 working days.
-3. You pay ${price} after you have seen it and are happy with it.
-
-## Not included
-Domain, hosting, photos you do not own, online shop or booking systems.
-
-## Example
-See sample/index.html (a made-up bakery, clearly marked as a sample).
-
----
-Internal note for the owner: ${unitsNeeded} sale(s) at ${price} close the current gap for "${goal.productName}". The price is a proposal; payment is collected by you, never by Pandesh.
-`, 'utf8');
-  fs.writeFileSync(path.join(folder, 'intake-questions.md'), `# Questions for your website
-
-1. Business name, and one line that says what you do.
-2. Two or three sentences about you.
-3. What you offer (a short list).
-4. Opening hours.
-5. Address, phone and email to show.
-6. A colour you like (optional).
-7. Language of the page.
-8. Confirm that you own or may use every text you send.
-`, 'utf8');
-  const sample = writeValidatedSite(folder, 'sample/index.html', SAMPLE_BRIEF);
-  return {
-    folder,
-    files: ['OFFER.md', 'intake-questions.md', 'sample/index.html'],
-    unitPriceCents,
-    unitsNeeded,
-    validation: sample.structurallySound
-      ? 'Sample page passed the structural HTML check (not a visual or semantic review).'
-      : `Sample page FAILED the structural HTML check: ${sample.findings.join('; ')}`,
-    sampleStructurallySound: sample.structurallySound,
-    published: false,
-    developedAt: new Date().toISOString(),
-  };
-}
-
-/** Delivers one customer order of the website offering: the page, validated, in the goal's orders folder. Records no money. */
-export function buildWebsiteDeliverable(dataDir: string, goalId: string, brief: SiteBrief): { file: string; structurallySound: boolean; findings: string[] } {
-  if (!brief.businessName?.trim()) throw new Error('the brief needs a business name');
-  const slug = brief.businessName.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 40) || 'order';
-  const folder = path.join(wishFolder(dataDir, goalId), 'offering-one-page-websites');
-  return writeValidatedSite(folder, `orders/${slug}/index.html`, { ...brief, sample: false });
-}
+export { type SiteBrief, buildWebsiteDeliverable, developWebsiteOffering, renderOnePageSite, wishFolder } from './wishFulfilment';
 
 // ---------------------------------------------------------------- advancing a goal
 
@@ -440,12 +295,20 @@ export async function advanceWish(deps: AdvanceWishDeps, goalId: string, opts: {
     goal = getWishGoal(db, goalId);
   }
 
-  if (goal.stage === 'assess_opportunities') {
+  // An offering built by an earlier version of the website offering is reassessed and rebuilt (the selection is kept).
+  const current = listWishOpportunities(db, goalId).find((o) => o.status === 'selected');
+  const outdated = current?.key === 'one_page_websites' && Number((current.offering as { version?: number } | null)?.version ?? 1) < WEBSITE_OFFERING.version;
+  if (outdated) steps.push(`The website offering was built by an older version; reassessing and rebuilding it (now: ${WEBSITE_OFFERING.niche}).`);
+  if (goal.stage === 'assess_opportunities' || outdated) {
     const shortfall = evaluateWishPurchase(db, goalId, now()).shortfallCents;
     const assessed = replaceWishOpportunities(db, goalId, assessOpportunities(shortfall));
-    const best = assessed.filter((o) => o.status === 'candidate').sort((a, b) => b.score - a.score)[0];
-    if (!goal.selectedOpportunityId && best) selectWishOpportunity(db, goalId, best.key);
-    steps.push(`Assessed ${assessed.length} earning options for a shortfall of ${formatMoney(shortfall, goal.currency)}; selected "${best?.title}" (highest score). Excluded: ${assessed.filter((o) => o.status === 'excluded').map((o) => o.title).join('; ')}.`);
+    const best = assessed.filter((o) => o.status !== 'excluded').sort((a, b) => b.score - a.score)[0];
+    const kept = assessed.find((o) => o.status === 'selected');
+    if (!kept && best) selectWishOpportunity(db, goalId, best.key);
+    const choice = kept
+      ? `kept the selected "${kept.title}" (score ${kept.score.toFixed(2)}${best && best.key !== kept.key ? `; "${best.title}" now scores higher at ${best.score.toFixed(2)}` : ', highest'})`
+      : `selected "${best?.title}" (highest score)`;
+    steps.push(`Assessed ${assessed.length} earning options for a still-to-earn amount of ${formatMoney(shortfall, goal.currency)}; ${choice}. Excluded: ${assessed.filter((o) => o.status === 'excluded').map((o) => o.title).join('; ')}.`);
     setWishStage(db, goalId, 'develop_offering');
     goal = getWishGoal(db, goalId);
   }

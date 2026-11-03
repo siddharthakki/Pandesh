@@ -57,6 +57,8 @@ import * as karkeDikha from '../domain/karkeDikhaLifecycle';
 import * as backgroundTasks from '../domain/backgroundTasks';
 import * as notificationOutbox from '../domain/notificationOutbox';
 import * as wishes from '../domain/wishes';
+import * as wishOrders from '../domain/wishOrders';
+import { renderWishStatus } from '../runtime/wishPipeline';
 import * as permissionModes from '../domain/permissionModes';
 import { cancelBackgroundTaskWorker, resumeBackgroundTask } from '../runtime/backgroundWorker';
 import { latestRuntimeSequence, listRuntimeEventsAfter, recordRuntimeEvent } from '../domain/runtimeEvents';
@@ -1572,9 +1574,19 @@ export function buildRouter(
   // --- Wish-to-Reality: goals are read here; only a person verifies money (the model can only record a claim) ---
   router.get('/v1/wishes', (ctx) => ({ status: 200, body: { goals: wishes.listWishGoals(ctx.db) } }));
 
+  // Business authorization: only a person records it (registration, tax status, which outward actions are allowed).
+  router.get('/v1/wishes/business', (ctx) => ({ status: 200, body: { business: wishOrders.getWishBusiness(ctx.db) } }));
+
+  router.post('/v1/wishes/business', (ctx) => {
+    const key = requireIdempotencyKey(ctx);
+    return withIdempotency(ctx.db, { key, clientId: ctx.clientId, routeId: 'wishes.business.authorize' }, ctx.body, () => ({
+      status: 200, body: { business: wishOrders.authorizeWishBusiness(ctx.db, asRecord(ctx.body), ctx.actor) },
+    }));
+  });
+
   router.get('/v1/wishes/:id', (ctx, match) => ({
     status: 200,
-    body: { ...wishes.wishView(ctx.db, match.params.id), statusText: wishes.renderWishStatus(ctx.db, match.params.id) },
+    body: { ...wishes.wishView(ctx.db, match.params.id), orders: wishOrders.listWishOrders(ctx.db, match.params.id), statusText: renderWishStatus(ctx.db, match.params.id) },
   }));
 
   router.post('/v1/wishes/:id/ledger/:entryId/verify', (ctx, match) => {
@@ -1584,9 +1596,9 @@ export function buildRouter(
     if (!resolution) throw new CoreError('invalid_request', "resolution must be 'verified' or 'rejected'");
     return withIdempotency(ctx.db, { key, clientId: ctx.clientId, routeId: 'wishes.ledger.verify' }, ctx.body, () => {
       if (!wishes.listWishLedger(ctx.db, match.params.id).some((e) => e.id === match.params.entryId)) throw new CoreError('not_found', 'ledger entry does not belong to this goal');
-      const entry = wishes.verifyWishLedgerEntry(ctx.db, match.params.entryId, resolution, ctx.actor);
+      const entry = wishes.verifyWishLedgerEntry(ctx.db, match.params.entryId, resolution, ctx.actor, { paymentReference: typeof body.paymentReference === 'string' ? body.paymentReference : null });
       const purchase = wishes.prepareWishPurchase(ctx.db, entry.goalId);
-      return { status: 200, body: { entry, readiness: purchase, statusText: wishes.renderWishStatus(ctx.db, entry.goalId) } };
+      return { status: 200, body: { entry, readiness: purchase, statusText: renderWishStatus(ctx.db, entry.goalId) } };
     });
   });
 

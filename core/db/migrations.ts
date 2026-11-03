@@ -1348,6 +1348,54 @@ CREATE TABLE IF NOT EXISTS wish_ledger (
 CREATE INDEX IF NOT EXISTS idx_wish_ledger_goal ON wish_ledger(goalId, createdAt);
 `;
 
+/**
+ * Wish-to-Reality, real revenue: demonstration money is kept apart from real money, a payment counts only when a person
+ * reconciles it against an issued invoice, and real customer work is possible only after a person records the business
+ * authorization (registration, tax status, which outward actions are allowed).
+ */
+const MIGRATION_43_WISH_COMMERCE = `
+ALTER TABLE wish_ledger ADD COLUMN mode TEXT NOT NULL DEFAULT 'real';
+ALTER TABLE wish_ledger ADD COLUMN orderId TEXT;
+ALTER TABLE wish_ledger ADD COLUMN paymentReference TEXT;
+CREATE TABLE IF NOT EXISTS wish_business (
+  id TEXT PRIMARY KEY,
+  legalName TEXT NOT NULL,
+  address TEXT NOT NULL,
+  email TEXT NOT NULL,
+  phone TEXT,
+  taxNumber TEXT,
+  vatMode TEXT NOT NULL,
+  registration TEXT NOT NULL,
+  taxReserveBps INTEGER NOT NULL,
+  paymentDetails TEXT,
+  scopesJson TEXT NOT NULL,
+  authorizedBy TEXT NOT NULL,
+  authorizedAt TEXT NOT NULL,
+  updatedAt TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS wish_orders (
+  id TEXT PRIMARY KEY,
+  goalId TEXT NOT NULL REFERENCES wish_goals(id),
+  mode TEXT NOT NULL,
+  status TEXT NOT NULL,
+  channel TEXT NOT NULL,
+  customerName TEXT NOT NULL,
+  customerEmail TEXT,
+  customerAddress TEXT,
+  briefJson TEXT,
+  priceCents INTEGER NOT NULL,
+  currency TEXT NOT NULL,
+  folder TEXT,
+  qcJson TEXT,
+  invoiceNumber TEXT UNIQUE,
+  invoiceFile TEXT,
+  eventsJson TEXT NOT NULL DEFAULT '[]',
+  createdAt TEXT NOT NULL,
+  updatedAt TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_wish_orders_goal ON wish_orders(goalId, createdAt);
+`;
+
 const MIGRATION_36_BACKGROUND_TASKS = `
 CREATE TABLE IF NOT EXISTS background_tasks (
   id TEXT PRIMARY KEY,
@@ -1524,6 +1572,7 @@ export const MIGRATIONS: Migration[] = [
   { version: 40, description: 'Notification outbox: durable notification intents with host-reported delivery status and the registered delivery channel', sql: MIGRATION_40_NOTIFICATION_OUTBOX },
   { version: 41, description: 'Chat permission modes per conversation and standing authorizations (scope, pins, expiry, revocation)', sql: MIGRATION_41_PERMISSION_MODES },
   { version: 42, description: 'Wish-to-Reality: durable purchase goals, researched offers, earning opportunities and a verified funds ledger', sql: MIGRATION_42_WISH_GOALS },
+  { version: 43, description: 'Wish-to-Reality real revenue: demo vs real money, reconciled payments, business authorization and customer orders', sql: MIGRATION_43_WISH_COMMERCE },
 ];
 
 
