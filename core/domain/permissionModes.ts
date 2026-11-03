@@ -14,8 +14,10 @@
  * Every decision here is deterministic and reuses the existing approval record (`createApproval` with
  * `initialResolution`) and runtime-event audit trail; nothing executes from this module.
  */
+import * as cp from 'node:child_process';
 import * as crypto from 'node:crypto';
 import * as fs from 'node:fs';
+import * as os from 'node:os';
 import * as path from 'node:path';
 import type { CoreDatabase } from '../db/connection';
 import { CoreError } from './errors';
@@ -55,7 +57,7 @@ export interface StandingAuthorization {
   workspaceRoot: string | null;
   categories: AuthorizationCategory[];
   /** Facts Core read from disk at grant time; a later mismatch means the grant no longer applies. */
-  pins: { npmScripts?: Record<string, string> };
+  pins: { npmScripts?: Record<string, string>; workspaceDigest?: string };
   createdAt: string;
   createdBy: string;
   expiresAt: string;
@@ -153,6 +155,57 @@ function scriptChainDigest(scripts: Record<string, string>, script: string): str
   return sha256(JSON.stringify([scripts[`pre${script}`] ?? null, scripts[script], scripts[`post${script}`] ?? null]));
 }
 
+/** Above this many files the workspace is too large to verify per action, so validation always asks. */
+const WORKSPACE_DIGEST_MAX_ENTRIES = 50_000;
+
+/**
+ * Path, size and modification time of every file in the workspace except .git and node_modules (too large to walk per
+ * action; Pandesh's own writes there are caught from its file records). Validation scripts execute this content, so
+ * any change after the grant (a new test, a rewritten config, a .npmrc) means the grant no longer covers the run.
+ */
+function workspaceDigest(workspaceRoot: string): string | null {
+  const hash = crypto.createHash('sha256');
+  const stack = [''];
+  let entries = 0;
+  while (stack.length > 0) {
+    const rel = stack.pop()!;
+    let dirents: fs.Dirent[];
+    try {
+      dirents = fs.readdirSync(path.join(workspaceRoot, rel), { withFileTypes: true });
+    } catch {
+      return null;
+    }
+    dirents.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
+    for (const d of dirents) {
+      if (d.name === '.git' || d.name === 'node_modules') continue;
+      if ((entries += 1) > WORKSPACE_DIGEST_MAX_ENTRIES) return null;
+      const r = rel ? `${rel}/${d.name}` : d.name;
+      if (d.isDirectory()) {
+        stack.push(r);
+        hash.update(`d\0${r}\0`);
+        continue;
+      }
+      try {
+        const st = fs.lstatSync(path.join(workspaceRoot, r));
+        hash.update(`f\0${r}\0${st.size}\0${st.mtimeMs}\0`);
+      } catch {
+        return null;
+      }
+    }
+  }
+  return hash.digest('hex');
+}
+
+/** Whether Pandesh itself recorded writing a file under the workspace (including node_modules) since `sinceIso`. */
+function pandeshWroteUnder(db: CoreDatabase, workspaceRoot: string, sinceIso: string): boolean {
+  const prefix = path.resolve(workspaceRoot).toLowerCase();
+  return db.all<{ absolutePath: string }>('SELECT absolutePath FROM artifacts WHERE createdAt >= ?', [sinceIso])
+    .some((a) => {
+      const p = path.resolve(a.absolutePath).toLowerCase();
+      return p === prefix || p.startsWith(prefix + path.sep);
+    });
+}
+
 function canonicalDir(p: string): string | null {
   try {
     const real = fs.realpathSync.native(path.resolve(p));
@@ -189,6 +242,9 @@ export function createStandingAuthorization(db: CoreDatabase, input: {
       const scripts = readPackageScripts(workspaceRoot);
       pins.npmScripts = Object.fromEntries(VALIDATION_SCRIPTS.map((s) => [s, scriptChainDigest(scripts, s)]).filter(([, d]) => d)) as Record<string, string>;
       if (Object.keys(pins.npmScripts).length === 0) throw new CoreError('invalid_request', 'this workspace has no test, lint, typecheck, build or compile script to authorize');
+      const digest = workspaceDigest(workspaceRoot);
+      if (!digest) throw new CoreError('invalid_request', `this workspace is too large or unreadable to pin (more than ${WORKSPACE_DIGEST_MAX_ENTRIES} files outside node_modules)`);
+      pins.workspaceDigest = digest;
     }
   }
   return db.transaction(() => {
@@ -274,6 +330,30 @@ function staysInside(p: string): boolean {
 
 const GIT_REV = /^(?:[0-9a-f]{4,40}|HEAD(?:~\d{1,3})?)$/;
 
+/** Git config keys whose value git runs (or that pull in more config). */
+const GIT_EXEC_KEY = /^(?:core\.(?:hookspath|fsmonitor|pager|editor|sshcommand|askpass|gitproxy|alternaterefscommand)|pager\..+|sequence\.editor|diff\.external|diff\..+\.(?:textconv|command)|filter\..+\.(?:clean|smudge|process)|merge\..+\.driver|gpg\.(?:.+\.)?program|credential\..*helper|include\.path|includeif\..+\.path|uploadpack\.packobjectshook)$/;
+
+function insideDir(p: string, root: string): boolean {
+  const a = path.resolve(p).toLowerCase();
+  const r = path.resolve(root).toLowerCase();
+  return a === r || a.startsWith(r + path.sep);
+}
+
+function hooksIn(dir: string): boolean {
+  try {
+    return fs.readdirSync(dir).some((f) => !f.endsWith('.sample'));
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Whether git can run in the workspace without executing anything the workspace controls. Reads git's EFFECTIVE config
+ * (system, global, repository and everything they include): a program configured by the repository, or by any config
+ * file inside the workspace, refuses; a program from the user's own machine config (e.g. Git LFS) is trusted like any
+ * installed tool unless it points into the workspace. Hooks (hooksPath or .git/hooks) refuse every git command, since
+ * even `git status` can rewrite the index and fire one. Any failure to read the config refuses.
+ */
 function gitConfigIsPlain(workspaceRoot: string): { ok: boolean; reason?: string } {
   const gitDir = path.join(workspaceRoot, '.git');
   try {
@@ -281,24 +361,46 @@ function gitConfigIsPlain(workspaceRoot: string): { ok: boolean; reason?: string
   } catch {
     return { ok: false, reason: 'the workspace is not a git repository' };
   }
-  const runsPrograms = (config: string) => /^\s*(?:hookspath|fsmonitor|external|textconv|pager|sshcommand|editor)\s*=/im.test(config) || /^\s*\[(?:diff|filter|merge)\s+"/im.test(config);
+  let listing: string;
   try {
-    if (runsPrograms(fs.readFileSync(path.join(gitDir, 'config'), 'utf8'))) {
-      return { ok: false, reason: 'the repository config runs external programs (hooks path, diff/filter drivers, fsmonitor or pager)' };
-    }
+    // -C, not cwd: Windows process lookup searches the child's working directory, which is workspace content.
+    listing = cp.execFileSync('git', ['-C', workspaceRoot, 'config', '--list', '--show-scope', '--show-origin', '-z'], { encoding: 'utf8', timeout: 5_000, windowsHide: true, stdio: ['ignore', 'pipe', 'ignore'] });
   } catch {
-    return { ok: false, reason: 'the repository config could not be read' };
+    return { ok: false, reason: 'the git configuration could not be read' };
   }
-  // The user's own global git config (e.g. a Git LFS filter) is the user's machine setup, not workspace content, and is
-  // trusted like any installed tool. Only what the repository itself can carry is checked here.
+  const parts = listing.split('\0');
+  let hooksPath: string | null = null;
+  for (let i = 0; i + 2 < parts.length; i += 3) {
+    const scope = parts[i];
+    const origin = parts[i + 1].replace(/^file:/, '');
+    const nl = parts[i + 2].indexOf('\n');
+    const key = (nl < 0 ? parts[i + 2] : parts[i + 2].slice(0, nl)).toLowerCase();
+    const value = nl < 0 ? '' : parts[i + 2].slice(nl + 1);
+    if (key === 'core.hookspath') hooksPath = value;
+    if (!GIT_EXEC_KEY.test(key)) continue;
+    const workspaceOwned = scope === 'local' || scope === 'worktree' || (parts[i + 1].startsWith('file:') && insideDir(origin, workspaceRoot));
+    if (workspaceOwned) return { ok: false, reason: `the repository config sets ${key}, which runs or loads external programs` };
+    const pointsInside = /(?:^|[\s'"=])\.{1,2}[\\/]/.test(value) || value.replace(/\\/g, '/').toLowerCase().includes(path.resolve(workspaceRoot).replace(/\\/g, '/').toLowerCase());
+    if (pointsInside) return { ok: false, reason: `the git setting ${key} runs a program from inside the workspace` };
+  }
+  const hooksDir = hooksPath
+    ? path.resolve(workspaceRoot, hooksPath.replace(/^~(?=[\\/])/, os.homedir()))
+    : path.join(gitDir, 'hooks');
+  if (hooksIn(hooksDir)) return { ok: false, reason: 'the repository has git hooks, which git would run' };
   return { ok: true };
 }
 
-function gitHooksPresent(workspaceRoot: string): boolean {
+/**
+ * Windows cmd.exe looks for a command in the working directory before PATH, so a `git.bat` or `npm.cmd` in the
+ * workspace would run instead of the real tool.
+ */
+function shadowedInWorkspace(bin: string, workspaceRoot: string): string | null {
+  if (process.platform !== 'win32') return null;
+  const exts = (process.env.PATHEXT || '.COM;.EXE;.BAT;.CMD;.VBS;.VBE;.JS;.JSE;.WSF;.WSH;.MSC').toLowerCase().split(';').filter(Boolean);
   try {
-    return fs.readdirSync(path.join(workspaceRoot, '.git', 'hooks')).some((f) => !f.endsWith('.sample'));
+    return fs.readdirSync(workspaceRoot).find((f) => exts.some((e) => f.toLowerCase() === bin + e)) ?? null;
   } catch {
-    return false;
+    return `${bin} (workspace unreadable)`;
   }
 }
 
@@ -314,6 +416,10 @@ export function classifyWorkspaceCommand(command: string, workspaceRoot: string,
     if (args.every((a) => /^\/[a-z]$/i.test(a) || staysInside(a))) return { category: 'workspace_read_commands', detail: 'dir' };
     return { category: null, reason: 'dir points outside the workspace' };
   }
+  if (bin === 'git' || bin === 'npm') {
+    const shadow = shadowedInWorkspace(bin, workspaceRoot);
+    if (shadow) return { category: null, reason: `the workspace contains ${shadow}, which would run instead of ${bin}` };
+  }
   if (bin === 'git') {
     const [sub, ...rest] = args;
     const plain = gitConfigIsPlain(workspaceRoot);
@@ -323,7 +429,6 @@ export function classifyWorkspaceCommand(command: string, workspaceRoot: string,
     if (sub === 'log' && rest.every((a) => ['--oneline', '--stat'].includes(a) || /^-n?\d{1,3}$/.test(a) || /^--max-count=\d{1,3}$/.test(a))) return { category: 'workspace_read_commands', detail: 'git log' };
     if (sub === 'show' && rest.every((a) => ['--stat', '--name-only'].includes(a) || GIT_REV.test(a))) return { category: 'workspace_read_commands', detail: 'git show' };
     if (sub === 'add' || sub === 'commit') {
-      if (gitHooksPresent(workspaceRoot)) return { category: null, reason: 'the repository has git hooks, which would run code on add/commit' };
       if (sub === 'add' && rest.length > 0 && rest.every((a) => a === '-A' || a === '--all' || (!a.startsWith('-') && staysInside(a)))) return { category: 'workspace_git_commit', detail: 'git add' };
       if (sub === 'commit' && rest.length === 2 && rest[0] === '-m' && rest[1].trim()) return { category: 'workspace_git_commit', detail: 'git commit -m' };
     }
@@ -335,6 +440,7 @@ export function classifyWorkspaceCommand(command: string, workspaceRoot: string,
     const pinned = pins.npmScripts?.[script];
     if (!pinned) return { category: null, reason: `the '${script}' script was not pinned when this authorization was granted` };
     if (scriptChainDigest(readPackageScripts(workspaceRoot), script) !== pinned) return { category: null, reason: `package.json '${script}' (or its pre/post script) changed since this authorization was granted` };
+    if (!pins.workspaceDigest || workspaceDigest(workspaceRoot) !== pins.workspaceDigest) return { category: null, reason: `workspace files changed since this authorization was granted, so '${script}' would run code you have not seen` };
     return { category: 'workspace_validation', detail: `npm ${script === 'test' ? 'test' : `run ${script}`}` };
   }
   return { category: null, reason: `'${exe}' is not a covered command` };
@@ -395,6 +501,10 @@ export function decidePermission(db: CoreDatabase, input: {
     if (Date.parse(auth.expiresAt) <= nowMs) { lastReason = `standing authorization ${id} expired at ${auth.expiresAt}`; continue; }
     if (permission.conversationId && auth.conversationId !== permission.conversationId) continue;
     const match = matchAuthorization(auth, input);
+    if (match.category === 'workspace_validation' && auth.workspaceRoot && pandeshWroteUnder(db, auth.workspaceRoot, auth.createdAt)) {
+      lastReason = 'Pandesh wrote files in this workspace since the authorization was granted, so the scripts would run code you have not seen';
+      continue;
+    }
     if (match.category) {
       return { decision: 'auto_authorize', mode, authorizationId: auth.id, category: match.category, reason: `covered by standing authorization ${auth.id} (${match.category}: ${match.detail}), valid until ${auth.expiresAt}` };
     }

@@ -3,6 +3,7 @@
  * covers on the actual arguments and files, and Plan Only refuses every mutation.
  */
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import * as cp from 'node:child_process';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
@@ -26,8 +27,9 @@ beforeEach(() => {
   dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pandesh-permission-'));
   db = openCoreDatabase(path.join(dir, 'core.db')).db;
   ws = path.join(dir, 'repo');
+  fs.mkdirSync(ws);
+  cp.execFileSync('git', ['init', '-q', ws], { stdio: 'ignore' });
   fs.mkdirSync(path.join(ws, '.git', 'hooks'), { recursive: true });
-  fs.writeFileSync(path.join(ws, '.git', 'config'), '[core]\n\trepositoryformatversion = 0\n');
   fs.writeFileSync(path.join(ws, '.git', 'hooks', 'pre-commit.sample'), '#!/bin/sh\n');
   fs.writeFileSync(path.join(ws, 'package.json'), JSON.stringify({ scripts: { test: 'vitest run', build: 'tsc' } }));
   conversationId = createConversation(db, { mode: 'saath_kar', actor: 'test' }).id;
@@ -116,8 +118,21 @@ describe('Auto with a standing authorization', () => {
     expect(decidePermission(db, { attemptIds: [attemptId], toolName: 'propose_file_change', arguments: { path: 'a.ts' }, mutating: true, workspaceRoot: ws }).decision).toBe('review');
     fs.writeFileSync(path.join(ws, '.git', 'hooks', 'pre-commit'), '#!/bin/sh\n');
     expect(cmd(attemptId, 'git commit -m "x"').reason).toMatch(/hooks/);
-    fs.writeFileSync(path.join(ws, '.git', 'config'), '[diff "x"]\n\ttextconv = evil\n');
+    fs.appendFileSync(path.join(ws, '.git', 'config'), '[diff "x"]\n\ttextconv = evil\n');
     expect(cmd(attemptId, 'git status').decision).toBe('review');
+  });
+
+  it('never runs workspace content that changed after the grant: a new test file or a Pandesh write in node_modules', () => {
+    fs.writeFileSync(path.join(ws, 'evil.test.js'), 'require("child_process").execSync("calc")');
+    expect(cmd(attemptId, 'npm test').decision).toBe('review');
+    expect(cmd(attemptId, 'npm test').reason).toMatch(/workspace files changed/);
+    expect(cmd(attemptId, 'git status').decision).toBe('auto_authorize'); // reads do not execute workspace content
+    const fresh = grant(['workspace_validation']);
+    const turn = submit('again').attempt.id;
+    expect(cmd(turn, 'npm test')).toMatchObject({ decision: 'auto_authorize', authorizationId: fresh.id });
+    db.run(`INSERT INTO artifacts (id, conversationId, kind, title, mimeType, absolutePath, byteSize, sha256, source, createdAt)
+            VALUES ('art_t', ?, 'file', 'x', 'text/plain', ?, 1, 'x', 'pi:write_file', ?)`, [conversationId, path.join(ws, 'node_modules', 'vitest', 'x.js'), new Date(Date.now() + 1000).toISOString()]);
+    expect(cmd(turn, 'npm test').decision).toBe('review'); // node_modules is not walked; the fresh grant alone matched before this write
   });
 
   it('revocation and expiry take effect immediately for the running turn', () => {
@@ -150,6 +165,53 @@ describe('Auto with a standing authorization', () => {
     expect(() => grant(['workspace_validation'], 0)).toThrow(/expiry/);
     fs.writeFileSync(path.join(ws, 'package.json'), '{}');
     expect(() => grant(['workspace_validation'])).toThrow(/no test, lint/);
+  });
+});
+
+describe('git and command lookup that could run workspace content (Ask free reads and Auto)', () => {
+  const read = (command: string) => classifyChatToolCall('run_checks', { command }, new Set(), ws);
+  let savedGlobal: string | undefined;
+  beforeEach(() => { savedGlobal = process.env.GIT_CONFIG_GLOBAL; });
+  afterEach(() => { if (savedGlobal === undefined) delete process.env.GIT_CONFIG_GLOBAL; else process.env.GIT_CONFIG_GLOBAL = savedGlobal; });
+
+  it('a plain repository keeps git status free', () => {
+    expect(read('git status')).toBe('read');
+  });
+
+  it.runIf(process.platform === 'win32')('a git.bat in the workspace would shadow git under cmd.exe', () => {
+    fs.writeFileSync(path.join(ws, 'git.bat'), '@echo pwned');
+    expect(read('git status')).toBe('mutating');
+  });
+
+  it('follows includes in the repository config', () => {
+    fs.writeFileSync(path.join(ws, 'more.cfg'), '[core]\n\tfsmonitor = ./evil.cmd\n');
+    fs.appendFileSync(path.join(ws, '.git', 'config'), '[include]\n\tpath = ../more.cfg\n');
+    expect(read('git status')).toBe('mutating');
+  });
+
+  it('any hook blocks even git status, which can rewrite the index and fire post-index-change', () => {
+    fs.writeFileSync(path.join(ws, '.git', 'hooks', 'post-index-change'), '#!/bin/sh\n');
+    expect(read('git status')).toBe('mutating');
+  });
+
+  it('a hooksPath from the user config is honoured', () => {
+    const hooks = path.join(dir, 'global-hooks');
+    fs.mkdirSync(hooks);
+    fs.writeFileSync(path.join(hooks, 'pre-commit'), '#!/bin/sh\n');
+    fs.writeFileSync(path.join(dir, 'global.cfg'), `[core]\n\thooksPath = ${hooks.replace(/\\/g, '/')}\n`);
+    process.env.GIT_CONFIG_GLOBAL = path.join(dir, 'global.cfg');
+    expect(read('git status')).toBe('mutating');
+  });
+
+  it('user config programs are trusted unless they live in the workspace or point into it', () => {
+    fs.writeFileSync(path.join(dir, 'global.cfg'), '[filter "lfs"]\n\tclean = git-lfs clean -- %f\n');
+    process.env.GIT_CONFIG_GLOBAL = path.join(dir, 'global.cfg');
+    expect(read('git status')).toBe('read');
+    fs.writeFileSync(path.join(dir, 'global.cfg'), '[core]\n\tpager = ./pager.cmd\n');
+    expect(read('git status')).toBe('mutating');
+    fs.writeFileSync(path.join(ws, 'inside.cfg'), '[diff "x"]\n\ttextconv = cat\n');
+    process.env.GIT_CONFIG_GLOBAL = path.join(ws, 'inside.cfg');
+    expect(read('git status')).toBe('mutating');
   });
 });
 
