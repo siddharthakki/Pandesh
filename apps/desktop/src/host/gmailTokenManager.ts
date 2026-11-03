@@ -98,6 +98,8 @@ export interface GmailTokenManagerOptions {
   openExternal?: OpenExternal;
   fetchFn?: FetchLike;
   onStatusChange?: (status: GmailConnectionStatus) => void;
+  /** First wait before retrying a refresh that failed for a transient reason (offline at boot, Google 5xx). Doubles up to 5 minutes. */
+  retryBaseMs?: number;
   /** How long before real expiry to refresh proactively. */
   refreshMarginMs?: number;
   /** Never below this, so a nearly-expired token does not cause a refresh
@@ -127,6 +129,8 @@ export class GmailTokenManager {
   private readonly refreshMarginMs: number;
   private readonly minRefreshDelayMs: number;
   private readonly now: () => number;
+  private readonly retryBaseMs: number;
+  private retryAttempt = 0;
 
   private status: GmailConnectionStatus;
   private refreshTimer: ReturnType<typeof setTimeout> | null = null;
@@ -143,6 +147,7 @@ export class GmailTokenManager {
     this.refreshMarginMs = options.refreshMarginMs ?? DEFAULT_REFRESH_MARGIN_MS;
     this.minRefreshDelayMs = options.minRefreshDelayMs ?? DEFAULT_MIN_REFRESH_DELAY_MS;
     this.now = options.now ?? Date.now;
+    this.retryBaseMs = options.retryBaseMs ?? 30_000;
     const storedPresent = connectorCredentialPresent(this.dataDir, 'gmail');
     this.status = { connected: storedPresent, accountEmail: null, lastError: null, lastRefreshedAt: null, capabilityBlocker: null, calendarBlocker: null, scopes: [] };
   }
@@ -165,6 +170,20 @@ export class GmailTokenManager {
   private scheduleRefresh(expiresAtIso: string): void {
     this.clearTimer();
     const delay = computeRefreshDelayMs(expiresAtIso, this.refreshMarginMs, this.minRefreshDelayMs, this.now());
+    this.refreshTimer = setTimeout(() => {
+      void this.ensureFreshAccessToken();
+    }, delay);
+    this.refreshTimer.unref?.();
+  }
+
+  /**
+   * A refresh that failed for a transient reason must not leave Gmail dead until the next restart: the grant is still
+   * on disk, so try again with a bounded, doubling wait (never a tight loop).
+   */
+  private scheduleRetry(): void {
+    this.clearTimer();
+    const delay = Math.min(this.retryBaseMs * 2 ** this.retryAttempt, Math.max(this.retryBaseMs, 5 * 60_000));
+    this.retryAttempt += 1;
     this.refreshTimer = setTimeout(() => {
       void this.ensureFreshAccessToken();
     }, delay);
@@ -337,6 +356,7 @@ export class GmailTokenManager {
       const expiresAt = new Date(this.now() + refreshed.expiresInSeconds * 1000).toISOString();
       const scopes = refreshed.scopes ?? stored.scopes ?? [];
       const blockers = await this.pushToken(refreshed.accessToken, expiresAt, stored.accountEmail, scopes);
+      this.retryAttempt = 0;
       this.status = { connected: true, accountEmail: stored.accountEmail, lastError: null, lastRefreshedAt: new Date(this.now()).toISOString(), capabilityBlocker: blockers.gmail, calendarBlocker: blockers.calendar, scopes };
       this.emit();
       this.scheduleRefresh(expiresAt);
@@ -360,6 +380,7 @@ export class GmailTokenManager {
         scopes: revoked ? [] : this.status.scopes,
       };
       if (revoked) clearConnectorCredential(this.dataDir, 'gmail');
+      else this.scheduleRetry();
       this.emit();
       return this.getStatus();
     }
