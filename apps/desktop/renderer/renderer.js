@@ -6863,8 +6863,58 @@ function wireAboutPanel() {
   }
 }
 
+/** Update & Restart: the host does the work (verify, make Core safe to stop, hand over to the updater). */
+async function refreshUpdateStatus() {
+  const say = (text) => { const el = document.getElementById('update-status'); if (el) el.textContent = text; };
+  const button = document.getElementById('update-restart');
+  if (!button || typeof api.getUpdateStatus !== 'function') return;
+  try {
+    const status = await api.getUpdateStatus();
+    button.disabled = !status.available;
+    const last = status.lastResult;
+    if (!status.available) { say('Updates need the latest Pandesh installer, run once.'); return; }
+    if (last && !last.acknowledged) {
+      const labels = {
+        success: `Updated to build b${last.revision}.`,
+        rolled_back: `Update to b${last.attemptedRevision} did not start correctly and was undone. You are on b${last.revision}. ${last.reason || ''}`,
+        aborted: `Update not applied: ${last.reason || 'nothing was changed.'}`,
+        rollback_failed: `Update failed and could not be undone automatically. Run the Pandesh installer to recover. ${last.reason || ''}`,
+      };
+      say(labels[last.status] || '');
+      return; // kept until the next Update & Restart click acknowledges it
+    }
+    say(`Installed build b${status.installedRevision ?? '?'}.`);
+  } catch {
+    say('');
+  }
+}
+
+function wireUpdateControl() {
+  const button = document.getElementById('update-restart');
+  if (!button || button.dataset.updateBound || typeof api.startUpdate !== 'function') return;
+  button.dataset.updateBound = '1';
+  button.addEventListener('click', async () => {
+    const say = (text) => { const el = document.getElementById('update-status'); if (el) el.textContent = text; };
+    button.disabled = true;
+    say('Checking the update…');
+    let applying = false;
+    try {
+      void api.acknowledgeUpdateResult?.();
+      const result = await api.startUpdate();
+      applying = result.status === 'applying';
+      say(result.message);
+    } catch (err) {
+      say(`Update failed to start: ${err && err.message ? err.message : err}`);
+    } finally {
+      button.disabled = applying;
+    }
+  });
+  void refreshUpdateStatus();
+}
+
 void applyAppMetadata();
 wireAboutPanel();
+wireUpdateControl();
 wireConnectionTabs();
 void refreshConversationsRail();
 void refreshIntegrationsView();

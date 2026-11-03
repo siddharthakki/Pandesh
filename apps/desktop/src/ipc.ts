@@ -161,7 +161,33 @@ export const DESKTOP_CHANNELS = {
   closePopoutWorkbench: 'desktop:closePopoutWorkbench',
   copyToClipboard: 'desktop:copyToClipboard',
   quitApp: 'desktop:quitApp',
+  /** Update & Restart: verify a user-chosen local package, make Core safe to stop, then hand over to the updater. */
+  startUpdate: 'desktop:startUpdate',
+  getUpdateStatus: 'desktop:getUpdateStatus',
+  acknowledgeUpdateResult: 'desktop:acknowledgeUpdateResult',
 } as const;
+
+export interface DesktopUpdateStatus {
+  /** False when this install predates the updater (or the updater files are missing): use the installer. */
+  available: boolean;
+  /** The build actually running now (from the embedded build identity). */
+  installedRevision: number | null;
+  version: string;
+  /** The outcome of the last update attempt, until the user dismisses it. */
+  lastResult: {
+    status: 'success' | 'rolled_back' | 'aborted' | 'rollback_failed';
+    at: string;
+    acknowledged: boolean;
+    reason?: string;
+    revision?: number;
+    attemptedRevision?: number;
+  } | null;
+}
+
+export interface DesktopUpdateStartResult {
+  status: 'cancelled' | 'rejected' | 'blocked' | 'unavailable' | 'applying';
+  message: string;
+}
 
 export type DesktopApprovalResolution = 'approved' | 'rejected';
 

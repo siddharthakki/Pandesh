@@ -252,6 +252,13 @@ const nodeDest = path.join(runtimeDir, 'node.exe');
 fs.copyFileSync(nodeSrc, nodeDest);
 console.log(`Bundled Node runtime from ${nodeSrc}`);
 
+// The updater (and the public key it trusts) ships in the install tree and is deliberately not replaceable by an
+// update package, only by the installer.
+if (!fs.existsSync(path.join(desktopRoot, 'updater', 'update-trust.json'))) {
+  throw new Error('updater/update-trust.json is missing; run: node scripts/build-update-package.mjs keygen');
+}
+copyRecursive(path.join(desktopRoot, 'updater'), path.join(outDir, 'updater'));
+
 const launchCmd = `@echo off
 setlocal
 set "ROOT=%~dp0"

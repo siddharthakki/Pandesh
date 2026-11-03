@@ -15,6 +15,7 @@
  */
 import * as crypto from 'node:crypto';
 import type { ToolExecutionResult } from '../toolRunner';
+import { beginWrite, isQuiescing, UPDATE_IN_PROGRESS_MESSAGE } from '../updateGate';
 import { callGws, invalidArgs, mapWithConcurrency, stringArray, succeeded, trimmedNonEmptyString, type CallDeps } from './gwsGmailAdapter';
 
 export const GMAIL_MODIFY_SCOPE = 'https://www.googleapis.com/auth/gmail.modify';
@@ -654,7 +655,26 @@ function verificationSummary(v: PlanVerification, total: number): string {
   return parts.join('; ');
 }
 
-export async function applyPlan(rawArgs: Record<string, unknown>, env: OrganizeEnv): Promise<ToolExecutionResult> {
+/** A whole apply/undo is one unit for the update gate: it is refused before it starts, never stopped halfway. */
+async function guardedWrite(run: () => Promise<ToolExecutionResult>): Promise<ToolExecutionResult> {
+  if (isQuiescing()) return { status: 'failed', exitCode: null, output: UPDATE_IN_PROGRESS_MESSAGE, resultCategory: 'update_in_progress' };
+  const end = beginWrite();
+  try {
+    return await run();
+  } finally {
+    end();
+  }
+}
+
+export function applyPlan(rawArgs: Record<string, unknown>, env: OrganizeEnv): Promise<ToolExecutionResult> {
+  return guardedWrite(() => applyPlanNow(rawArgs, env));
+}
+
+export function undoPlan(rawArgs: Record<string, unknown>, env: OrganizeEnv): Promise<ToolExecutionResult> {
+  return guardedWrite(() => undoPlanNow(rawArgs, env));
+}
+
+async function applyPlanNow(rawArgs: Record<string, unknown>, env: OrganizeEnv): Promise<ToolExecutionResult> {
   const args = unwrapArgs(rawArgs);
   const planId = trimmedNonEmptyString(args.planId);
   if (!planId) return invalidArgs('gmail_apply_plan: "planId" is required');
@@ -706,7 +726,7 @@ export async function applyPlan(rawArgs: Record<string, unknown>, env: OrganizeE
   });
 }
 
-export async function undoPlan(rawArgs: Record<string, unknown>, env: OrganizeEnv): Promise<ToolExecutionResult> {
+async function undoPlanNow(rawArgs: Record<string, unknown>, env: OrganizeEnv): Promise<ToolExecutionResult> {
   const args = unwrapArgs(rawArgs);
   const planId = trimmedNonEmptyString(args.planId);
   if (!planId) return invalidArgs('gmail_undo_plan: "planId" is required');

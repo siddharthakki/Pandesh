@@ -69,5 +69,8 @@ Filename: "{app}\{#MyAppExeName}"; Parameters: {#MyAppParams}; Description: "Lau
 
 [UninstallDelete]
 Type: filesandordirs; Name: "{app}\.tmp"
+; Files an update package added are not in the installer's file list.
+Type: filesandordirs; Name: "{app}\app\out"
+Type: filesandordirs; Name: "{app}\app\renderer"
 
 #include "upgrade-shutdown.iss"

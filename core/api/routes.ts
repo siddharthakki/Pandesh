@@ -70,7 +70,8 @@ import { listRecentWorkspaceCapabilityActions } from '../domain/capabilityAction
 import { listTaskHistory, getTaskHistoryDetail } from '../domain/history';
 import type { RuntimeExecutor } from '../runtime/executor';
 import { GovernedCapabilityRegistry, createWorkspaceCapabilityAdapter } from '../runtime/governedCapability';
-import { resolveCapabilityApproval, cancelCapabilityAction, listCapabilityActions } from '../domain/capabilityDispatch';
+import { resolveCapabilityApproval, cancelCapabilityAction, listCapabilityActions, hasInFlightCapabilityExecutions } from '../domain/capabilityDispatch';
+import { gmailWritesInFlight, isQuiescing, setQuiescing } from '../runtime/updateGate';
 import { dispatchConnectorAction } from '../domain/connectorDispatch';
 import { LocalAutonomySecurityKernel } from '../security/kernel';
 import { getConnectorStatus, listConnectorStatuses, setConnectorPermission } from '../domain/connectors';
@@ -263,6 +264,20 @@ export function buildRouter(
   router.delete('/v1/providers', () => {
     sharedCloudCredentials.clearAll();
     return { status: 200, body: { providers: [] } };
+  });
+
+  // Application update gate. In memory only (a restart clears it), so these bypass idempotency persistence like the
+  // provider credential routes. `quiesce` stops NEW Gmail writes; one already running is never interrupted.
+  const updateReadiness = () => ({
+    quiescing: isQuiescing(),
+    gmailWritesInFlight: gmailWritesInFlight(),
+    activeAttempts: executor?.activeCount() ?? 0,
+    capabilityInFlight: hasInFlightCapabilityExecutions(),
+  });
+  router.get('/v1/core/update-readiness', () => ({ status: 200, body: updateReadiness() }));
+  router.post('/v1/core/update-gate', (ctx) => {
+    setQuiescing(asRecord(ctx.body).quiesce === true);
+    return { status: 200, body: updateReadiness() };
   });
 
   router.post('/v1/core/shutdown', (ctx) => {

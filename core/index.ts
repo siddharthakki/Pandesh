@@ -38,6 +38,7 @@ import { latestSequence } from './domain/events';
 import type { CoreInfo } from './shared/wireTypes';
 import { CORE_API_VERSION } from './shared/wireTypes';
 import { hashCoreBundle } from './runtime/coreBundle';
+import { drainWrites } from './runtime/updateGate';
 import type { CoreDatabase } from './db/connection';
 import { LocalAutonomySecurityKernel } from './security/kernel';
 import { GovernedCapabilityRegistry, createWorkspaceCapabilityAdapter } from './runtime/governedCapability';
@@ -496,6 +497,8 @@ async function main(): Promise<void> {
   async function shutdown(): Promise<void> {
     if (shuttingDown) return;
     shuttingDown = true;
+    // A Gmail write that has started always finishes: stop only after it has settled (bounded, so a hung call cannot block exit).
+    if (!(await drainWrites(30_000))) redactedLog('shutdown: a Gmail call was still running after 30s; continuing shutdown');
     wsHandle.close();
     await closeAllBrowserSessions();
     await api.close();

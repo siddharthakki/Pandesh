@@ -28,6 +28,8 @@ import {
   type DesktopDailyBriefRoutine,
   type DesktopCloudPublicTextPreview,
   type DesktopCloudState,
+  type DesktopUpdateStartResult,
+  type DesktopUpdateStatus,
 } from './ipc';
 
 const desktopApi = {
@@ -238,6 +240,10 @@ const desktopApi = {
   copyToClipboard: (text: string): Promise<{ copied: boolean }> =>
     ipcRenderer.invoke(DESKTOP_CHANNELS.copyToClipboard, text),
   quitApp: (): Promise<void> => ipcRenderer.invoke(DESKTOP_CHANNELS.quitApp),
+  getUpdateStatus: (): Promise<DesktopUpdateStatus> => ipcRenderer.invoke(DESKTOP_CHANNELS.getUpdateStatus),
+  startUpdate: (testPackagePath?: string): Promise<DesktopUpdateStartResult> =>
+    ipcRenderer.invoke(DESKTOP_CHANNELS.startUpdate, testPackagePath),
+  acknowledgeUpdateResult: (): Promise<void> => ipcRenderer.invoke(DESKTOP_CHANNELS.acknowledgeUpdateResult),
   onEvent: (listener: (event: DesktopActivityEvent) => void): (() => void) => {
     const wrapped = (_event: unknown, payload: DesktopActivityEvent) => listener(payload);
     ipcRenderer.on(DESKTOP_CHANNELS.event, wrapped);

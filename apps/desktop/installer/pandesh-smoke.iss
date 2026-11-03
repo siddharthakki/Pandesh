@@ -67,4 +67,10 @@ Source: "{#SourceDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs 
 Filename: "{app}\{#MyAppExeName}"; Parameters: {#MyAppParams}; Description: "Launch {#MyAppName}"; Flags: nowait postinstall skipifsilent
 
 #define SmokeBuild
+[UninstallDelete]
+Type: filesandordirs; Name: "{app}\.tmp"
+; Files an update package added are not in the installer's file list.
+Type: filesandordirs; Name: "{app}\app\out"
+Type: filesandordirs; Name: "{app}\app\renderer"
+
 #include "upgrade-shutdown.iss"

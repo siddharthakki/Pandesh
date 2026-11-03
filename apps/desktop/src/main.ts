@@ -20,7 +20,11 @@ import {
   type DesktopBuildIdentity,
 } from './host/desktopBuildIdentity';
 import { readHostPreferences, writeHostPreferences } from './host/desktopHostPreferences';
-import { DESKTOP_CHANNELS, type DesktopAppMetadata } from './ipc';
+import { DESKTOP_CHANNELS, type DesktopAppMetadata, type DesktopUpdateStartResult, type DesktopUpdateStatus } from './ipc';
+import {
+  acknowledgeUpdateResult, inspectPackage, launchUpdater, quiesceCore, readCoreReadiness, readUpdateResult,
+  setUpdateGate, updaterAvailable, writeUiHealth,
+} from './host/desktopUpdate';
 import { JarvisTrayController } from './host/jarvisTray';
 import { createAppIcon } from './host/appIcon';
 import { normalizeSafeExternalUrl, normalizeSafeBrowserUrl } from './host/desktopSafeOpen';
@@ -1538,6 +1542,97 @@ function registerIpc(): void {
   ipcMain.handle(DESKTOP_CHANNELS.quitApp, () => {
     void shutdownAndQuit();
   });
+  ipcMain.handle(DESKTOP_CHANNELS.getUpdateStatus, (): DesktopUpdateStatus => {
+    const identity = currentBuildIdentity();
+    return {
+      available: updaterAvailable(productRoot),
+      installedRevision: identity.buildNumber,
+      version: identity.version,
+      lastResult: readUpdateResult(dataDir),
+    };
+  });
+  ipcMain.handle(DESKTOP_CHANNELS.acknowledgeUpdateResult, () => acknowledgeUpdateResult(dataDir));
+  ipcMain.handle(DESKTOP_CHANNELS.startUpdate, (_event, testPackagePath?: string) => startUpdate(testPackagePath));
+}
+
+/** Test hook: an isolated test instance may skip the confirmation dialogs and name its package. Never set in production. */
+const updateTestMode = process.env.KARKEDIKHA_UPDATE_TEST_AUTOCONFIRM === '1';
+let updateInProgress = false;
+
+/**
+ * Update & Restart. Verifies a user-chosen local package, makes Core safe to stop (no new Gmail writes, running ones
+ * finish), starts the separate updater and quits. Every refusal leaves the installation exactly as it was.
+ */
+async function startUpdate(testPackagePath?: string): Promise<DesktopUpdateStartResult> {
+  if (updateInProgress || isShuttingDown) return { status: 'blocked', message: 'An update is already in progress.' };
+  if (!updaterAvailable(productRoot)) {
+    return { status: 'unavailable', message: 'This installation does not include the updater. Run the latest Pandesh installer once to enable updates.' };
+  }
+  const node = process.env.KARKEDIKHA_DESKTOP_NODE?.trim() || path.join(productRoot, 'runtime', 'node.exe');
+  let packagePath = updateTestMode && testPackagePath ? testPackagePath : undefined;
+  if (!packagePath) {
+    const picked = await dialog.showOpenDialog(window!, {
+      title: 'Choose a Pandesh update package',
+      filters: [{ name: 'Pandesh update', extensions: ['pdupdate'] }],
+      properties: ['openFile'],
+    });
+    if (picked.canceled || !picked.filePaths[0]) return { status: 'cancelled', message: 'No update package was chosen.' };
+    packagePath = picked.filePaths[0];
+  }
+
+  let summary;
+  try {
+    summary = await inspectPackage({ productRoot, dataDir, node, packagePath });
+  } catch (err) {
+    hostLog(`update rejected: ${(err as Error).message}`);
+    return { status: 'rejected', message: (err as Error).message };
+  }
+
+  if (!updateTestMode) {
+    const active = (await readCoreReadiness(dataDir))?.activeAttempts ?? 0;
+    const detail = [
+      `Build b${summary.installedRevision} → b${summary.revision} (v${summary.version}), updating: ${summary.components.join(' + ')}.`,
+      summary.migrates ? `The database will be upgraded (schema ${summary.dbSchemaFrom} → ${summary.dbSchemaTo}); it is backed up first.` : 'No database change.',
+      'Your conversations, memory, settings and Google sign-in are kept. If the new version does not start, the previous one is restored automatically.',
+      active > 0 ? `${active} task(s) are running. They will be stopped at a safe point and can be resumed after the restart. A Gmail change that is already being written is always finished first.` : '',
+    ].filter(Boolean).join('\n\n');
+    const choice = await dialog.showMessageBox(window!, {
+      type: 'question', buttons: ['Update & Restart', 'Cancel'], defaultId: 1, cancelId: 1, title: 'Update Pandesh', message: `Update Pandesh to build b${summary.revision}?`, detail,
+    });
+    if (choice.response !== 0) return { status: 'cancelled', message: 'Update cancelled. Nothing was changed.' };
+  }
+
+  updateInProgress = true;
+  if (!(await quiesceCore(dataDir))) {
+    updateInProgress = false;
+    return { status: 'blocked', message: 'A Gmail change is still being written. Nothing was changed; try again in a minute.' };
+  }
+  try {
+    launchUpdater({ productRoot, dataDir, node });
+  } catch (err) {
+    await setUpdateGate(dataDir, false);
+    updateInProgress = false;
+    return { status: 'blocked', message: `The updater could not be started: ${(err as Error).message}` };
+  }
+  hostLog(`update to b${summary.revision} verified; handing over to the updater and quitting`);
+  void shutdownAndQuit();
+  return { status: 'applying', message: 'Updating… Pandesh will restart in a moment.' };
+}
+
+/** Once the window has loaded and Core is connected, say so on disk: the updater uses this to confirm a good update. */
+function startUiHealthMarker(): void {
+  const started = Date.now();
+  const timer = setInterval(() => {
+    if (isShuttingDown || Date.now() - started > 300_000) { clearInterval(timer); return; }
+    const loaded = Boolean(window && !window.isDestroyed() && !window.webContents.isLoading());
+    if (!loaded || session?.snapshot()?.coreState !== 'connected') return;
+    try {
+      writeUiHealth(dataDir, { buildNumber: currentBuildIdentity().buildNumber, rendererLoaded: true, coreConnected: true });
+    } catch (err) {
+      hostLog(`could not write ui health marker: ${(err as Error).message}`);
+    }
+    clearInterval(timer);
+  }, 1000);
 }
 
 if (gotSingleInstanceLock) {
@@ -1581,6 +1676,7 @@ if (gotSingleInstanceLock) {
       + `(${identity.releaseChannel}) commit=${identity.commit ?? 'unknown'} built=${identity.builtAt ?? 'unknown'} `
       + `installer=${identity.installerVersion ?? 'unknown'} electron=${process.versions.electron ?? 'n/a'}`,
     );
+    startUiHealthMarker();
     await createWindow();
     powerMonitor.on('resume', () => {
       hostLog('host resume — reconciling reminders');
