@@ -922,11 +922,17 @@ export class PiAgentEngine implements EngineAdapter {
           // Fall through to the ordinary card: failing to auto-authorize must never authorize anything.
         }
       }
+      // Auto that still needs the human says why on the card and in the audit trail (e.g. the workspace changed).
+      if (permission.mode === 'auto') {
+        const note = `Auto did not cover this: ${permission.reason}`;
+        summary = { ...summary, policyDecision: 'review', policyReason: permission.reason, ...(typeof summary.cardText === 'string' ? { cardText: `${summary.cardText}\n${note}` } : {}) };
+      }
       let approval: any;
       try {
         mutateWithBroadcast(db, broadcaster, () => {
           transitionAttempt(db, attemptId, { toStatus: 'waiting_for_approval', fenceToken, actor });
           approval = createApproval(db, { attemptId, kind: 'mutation', summary, presentation: summary, actor });
+          if (permission.mode === 'auto') recordPermissionDecision(db, { attemptId, toolName, arguments: summary, decision: permission, approvalId: approval.id });
         });
       } catch (err: any) {
         // The request never reached the user. That is a system failure, not a
