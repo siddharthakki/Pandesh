@@ -1867,6 +1867,7 @@ export class DesktopSession {
     if (!conversationId) {
       const conversation = await client.createConversation({ mode: 'baat_kar', title: text.slice(0, 80) });
       conversationId = conversation.id;
+      this.discardPendingPermission('this conversation was started outside the chat composer');
     }
     this.voiceConversationId = conversationId;
     this.selectedConversationId = conversationId;
@@ -2113,11 +2114,7 @@ export class DesktopSession {
       });
       conversationId = conversation.id;
       // The mode picked before this conversation existed must be in Core before the turn is submitted and frozen.
-      if (this.pendingPermission) {
-        const pending = this.pendingPermission;
-        this.pendingPermission = null;
-        await this.applyPermission(conversationId, pending.mode, pending.grant);
-      }
+      await this.applyPendingPermission(conversationId);
     }
     // Continuing an opened conversation must keep using the same Core
     // conversation ID; submitting from the default (never-opened) state
@@ -3228,6 +3225,7 @@ export class DesktopSession {
     // A passive transcript refresh (select=false) only reads: it must never
     // re-select a conversation the person has already navigated away from.
     if (select) {
+      this.discardPendingPermission('another conversation was opened');
       this.selectedConversationId = conversationId;
       writeSelectedConversation(this.dataDir, conversationId);
       // A different conversation's restored (never-resolved) media approval
@@ -3304,8 +3302,32 @@ export class DesktopSession {
 
   // --- Chat permission mode (Ask / Auto / Plan Only). Core stores and enforces it; the host only relays the choice. ---
   private permission: DesktopPermissionState = { conversationId: null, mode: 'ask', authorizations: [], categories: {}, pending: false };
-  /** A mode chosen before the conversation exists; applied right after the next submit creates it, before Core freezes the turn. */
-  private pendingPermission: { mode: DesktopPermissionMode; grant?: DesktopPermissionGrant } | null = null;
+  /**
+   * A mode chosen before the conversation exists; applied right after the next chat submit creates it, before Core
+   * freezes the turn. It is bound to the workspace selected when the user chose it: if the folder differs by then it is
+   * not applied, and any other way of leaving the blank conversation discards it, so nothing inherits it silently.
+   */
+  private pendingPermission: { mode: DesktopPermissionMode; grant?: DesktopPermissionGrant; workspaceRoot: string | null } | null = null;
+
+  private discardPendingPermission(why: string): void {
+    if (!this.pendingPermission) return;
+    const mode = this.pendingPermission.mode;
+    this.pendingPermission = null;
+    this.permission = { ...this.permission, mode: 'ask', pending: false, pendingWorkspaceRoot: null };
+    this.emit({ kind: 'status', at: nowIso(), summary: `The ${mode} mode you chose was not applied (${why}); choose it again for this conversation` });
+  }
+
+  /** Applies the parked mode to the conversation the chat submit just created, if it still matches what was chosen. */
+  private async applyPendingPermission(conversationId: string): Promise<void> {
+    const pending = this.pendingPermission;
+    if (!pending) return;
+    this.pendingPermission = null;
+    if (pending.grant && !sameFolder(pending.workspaceRoot, this.folder)) {
+      this.emit({ kind: 'status', at: nowIso(), summary: `Auto was not applied: you chose it for ${pending.workspaceRoot ?? 'no workspace'}, but the workspace is now ${this.folder ?? 'none'}. This conversation stays in Ask.` });
+      return;
+    }
+    await this.applyPermission(conversationId, pending.mode, pending.grant, pending.workspaceRoot);
+  }
 
   private permissionLookupFailedFor: string | null = null;
   /** The mode the running (or resumed) turn was frozen with, read once from Core's own request record. */
@@ -3342,7 +3364,7 @@ export class DesktopSession {
   async refreshPermission(): Promise<void> {
     const conversationId = this.selectedConversationId;
     if (!conversationId || !this.client) {
-      this.permission = { conversationId: null, mode: this.pendingPermission?.mode ?? 'ask', authorizations: [], categories: this.permission.categories, pending: Boolean(this.pendingPermission) };
+      this.permission = { conversationId: null, mode: this.pendingPermission?.mode ?? 'ask', authorizations: [], categories: this.permission.categories, pending: Boolean(this.pendingPermission), pendingWorkspaceRoot: this.pendingPermission?.grant ? this.pendingPermission.workspaceRoot : null };
     } else {
       const state = await this.client.getConversationPermission(conversationId);
       this.permission = {
@@ -3363,7 +3385,7 @@ export class DesktopSession {
     if (mode === 'auto' && (!grant || grant.categories.length === 0)) throw new Error('Auto needs at least one thing you authorize and an expiry.');
     const conversationId = this.selectedConversationId;
     if (!conversationId) {
-      this.pendingPermission = { mode, ...(grant ? { grant } : {}) };
+      this.pendingPermission = { mode, ...(grant ? { grant } : {}), workspaceRoot: this.folder };
     } else {
       await this.applyPermission(conversationId, mode, grant);
     }
@@ -3377,17 +3399,19 @@ export class DesktopSession {
     return this.snapshot();
   }
 
-  private async applyPermission(conversationId: string, mode: DesktopPermissionMode, grant?: DesktopPermissionGrant): Promise<void> {
+  /** `workspaceRoot` is the folder selected when the user issued the grant; the grant is bound to it, never to a later one. */
+  private async applyPermission(conversationId: string, mode: DesktopPermissionMode, grant?: DesktopPermissionGrant, workspaceRoot: string | null = this.folder): Promise<void> {
     const client = this.requireClient();
     await client.setConversationPermissionMode(conversationId, mode);
     if (mode === 'auto' && grant) {
-      await client.grantStandingAuthorization(conversationId, { categories: grant.categories, workspaceRoot: this.folder, expiresInMinutes: grant.expiresInMinutes });
+      await client.grantStandingAuthorization(conversationId, { categories: grant.categories, workspaceRoot, expiresInMinutes: grant.expiresInMinutes });
     }
   }
 
   /** Clears the selection so the next submit lazily creates a brand-new Core
    * conversation — never inherits the previous objective or context. */
   async newConversation(): Promise<void> {
+    this.discardPendingPermission('a new conversation was started');
     this.voiceConversationId = null;
     this.selectedConversationId = null;
     this.lastWeatherLocation = null;
@@ -3593,6 +3617,7 @@ export class DesktopSession {
         title: title.slice(0, 70),
       });
       conversationId = conversation.id;
+      this.discardPendingPermission('this conversation was started outside the chat composer');
       this.voiceConversationId = conversationId;
       this.selectedConversationId = conversationId;
       writeSelectedConversation(this.dataDir, conversationId);
@@ -3912,6 +3937,7 @@ export class DesktopSession {
         title: normalized.slice(0, 80),
       });
       conversationId = conversation.id;
+      this.discardPendingPermission('this conversation was started outside the chat composer');
       this.voiceConversationId = conversationId;
       this.selectedConversationId = conversationId;
       writeSelectedConversation(this.dataDir, conversationId);
@@ -5140,4 +5166,11 @@ function sleep(ms: number): Promise<void> {
 
 function isLocalCoreWorker(workerId: string): boolean {
   return workerId === 'local-core';
+}
+
+/** Whether two workspace selections name the same folder (null means no workspace). */
+function sameFolder(a: string | null, b: string | null): boolean {
+  if (!a || !b) return a === b;
+  const norm = (p: string) => (process.platform === 'win32' ? path.resolve(p).toLowerCase() : path.resolve(p));
+  return norm(a) === norm(b);
 }

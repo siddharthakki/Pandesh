@@ -4509,7 +4509,7 @@ function renderPermission(snapshot) {
       lines.push(permissionLine([strong('Auto'), ` until ${permissionTime(a.expiresAt)}${where}${scripts}`, revoke, list]));
     }
   }
-  if (p.pending) lines.push(permissionLine([strong(PERMISSION_LABELS[p.mode]), ' applies from your next message.']));
+  if (p.pending) lines.push(permissionLine([strong(PERMISSION_LABELS[p.mode]), p.mode === 'auto' ? ` applies from your next message, for ${p.pendingWorkspaceRoot || 'no workspace folder'} only.` : ' applies from your next message.']));
   if (permissionScope) permissionScope.replaceChildren(...lines);
   if (permissionPanel) permissionPanel.hidden = lines.length === 0 && permissionGrant?.hidden !== false;
 }

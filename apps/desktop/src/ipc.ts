@@ -538,6 +538,8 @@ export interface DesktopPermissionState {
   categories: Record<string, string>;
   /** True while the mode waits for the next message to create its conversation. */
   pending: boolean;
+  /** The workspace a pending Auto grant is bound to (the folder selected when it was chosen). */
+  pendingWorkspaceRoot?: string | null;
   /** The mode the running or resumed turn was frozen with, or null when nothing runs. */
   activeTurnMode?: DesktopPermissionMode | null;
 }
