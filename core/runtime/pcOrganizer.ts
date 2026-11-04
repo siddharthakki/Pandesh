@@ -11,6 +11,7 @@
  *   SHA-256 where it was taken), and undone in reverse. A cross-drive move copies, verifies the copy, then removes the
  *   original — the original is never removed before its copy is proven identical.
  */
+import { documentReadGrantFor, documentReadPolicy, listDocumentReadGrants, toContentReadPolicy, type ContentReadPolicy } from '../domain/documentReadGrants';
 import * as crypto from 'node:crypto';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
@@ -91,6 +92,26 @@ const within = (child: string, parent: string) => {
  * A root a person may authorize. Drive roots, Windows and program folders, AppData, credential folders and Pandesh's
  * own data are refused, so an over-broad request fails before anything is read.
  */
+/**
+ * Where a plan puts the new hierarchy.
+ *
+ * The same names people use are understood here as `validateRoot` reads them ("~", "%USERPROFILE%"), and a name that
+ * is not a path at all — "Documents", "Tax" — is taken inside the folder the scan was pointed at, or as a scanned
+ * folder of that name. It is never resolved against the working directory of the running program: that would aim a
+ * plan at the program's own folder, which is how a plain word once became a destination inside the code repository.
+ */
+export function resolveTargetBase(raw: string, scannedRoots: string[], env: NodeJS.ProcessEnv = process.env): string {
+  const trimmed = String(raw ?? '').trim().replace(/^"|"$/g, '');
+  const first = scannedRoots[0] ?? '';
+  if (!trimmed) return first;
+  const home = env.USERPROFILE ?? os.homedir();
+  const expanded = trimmed.replace(/^~(?=$|[\\/])/, home).replace(/%USERPROFILE%/i, home);
+  if (path.isAbsolute(expanded)) return path.resolve(expanded);
+  const byName = scannedRoots.find((r) => path.basename(r).toLowerCase() === expanded.toLowerCase());
+  if (byName) return byName;
+  return path.resolve(first, expanded);
+}
+
 export function validateRoot(raw: string, env: NodeJS.ProcessEnv = process.env): { ok: true; root: string } | { ok: false; reason: string } {
   const trimmed = String(raw ?? '').trim().replace(/^"|"$/g, '');
   if (!trimmed) return { ok: false, reason: 'an empty folder path' };
@@ -163,7 +184,7 @@ function isActiveUnit(dir: string): boolean {
 }
 
 /** Walks the authorized roots. Read-only; bounded by file count and depth. */
-export async function scanRoots(roots: string[], options: { inspectContents?: boolean; nowMs?: number } = {}): Promise<ScanResult> {
+export async function scanRoots(roots: string[], options: { readContents?: ContentReadPolicy; nowMs?: number } = {}): Promise<ScanResult> {
   const started = Date.now();
   const files: ScannedFile[] = [];
   const units: ScannedUnit[] = [];
@@ -198,7 +219,7 @@ export async function scanRoots(roots: string[], options: { inspectContents?: bo
       const rel = path.relative(root, full);
       const parentNames = path.dirname(rel) === '.' ? [] : path.dirname(rel).split(path.sep).map((s) => s.toLowerCase());
       let text: string | undefined;
-      if (options.inspectContents && contentReads < MAX_CONTENT_READS && (detected === 'pdf' || detected === 'text')) {
+      if (options.readContents?.(full) && contentReads < MAX_CONTENT_READS && (detected === 'pdf' || detected === 'text')) {
         text = await readContentText(full, detected, st.size);
         if (text !== undefined) contentReads += 1;
       }
@@ -242,7 +263,11 @@ export async function findDuplicates(files: ScannedFile[]): Promise<{ sets: Scan
 export interface ProposeInput {
   roots: string[];
   targetBase?: string;
-  inspectContents?: boolean;
+  /**
+   * Whose permission covers reading document text: `true` only from the person in the desktop panel, a grant policy
+   * (documentReadPolicy) from chat and routines. Absent: names, sizes, dates and headers only.
+   */
+  inspectContents?: boolean | ContentReadPolicy;
   /** Folder names per category, relative to the target base ("" leaves that category in place). */
   hierarchy?: Partial<Record<FileCategory, string>>;
   origin?: OrganizationPlan['origin'];
@@ -267,11 +292,11 @@ export async function proposeOrganization(db: CoreDatabase, input: ProposeInput,
   if (roots.length === 0) throw new CoreError('invalid_request', 'name at least one folder to organize');
   for (const a of roots) for (const b of roots) if (a !== b && within(a, b)) throw new CoreError('invalid_request', `${a} is inside ${b}; name each folder once`);
   const documents = roots.find((r) => path.basename(r).toLowerCase() === 'documents');
-  const targetBase = input.targetBase ? path.resolve(input.targetBase) : (documents ?? roots[0]);
+  const targetBase = input.targetBase ? resolveTargetBase(input.targetBase, roots, env) : (documents ?? roots[0]);
   const tv = validateRoot(fs.existsSync(targetBase) ? targetBase : path.dirname(targetBase), env);
   if (!tv.ok) throw new CoreError('invalid_request', `the target folder is not allowed: ${tv.reason}`);
 
-  const scan = await scanRoots(roots, { inspectContents: input.inspectContents, nowMs: input.nowMs });
+  const scan = await scanRoots(roots, { readContents: toContentReadPolicy(input.inspectContents), nowMs: input.nowMs });
   const dup = await findDuplicates(scan.files);
   const redundant = new Set<string>();
   for (const set of dup.sets) for (const f of set.slice(1)) redundant.add(f.path);
@@ -357,7 +382,7 @@ export async function proposeOrganization(db: CoreDatabase, input: ProposeInput,
   risks.push('a file open in another program cannot be moved; it is reported and stays where it is');
 
   const summary: Record<string, unknown> = {
-    inspectContents: input.inspectContents === true,
+    inspectContents: input.inspectContents === true || scan.contentReads > 0,
     contentReads: scan.contentReads,
     scanned: { files: scan.files.length, bytes: scan.files.reduce((s, f) => s + f.size, 0), units: scan.units.length, elapsedMs: scan.elapsedMs, truncated: scan.truncated },
     inventory: scan.folders.slice(0, 30),
@@ -642,6 +667,15 @@ export function renderApplyReport(r: ApplyReport): string {
 
 // ------------------------------------------------------------------ governed capability
 
+/** What a scan of `roots` will read, for the approval card: document text only where a grant covers the folder. */
+export function describeContentReading(db: CoreDatabase, roots: string[]): string {
+  const allowed = roots.filter((r) => documentReadGrantFor(db, r));
+  const partial = listDocumentReadGrants(db).filter((g) => roots.some((r) => within(g.folder, r) && g.folder.toLowerCase() !== r.toLowerCase()));
+  const base = 'names, sizes, dates and file-type headers';
+  if (!allowed.length && !partial.length) return `${base} only — document text is not read (no document-reading permission for these folders)`;
+  return `${base}; document text (locally, not stored) only in ${[...allowed, ...partial.map((g) => g.folder)].join(', ')}, where you allowed document reading`;
+}
+
 const okResult = (output: string, category: string, normalizedArguments?: Record<string, unknown>): ToolExecutionResult => ({ status: 'succeeded', exitCode: 0, output, resultCategory: category, ...(normalizedArguments ? { normalizedArguments } : {}) });
 const failResult = (output: string, category: string): ToolExecutionResult => ({ status: 'failed', exitCode: null, output, resultCategory: category });
 
@@ -665,7 +699,6 @@ export function createPcOrganizerAdapter(deps: { db: CoreDatabase; env?: NodeJS.
           properties: {
             roots: { type: 'array', items: { type: 'string' }, description: 'Folders to scan, e.g. ["Downloads"] or ["C:\\\\Users\\\\me\\\\Documents"].' },
             targetBase: { type: 'string', description: 'Folder the new hierarchy is created in. Defaults to Documents when scanned, else the first folder.' },
-            inspectContents: { type: 'boolean', description: 'Read PDF/text contents locally to classify better. Only when the user agreed.' },
           },
           required: ['roots'],
         },
@@ -699,7 +732,10 @@ export function createPcOrganizerAdapter(deps: { db: CoreDatabase; env?: NodeJS.
     async prepare(toolName, args) {
       if (toolName === 'pc_organize_scan') {
         const roots = stringList(args.roots).map((r) => { const v = validateRoot(r, env); return v.ok ? v.root : r; });
-        return { ...args, roots, inspectContents: args.inspectContents === true, reads: args.inspectContents === true ? 'names, sizes, dates, file-type headers and document text (locally)' : 'names, sizes, dates and file-type headers only' };
+        const { inspectContents: _ignored, ...rest } = args;
+        // The card shows where the files will really go, not the word the model used.
+        const targetBase = typeof args.targetBase === 'string' && args.targetBase.trim() ? resolveTargetBase(args.targetBase, roots, env) : undefined;
+        return { ...rest, ...(targetBase ? { targetBase } : {}), roots, reads: describeContentReading(db, roots) };
       }
       if (toolName === 'pc_organize_apply' || toolName === 'pc_organize_undo') {
         try {
@@ -719,7 +755,8 @@ export function createPcOrganizerAdapter(deps: { db: CoreDatabase; env?: NodeJS.
         if (call.name === 'pc_organize_scan') {
           const roots = stringList(args.roots);
           if (!roots.length) return failResult('roots is required: name the folders to scan.', 'invalid_arguments');
-          const plan = await proposeOrganization(db, { roots, targetBase: typeof args.targetBase === 'string' && args.targetBase.trim() ? args.targetBase : undefined, inspectContents: args.inspectContents === true }, env);
+          // Document text only inside folders the person allowed (documentReadGrants); a model-supplied flag is ignored.
+          const plan = await proposeOrganization(db, { roots, targetBase: typeof args.targetBase === 'string' && args.targetBase.trim() ? args.targetBase : undefined, inspectContents: documentReadPolicy(db) }, env);
           return okResult(renderPlanPreview(db, plan), 'organization_plan_proposed', { planId: plan.id });
         }
         if (call.name === 'pc_organize_plan') {

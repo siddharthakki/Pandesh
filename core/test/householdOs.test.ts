@@ -22,6 +22,9 @@ import {
 import { handleCompanionOps } from '../runtime/householdService';
 import { runHouseholdRoutine } from '../runtime/householdRoutineRunner';
 
+/** The protocol tests do not exercise the vault (householdHardening.test.ts does); keys pass through in a sealed-looking form. */
+const plainSealer = { seal: (b: Buffer) => `vault1:${b.toString('base64')}`, unseal: (s: string) => Buffer.from(s.slice(7), 'base64') };
+
 let dir: string;
 let db: CoreDatabase;
 const PDF = Buffer.from('%PDF-1.4\n% test\n');
@@ -219,21 +222,21 @@ describe('JUGAAD companion protocol', () => {
     const { code } = createCompanionPairingCode();
     const salt = crypto.randomBytes(16);
     const deviceId = 'jugaad-test-device';
-    expect(() => redeemCompanionPairing(db, { deviceId, label: 'Pixel', salt: salt.toString('base64'), proof: pairingProof(pairingKey('WRONGCODE', salt), deviceId).toString('base64') })).toThrow(/wrong, expired/);
+    expect(() => redeemCompanionPairing(db, plainSealer, { deviceId, label: 'Pixel', salt: salt.toString('base64'), proof: pairingProof(pairingKey('WRONGCODE', salt), deviceId).toString('base64') })).toThrow(/wrong, expired/);
     const key = pairingKey(code, salt);
-    const r = redeemCompanionPairing(db, { deviceId, label: 'Pixel', salt: salt.toString('base64'), proof: pairingProof(key, deviceId).toString('base64') });
+    const r = redeemCompanionPairing(db, plainSealer, { deviceId, label: 'Pixel', salt: salt.toString('base64'), proof: pairingProof(key, deviceId).toString('base64') });
     const sealed = JSON.parse(openCompanionMessage(key, `${deviceId}:pair`, r.sealedKey)) as { deviceKey: string };
     const deviceKey = Buffer.from(sealed.deviceKey, 'base64');
     expect(deviceKey).toHaveLength(32);
     // The code works once.
-    expect(() => redeemCompanionPairing(db, { deviceId, label: 'Pixel', salt: salt.toString('base64'), proof: pairingProof(key, deviceId).toString('base64') })).toThrow();
+    expect(() => redeemCompanionPairing(db, plainSealer, { deviceId, label: 'Pixel', salt: salt.toString('base64'), proof: pairingProof(key, deviceId).toString('base64') })).toThrow();
 
     const msg = sealCompanionMessage(deviceKey, deviceId, JSON.stringify({ method: 'pull' }));
     expect(JSON.parse(openCompanionMessage(deviceKey, deviceId, msg))).toEqual({ method: 'pull' });
     expect(() => openCompanionMessage(crypto.randomBytes(32), deviceId, msg)).toThrow(/did not authenticate/);
     expect(() => openCompanionMessage(deviceKey, 'other-device', msg)).toThrow(/did not authenticate/);
-    checkFreshness(deviceId, Date.now(), 'nonce-aaaaaaaa');
-    expect(() => checkFreshness(deviceId, Date.now(), 'nonce-aaaaaaaa')).toThrow(/replayed/);
-    expect(() => checkFreshness(deviceId, Date.now() - 3_600_000, 'nonce-bbbbbbbb')).toThrow(/too old/);
+    checkFreshness(db, deviceId, Date.now(), 'nonce-aaaaaaaa');
+    expect(() => checkFreshness(db, deviceId, Date.now(), 'nonce-aaaaaaaa')).toThrow(/replayed/);
+    expect(() => checkFreshness(db, deviceId, Date.now() - 3_600_000, 'nonce-bbbbbbbb')).toThrow(/too old/);
   });
 });

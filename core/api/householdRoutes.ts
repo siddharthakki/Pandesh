@@ -11,7 +11,8 @@ import type { ConnectorAdapter } from '../runtime/connectors/connectorCapability
 import type { EventBroadcaster } from '../ws/broadcaster';
 import { CoreError } from '../domain/errors';
 import { getOrganizationPlan, listOrganizationPlans, listOrganizationRules, moveCounts } from '../domain/fileOrganization';
-import { applyOrganizationPlan, proposeOrganization, renderApplyReport, renderPlanPreview, undoOrganizationPlan } from '../runtime/pcOrganizer';
+import { applyOrganizationPlan, proposeOrganization, renderApplyReport, renderPlanPreview, undoOrganizationPlan, validateRoot } from '../runtime/pcOrganizer';
+import { grantDocumentReading, listDocumentReadGrants, revokeDocumentReading } from '../domain/documentReadGrants';
 import { decideObligation, listObligationEvidence, listObligations, type ObligationAction, type ObligationStatus } from '../domain/householdObligations';
 import { controlHouseholdRoutine, createHouseholdRoutine, listHouseholdRoutines, type HouseholdRoutineKind, type RoutineControl } from '../domain/householdRoutines';
 import { getScheduledTask } from '../domain/scheduledTasks';
@@ -52,6 +53,7 @@ export function registerHouseholdRoutes(router: Router<ApiContext, ApiResult>, o
       obligations: listObligations(ctx.db, { status: ['proposed', 'confirmed'] }).slice(0, 50),
       plans,
       rules: listOrganizationRules(ctx.db),
+      documentReading: listDocumentReadGrants(ctx.db),
       companion: { ...companionController(ctx.db, options.dataDir).status(), devices: listCompanionDevices(ctx.db), latestRevision: latestCompanionRevision(ctx.db), records: listCompanionRecords(ctx.db).length, recentOps: recentCompanionOps(ctx.db, 5) },
     });
   });
@@ -125,6 +127,19 @@ export function registerHouseholdRoutes(router: Router<ApiContext, ApiResult>, o
     return ok({ obligation: decideObligation(ctx.db, match.params.id, { action, actor: who, resolution: b.resolution === 'paid' ? 'paid' : undefined, corrections: typeof b.date === 'string' ? { nextDate: b.date } : undefined }) });
   });
 
+  // --- Document reading: the person's own, separate decision per folder ---
+  router.post('/v1/household/document-reading', (ctx) => {
+    const who = requireHost(ctx);
+    const b = body(ctx);
+    const v = validateRoot(String(b.folder ?? ''));
+    if (!v.ok) throw new CoreError('invalid_request', `that folder cannot be allowed: ${v.reason}`);
+    return ok({ grant: grantDocumentReading(ctx.db, v.root, who), grants: listDocumentReadGrants(ctx.db) });
+  });
+  router.post('/v1/household/document-reading/:id/revoke', (ctx, match) => {
+    const who = requireHost(ctx);
+    return ok({ revoked: revokeDocumentReading(ctx.db, match.params.id, who), grants: listDocumentReadGrants(ctx.db) });
+  });
+
   // --- JUGAAD companion ---
   router.post('/v1/household/companion/settings', async (ctx) => {
     requireHost(ctx);
@@ -140,7 +155,7 @@ export function registerHouseholdRoutes(router: Router<ApiContext, ApiResult>, o
     requireHost(ctx);
     const status = companionController(ctx.db, options.dataDir).status();
     if (!status.listening) throw new CoreError('invalid_transition', 'turn on phone sync first, so the phone can reach Pandesh');
-    return ok({ ...createCompanionPairingCode(), port: status.port, addresses: status.settings.bind === 'lan' ? status.lanAddresses : ['10.0.2.2 (Android emulator)', '127.0.0.1 (USB with adb reverse)'] });
+    return ok({ ...createCompanionPairingCode(), port: status.port, scheme: 'https', certificateFingerprint: status.certificateFingerprint, addresses: status.settings.bind === 'lan' ? status.lanAddresses : ['10.0.2.2 (Android emulator)', '127.0.0.1 (USB with adb reverse)'] });
   });
   router.post('/v1/household/companion/devices/:id/revoke', (ctx, match) => {
     requireHost(ctx);

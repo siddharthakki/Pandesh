@@ -5,6 +5,9 @@
  * (which puts it on the phone), creating or changing a routine (a standing permission), sending something to the phone —
  * is consequential, so it goes through the one existing approval card. The routine approval shows the exact scope the
  * routine will hold; `prepare` freezes it into the approved arguments, so what runs is what was approved.
+ *
+ * Reading the text inside documents is not a scan option the model can set: it happens only in folders the person
+ * allowed through `household_allow_document_reading`, a card of its own (see documentReadGrants.ts).
  */
 import type { CoreDatabase } from '../db/connection';
 import type { ConnectorId } from '../shared/wireTypes';
@@ -24,6 +27,8 @@ import { activeCompanionDeviceCount, latestCompanionRevision, listCompanionDevic
 import { readConnector } from './assistantBrief';
 import { publishBriefing, renderHouseholdBriefing, renderObligationList, scanObligationSources, type ConnectorReader } from './householdService';
 import { runHouseholdRoutine } from './householdRoutineRunner';
+import { documentReadPolicy, grantDocumentReading, listDocumentReadGrants, revokeDocumentReading } from '../domain/documentReadGrants';
+import { validateRoot } from './pcOrganizer';
 
 const ok = (output: string, category: string): ToolExecutionResult => ({ status: 'succeeded', exitCode: 0, output, resultCategory: category });
 const fail = (output: string, category: string): ToolExecutionResult => ({ status: 'failed', exitCode: null, output, resultCategory: category });
@@ -50,8 +55,19 @@ function scopeFrom(kind: HouseholdRoutineKind, args: Record<string, unknown>): R
   if (args.sources !== undefined) raw.sources = list(args.sources) as Array<'gmail'>;
   if (args.maxMovesPerRun !== undefined) raw.maxMovesPerRun = Number(args.maxMovesPerRun);
   if (args.lookbackDays !== undefined) raw.lookbackDays = Number(args.lookbackDays);
-  if (args.inspectContents !== undefined) raw.inspectContents = args.inspectContents === true;
   return validateRoutineScope(kind, raw);
+}
+
+function resolveGrantFolders(v: unknown): { ok: true; roots: string[] } | { ok: false; reason: string } {
+  const raw = list(v);
+  if (!raw.length) return { ok: false, reason: 'name the folders, e.g. ["Documents"]' };
+  const roots: string[] = [];
+  for (const r of raw) {
+    const checked = validateRoot(r);
+    if (!checked.ok) return { ok: false, reason: `${r}: ${checked.reason}` };
+    roots.push(checked.root);
+  }
+  return { ok: true, roots };
 }
 
 export function createHouseholdCapabilityAdapter(deps: { db: CoreDatabase; connectorRegistry?: Map<ConnectorId, ConnectorAdapter> }): GovernedCapabilityAdapter {
@@ -70,7 +86,7 @@ export function createHouseholdCapabilityAdapter(deps: { db: CoreDatabase; conne
         if (!sources.includes('gmail') && !folders.length) return fail('Name what to scan: sources ["gmail"] and/or folders.', 'invalid_arguments');
         const report = await scanObligationSources(db, {
           gmail: sources.includes('gmail') ? { reader: readerFor(ctx), lookbackDays: Math.min(365, Math.max(1, Number(a.lookbackDays) || 60)) } : undefined,
-          folders, inspectContents: a.inspectContents === true,
+          folders, inspectContents: documentReadPolicy(db),
         });
         const briefing = renderHouseholdBriefing(db, report, Date.now(), 'Obligations found');
         const proposed = listObligations(db, { status: ['proposed'] });
@@ -119,7 +135,7 @@ export function createHouseholdCapabilityAdapter(deps: { db: CoreDatabase; conne
         }
         if (action === 'edit') {
           const kind = task.routine as HouseholdRoutineKind;
-          const scopeKeys = ['folders', 'operations', 'sources', 'maxMovesPerRun', 'lookbackDays', 'inspectContents'];
+          const scopeKeys = ['folders', 'operations', 'sources', 'maxMovesPerRun', 'lookbackDays'];
           editHouseholdRoutine(db, id, {
             dailyTime: typeof a.time === 'string' ? a.time : undefined, timezone: typeof a.timezone === 'string' ? a.timezone : undefined, recurrence: recurrenceFrom(a),
             scope: scopeKeys.some((k) => a[k] !== undefined) ? scopeFrom(kind, { ...(task.scope ?? {}), ...a }) : undefined,
@@ -129,6 +145,16 @@ export function createHouseholdCapabilityAdapter(deps: { db: CoreDatabase; conne
           controlHouseholdRoutine(db, id, action);
         } else return fail('action must be pause, resume, cancel, run_now or edit', 'invalid_arguments');
         return ok(renderRoutine(listHouseholdRoutines(db).find((r) => r.id === id)!), 'routine_controlled');
+      }
+      case 'household_allow_document_reading': {
+        const folders = resolveGrantFolders(a.folders);
+        if (!folders.ok) return fail(folders.reason, 'invalid_arguments');
+        if (a.action === 'revoke') {
+          const revoked = folders.roots.flatMap((f) => { try { return revokeDocumentReading(db, f, 'chat-approval'); } catch { return []; } });
+          return ok(revoked.length ? `Document reading revoked for ${revoked.map((g) => g.folder).join(', ')}. Scans and routines read only names, sizes, dates and file types there from now on.` : 'No document-reading permission was active for those folders.', 'document_reading_revoked');
+        }
+        const granted = folders.roots.map((f) => grantDocumentReading(db, f, 'chat-approval'));
+        return ok(`Document reading allowed in ${granted.map((g) => g.folder).join(', ')}. Pandesh may read the text of PDFs and text files there, on this PC only, to classify them and find dates; the text is not stored or sent anywhere. Revoke it any time (Home → Household, or ask).`, 'document_reading_allowed');
       }
       case 'jugaad_status': {
         const devices = listCompanionDevices(db);
@@ -175,7 +201,7 @@ export function createHouseholdCapabilityAdapter(deps: { db: CoreDatabase; conne
       {
         name: 'household_scan_obligations',
         description: 'Find bills, invoices, subscriptions, renewals, contracts, warranties, payment confirmations, deliveries, appointments and service notices in Gmail and/or named folders, locally and without a model. Each finding keeps its source (email subject/date or file) and is deduplicated into one record per obligation. Never pays, replies or cancels. Needs approval (reads private mail/files).',
-        parameters: { type: 'object', properties: { sources: { type: 'array', items: { type: 'string', enum: ['gmail'] } }, folders: { type: 'array', items: { type: 'string' } }, lookbackDays: { type: 'number', description: 'Mail look-back, default 60.' }, inspectContents: { type: 'boolean', description: 'Read PDF/text contents of the folders locally.' } } },
+        parameters: { type: 'object', properties: { sources: { type: 'array', items: { type: 'string', enum: ['gmail'] } }, folders: { type: 'array', items: { type: 'string' } }, lookbackDays: { type: 'number', description: 'Mail look-back, default 60.' } } },
       },
       {
         name: 'household_obligations',
@@ -195,7 +221,7 @@ export function createHouseholdCapabilityAdapter(deps: { db: CoreDatabase; conne
           properties: {
             kind: { type: 'string', enum: ['folder_cleanup', 'obligations_check', 'expiry_watch'] }, title: { type: 'string' }, purpose: { type: 'string' }, time: { type: 'string', description: 'HH:MM 24-hour' },
             weekdays: { type: 'array', items: { type: 'string' } }, everyDays: { type: 'number' }, frequency: { type: 'string', enum: ['daily', 'weekly'] }, timezone: { type: 'string' },
-            folders: { type: 'array', items: { type: 'string' } }, operations: { type: 'array', items: { type: 'string' } }, maxMovesPerRun: { type: 'number' }, lookbackDays: { type: 'number' }, inspectContents: { type: 'boolean' },
+            folders: { type: 'array', items: { type: 'string' } }, operations: { type: 'array', items: { type: 'string' } }, maxMovesPerRun: { type: 'number' }, lookbackDays: { type: 'number' },
           },
           required: ['kind'],
         },
@@ -205,6 +231,11 @@ export function createHouseholdCapabilityAdapter(deps: { db: CoreDatabase; conne
         name: 'routine_control',
         description: 'Pause, resume, cancel, run_now or edit (time, weekdays, folders, operations, limits) a household routine. Needs approval.',
         parameters: { type: 'object', properties: { routineId: { type: 'string' }, action: { type: 'string', enum: ['pause', 'resume', 'cancel', 'run_now', 'edit'] }, time: { type: 'string' }, weekdays: { type: 'array', items: { type: 'string' } }, everyDays: { type: 'number' }, folders: { type: 'array', items: { type: 'string' } }, operations: { type: 'array', items: { type: 'string' } }, maxMovesPerRun: { type: 'number' }, title: { type: 'string' } }, required: ['routineId', 'action'] },
+      },
+      {
+        name: 'household_allow_document_reading',
+        description: 'Ask the person to allow (or revoke) Pandesh reading the TEXT inside PDFs and text files of named folders, locally. This is a separate decision from scanning: scans and routines otherwise read only names, sizes, dates and file types. Use it only when the person asked for their documents to be read, or after asking them in your own words; never as a side step of another task. Needs its own approval.',
+        parameters: { type: 'object', properties: { action: { type: 'string', enum: ['allow', 'revoke'] }, folders: { type: 'array', items: { type: 'string' } } }, required: ['action', 'folders'] },
       },
       { name: 'jugaad_status', description: 'Show whether a JUGAAD phone is paired, when it last synced, and what is shared with it. Read-only.', parameters: { type: 'object', properties: {} } },
       {
@@ -224,7 +255,20 @@ export function createHouseholdCapabilityAdapter(deps: { db: CoreDatabase; conne
           const scope = scopeFrom(kind, args);
           const rec = recurrenceFrom(args);
           const schedule = describeSchedule({ dailyTime: typeof args.time === 'string' ? args.time : kind === 'folder_cleanup' ? '10:00' : kind === 'obligations_check' ? '07:30' : '08:00', timezone: typeof args.timezone === 'string' ? args.timezone : Intl.DateTimeFormat().resolvedOptions().timeZone, recurrence: rec === undefined ? (kind === 'obligations_check' ? null : { kind: 'weekly', weekdays: [kind === 'folder_cleanup' ? 0 : 1] }) : rec, repeat: 'daily' });
-          return { ...args, folders: scope.folders, sources: scope.sources, operations: scope.operations, ...(scope.maxMovesPerRun ? { maxMovesPerRun: scope.maxMovesPerRun } : {}), ...(scope.lookbackDays ? { lookbackDays: scope.lookbackDays } : {}), ...(scope.inspectContents ? { inspectContents: true } : {}), schedule, neverDoes: 'send, pay, cancel, delete, or move files outside approved rules' };
+          return { ...args, folders: scope.folders, sources: scope.sources, operations: scope.operations, ...(scope.maxMovesPerRun ? { maxMovesPerRun: scope.maxMovesPerRun } : {}), ...(scope.lookbackDays ? { lookbackDays: scope.lookbackDays } : {}), ...(scope.inspectContents ? { documentText: 'only in folders where you allowed document reading (checked at every run)' } : {}), schedule, neverDoes: 'send, pay, cancel, delete, or move files outside approved rules' };
+        }
+        if (toolName === 'household_allow_document_reading') {
+          const folders = resolveGrantFolders(args.folders);
+          if (!folders.ok) return args;
+          return args.action === 'revoke'
+            ? { action: 'revoke', folders: folders.roots, decision: `Stop reading document text in ${folders.roots.join(', ')}` }
+            : {
+              action: 'allow', folders: folders.roots,
+              decision: `Allow Pandesh to read the text of PDFs and text files in ${folders.roots.join(', ')} (and folders inside them)`,
+              scope: 'Read locally on this PC to classify files and find dates and amounts; the text is not stored, not sent to any model or service, and not synced to the phone',
+              lasts: 'Until you revoke it (Home → Household, or ask Pandesh)',
+              alreadyAllowed: listDocumentReadGrants(db).map((g) => g.folder),
+            };
         }
         if (toolName === 'household_obligation_update') {
           const ob = getObligation(db, String(args.obligationId ?? ''));

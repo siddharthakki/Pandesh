@@ -2629,6 +2629,8 @@ export class DesktopSession {
       pairingCode: { path: '/v1/household/companion/pairing-code', method: 'POST', body: {} },
       revokeDevice: { path: `/v1/household/companion/devices/${id}/revoke`, method: 'POST', body: {} },
       sendBriefing: { path: '/v1/household/companion/briefing', method: 'POST', body: {} },
+      allowDocumentReading: { path: '/v1/household/document-reading', method: 'POST', body: { folder: args.folder } },
+      revokeDocumentReading: { path: `/v1/household/document-reading/${id}/revoke`, method: 'POST', body: {} },
     };
     const route = routes[action];
     if (!route) throw new Error(`unknown household action ${action}`);

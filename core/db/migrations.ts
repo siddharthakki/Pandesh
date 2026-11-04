@@ -1547,6 +1547,34 @@ CREATE TABLE IF NOT EXISTS companion_ops (
 );
 `;
 
+/**
+ * Household OS hardening.
+ *
+ * - `companion_nonces` makes replay rejection survive a Core restart: a request nonce is remembered for the replay
+ *   window in the database, not only in memory.
+ * - `document_read_grants` is the person's separate decision to let Pandesh read the text of documents in a folder.
+ *   Scans and routines read contents only inside an active grant; the model cannot create one without its own
+ *   approval card.
+ */
+const MIGRATION_45_HOUSEHOLD_HARDENING = `
+CREATE TABLE IF NOT EXISTS companion_nonces (
+  deviceId TEXT NOT NULL,
+  nonce TEXT NOT NULL,
+  seenAt INTEGER NOT NULL,
+  PRIMARY KEY (deviceId, nonce)
+);
+CREATE INDEX IF NOT EXISTS idx_companion_nonces_seen ON companion_nonces(seenAt);
+CREATE TABLE IF NOT EXISTS document_read_grants (
+  id TEXT PRIMARY KEY,
+  folder TEXT NOT NULL,
+  grantedAt TEXT NOT NULL,
+  grantedBy TEXT NOT NULL,
+  revokedAt TEXT,
+  revokedBy TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_document_read_grants_folder ON document_read_grants(folder);
+`;
+
 const MIGRATION_36_BACKGROUND_TASKS = `
 CREATE TABLE IF NOT EXISTS background_tasks (
   id TEXT PRIMARY KEY,
@@ -1725,6 +1753,7 @@ export const MIGRATIONS: Migration[] = [
   { version: 42, description: 'Wish-to-Reality: durable purchase goals, researched offers, earning opportunities and a verified funds ledger', sql: MIGRATION_42_WISH_GOALS },
   { version: 43, description: 'Wish-to-Reality real revenue: demo vs real money, reconciled payments, business authorization and customer orders', sql: MIGRATION_43_WISH_COMMERCE },
   { version: 44, description: 'Household OS: PC organization move journal and rules, bounded recurring routines with run history, household obligations with evidence, JUGAAD companion sync', sql: MIGRATION_44_HOUSEHOLD_OS },
+  { version: 45, description: 'Household OS hardening: replay nonces that survive a restart, per-folder document-reading grants', sql: MIGRATION_45_HOUSEHOLD_HARDENING },
 ];
 
 

@@ -9815,6 +9815,7 @@ async function refreshHousehold() {
     householdObligationsGroup(o.obligations),
     householdRoutinesGroup(o.routines),
     householdPlansGroup(o.plans),
+    householdReadingGroup(o.documentReading ?? []),
     householdPhoneGroup(o.companion),
     hh('p', { id: 'home-household-note', class: 'ws-routine-note', 'aria-live': 'polite' }, householdUi.note),
   );
@@ -9886,11 +9887,20 @@ function householdPlansGroup(plans) {
   return householdGroup('Organization plans', plans.length, Boolean(householdUi.pending || Object.keys(householdUi.preview).length), ...rows);
 }
 
+/** Folders where the person allowed Pandesh to read document text. Granting happens in chat on its own card. */
+function householdReadingGroup(grants) {
+  const rows = grants.map((g) => hh('div', { class: 'ws-household-row' },
+    hh('span', { class: 'ws-household-text' }, hh('strong', {}, g.folder), hh('span', { class: 'ws-household-evidence' }, `allowed ${new Date(g.grantedAt).toLocaleString()} — text of PDFs and text files is read on this PC only`)),
+    hh('button', { type: 'button', class: 'ws-chip is-reject', onclick: () => householdAction('revokeDocumentReading', { id: g.id }, 'Document reading revoked. Scans read only names, dates and file types there.') }, 'Revoke')));
+  if (!rows.length) rows.push(hh('p', { class: 'ws-routine-note' }, 'Pandesh reads file names, dates and types only. To let it read the text inside documents of a folder, ask: “Allow reading my documents in Documents\Tax.”'));
+  return householdGroup('Document reading', grants.length, false, ...rows);
+}
+
 function householdPhoneGroup(c) {
   const devices = (c.devices ?? []).filter((d) => !d.revokedAt);
   const rows = [
     hh('div', { class: 'ws-household-row' },
-      hh('span', { class: 'ws-household-text' }, c.listening ? `Phone sync is on (${c.settings.bind === 'lan' ? 'local network' : 'this PC only — emulator or USB'}, port ${c.port}). ${c.records} record(s) shared, revision ${c.latestRevision}.` : `Phone sync is off.${c.error ? ` ${c.error}` : ''}`),
+      hh('span', { class: 'ws-household-text' }, c.listening ? `Phone sync is on (${c.settings.bind === 'lan' ? 'local network' : 'this PC only — emulator or USB'}, port ${c.port}, encrypted: TLS with this PC's certificate and a per-phone key${c.keyProtection && c.keyProtection !== 'none' ? `, keys protected by ${c.keyProtection}` : ''}). ${c.records} record(s) shared, revision ${c.latestRevision}.` : c.starting ? 'Phone sync is starting (opening the key vault)…' : `Phone sync is off.${c.error ? ` ${c.error}` : ''}`),
       c.listening
         ? hh('button', { type: 'button', class: 'ws-chip is-reject', onclick: () => householdAction('companionSettings', { enabled: false }, 'Phone sync turned off.') }, 'Turn off')
         : hh('button', { type: 'button', class: 'ws-chip is-approve', onclick: () => householdAction('companionSettings', { enabled: true }, 'Phone sync is on for this PC.') }, 'Turn on'),
@@ -9901,7 +9911,7 @@ function householdPhoneGroup(c) {
         await refreshHousehold();
       } }, 'Pair a phone') : null,
       c.listening && devices.length ? hh('button', { type: 'button', class: 'ws-chip', onclick: () => householdAction('sendBriefing', {}, 'Briefing sent to the phone.') }, 'Send briefing') : null),
-    householdUi.pairing ? hh('p', { class: 'ws-household-pairing' }, `In JUGAAD → Config → Pandesh, enter code ${householdUi.pairing.code} and address ${householdUi.pairing.addresses[0]}:${householdUi.pairing.port}. The code works once and expires ${new Date(householdUi.pairing.expiresAt).toLocaleTimeString()}.`) : null,
+    householdUi.pairing ? hh('p', { class: 'ws-household-pairing' }, `In JUGAAD → Config → Pandesh, enter code ${householdUi.pairing.code} and address ${householdUi.pairing.addresses[0]}:${householdUi.pairing.port}. The code works once and expires ${new Date(householdUi.pairing.expiresAt).toLocaleTimeString()}.${householdUi.pairing.certificateFingerprint ? ` The phone will show this PC's certificate as ${householdUi.pairing.certificateFingerprint.split(' ').slice(0, 4).join(' ')}…` : ''}`) : null,
     ...devices.map((d) => hh('div', { class: 'ws-household-row' },
       hh('span', { class: 'ws-household-text' }, `${d.label} — last synced ${d.lastSeenAt ? new Date(d.lastSeenAt).toLocaleString() : 'never'}, revision ${d.lastPulledRevision}`),
       hh('button', { type: 'button', class: 'ws-chip is-reject', onclick: () => householdAction('revokeDevice', { id: d.id }, 'Phone unpaired. It can no longer sync.') }, 'Unpair'))),

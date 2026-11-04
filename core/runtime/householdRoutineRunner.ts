@@ -6,6 +6,7 @@
  * succeeded with a summary, or failed with the reason. Unattended runs never create approval cards — nobody is there to
  * answer them — so anything the scope does not cover is written down as a proposal instead.
  */
+import { documentReadPolicy } from '../domain/documentReadGrants';
 import * as path from 'node:path';
 import type { CoreDatabase } from '../db/connection';
 import type { EventBroadcaster } from '../ws/broadcaster';
@@ -46,7 +47,7 @@ async function runFolderCleanup(db: CoreDatabase, task: ScheduledTaskRecord, sco
     const v = validateRoot(raw);
     if (!v.ok) { sections.push(`- ${raw}: not read — ${v.reason}`); (detail.folders as unknown[]).push({ folder: raw, error: v.reason }); continue; }
     const rules = listOrganizationRules(db, v.root);
-    const plan = await proposeOrganization(db, { roots: [v.root], targetBase: v.root, rules, origin: 'routine', routineId: task.id, inspectContents: scope.inspectContents === true && ops.has('classify') });
+    const plan = await proposeOrganization(db, { roots: [v.root], targetBase: v.root, rules, origin: 'routine', routineId: task.id, inspectContents: scope.inspectContents === true && ops.has('classify') ? documentReadPolicy(db) : undefined });
     const s = plan.summary as Record<string, any>;
     const planned = listPlanMoves(db, plan.id).length;
     let movedHere = 0;
@@ -88,7 +89,8 @@ async function runObligationCheck(db: CoreDatabase, task: ScheduledTaskRecord, s
     const report = await scanObligationSources(db, {
       gmail: ops.has('read_gmail') && scope.sources.includes('gmail') ? { reader, lookbackDays: lookback } : undefined,
       folders: ops.has('read_folders') ? scope.folders : [],
-      inspectContents: scope.inspectContents === true && (ops.has('read_contents') || kind === 'obligations_check'),
+      // The scope says the routine may use document text; the person's grant, checked now, says where.
+      inspectContents: scope.inspectContents === true && (ops.has('read_contents') || kind === 'obligations_check') ? documentReadPolicy(db) : undefined,
       sinceMs: previous && kind === 'obligations_check' ? Date.parse(previous.startedAt) - 86_400_000 : undefined,
       nowMs,
     });

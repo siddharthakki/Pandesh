@@ -10,8 +10,13 @@
  * Transport security without a bearer token: pairing derives a key from the one-time code shown on the PC (PBKDF2,
  * the code itself never crosses the network), the PC then hands the phone a random device key encrypted under it, and
  * every later request and response is AES-256-GCM encrypted and authenticated with that device key, bound to the
- * device id, timestamped and nonce-checked against replay. A phone without a key — or with a revoked one — can decrypt
- * nothing and its requests fail authentication, so it gains no access to the PC.
+ * device id, timestamped and nonce-checked against replay (nonces are kept in the database, so a restart does not
+ * reopen the window). A phone without a key — or with a revoked one — can decrypt nothing and its requests fail
+ * authentication, so it gains no access to the PC.
+ *
+ * Two layers sit around that envelope: the listener speaks TLS only, with a per-PC self-signed certificate whose
+ * SHA-256 fingerprint travels inside the sealed pairing reply, so the phone pins the certificate it actually paired
+ * with; and device keys at rest are sealed by the companion vault (OS-protected key), never stored in the clear.
  *
  * Sync is a revision log: every change to a record bumps a global revision; the phone pulls "everything after the
  * revision I have", and pushes its own operations with unique opIds that the PC applies exactly once.
@@ -43,6 +48,14 @@ export interface CompanionDevice {
 }
 
 const MAX_PAYLOAD_CHARS = 8_000;
+
+/** Seals secrets at rest (the companion vault). A domain-side seam so this module does not reach the OS store itself. */
+export interface CompanionKeySealer {
+  seal(plain: Buffer, purpose: string): string;
+  unseal(stored: string, purpose: string): Buffer | null;
+}
+
+export const deviceKeyPurpose = (deviceId: string) => `companion-device-key:${deviceId}`;
 
 function mapRecord(r: Record<string, unknown>): CompanionRecord {
   return {
@@ -121,11 +134,15 @@ export function revokeCompanionDevice(db: CoreDatabase, id: string): CompanionDe
   return mapDevice(db.get<Record<string, unknown>>('SELECT * FROM companion_devices WHERE id = ?', [id])!);
 }
 
-/** The device key, only for a paired, unrevoked device. */
-export function companionDeviceKey(db: CoreDatabase, id: string): Buffer | null {
+/**
+ * The device key, only for a paired, unrevoked device whose key the vault sealed. A key still in the clear (not yet
+ * migrated) or sealed by another vault is refused, so the phone must pair again rather than fall back to plaintext.
+ */
+export function companionDeviceKey(db: CoreDatabase, id: string, vault: CompanionKeySealer): Buffer | null {
   const row = db.get<{ keyMaterial: string; revokedAt: string | null }>('SELECT keyMaterial, revokedAt FROM companion_devices WHERE id = ?', [id]);
   if (!row || row.revokedAt) return null;
-  return Buffer.from(row.keyMaterial, 'base64');
+  const key = vault.unseal(row.keyMaterial, deviceKeyPurpose(id));
+  return key && key.length === 32 ? key : null;
 }
 
 export function touchCompanionDevice(db: CoreDatabase, id: string, pulledRevision?: number): void {
@@ -158,10 +175,12 @@ export function pairingProof(key: Buffer, deviceId: string): Buffer {
 
 /**
  * Pairs a phone that proved it knows a live code. Returns the new device key encrypted under the code-derived key, so
- * someone watching the network learns neither the code nor the device key. A code works once; five wrong proofs burn
- * every open code.
+ * someone watching the network learns neither the code nor the device key. The same sealed reply names the TLS
+ * certificate the PC serves (`tlsFingerprint`): the phone compares it with the certificate its connection actually
+ * saw, so an interceptor holding another certificate is caught at pairing and the phone pins the real one. A code
+ * works once; five wrong proofs burn every open code.
  */
-export function redeemCompanionPairing(db: CoreDatabase, input: { deviceId: string; label: string; salt: string; proof: string }, now = Date.now()): { device: CompanionDevice; sealedKey: { iv: string; ct: string } } {
+export function redeemCompanionPairing(db: CoreDatabase, vault: CompanionKeySealer, input: { deviceId: string; label: string; salt: string; proof: string; tlsFingerprint?: string | null }, now = Date.now()): { device: CompanionDevice; sealedKey: { iv: string; ct: string } } {
   const deviceId = String(input.deviceId ?? '');
   if (!/^[A-Za-z0-9-]{8,64}$/.test(deviceId)) throw new CoreError('invalid_request', 'deviceId must be 8–64 letters, digits or dashes');
   const salt = Buffer.from(String(input.salt ?? ''), 'base64');
@@ -186,9 +205,10 @@ export function redeemCompanionPairing(db: CoreDatabase, input: { deviceId: stri
   db.run(
     `INSERT INTO companion_devices (id, label, keyMaterial, createdAt, lastSeenAt, lastPulledRevision, revokedAt) VALUES (?, ?, ?, ?, ?, 0, NULL)
      ON CONFLICT(id) DO UPDATE SET label = excluded.label, keyMaterial = excluded.keyMaterial, createdAt = excluded.createdAt, lastSeenAt = excluded.lastSeenAt, lastPulledRevision = 0, revokedAt = NULL`,
-    [deviceId, label, deviceKey.toString('base64'), at, at],
+    [deviceId, label, vault.seal(deviceKey, deviceKeyPurpose(deviceId)), at, at],
   );
-  const sealed = sealCompanionMessage(matched.key, `${deviceId}:pair`, JSON.stringify({ deviceKey: deviceKey.toString('base64'), pc: process.env.COMPUTERNAME ?? 'Pandesh PC' }));
+  const sealed = sealCompanionMessage(matched.key, `${deviceId}:pair`, JSON.stringify({ deviceKey: deviceKey.toString('base64'), pc: process.env.COMPUTERNAME ?? 'Pandesh PC', ...(input.tlsFingerprint ? { tlsFingerprint: input.tlsFingerprint } : {}) }));
+  deviceKey.fill(0);
   return { device: mapDevice(db.get<Record<string, unknown>>('SELECT * FROM companion_devices WHERE id = ?', [deviceId])!), sealedKey: sealed };
 }
 
@@ -218,17 +238,19 @@ export function openCompanionMessage(key: Buffer, aad: string, envelope: { iv: s
 }
 
 const REPLAY_WINDOW_MS = 10 * 60_000;
-const seenNonces = new Map<string, Map<string, number>>();
 
-/** Refuses a request older than ten minutes or one whose nonce was already used. */
-export function checkFreshness(deviceId: string, ts: number, nonce: string, now = Date.now()): void {
+/**
+ * Refuses a request older than ten minutes or one whose nonce was already used. Nonces are recorded in the database
+ * for the whole window, so a request captured before a Core restart is still refused after it.
+ */
+export function checkFreshness(db: CoreDatabase, deviceId: string, ts: number, nonce: string, now = Date.now()): void {
   if (!Number.isFinite(ts) || Math.abs(now - ts) > REPLAY_WINDOW_MS) throw new CoreError('unauthenticated', 'the request is too old or the phone clock is wrong');
   if (!/^[A-Za-z0-9_-]{8,64}$/.test(nonce)) throw new CoreError('unauthenticated', 'malformed nonce');
-  const seen = seenNonces.get(deviceId) ?? new Map<string, number>();
-  for (const [n, at] of seen) if (now - at > REPLAY_WINDOW_MS) seen.delete(n);
-  if (seen.has(nonce)) throw new CoreError('unauthenticated', 'replayed request');
-  seen.set(nonce, now);
-  seenNonces.set(deviceId, seen);
+  db.transaction(() => {
+    db.run('DELETE FROM companion_nonces WHERE seenAt < ?', [now - 2 * REPLAY_WINDOW_MS]);
+    if (db.get('SELECT 1 AS x FROM companion_nonces WHERE deviceId = ? AND nonce = ?', [deviceId, nonce])) throw new CoreError('unauthenticated', 'replayed request');
+    db.run('INSERT INTO companion_nonces (deviceId, nonce, seenAt) VALUES (?, ?, ?)', [deviceId, nonce, now]);
+  });
 }
 
 // ------------------------------------------------------------------ operations from the phone

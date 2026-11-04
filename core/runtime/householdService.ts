@@ -4,6 +4,7 @@
  * the JUGAAD phone in step. No model, no cloud: every extraction is the deterministic local parser, and only the
  * derived facts plus a short excerpt are stored as evidence.
  */
+import { toContentReadPolicy, type ContentReadPolicy } from '../domain/documentReadGrants';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import type { CoreDatabase } from '../db/connection';
@@ -67,11 +68,12 @@ async function gmailSources(reader: ConnectorReader, lookbackDays: number, unava
   return out;
 }
 
-async function folderSources(folders: string[], options: { sinceMs?: number; inspectContents: boolean }, unavailable: string[]): Promise<SourceText[]> {
+async function folderSources(folders: string[], options: { sinceMs?: number; readContents?: ContentReadPolicy }, unavailable: string[]): Promise<SourceText[]> {
   const out: SourceText[] = [];
   for (const raw of folders) {
     const v = validateRoot(raw);
     if (!v.ok) { unavailable.push(`${raw}: ${v.reason}`); continue; }
+    let withheld = 0;
     const pending = [{ dir: v.root, depth: 0 }];
     while (pending.length && out.length < MAX_FILES) {
       const { dir, depth } = pending.shift()!;
@@ -86,7 +88,8 @@ async function folderSources(folders: string[], options: { sinceMs?: number; ins
         try { st = fs.statSync(full); } catch { continue; }
         if (options.sinceMs && st.mtimeMs < options.sinceMs) continue;
         let text = '';
-        if (options.inspectContents) {
+        if (options.readContents && !options.readContents(full)) withheld += 1;
+        else if (options.readContents) {
           try {
             if (/\.pdf$/i.test(e.name) && st.size <= 15 * 1024 * 1024) text = (await extractPdfFromBytes(new Uint8Array(fs.readFileSync(full)))).sections.slice(0, 4).map((s) => s.text).join('\n');
             else if (st.size <= 1024 * 1024) text = fs.readFileSync(full, 'utf8').slice(0, 20_000);
@@ -96,6 +99,7 @@ async function folderSources(folders: string[], options: { sinceMs?: number; ins
         if (out.length >= MAX_FILES) break;
       }
     }
+    if (withheld) unavailable.push(`${v.root}: the text of ${withheld} document(s) was not read (no document-reading permission for this folder; names and dates were used)`);
   }
   return out;
 }
@@ -104,14 +108,15 @@ async function folderSources(folders: string[], options: { sinceMs?: number; ins
 export async function scanObligationSources(db: CoreDatabase, input: {
   gmail?: { reader: ConnectorReader; lookbackDays: number };
   folders?: string[];
-  inspectContents?: boolean;
+  /** Document text: a grant policy (documentReadPolicy), or `true` only for the person's own choice in the panel. */
+  inspectContents?: boolean | ContentReadPolicy;
   sinceMs?: number;
   nowMs?: number;
 }): Promise<ScanReport> {
   const unavailable: string[] = [];
   const sources = [
     ...(input.gmail ? await gmailSources(input.gmail.reader, input.gmail.lookbackDays, unavailable) : []),
-    ...(input.folders?.length ? await folderSources(input.folders, { sinceMs: input.sinceMs, inspectContents: input.inspectContents === true }, unavailable) : []),
+    ...(input.folders?.length ? await folderSources(input.folders, { sinceMs: input.sinceMs, readContents: toContentReadPolicy(input.inspectContents) }, unavailable) : []),
   ];
   const report: ScanReport = {
     sourcesRead: { gmailMessages: sources.filter((s) => s.sourceType === 'gmail').length, files: sources.filter((s) => s.sourceType === 'file').length },
