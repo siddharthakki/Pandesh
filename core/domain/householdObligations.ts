@@ -138,7 +138,9 @@ export function derivePaymentStatus(input: { kind: ObligationKind; evidence: Arr
   const lastBill = bills[bills.length - 1];
   const confirmations = sorted.filter((e) => e.signal === 'payment_confirmed');
   const lastConfirm = confirmations[confirmations.length - 1];
-  if (lastConfirm && (!lastBill || lastConfirm.observedAt >= lastBill.observedAt)) return 'confirmed';
+  // A confirmation covers the bills before it — never a renewal that is still to come.
+  const upcomingRenewal = input.dateKind === 'renewal' && input.nextDate !== null && lastConfirm !== undefined && input.nextDate > lastConfirm.observedAt.slice(0, 10);
+  if (lastConfirm && (!lastBill || lastConfirm.observedAt >= lastBill.observedAt) && !upcomingRenewal) return 'confirmed';
   if (!lastBill) return 'unknown';
   if (lastBill.signal === 'payment_reminder') return 'potentially_overdue';
   const due = input.dateKind === 'due' || input.dateKind === 'debit' ? input.nextDate : (lastBill.facts.date ?? null);

@@ -88,7 +88,8 @@ export function renderOfferings(assessments: OfferingAssessment[]): string {
   const lines = ['Deliverables this PC can produce now (from the live capability inventory):'];
   for (const a of assessments) {
     const o = a.offering;
-    lines.push('', `${a.achievable ? 'ACHIEVABLE' : 'NOT YET'} — ${o.name}`);
+    const state = !a.achievable ? 'NOT YET' : o.sampleTool ? 'ACHIEVABLE' : 'TOOLS PRESENT (no Pandesh workflow yet — manual work)';
+    lines.push('', `${state} — ${o.name}`);
     lines.push(`  deliverable: ${o.deliverable}`);
     if (!a.achievable) lines.push(`  missing: ${a.missing.join(', ')}`);
     if (a.degraded.length) lines.push(`  works without: ${a.degraded.join(', ')} (lower quality)`);

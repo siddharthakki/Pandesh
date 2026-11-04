@@ -303,6 +303,8 @@ export async function proposeOrganization(db: CoreDatabase, input: ProposeInput,
     let rel: string | null;
     let ruleId: string | null = null;
     if (routineMode) {
+      // An unattended run is never less careful than a person's plan: a file whose content contradicts its name is asked about.
+      if (f.mismatch) { ambiguous.push({ path: f.path, category: f.category, reason: `its extension says ${f.ext} but it is really ${f.detected}`, suggested: destinationFor(f.category, f.year, input.hierarchy) }); continue; }
       const rule = ruleFor.get(`${f.root.toLowerCase()}|${f.category}`);
       if (!rule) {
         if (f.category !== 'system' && f.category !== 'temporary') ambiguous.push({ path: f.path, category: f.category, reason: `${f.reason}; no approved rule for "${f.category}" in this folder`, suggested: destinationFor(f.category, f.year, input.hierarchy) });
@@ -314,7 +316,7 @@ export async function proposeOrganization(db: CoreDatabase, input: ProposeInput,
       rel = destinationFor(f.category, f.year, input.hierarchy);
     }
     if (rel === null) { stays.push({ path: f.path, why: f.category === 'temporary' ? 'temporary or unfinished download (flagged, not moved)' : f.category === 'system' ? 'system file' : `not recognized (${f.reason})` }); continue; }
-    if (!routineMode && f.ambiguous) { ambiguous.push({ path: f.path, category: f.category, reason: f.reason, suggested: rel }); continue; }
+    if (!routineMode && (f.ambiguous || f.mismatch)) { ambiguous.push({ path: f.path, category: f.category, reason: f.mismatch ? `its extension says ${f.ext} but it is really ${f.detected}` : f.reason, suggested: rel }); continue; }
     const base = routineMode ? f.root : targetBase;
     const destDir = path.join(base, rel);
     if (path.dirname(f.path).toLowerCase() === destDir.toLowerCase()) { stays.push({ path: f.path, why: 'already in its folder' }); continue; }
@@ -337,7 +339,7 @@ export async function proposeOrganization(db: CoreDatabase, input: ProposeInput,
     const key = String(m.category);
     const base = routineMode ? (roots.find((r) => within(m.fromPath, r)) ?? targetBase) : targetBase;
     const dest = path.relative(base, path.dirname(m.toPath)) || '.';
-    const entry = byCategory[key] ?? { files: 0, bytes: 0, destination: key === 'unit' ? 'Projects' : dest.replace(/[\\/]\d{4}$/, '/{year}') };
+    const entry = byCategory[key] ?? { files: 0, bytes: 0, destination: key === 'unit' ? 'Projects' : dest.split(path.sep).join('/').replace(/\/\d{4}$/, '/{year}') };
     entry.files += 1; entry.bytes += m.size;
     byCategory[key] = entry;
   }

@@ -2632,7 +2632,7 @@ export class DesktopSession {
     };
     const route = routes[action];
     if (!route) throw new Error(`unknown household action ${action}`);
-    return client.request(route.path, route.method ? { method: route.method, body: route.body } : {});
+    return client.requestAsHost(route.path, route.method ? { method: route.method, body: route.body } : {});
   }
 
   /** The configured daily brief routine, or null when it was never set up. */

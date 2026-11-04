@@ -175,7 +175,10 @@ export function resolveExecutable(names: string[], env: NodeJS.ProcessEnv = proc
     for (const name of names) {
       for (const ext of exts) {
         const candidate = path.join(dir, name + ext);
-        try { if (fs.statSync(candidate).isFile()) return candidate; } catch { /* absent */ }
+        try { if (fs.statSync(candidate).isFile()) return candidate; } catch {
+          // Store-installed tools (winget, python) are App Execution Aliases: reparse points stat cannot follow, but they run.
+          if (/[\\/]WindowsApps$/i.test(dir) && ext === '.exe') { try { fs.lstatSync(candidate); return candidate; } catch { /* absent */ } }
+        }
       }
     }
   }

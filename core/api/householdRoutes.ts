@@ -44,7 +44,9 @@ export interface HouseholdRouteOptions {
 export function registerHouseholdRoutes(router: Router<ApiContext, ApiResult>, options: HouseholdRouteOptions): void {
   router.get('/v1/household/overview', (ctx) => {
     requireHost(ctx);
-    const plans = listOrganizationPlans(ctx.db, 10).map((p) => ({ ...p, counts: moveCounts(ctx.db, p.id) }));
+    // A routine run that found nothing to move leaves an empty plan behind; it is history, not something to review.
+    const plans = listOrganizationPlans(ctx.db, 20).map((p) => ({ ...p, counts: moveCounts(ctx.db, p.id) }))
+      .filter((p) => p.origin !== 'routine' || Object.values(p.counts).some((n) => n > 0)).slice(0, 10);
     return ok({
       routines: listHouseholdRoutines(ctx.db, 5),
       obligations: listObligations(ctx.db, { status: ['proposed', 'confirmed'] }).slice(0, 50),

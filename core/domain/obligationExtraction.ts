@@ -183,6 +183,7 @@ export function counterpartyName(from: string | undefined, label: string): strin
   let name = from ? cleanCounterparty(from) : '';
   if (!name || name === 'Unknown') name = label.replace(/\.(pdf|txt|eml|docx?)$/i, '').replace(/[_-]+/g, ' ').replace(/\b(rechnung|invoice|receipt|quittung|beleg|vertrag|contract|\d[\d.\- ]*)\b/gi, ' ').replace(/\s+/g, ' ').trim();
   name = name.replace(/\s*(\(|-|\|).*(service|kundenservice|no.?reply|rechnung|billing).*$/i, '').replace(/\b(gmbh|ag|se|kg|ug|ohg|inc\.?|ltd\.?|llc|co\.?|& co\.?)\b\.?/gi, '').replace(/[,\s]+$/g, '').trim();
+  name = name.replace(/\s+(kundenservice|customer service|service|team|billing|rechnung(sservice)?|abrechnung)$/i, '').trim();
   return name.slice(0, 60) || 'Unknown';
 }
 
@@ -191,11 +192,15 @@ export function counterpartyKey(name: string): string {
   return name.toLowerCase().normalize('NFKD').replace(/[̀-ͯ]/g, '').replace(/\b(deutschland|germany|online|service|kundenservice|team)\b/g, '').replace(/[^a-z0-9]/g, '') || 'unknown';
 }
 
+/** The line holding the match (plus the next one when it is short), cut at a word boundary — a sentence a person can check. */
 function sentenceAround(text: string, index: number): string {
-  const start = Math.max(0, text.lastIndexOf('\n', index) + 1, index - 160);
-  const endNl = text.indexOf('\n', index);
-  const end = Math.min(text.length, endNl === -1 ? index + 200 : Math.max(endNl, index + 60), index + 220);
-  return text.slice(start, end).replace(/\s+/g, ' ').trim();
+  const start = Math.max(text.lastIndexOf('\n', index) + 1, index - 160);
+  let end = text.indexOf('\n', index);
+  if (end === -1) end = text.length;
+  if (end - start < 50) { const next = text.indexOf('\n', end + 1); end = next === -1 ? text.length : next; }
+  let excerpt = text.slice(start, Math.min(end, start + 260)).replace(/\s+/g, ' ').trim();
+  if (end > start + 260) excerpt = `${excerpt.replace(/\s+\S*$/, '')} …`;
+  return excerpt;
 }
 
 /** Reads one source. Returns null when it says nothing about an obligation. */
@@ -205,6 +210,9 @@ export function extractObligation(src: SourceText): ExtractedObligation | null {
   let at = 0;
   for (const [s, re] of SIGNALS) { const m = re.exec(text); if (m) { signal = s; at = m.index ?? 0; break; } }
   if (!signal) return null;
+  // The evidence quote comes from the body when the body says it too, not from the subject line.
+  const inBody = SIGNALS.find(([s]) => s === signal)![1].exec(src.text);
+  if (inBody) at = src.label.length + 1 + (inBody.index ?? 0);
   // Marketing mail mentions "subscription" constantly; without an amount, a date or a reference it is not an obligation.
   const amount = extractAmount(text);
   const dated = contextualDate(text);

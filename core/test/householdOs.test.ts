@@ -119,10 +119,12 @@ describe('PC organization journal', () => {
     await applyOrganizationPlan(db, first.id, { actor: 'test', categories: ['tax'], saveRules: true });
     write('Downloads/Steuererklaerung_2025.pdf', Buffer.concat([PDF, Buffer.from('2025')]));
     write('Downloads/Arbeitsvertrag.pdf', Buffer.concat([PDF, Buffer.from('job')]));
+    write('Downloads/Steuer-invoice.pdf', '<!DOCTYPE html><html>not a pdf</html>');
     const routinePlan = await proposeOrganization(db, { roots: [root], targetBase: root, rules: listOrganizationRules(db, root), origin: 'routine' });
     const moves = listPlanMoves(db, routinePlan.id);
     expect(moves.map((m) => path.basename(m.fromPath))).toEqual(['Steuererklaerung_2025.pdf']);
     expect(((routinePlan.summary as any).ambiguous.examples as any[]).some((a) => a.path.endsWith('Arbeitsvertrag.pdf'))).toBe(true);
+    expect(((routinePlan.summary as any).ambiguous.examples as any[]).some((a) => a.path.endsWith('Steuer-invoice.pdf') && /really html/.test(a.reason))).toBe(true);
   });
 });
 
@@ -191,6 +193,8 @@ describe('household obligations', () => {
     expect(derivePaymentStatus({ kind: 'bill', evidence: [bill], nextDate: null, dateKind: null, resolution: null, today })).toBe('requested');
     expect(derivePaymentStatus({ kind: 'bill', evidence: [], nextDate: null, dateKind: null, resolution: null, today })).toBe('unknown');
     expect(derivePaymentStatus({ kind: 'delivery', evidence: [bill], nextDate: null, dateKind: null, resolution: null, today })).toBe('not_applicable');
+    const paidOct = { signal: 'payment_confirmed' as const, observedAt: '2026-10-28T00:00:00Z', facts: {} };
+    expect(derivePaymentStatus({ kind: 'subscription', evidence: [paidOct], nextDate: '2026-11-28', dateKind: 'renewal', resolution: null, today: '2026-11-04' })).toBe('unknown');
   });
 
   it('a confirmed obligation becomes one Important Date; the phone resolving it applies exactly once', () => {

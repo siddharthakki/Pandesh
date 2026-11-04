@@ -9835,7 +9835,7 @@ function householdObligationsGroup(list) {
       ` — ${o.nextDate ? `${o.dateKind ?? 'date'} ${o.nextDate}` : 'no date'}${householdMoney(o)}${HOUSEHOLD_PAYMENT[o.paymentStatus] ? ` · ${HOUSEHOLD_PAYMENT[o.paymentStatus]}` : ''} · ${o.sourceCount} source(s)`,
       o.evidence?.length ? hh('span', { class: 'ws-household-evidence' }, `from ${o.evidence[o.evidence.length - 1].sourceType}: “${o.evidence[o.evidence.length - 1].sourceLabel}”`) : null),
     o.status === 'proposed' ? hh('button', { type: 'button', class: 'ws-chip is-approve', onclick: () => householdAction('obligation', { id: o.id, op: 'confirm' }, 'Confirmed. It is now an Important Date for the phone.') }, 'Confirm') : null,
-    o.status !== 'resolved' ? hh('button', { type: 'button', class: 'ws-chip', onclick: () => householdAction('obligation', { id: o.id, op: 'resolve', resolution: 'paid' }, 'Marked paid.') }, 'Paid') : null,
+    o.status !== 'resolved' && o.paymentStatus !== 'not_applicable' ? hh('button', { type: 'button', class: 'ws-chip', onclick: () => householdAction('obligation', { id: o.id, op: 'resolve', resolution: 'paid' }, 'Marked paid.') }, 'Paid') : null,
     hh('button', { type: 'button', class: 'ws-chip is-reject', onclick: () => householdAction('obligation', { id: o.id, op: 'dismiss' }, 'Dismissed.') }, 'Dismiss'),
   ));
   if (!rows.length) rows.push(hh('p', { class: 'ws-routine-note' }, 'No bills or subscriptions found yet. Ask: “Check my Gmail for subscriptions renewing next month.”'));
@@ -9875,7 +9875,7 @@ function householdPlansGroup(plans) {
           householdUi.preview[p.id] = r?.preview ?? 'The plan could not be read.';
           await refreshHousehold();
         } }, preview ? 'Hide plan' : 'Review plan'),
-        (p.status === 'proposed' || p.status === 'partially_applied') && !confirming ? hh('button', { type: 'button', class: 'ws-chip is-approve', onclick: () => { householdUi.pending = p.id; void refreshHousehold(); } }, 'Approve…') : null,
+        (p.status === 'proposed' || p.status === 'partially_applied') && (c.planned ?? 0) > 0 && !confirming ? hh('button', { type: 'button', class: 'ws-chip is-approve', onclick: () => { householdUi.pending = p.id; void refreshHousehold(); } }, 'Approve…') : null,
         confirming ? hh('button', { type: 'button', class: 'ws-chip is-approve', onclick: () => { householdUi.pending = null; void householdAction('apply', { id: p.id, digest: p.digest, saveRules: true }, (x) => x?.text ?? 'Applied.'); } }, `Move ${c.planned ?? 0} file(s) and keep these rules`) : null,
         confirming ? hh('button', { type: 'button', class: 'ws-chip', onclick: () => { householdUi.pending = null; void refreshHousehold(); } }, 'Not now') : null,
         (c.verified ?? 0) + (c.moved ?? 0) > 0 ? hh('button', { type: 'button', class: 'ws-chip is-reject', onclick: () => householdAction('undo', { id: p.id }, (x) => x ? `Undo: ${x.restored} restored${x.problems?.length ? `, ${x.problems.length} not restored` : ''}.` : 'Not undone.') }, 'Undo') : null),
