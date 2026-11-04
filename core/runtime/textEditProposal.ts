@@ -12,6 +12,7 @@
  *
  * Core-safe: node `fs`/`crypto` only, no `vscode`.
  */
+import * as crypto from 'node:crypto';
 import * as fs from 'node:fs';
 import { recoverRepositoryPath } from './repositoryPathRecovery';
 import { buildAnchorContext, type AnchorMissKind } from './anchorContext';
@@ -90,6 +91,15 @@ export interface TextEditProposal {
   /** Workspace-relative path the proposal resolved to. */
   selectedPath: string;
   expectedBaseline: WriteBaselineIdentity;
+  /**
+   * The SHA-256 of the content this proposal produces.
+   *
+   * Frozen into the approval with the baseline, so a replay of the same
+   * proposal after a restart can be told apart from a first attempt: the
+   * file on disk either still hashes to the baseline (the write never
+   * landed) or already hashes to this value (it landed).
+   */
+  resultSha256: string;
   /** The complete resulting content, computed by Core from the current file. */
   content: string;
   presentation: WriteProposalPresentation;
@@ -174,6 +184,7 @@ export function buildTextEditProposal(input: {
     resolvedPath: recovery.resolvedPath,
     selectedPath,
     expectedBaseline: identity.baseline,
+    resultSha256: crypto.createHash('sha256').update(resolved.content, 'utf8').digest('hex'),
     content: resolved.content,
     presentation: {
       kind: 'write_file_diff',

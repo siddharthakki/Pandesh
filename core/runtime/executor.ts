@@ -161,8 +161,10 @@ import {
 import {
   ABSENT_FILE_SHA256,
   decideMutationReplay,
+  findMutationByResult,
   latestMutationForPath,
   markMutationApplied,
+  mutationByFingerprint,
   mutationFingerprint,
   recordMutationIntent,
 } from '../domain/mutationLedger';
@@ -1207,7 +1209,17 @@ export class RuntimeExecutor {
       // M-benchmark P4: the mutation landed, so the recorded intent is now a
       // completed fact. A later replay of the same edit recognises it and
       // does not write again.
-      if (approvedExecuted) this.completeMutationLedger(attemptId, pendingCall, cwd);
+      if (approvedExecuted) {
+        const evidence = (dispatch.outcome === 'executed' ? dispatch.toolInvocation.evidence : {}) as Record<string, unknown>;
+        if (evidence.resultCategory === 'mutation_already_applied') {
+          this.mutate(() => recordRuntimeEvent(this.db, {
+            domain: 'attempt', entityId: attemptId, eventType: 'mutation_already_applied', actor: CORE_ACTOR,
+            metadata: { attemptId, path: String(pendingCall.arguments.path ?? '') },
+            resultingRevision: null,
+          }));
+        }
+        this.completeMutationLedger(attemptId, pendingCall, cwd);
+      }
       // The approved mutation has now actually executed; the validation the
       // user was promised runs inside this same approved operation.
       validationText = await this.validateAfterApprovedMutation({ attemptId, cwd, signal, call: pendingCall, dispatch });
@@ -1310,6 +1322,14 @@ export class RuntimeExecutor {
     ) as Array<{ command: string | null }>).map((row) => String(row.command ?? '')).filter((command) => command && isFileChangingShellCommand(command));
     const hasExecutedMutatingCommand = () => executedFileChangingCommands().length > 0;
     const hasMutationProposal = () => hasProposeToolMutation() || hasExecutedMutatingCommand();
+    // M-benchmark P4: a mutation whose content was ALREADY applied counts as
+    // delivered for this attempt. The file the objective names already has
+    // the change, so the task IS satisfied — it must not be failed for
+    // "no change was made" when the change is right there.
+    const alreadyAppliedPaths = (): string[] => (this.db.all(
+      "SELECT json_extract(metadata, '$.path') AS p FROM runtime_events WHERE entityId = ? AND eventType = 'mutation_already_applied'",
+      [attemptId],
+    ) as Array<{ p: string | null }>).map((row) => String(row.p ?? '')).filter((value) => value !== '');
     // M55: a final answer to a change request is accepted only on VERIFIED mutation: an approved propose_* invocation that
     // succeeded, or an executed file-changing command. A proposal that exists but never executed (approved then not run,
     // cancelled, or still pending) is not a completed change.
@@ -1318,7 +1338,7 @@ export class RuntimeExecutor {
        WHERE (a.attemptId = ? OR json_extract(a.summary, '$.scopeIdentity') = ?)
        AND json_extract(a.summary, '$.toolName') IN ('propose_file_change', 'propose_text_edit') AND t.status = 'succeeded' LIMIT 1`,
       [attemptId, attemptId],
-    )) || hasExecutedMutatingCommand();
+    )) || hasExecutedMutatingCommand() || alreadyAppliedPaths().length > 0;
     const correctionEvent = (eventType: string, reason: string) => this.mutate(() => recordRuntimeEvent(this.db, {
       domain: 'attempt', entityId: attemptId, eventType, actor: CORE_ACTOR,
       metadata: { attemptId, reason }, resultingRevision: null,
@@ -1870,7 +1890,7 @@ export class RuntimeExecutor {
           // longer has it): a file that merely already existed next to an unrelated `mkdir` is not delivered.
           const governedObjective = expectsMutation || conditional !== null;
           const commandDelivered = governedObjective ? commandDeliveredTargets(cwd, context.taskInput, executedFileChangingCommands()) : [];
-          const appliedPaths = [...toolAppliedPaths, ...commandDelivered];
+          const appliedPaths = [...toolAppliedPaths, ...alreadyAppliedPaths(), ...commandDelivered];
           const objectiveFiles = governedObjective ? evaluateObjectiveFiles(context.taskInput, appliedPaths) : { outstanding: [], violations: [] };
           const outstandingTargets = objectiveFiles.outstanding;
           if (objectiveFiles.violations.length > 0) {
@@ -2329,26 +2349,12 @@ export class RuntimeExecutor {
 
       const governed = this.governedCapabilities?.classify(call.name);
       if (governed) {
-        // M-benchmark P4: a repeated mutation is checked against the durable
-        // ledger BEFORE it is dispatched. An edit that already landed is not
-        // written again, and an edit whose outcome is uncertain is never
-        // replayed on a guess.
-        const replay = this.evaluateMutationReplay({ attemptId, call, cwd });
-        if (replay.decision !== 'apply' && replay.message) {
-          turn.nonProgress += 1;
-          this.recordQuality(attemptId, replay.decision === 'already_applied' ? 'mutation_already_applied' : 'mutation_outcome_uncertain', {
-            operation: call.name,
-            path: String(call.arguments.path ?? ''),
-            fingerprint: replay.fingerprint ?? null,
-          }, `mutation-replay:${call.name}:${replay.decision}`);
-          messages.push({ role: 'tool', content: `[${call.name}] ${replay.message}` });
-          saveLoopContinuation(this.db, attemptId, {
-            state: 'running', provider, model, turnIndex, baseMessageSeq,
-            payload: { deltaMessages: continuationSuffix(messages, baseMessageCount), priorOperations: [...priorOperations], loopProgress: { ...loopProgress }, ...compactionPayload(compaction), pendingCall: input.calls[i + 1] ?? null, remainingCalls: input.calls.slice(i + 2) },
-            frozenContextHash,
-          });
-          continue;
-        }
+        // M-benchmark P4: the INTENTION of this mutation is recorded durably
+        // BEFORE it is dispatched, so a crash between here and the write
+        // leaves a record of exactly what was intended. The write itself is
+        // idempotent (the tool runner recognises a proposal whose result is
+        // already in the file) and an UNCERTAIN outcome is never replayed.
+        this.recordMutationIntentForCall(attemptId, call, cwd);
         const dispatch = await dispatchConnectorAction(this.db, this.governedCapabilities!, this.connectorRegistry, {
           correlationId: conversationId ?? attemptId,
           scopeIdentity: attemptId,
@@ -2462,6 +2468,17 @@ export class RuntimeExecutor {
         // completed fact. A later replay of the same edit recognises it and
         // does not write again.
         if (dispatch.outcome === 'executed' && dispatch.toolInvocation.status === 'succeeded') {
+          const evidence = dispatch.toolInvocation.evidence as Record<string, unknown>;
+          if (evidence.resultCategory === 'mutation_already_applied') {
+            // The requested content was already in the file: the objective IS
+            // delivered, and the attempt records that fact so the completion
+            // guard does not read "no change" into a satisfied task.
+            this.mutate(() => recordRuntimeEvent(this.db, {
+              domain: 'attempt', entityId: attemptId, eventType: 'mutation_already_applied', actor: CORE_ACTOR,
+              metadata: { attemptId, path: String(call.arguments.path ?? '') },
+              resultingRevision: null,
+            }));
+          }
           this.completeMutationLedger(attemptId, call, cwd);
         }
         const signature = createLoopSignature({ operation: call.name, normalizedArguments: call.arguments, resultCategory: formatted.category, relevantEvidence: { text: formatted.text } });
@@ -2712,26 +2729,30 @@ export class RuntimeExecutor {
    * write, so a replay after a restart can be told apart from a first
    * attempt — and an edit whose outcome is UNCERTAIN is never repeated.
    */
-  private evaluateMutationReplay(input: {
-    attemptId: string;
-    call: { name: string; arguments: Record<string, unknown> };
-    cwd: string;
-  }): { decision: 'apply' | 'already_applied' | 'uncertain'; message?: string; fingerprint?: string } {
-    const { call, cwd } = input;
-    if (call.name !== 'propose_file_change' && call.name !== 'propose_text_edit') return { decision: 'apply' };
+  /**
+   * Records the INTENTION of a workspace mutation in the durable ledger,
+   * before the mutation is dispatched.
+   *
+   * M-benchmark P4: the ledger is what makes a RESTART safe. It holds the
+   * exact pre-image the edit was computed against and the exact content it
+   * produces, so a replay after an interruption can be recognised instead of
+   * guessed at — and an edit whose outcome is UNKNOWN is never repeated.
+   */
+  private recordMutationIntentForCall(
+    attemptId: string,
+    call: { name: string; arguments: Record<string, unknown> },
+    cwd: string,
+  ): void {
+    if (call.name !== 'propose_file_change' && call.name !== 'propose_text_edit') return;
     const requestedPath = String(call.arguments.path ?? '');
-    if (!requestedPath) return { decision: 'apply' };
-
-    // The intended result, computed from the CURRENT file. For a whole-file
-    // proposal it is the proposed content itself; for an anchored edit it is
-    // what the anchor produces against the file as it stands now.
+    if (!requestedPath) return;
     let resultContent: string | undefined;
     let baselineSha256: string;
     let selectedPath = requestedPath;
     if (call.name === 'propose_file_change') {
       resultContent = String(call.arguments.content ?? '');
       const baseline = readBaselineIdentity(path.resolve(cwd, requestedPath));
-      if ('error' in baseline) return { decision: 'apply' };
+      if ('error' in baseline) return;
       baselineSha256 = baseline.baseline.kind === 'absent' ? ABSENT_FILE_SHA256 : baseline.baseline.sha256;
     } else {
       const built = buildTextEditProposal({
@@ -2739,43 +2760,19 @@ export class RuntimeExecutor {
         find: String(call.arguments.find ?? ''),
         replace: String(call.arguments.replace ?? ''),
       });
-      if (!built || 'error' in built) {
-        // The anchor does not resolve against the current file: either the
-        // edit already landed, or the file moved on. Only the ledger can
-        // tell those apart, so the ledger decides.
-        const row = latestMutationForPath(this.db, call.name, requestedPath);
-        if (!row) return { decision: 'apply' };
-        const current = this.currentFileSha256(path.resolve(cwd, requestedPath));
-        const decision = decideMutationReplay({ row, currentSha256: current, toolName: call.name, path: requestedPath });
-        return decision.decision === 'apply'
-          ? { decision: 'apply' }
-          : { decision: decision.decision, message: decision.message, fingerprint: decision.fingerprint };
-      }
+      if (!built || 'error' in built) return;
       resultContent = built.content;
       selectedPath = built.selectedPath;
       baselineSha256 = built.expectedBaseline.kind === 'absent' ? ABSENT_FILE_SHA256 : built.expectedBaseline.sha256;
     }
-
     const resultSha256 = crypto.createHash('sha256').update(resultContent, 'utf8').digest('hex');
-    const row = latestMutationForPath(this.db, call.name, selectedPath);
-    const current = this.currentFileSha256(path.resolve(cwd, selectedPath));
-    const decision = decideMutationReplay({ row, currentSha256: current, toolName: call.name, path: selectedPath });
-    if (decision.decision === 'already_applied' || decision.decision === 'uncertain') {
-      return { decision: decision.decision, message: decision.message, fingerprint: decision.fingerprint };
-    }
-
-    // The write is about to happen (or to be approved): record the intent
-    // durably FIRST, so a crash between here and the write leaves a record
-    // that says exactly what was intended.
-    const fingerprint = mutationFingerprint({ toolName: call.name, path: selectedPath, baselineSha256, resultSha256 });
     this.mutate(() => recordMutationIntent(this.db, {
-      attemptId: input.attemptId,
+      attemptId,
       toolName: call.name,
       path: selectedPath,
       baselineSha256,
       resultSha256,
     }));
-    return { decision: 'apply', fingerprint };
   }
 
   /** The current identity of a file, or null when it cannot be read. */
@@ -2790,11 +2787,28 @@ export class RuntimeExecutor {
     }
   }
 
-  /** Marks a recorded mutation as applied, once its write actually landed. */
+  /**
+   * Marks a recorded mutation as applied, once its write actually landed.
+   *
+   * The row is found by the CONTENT the file now has, not by path: a file
+   * can be the target of several proposals, and only the one that produced
+   * the bytes now on disk is the one that was applied.
+   */
   private completeMutationLedger(attemptId: string, call: { name: string; arguments: Record<string, unknown> }, cwd: string): void {
     if (call.name !== 'propose_file_change' && call.name !== 'propose_text_edit') return;
     const requestedPath = String(call.arguments.path ?? '');
-    const row = latestMutationForPath(this.db, call.name, requestedPath);
+    let selectedPath = requestedPath;
+    if (call.name === 'propose_text_edit') {
+      const built = buildTextEditProposal({
+        workspaceRoot: cwd, requestedPath,
+        find: String(call.arguments.find ?? ''),
+        replace: String(call.arguments.replace ?? ''),
+      });
+      if (built && !('error' in built)) selectedPath = built.selectedPath;
+    }
+    const current = this.currentFileSha256(path.resolve(cwd, selectedPath));
+    if (current === null) return;
+    const row = findMutationByResult(this.db, call.name, [selectedPath, requestedPath], current);
     if (!row) return;
     this.mutate(() => markMutationApplied(this.db, row.fingerprint));
   }
@@ -2860,7 +2874,7 @@ export class RuntimeExecutor {
   private captureWriteProposal(
     call: ModelToolCall,
     cwd: string,
-  ): { expectedBaseline: WriteFileProposal['expectedBaseline']; presentation: WriteFileProposal['presentation'] } | undefined {
+  ): { expectedBaseline: WriteFileProposal['expectedBaseline']; expectedResultSha256?: string; presentation: WriteFileProposal['presentation'] } | undefined {
     if (call.name === 'propose_file_change') {
       const proposal = buildWriteFileProposal({
         workspaceRoot: cwd,
@@ -2868,7 +2882,11 @@ export class RuntimeExecutor {
         content: String(call.arguments.content ?? ''),
       });
       if (!proposal) return undefined;
-      return { expectedBaseline: proposal.expectedBaseline, presentation: proposal.presentation };
+      return {
+        expectedBaseline: proposal.expectedBaseline,
+        expectedResultSha256: proposal.resultSha256,
+        presentation: proposal.presentation,
+      };
     }
     if (call.name === 'propose_text_edit') {
       const built = buildTextEditProposal({
@@ -2878,7 +2896,11 @@ export class RuntimeExecutor {
         replace: String(call.arguments.replace ?? ''),
       });
       if (!built || 'error' in built) return undefined;
-      return { expectedBaseline: built.expectedBaseline, presentation: built.presentation };
+      return {
+        expectedBaseline: built.expectedBaseline,
+        expectedResultSha256: built.resultSha256,
+        presentation: built.presentation,
+      };
     }
     return undefined;
   }

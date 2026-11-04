@@ -72,6 +72,16 @@ export interface WriteFileProposal {
   /** Workspace-relative path the proposal resolved to. */
   selectedPath: string;
   expectedBaseline: WriteBaselineIdentity;
+  /**
+   * The SHA-256 of the content this proposal produces.
+   *
+   * Frozen into the approval together with the baseline, so that a REPLAY
+   * of the same proposal after a restart can be recognised: the file on
+   * disk either still hashes to the baseline (the write never landed) or
+   * already hashes to this value (it landed) — and anything else means the
+   * outcome is unknown, which is never replayed on a guess.
+   */
+  resultSha256: string;
   presentation: WriteProposalPresentation;
   /** Present only when an existing, renderable file is being replaced. */
   replacement?: WholeFileReplacementStats;
@@ -378,6 +388,7 @@ export function buildWriteFileProposal(input: {
     resolvedPath: recovery.resolvedPath,
     selectedPath,
     expectedBaseline: identity.baseline,
+    resultSha256: crypto.createHash('sha256').update(input.content, 'utf8').digest('hex'),
     presentation: {
       kind: 'write_file_diff',
       path: selectedPath,

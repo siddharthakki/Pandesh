@@ -53,6 +53,13 @@ export class CommandService {
         shell: false,
         windowsHide: true,
         env: createSanitizedChildEnvironment(),
+        // Node's default Windows argv quoting escapes the quotes inside the
+        // single command string, and cmd.exe does not understand that form:
+        // a quoted path came back mangled (`"C:\my dir\file.js"` -> escaped
+        // backslashes), so the command failed to run at all. The command is
+        // already one approved shell program, so it is passed verbatim —
+        // exactly as the Core tool runner does it.
+        windowsVerbatimArguments: process.platform === 'win32',
       });
 
       const tree = proc.pid ? createProcessTreeTracker(proc.pid) : undefined;

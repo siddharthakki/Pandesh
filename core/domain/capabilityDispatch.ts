@@ -339,6 +339,14 @@ export interface DispatchCapabilityInput {
    */
   proposal?: {
     expectedBaseline: WriteBaselineIdentity;
+    /**
+     * The SHA-256 of the content the proposal produces, frozen into the
+     * approval with the baseline. It makes a replayed write idempotent: the
+     * file either still hashes to the baseline (the write never landed) or
+     * already hashes to this value (it landed), and anything else means the
+     * outcome is unknown — which is never replayed on a guess.
+     */
+    expectedResultSha256?: string;
     presentation: WriteProposalPresentation;
   };
   /**
@@ -553,6 +561,7 @@ async function executeAndRecord(
   existingPending?: ToolInvocationRecord,
   approvalId?: string,
   expectedBaseline?: WriteBaselineIdentity,
+  expectedResultSha256?: string,
   envelope?: CommandPolicyEnvelope,
   gmailDraftExpectedDigest?: string,
 ): Promise<ToolInvocationRecord> {
@@ -633,6 +642,7 @@ async function executeAndRecord(
       // dispatch input — this is what makes stale-proposal protection survive
       // a restart and a re-dispatch of an already-approved action.
       expectedBaseline,
+      expectedResultSha256,
       gmailDraftExpectedDigest,
       commandPolicy: policyEnvelope,
       securityGrant,
@@ -737,6 +747,7 @@ export async function dispatchCapability(db: CoreDatabase, registry: GovernedCap
     ...(projectedAny ? { argumentsDigest: canonicalArgumentsDigest(redacted) } : {}),
     ...(input.scopeIdentity ? { scopeIdentity: input.scopeIdentity } : {}),
     ...(input.proposal ? { expectedBaseline: input.proposal.expectedBaseline } : {}),
+    ...(input.proposal?.expectedResultSha256 ? { expectedResultSha256: input.proposal.expectedResultSha256 } : {}),
     ...(input.gmailDraftProposal ? { gmailDraftExpectedDigest: input.gmailDraftProposal.expectedDigest } : {}),
     ...policySummaryFields(envelope, policy, policy.decision === 'deny' ? 'denied' : 'review_required'),
   };
@@ -844,7 +855,7 @@ export async function dispatchCapability(db: CoreDatabase, registry: GovernedCap
         });
       const invocation = await executeAndRecord(
         db, registry, attemptId, input, undefined, approval.id,
-        input.proposal?.expectedBaseline, envelope,
+        input.proposal?.expectedBaseline, input.proposal?.expectedResultSha256, envelope,
         input.gmailDraftProposal?.expectedDigest,
       );
       recordAuthorizedAction(db, {
@@ -872,7 +883,7 @@ export async function dispatchCapability(db: CoreDatabase, registry: GovernedCap
   }
 
   if (classification.risk === 'read_only') {
-    return { outcome: 'executed', attemptId, toolInvocation: await executeAndRecord(db, registry, attemptId, input, undefined, undefined, undefined, envelope) };
+    return { outcome: 'executed', attemptId, toolInvocation: await executeAndRecord(db, registry, attemptId, input, undefined, undefined, undefined, undefined, envelope) };
   }
 
   if (existing?.status === 'approved') {
@@ -895,6 +906,7 @@ export async function dispatchCapability(db: CoreDatabase, registry: GovernedCap
       toolInvocation: await executeAndRecord(
         db, registry, attemptId, input, priorInvocation, existing.id,
         parseBaselineIdentity(frozenSummary.expectedBaseline),
+        typeof frozenSummary.expectedResultSha256 === 'string' ? frozenSummary.expectedResultSha256 : undefined,
         frozen,
         typeof frozenSummary.gmailDraftExpectedDigest === 'string' ? frozenSummary.gmailDraftExpectedDigest : undefined,
       ),
@@ -928,7 +940,7 @@ export async function dispatchCapability(db: CoreDatabase, registry: GovernedCap
       resolvedBy: STANDING_AUTHORIZATION_ACTOR,
     });
     recordPermissionDecision(db, { attemptId: input.permissionScope ?? input.scopeIdentity ?? attemptId, toolName: input.toolName, arguments: input.arguments, decision: permission, approvalId: approval.id });
-    const invocation = await executeAndRecord(db, registry, attemptId, input, undefined, approval.id, input.proposal?.expectedBaseline, envelope);
+    const invocation = await executeAndRecord(db, registry, attemptId, input, undefined, approval.id, input.proposal?.expectedBaseline, input.proposal?.expectedResultSha256, envelope);
     return { outcome: 'executed', attemptId, toolInvocation: invocation };
   }
 

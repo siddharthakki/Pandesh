@@ -158,6 +158,34 @@ export function mutationByFingerprint(db: CoreDatabase, fingerprint: string): Mu
   return row ? { ...row } : null;
 }
 
+/**
+ * The recorded mutation that produced this exact content at one of these
+ * paths.
+ *
+ * This is how a completed write is recognised AFTER it happened: the file on
+ * disk now hashes to the result the ledger recorded, so that row is the one
+ * that was applied.
+ */
+export function findMutationByResult(
+  db: CoreDatabase,
+  toolName: string,
+  paths: readonly string[],
+  resultSha256: string,
+): MutationLedgerRow | null {
+  if (paths.length === 0) return null;
+  const placeholders = paths.map(() => '?').join(',');
+  const row = db.get<{
+    fingerprint: string; attemptId: string; toolName: string; path: string;
+    baselineSha256: string; resultSha256: string; status: MutationLedgerStatus;
+    recordedAt: string; completedAt: string | null;
+  }>(
+    `SELECT fingerprint, attemptId, toolName, path, baselineSha256, resultSha256, status, recordedAt, completedAt FROM mutation_ledger
+     WHERE toolName = ? AND resultSha256 = ? AND path IN (${placeholders}) ORDER BY recordedAt DESC LIMIT 1`,
+    [toolName, resultSha256, ...paths],
+  );
+  return row ? { ...row } : null;
+}
+
 /** The decision a replayed mutation gets. */
 export type MutationReplayDecision =
   /** The write did not land: it is safe to apply it. */
