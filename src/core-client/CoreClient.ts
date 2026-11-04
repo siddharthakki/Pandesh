@@ -224,6 +224,11 @@ export class CoreClient {
     return this.request('/v1/providers', { method: 'DELETE' });
   }
 
+  /** A request that stands for the person at the Pandesh window (host-only routes): adds the X-Host-Token. */
+  async requestAsHost<T>(path: string, init: CoreRequestInit = {}): Promise<T> {
+    return this.request<T>(path, { ...init, headers: { ...(init.headers ?? {}), ...(this.options.hostToken ? { 'X-Host-Token': this.options.hostToken } : {}) } });
+  }
+
   async request<T>(path: string, init: CoreRequestInit = {}): Promise<T> {
     const url = new URL(path, this.options.baseUrl);
     if (init.query) {

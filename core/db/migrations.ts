@@ -1396,6 +1396,185 @@ CREATE TABLE IF NOT EXISTS wish_orders (
 CREATE INDEX IF NOT EXISTS idx_wish_orders_goal ON wish_orders(goalId, createdAt);
 `;
 
+/**
+ * Household operating system: PC organization, bounded routines, household obligations and the JUGAAD companion.
+ *
+ * - `organization_plans` / `organization_moves` are the durable move journal: every move is written before it runs
+ *   and settled after it is verified, so a crash resumes without repeating completed moves and undo is exact.
+ * - `organization_rules` are destinations the user approved once; a weekly routine may apply only these.
+ * - `scheduled_tasks` gains a recurrence (weekly / every N days), a purpose and the routine's frozen authorization
+ *   scope; `routine_runs` is its result, failure and missed-run history.
+ * - `household_obligations` + `obligation_evidence` hold bills, subscriptions and contracts with their provenance;
+ *   the dedupe key makes several emails about one subscription one record.
+ * - `companion_*` is the opt-in sync with the JUGAAD phone app: devices hold an AES key (never a bearer token), the
+ *   record log carries stable ids and revisions, and inbound operations are idempotent by opId.
+ */
+const MIGRATION_44_HOUSEHOLD_OS = `
+CREATE TABLE IF NOT EXISTS organization_plans (
+  id TEXT PRIMARY KEY,
+  origin TEXT NOT NULL,
+  rootsJson TEXT NOT NULL,
+  targetBase TEXT NOT NULL,
+  status TEXT NOT NULL,
+  summaryJson TEXT NOT NULL,
+  digest TEXT NOT NULL,
+  routineId TEXT,
+  approvedBy TEXT,
+  approvedAt TEXT,
+  appliedAt TEXT,
+  undoneAt TEXT,
+  createdAt TEXT NOT NULL,
+  updatedAt TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS organization_moves (
+  planId TEXT NOT NULL REFERENCES organization_plans(id),
+  idx INTEGER NOT NULL,
+  fromPath TEXT NOT NULL,
+  toPath TEXT NOT NULL,
+  finalPath TEXT,
+  size INTEGER NOT NULL,
+  mtimeMs INTEGER NOT NULL,
+  sha256 TEXT,
+  category TEXT NOT NULL,
+  reason TEXT NOT NULL,
+  ruleId TEXT,
+  status TEXT NOT NULL,
+  error TEXT,
+  batch INTEGER,
+  movedAt TEXT,
+  undoneAt TEXT,
+  PRIMARY KEY (planId, idx)
+);
+CREATE INDEX IF NOT EXISTS idx_organization_moves_status ON organization_moves(planId, status);
+CREATE TABLE IF NOT EXISTS organization_rules (
+  id TEXT PRIMARY KEY,
+  sourceRoot TEXT NOT NULL,
+  category TEXT NOT NULL,
+  destination TEXT NOT NULL,
+  createdFromPlan TEXT,
+  approvedBy TEXT NOT NULL,
+  enabled INTEGER NOT NULL DEFAULT 1,
+  createdAt TEXT NOT NULL,
+  UNIQUE (sourceRoot, category)
+);
+
+ALTER TABLE scheduled_tasks ADD COLUMN recurrenceJson TEXT;
+ALTER TABLE scheduled_tasks ADD COLUMN purpose TEXT;
+ALTER TABLE scheduled_tasks ADD COLUMN scopeJson TEXT;
+ALTER TABLE scheduled_tasks ADD COLUMN cancelledAt TEXT;
+CREATE TABLE IF NOT EXISTS routine_runs (
+  id TEXT PRIMARY KEY,
+  taskId TEXT NOT NULL REFERENCES scheduled_tasks(id),
+  routine TEXT NOT NULL,
+  occurrenceKey TEXT NOT NULL,
+  trigger TEXT NOT NULL,
+  status TEXT NOT NULL,
+  startedAt TEXT NOT NULL,
+  finishedAt TEXT,
+  summary TEXT,
+  detailJson TEXT,
+  error TEXT,
+  UNIQUE (taskId, occurrenceKey)
+);
+CREATE INDEX IF NOT EXISTS idx_routine_runs_task ON routine_runs(taskId, startedAt);
+
+CREATE TABLE IF NOT EXISTS household_obligations (
+  id TEXT PRIMARY KEY,
+  obligationKey TEXT NOT NULL UNIQUE,
+  kind TEXT NOT NULL,
+  counterparty TEXT NOT NULL,
+  title TEXT NOT NULL,
+  amountCents INTEGER,
+  currency TEXT,
+  cadence TEXT NOT NULL,
+  nextDate TEXT,
+  dateKind TEXT,
+  paymentStatus TEXT NOT NULL,
+  status TEXT NOT NULL,
+  confidence REAL NOT NULL,
+  sourceCount INTEGER NOT NULL DEFAULT 0,
+  lastCheckedAt TEXT NOT NULL,
+  confirmedBy TEXT,
+  confirmedAt TEXT,
+  resolvedBy TEXT,
+  resolvedAt TEXT,
+  resolution TEXT,
+  createdAt TEXT NOT NULL,
+  updatedAt TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_household_obligations_date ON household_obligations(status, nextDate);
+CREATE TABLE IF NOT EXISTS obligation_evidence (
+  id TEXT PRIMARY KEY,
+  obligationId TEXT NOT NULL REFERENCES household_obligations(id),
+  sourceType TEXT NOT NULL,
+  sourceRef TEXT NOT NULL,
+  sourceLabel TEXT NOT NULL,
+  observedAt TEXT NOT NULL,
+  signal TEXT NOT NULL,
+  excerpt TEXT NOT NULL,
+  factsJson TEXT NOT NULL,
+  createdAt TEXT NOT NULL,
+  UNIQUE (obligationId, sourceRef)
+);
+
+CREATE TABLE IF NOT EXISTS companion_devices (
+  id TEXT PRIMARY KEY,
+  label TEXT NOT NULL,
+  keyMaterial TEXT NOT NULL,
+  createdAt TEXT NOT NULL,
+  lastSeenAt TEXT,
+  lastPulledRevision INTEGER NOT NULL DEFAULT 0,
+  revokedAt TEXT
+);
+CREATE TABLE IF NOT EXISTS companion_records (
+  recordId TEXT PRIMARY KEY,
+  kind TEXT NOT NULL,
+  revision INTEGER NOT NULL UNIQUE,
+  payloadJson TEXT NOT NULL,
+  deleted INTEGER NOT NULL DEFAULT 0,
+  sourceOfTruth TEXT NOT NULL,
+  updatedAt TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS companion_ops (
+  opId TEXT PRIMARY KEY,
+  deviceId TEXT NOT NULL,
+  recordId TEXT NOT NULL,
+  op TEXT NOT NULL,
+  baseRevision INTEGER,
+  result TEXT NOT NULL,
+  detail TEXT,
+  appliedAt TEXT NOT NULL
+);
+`;
+
+/**
+ * Household OS hardening.
+ *
+ * - `companion_nonces` makes replay rejection survive a Core restart: a request nonce is remembered for the replay
+ *   window in the database, not only in memory.
+ * - `document_read_grants` is the person's separate decision to let Pandesh read the text of documents in a folder.
+ *   Scans and routines read contents only inside an active grant; the model cannot create one without its own
+ *   approval card.
+ */
+const MIGRATION_45_HOUSEHOLD_HARDENING = `
+CREATE TABLE IF NOT EXISTS companion_nonces (
+  deviceId TEXT NOT NULL,
+  nonce TEXT NOT NULL,
+  seenAt INTEGER NOT NULL,
+  PRIMARY KEY (deviceId, nonce)
+);
+CREATE INDEX IF NOT EXISTS idx_companion_nonces_seen ON companion_nonces(seenAt);
+CREATE TABLE IF NOT EXISTS document_read_grants (
+  id TEXT PRIMARY KEY,
+  folder TEXT NOT NULL,
+  grantedAt TEXT NOT NULL,
+  grantedBy TEXT NOT NULL,
+  revokedAt TEXT,
+  revokedBy TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_document_read_grants_folder ON document_read_grants(folder);
+`;
+
 const MIGRATION_36_BACKGROUND_TASKS = `
 CREATE TABLE IF NOT EXISTS background_tasks (
   id TEXT PRIMARY KEY,
@@ -1573,6 +1752,8 @@ export const MIGRATIONS: Migration[] = [
   { version: 41, description: 'Chat permission modes per conversation and standing authorizations (scope, pins, expiry, revocation)', sql: MIGRATION_41_PERMISSION_MODES },
   { version: 42, description: 'Wish-to-Reality: durable purchase goals, researched offers, earning opportunities and a verified funds ledger', sql: MIGRATION_42_WISH_GOALS },
   { version: 43, description: 'Wish-to-Reality real revenue: demo vs real money, reconciled payments, business authorization and customer orders', sql: MIGRATION_43_WISH_COMMERCE },
+  { version: 44, description: 'Household OS: PC organization move journal and rules, bounded recurring routines with run history, household obligations with evidence, JUGAAD companion sync', sql: MIGRATION_44_HOUSEHOLD_OS },
+  { version: 45, description: 'Household OS hardening: replay nonces that survive a restart, per-folder document-reading grants', sql: MIGRATION_45_HOUSEHOLD_HARDENING },
 ];
 
 

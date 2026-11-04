@@ -46,6 +46,10 @@ export const CHAT_CAPABILITY_IDS = [
   'computer-use',
   'hermes',
   'weather',
+  'capability-inventory',
+  'pc-organizer',
+  'household',
+  'media-production',
 ] as const;
 
 export interface BuildPiCapabilityBridgeOptions {

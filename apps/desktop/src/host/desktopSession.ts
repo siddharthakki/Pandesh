@@ -2609,6 +2609,34 @@ export class DesktopSession {
     };
   }
 
+  /**
+   * The Household panel's actions. Each name maps to one fixed Core route (core/api/householdRoutes.ts); the renderer
+   * can name an action and its ids, never a path, so the panel cannot reach any other Core API.
+   */
+  async household(action: string, args: Record<string, unknown> = {}): Promise<unknown> {
+    const client = this.requireClient();
+    const id = encodeURIComponent(String(args.id ?? ''));
+    const routes: Record<string, { path: string; method?: 'POST'; body?: Record<string, unknown> }> = {
+      overview: { path: '/v1/household/overview' },
+      capabilities: { path: `/v1/household/capabilities${args.refresh ? '?refresh=1' : ''}` },
+      propose: { path: '/v1/household/organization/plans', method: 'POST', body: { roots: args.roots, targetBase: args.targetBase, inspectContents: args.inspectContents === true } },
+      plan: { path: `/v1/household/organization/plans/${id}` },
+      apply: { path: `/v1/household/organization/plans/${id}/apply`, method: 'POST', body: { digest: args.digest, saveRules: args.saveRules === true, includeUnits: args.includeUnits === true, archiveDuplicates: args.archiveDuplicates === true } },
+      undo: { path: `/v1/household/organization/plans/${id}/undo`, method: 'POST', body: {} },
+      routine: { path: `/v1/household/routines/${id}/${['run', 'pause', 'resume', 'cancel'].includes(String(args.op)) ? String(args.op) : 'invalid'}`, method: 'POST', body: {} },
+      obligation: { path: `/v1/household/obligations/${id}/${['confirm', 'resolve', 'dismiss', 'reopen'].includes(String(args.op)) ? String(args.op) : 'invalid'}`, method: 'POST', body: { resolution: args.resolution } },
+      companionSettings: { path: '/v1/household/companion/settings', method: 'POST', body: { enabled: args.enabled, bind: args.bind } },
+      pairingCode: { path: '/v1/household/companion/pairing-code', method: 'POST', body: {} },
+      revokeDevice: { path: `/v1/household/companion/devices/${id}/revoke`, method: 'POST', body: {} },
+      sendBriefing: { path: '/v1/household/companion/briefing', method: 'POST', body: {} },
+      allowDocumentReading: { path: '/v1/household/document-reading', method: 'POST', body: { folder: args.folder } },
+      revokeDocumentReading: { path: `/v1/household/document-reading/${id}/revoke`, method: 'POST', body: {} },
+    };
+    const route = routes[action];
+    if (!route) throw new Error(`unknown household action ${action}`);
+    return client.requestAsHost(route.path, route.method ? { method: route.method, body: route.body } : {});
+  }
+
   /** The configured daily brief routine, or null when it was never set up. */
   async getDailyBriefRoutine(): Promise<DesktopDailyBriefRoutine | null> {
     const client = this.requireClient();

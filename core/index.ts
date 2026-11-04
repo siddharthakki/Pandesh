@@ -64,6 +64,13 @@ import { configureDailyBriefRoutine, getDailyBriefRoutine } from './domain/assis
 import type { ConnectorId } from './shared/wireTypes';
 import { localRerouteEnvironment } from './runtime/autoRerouteRuntime';
 import { hasConnectorPermission, setConnectorPermission } from './domain/connectors';
+import { createCapabilityInventoryAdapter } from './runtime/capabilityInventory';
+import { createPcOrganizerAdapter } from './runtime/pcOrganizer';
+import { createHouseholdCapabilityAdapter } from './runtime/householdCapability';
+import { createMediaProductionAdapter } from './runtime/mediaProduction';
+import { activeCompanionDeviceCount } from './domain/companionSync';
+import { listHouseholdRoutines } from './domain/householdRoutines';
+import { companionController } from './api/companionServer';
 import type { ToolExecutionResult } from './runtime/toolRunner';
 
 /**
@@ -289,7 +296,15 @@ function buildCapabilityRegistry(dataDir: string, db: CoreDatabase, connectors: 
     .register(createNetworkDriveCapabilityAdapter())
     .register(createSystemManagementCapabilityAdapter())
   .register(createPortManagementCapabilityAdapter({ dataDir }))
-  .register(createIntelligenceScoutCapabilityAdapter({ dataDir, db, scout }));
+  .register(createIntelligenceScoutCapabilityAdapter({ dataDir, db, scout }))
+    .register(createCapabilityInventoryAdapter({
+      db, connectors,
+      companionDevices: () => activeCompanionDeviceCount(db),
+      scheduledRoutines: () => listHouseholdRoutines(db, 0).filter((r) => r.enabled).length,
+    }))
+    .register(createPcOrganizerAdapter({ db }))
+    .register(createHouseholdCapabilityAdapter({ db, connectorRegistry: connectors }))
+    .register(createMediaProductionAdapter({}));
   if (github) {
     registry.register(github);
   }
@@ -496,6 +511,10 @@ async function main(): Promise<void> {
     latestSequence: () => latestSequence(db),
   });
 
+  // The JUGAAD phone listener: off unless the person turned phone sync on (companion-sync.json).
+  const companion = companionController(db, dataDir, redactedLog);
+  await companion.apply().catch((err) => redactedLog(`companion: ${err instanceof Error ? err.message : String(err)}`));
+
   redactedLog(
     `listening on 127.0.0.1:${api.port}, instance ${instanceId}, coreVersion ${coreVersion}, bundleHash ${bundleHash ?? 'unknown'}, apiVersion ${CORE_API_VERSION}, node ${process.version}, electron ${process.versions.electron ?? 'n/a'}, dataDir ${dataDir}`,
   );
@@ -507,6 +526,7 @@ async function main(): Promise<void> {
     // A Gmail write that has started always finishes: stop only after it has settled (bounded, so a hung call cannot block exit).
     if (!(await drainWrites(30_000))) redactedLog('shutdown: a Gmail call was still running after 30s; continuing shutdown');
     wsHandle.close();
+    await companion.close().catch(() => undefined);
     await closeAllBrowserSessions();
     await api.close();
     singletonHandle.release();

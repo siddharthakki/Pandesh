@@ -195,6 +195,9 @@ const desktopApi = {
   /** Pandesh: the context-aware Home brief and the Today briefing. */
   getAssistantBrief: (options?: { external?: boolean }): Promise<DesktopAssistantBrief> =>
     ipcRenderer.invoke(DESKTOP_CHANNELS.getAssistantBrief, options ?? {}),
+  /** The Household panel: one allowlisted action (see DesktopSession.household). */
+  household: (action: string, args?: Record<string, unknown>): Promise<unknown> =>
+    ipcRenderer.invoke(DESKTOP_CHANNELS.household, action, args ?? {}),
   getDailyBriefRoutine: (): Promise<DesktopDailyBriefRoutine | null> =>
     ipcRenderer.invoke(DESKTOP_CHANNELS.getDailyBriefRoutine),
   configureDailyBriefRoutine: (input: { dailyTime: string; timezone?: string; enabled?: boolean }): Promise<DesktopDailyBriefRoutine | null> =>
