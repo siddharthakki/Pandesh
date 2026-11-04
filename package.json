@@ -2,7 +2,7 @@
   "name": "ollama-agent",
   "displayName": "KarkeDikha",
   "description": "Local AI coding agent powered by Ollama with tool execution, checkpoints, approval flows, observability, diagnostics, and bounded external control",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "publisher": "ollama-agent",
   "license": "MIT",
   "repository": {
@@ -801,6 +801,7 @@
     "desktop:installer-smoke": "node apps/desktop/scripts/installer-smoke.mjs",
     "desktop:smoke:sandbox": "node apps/desktop/scripts/sandbox-smoke/sandbox-smoke.mjs",
     "desktop:smoke:sandbox:check": "node apps/desktop/scripts/sandbox-smoke/sandbox-smoke.mjs --check",
+    "desktop:verify-release-target": "node apps/desktop/scripts/verify-release-target.mjs",
     "vscode:prepublish": "node scripts/fetch-whisper-model.mjs && node scripts/stage-asr-runtime-assets.mjs && node esbuild.js --production && node esbuild.core.js --production && node esbuild.webview-v2.js --production && node scripts/verify-release-assets.mjs && node scripts/strip-node-modules-ts-sources.mjs",
     "test": "node scripts/run-vitest-with-heap.mjs",
     "test:platform": "vitest run --config vitest.platform.config.ts",
