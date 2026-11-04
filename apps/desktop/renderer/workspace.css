@@ -2684,3 +2684,56 @@ body:has(.app[data-workspace="panda"]) { background: var(--ws-bg); }
 .app[data-workspace="panda"] .cp-all-models { list-style: none; margin: 0.4rem 0 0; padding: 0; max-height: 14rem; overflow: auto; font-size: 0.76rem; }
 .app[data-workspace="panda"] .cp-all-models li { display: flex; justify-content: space-between; gap: 0.8rem; padding: 0.2rem 0; border-bottom: 1px solid var(--ws-line-soft); color: var(--ws-text-soft); }
 .app[data-workspace="panda"] .cp-all-why { color: var(--ws-text-faint); white-space: nowrap; }
+
+/* ── Household ───────────────────────────────────────────────────────── */
+
+.app[data-workspace="panda"] .ws-household { display: grid; gap: 0.35rem; }
+.app[data-workspace="panda"] .ws-household-group {
+  border: 1px solid var(--ws-line);
+  border-radius: 10px;
+  background: var(--ws-surface-2);
+  padding: 0.35rem 0.7rem;
+}
+.app[data-workspace="panda"] .ws-household-group > summary {
+  cursor: pointer;
+  font-family: var(--ws-font);
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: var(--ws-text);
+  padding: 0.2rem 0;
+}
+.app[data-workspace="panda"] .ws-household-group:not([open]) > :not(summary) { display: none; }
+.app[data-workspace="panda"] .ws-household-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.35rem 0;
+  border-top: 1px solid var(--ws-line);
+}
+.app[data-workspace="panda"] .ws-household-text {
+  flex: 1 1 320px;
+  min-width: 0;
+  font-size: 0.8rem;
+  color: var(--ws-text);
+  line-height: 1.4;
+}
+.app[data-workspace="panda"] .ws-household-evidence,
+.app[data-workspace="panda"] .ws-household-pairing {
+  display: block;
+  font-size: 0.74rem;
+  color: var(--ws-text-muted, #9aa4ae);
+  margin: 0.1rem 0 0;
+}
+.app[data-workspace="panda"] .ws-household-pairing { font-size: 0.82rem; color: var(--ws-text); }
+.app[data-workspace="panda"] .ws-household-preview {
+  max-height: 22rem;
+  overflow: auto;
+  white-space: pre-wrap;
+  font-size: 0.74rem;
+  line-height: 1.45;
+  background: rgba(0, 0, 0, 0.25);
+  border-radius: 8px;
+  padding: 0.6rem 0.75rem;
+  margin: 0.3rem 0 0.4rem;
+}

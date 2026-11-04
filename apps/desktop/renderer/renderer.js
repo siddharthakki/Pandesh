@@ -9748,7 +9748,167 @@ function buildBriefSection(section) {
   void refreshAssistantBrief({ external: true });
   // The routine is one durable Core row: read it once and show its real state.
   void refreshAssistantRoutine();
+  void refreshHousehold();
 })();
+
+/* ── Household: obligations, routines, organization plans, JUGAAD phone ── */
+
+/**
+ * One calm section on Home for the household OS. Every action is a single allowlisted host call
+ * (DesktopSession.household); Core does the work and the panel re-reads Core's state afterwards,
+ * so what is shown is always what Core recorded — never an optimistic guess.
+ */
+const householdUi = { pending: null, preview: {}, pairing: null, note: '', open: new Map() };
+setInterval(() => { if (!document.hidden && !householdUi.pending) void refreshHousehold(); }, 60_000);
+
+function hh(tag, attrs = {}, ...children) {
+  const node = document.createElement(tag);
+  for (const [k, v] of Object.entries(attrs)) {
+    if (k === 'class') node.className = v;
+    else if (k === 'onclick') node.addEventListener('click', v);
+    else if (v !== undefined && v !== null && v !== false) node.setAttribute(k, v === true ? '' : String(v));
+  }
+  for (const c of children.flat()) if (c !== null && c !== undefined && c !== false) node.append(c instanceof Node ? c : document.createTextNode(String(c)));
+  return node;
+}
+
+function householdMoney(o) {
+  if (o.amountCents === null || o.amountCents === undefined) return '';
+  return ` · ${(o.amountCents / 100).toFixed(2).replace('.', ',')} ${!o.currency || o.currency === 'EUR' ? '€' : o.currency}`;
+}
+
+const HOUSEHOLD_PAYMENT = { requested: 'payment requested', due_soon: 'due soon', potentially_overdue: 'possibly overdue', confirmed: 'paid', unknown: 'status unknown', not_applicable: '' };
+
+async function householdAction(action, args, note) {
+  householdUi.note = 'Working…';
+  renderHouseholdNote();
+  try {
+    const result = await api.household(action, args);
+    householdUi.note = typeof note === 'function' ? note(result) : (note ?? '');
+    return result;
+  } catch (err) {
+    householdUi.note = `Not done: ${err?.message ?? err}`;
+    return null;
+  } finally {
+    await refreshHousehold();
+  }
+}
+
+function renderHouseholdNote() {
+  const n = document.getElementById('home-household-note');
+  if (n) n.textContent = householdUi.note;
+}
+
+async function refreshHousehold() {
+  const section = document.getElementById('home-household');
+  const body = document.getElementById('home-household-body');
+  if (!section || !body) return;
+  if (typeof api?.household !== 'function') { section.hidden = true; return; }
+  let o;
+  try { o = await api.household('overview'); } catch { section.hidden = true; return; }
+  section.hidden = false;
+  const state = document.getElementById('home-household-state');
+  const due = o.obligations.filter((x) => x.paymentStatus === 'due_soon' || x.paymentStatus === 'potentially_overdue').length;
+  const proposed = o.obligations.filter((x) => x.status === 'proposed').length;
+  if (state) state.textContent = [due ? `${due} due` : null, proposed ? `${proposed} to confirm` : null, `${o.routines.filter((r) => r.enabled).length} routine(s)`].filter(Boolean).join(' · ');
+  body.replaceChildren(
+    householdObligationsGroup(o.obligations),
+    householdRoutinesGroup(o.routines),
+    householdPlansGroup(o.plans),
+    householdPhoneGroup(o.companion),
+    hh('p', { id: 'home-household-note', class: 'ws-routine-note', 'aria-live': 'polite' }, householdUi.note),
+  );
+}
+
+function householdGroup(title, count, open, ...rows) {
+  // A group the person opened or closed stays that way across refreshes; otherwise it opens when something needs them.
+  const remembered = householdUi.open.get(title);
+  const node = hh('details', { class: 'ws-household-group', open: (remembered ?? open) || undefined }, hh('summary', {}, `${title}${count ? ` (${count})` : ''}`), ...rows);
+  node.addEventListener('toggle', () => householdUi.open.set(title, node.open));
+  return node;
+}
+
+function householdObligationsGroup(list) {
+  const rows = list.slice(0, 12).map((o) => hh('div', { class: 'ws-household-row' },
+    hh('span', { class: 'ws-household-text' },
+      hh('strong', {}, o.title),
+      ` — ${o.nextDate ? `${o.dateKind ?? 'date'} ${o.nextDate}` : 'no date'}${householdMoney(o)}${HOUSEHOLD_PAYMENT[o.paymentStatus] ? ` · ${HOUSEHOLD_PAYMENT[o.paymentStatus]}` : ''} · ${o.sourceCount} source(s)`,
+      o.evidence?.length ? hh('span', { class: 'ws-household-evidence' }, `from ${o.evidence[o.evidence.length - 1].sourceType}: “${o.evidence[o.evidence.length - 1].sourceLabel}”`) : null),
+    o.status === 'proposed' ? hh('button', { type: 'button', class: 'ws-chip is-approve', onclick: () => householdAction('obligation', { id: o.id, op: 'confirm' }, 'Confirmed. It is now an Important Date for the phone.') }, 'Confirm') : null,
+    o.status !== 'resolved' ? hh('button', { type: 'button', class: 'ws-chip', onclick: () => householdAction('obligation', { id: o.id, op: 'resolve', resolution: 'paid' }, 'Marked paid.') }, 'Paid') : null,
+    hh('button', { type: 'button', class: 'ws-chip is-reject', onclick: () => householdAction('obligation', { id: o.id, op: 'dismiss' }, 'Dismissed.') }, 'Dismiss'),
+  ));
+  if (!rows.length) rows.push(hh('p', { class: 'ws-routine-note' }, 'No bills or subscriptions found yet. Ask: “Check my Gmail for subscriptions renewing next month.”'));
+  return householdGroup('Upcoming obligations', list.length, list.some((x) => x.status === 'proposed' || x.paymentStatus === 'due_soon'), ...rows);
+}
+
+function householdRoutinesGroup(routines) {
+  const rows = routines.filter((r) => r.state !== 'cancelled').map((r) => {
+    const last = r.history?.[0];
+    return hh('div', { class: 'ws-household-row' },
+      hh('span', { class: 'ws-household-text' },
+        hh('strong', {}, r.title), ` — ${r.schedule}${r.state === 'paused' ? ' · paused' : ''}`,
+        hh('span', { class: 'ws-household-evidence' }, last ? `last: ${last.status} ${String(last.finishedAt ?? last.startedAt).slice(0, 16).replace('T', ' ')} — ${last.summary ?? last.error ?? ''}` : 'not run yet'),
+        hh('span', { class: 'ws-household-evidence' }, `may: ${(r.scope?.operations ?? []).join(', ')}${r.scope?.folders?.length ? ` · in ${r.scope.folders.join(', ')}` : ''}`)),
+      hh('button', { type: 'button', class: 'ws-chip', onclick: () => householdAction('routine', { id: r.id, op: 'run' }, (x) => x?.run ? `Ran: ${x.run.status} — ${x.run.summary}` : 'Not run.') }, 'Run now'),
+      r.state === 'active'
+        ? hh('button', { type: 'button', class: 'ws-chip', onclick: () => householdAction('routine', { id: r.id, op: 'pause' }, 'Paused.') }, 'Pause')
+        : hh('button', { type: 'button', class: 'ws-chip is-approve', onclick: () => householdAction('routine', { id: r.id, op: 'resume' }, 'Resumed.') }, 'Resume'),
+      hh('button', { type: 'button', class: 'ws-chip is-reject', onclick: () => householdAction('routine', { id: r.id, op: 'cancel' }, 'Cancelled.') }, 'Cancel'),
+    );
+  });
+  if (!rows.length) rows.push(hh('p', { class: 'ws-routine-note' }, 'No routines. Ask: “Keep my Downloads organized every week.”'));
+  return householdGroup('Routines', rows.length, false, ...rows);
+}
+
+function householdPlansGroup(plans) {
+  const rows = plans.slice(0, 5).map((p) => {
+    const c = p.counts ?? {};
+    const preview = householdUi.preview[p.id];
+    const confirming = householdUi.pending === p.id;
+    return hh('div', { class: 'ws-household-plan' },
+      hh('div', { class: 'ws-household-row' },
+        hh('span', { class: 'ws-household-text' }, hh('strong', {}, `${p.roots.map((r) => r.split(/[\\/]/).pop()).join(', ')} → ${p.targetBase.split(/[\\/]/).pop()}`), ` — ${p.status.replace('_', ' ')} · ${c.verified ?? 0} verified, ${c.planned ?? 0} planned, ${c.failed ?? 0} failed, ${c.undone ?? 0} undone`),
+        hh('button', { type: 'button', class: 'ws-chip', onclick: async () => {
+          if (householdUi.preview[p.id]) { delete householdUi.preview[p.id]; await refreshHousehold(); return; }
+          const r = await api.household('plan', { id: p.id }).catch(() => null);
+          householdUi.preview[p.id] = r?.preview ?? 'The plan could not be read.';
+          await refreshHousehold();
+        } }, preview ? 'Hide plan' : 'Review plan'),
+        (p.status === 'proposed' || p.status === 'partially_applied') && !confirming ? hh('button', { type: 'button', class: 'ws-chip is-approve', onclick: () => { householdUi.pending = p.id; void refreshHousehold(); } }, 'Approve…') : null,
+        confirming ? hh('button', { type: 'button', class: 'ws-chip is-approve', onclick: () => { householdUi.pending = null; void householdAction('apply', { id: p.id, digest: p.digest, saveRules: true }, (x) => x?.text ?? 'Applied.'); } }, `Move ${c.planned ?? 0} file(s) and keep these rules`) : null,
+        confirming ? hh('button', { type: 'button', class: 'ws-chip', onclick: () => { householdUi.pending = null; void refreshHousehold(); } }, 'Not now') : null,
+        (c.verified ?? 0) + (c.moved ?? 0) > 0 ? hh('button', { type: 'button', class: 'ws-chip is-reject', onclick: () => householdAction('undo', { id: p.id }, (x) => x ? `Undo: ${x.restored} restored${x.problems?.length ? `, ${x.problems.length} not restored` : ''}.` : 'Not undone.') }, 'Undo') : null),
+      preview ? hh('pre', { class: 'ws-household-preview' }, preview) : null,
+    );
+  });
+  if (!rows.length) rows.push(hh('p', { class: 'ws-routine-note' }, 'No organization plans. Ask: “Analyze my Downloads and propose an organization plan.”'));
+  return householdGroup('Organization plans', plans.length, Boolean(householdUi.pending || Object.keys(householdUi.preview).length), ...rows);
+}
+
+function householdPhoneGroup(c) {
+  const devices = (c.devices ?? []).filter((d) => !d.revokedAt);
+  const rows = [
+    hh('div', { class: 'ws-household-row' },
+      hh('span', { class: 'ws-household-text' }, c.listening ? `Phone sync is on (${c.settings.bind === 'lan' ? 'local network' : 'this PC only — emulator or USB'}, port ${c.port}). ${c.records} record(s) shared, revision ${c.latestRevision}.` : `Phone sync is off.${c.error ? ` ${c.error}` : ''}`),
+      c.listening
+        ? hh('button', { type: 'button', class: 'ws-chip is-reject', onclick: () => householdAction('companionSettings', { enabled: false }, 'Phone sync turned off.') }, 'Turn off')
+        : hh('button', { type: 'button', class: 'ws-chip is-approve', onclick: () => householdAction('companionSettings', { enabled: true }, 'Phone sync is on for this PC.') }, 'Turn on'),
+      c.listening && c.settings.bind !== 'lan' ? hh('button', { type: 'button', class: 'ws-chip', onclick: () => householdAction('companionSettings', { enabled: true, bind: 'lan' }, 'Phone sync now listens on the local network.') }, 'Use Wi-Fi') : null,
+      c.listening ? hh('button', { type: 'button', class: 'ws-chip', onclick: async () => {
+        const r = await householdAction('pairingCode', {}, '');
+        if (r) householdUi.pairing = r;
+        await refreshHousehold();
+      } }, 'Pair a phone') : null,
+      c.listening && devices.length ? hh('button', { type: 'button', class: 'ws-chip', onclick: () => householdAction('sendBriefing', {}, 'Briefing sent to the phone.') }, 'Send briefing') : null),
+    householdUi.pairing ? hh('p', { class: 'ws-household-pairing' }, `In JUGAAD → Config → Pandesh, enter code ${householdUi.pairing.code} and address ${householdUi.pairing.addresses[0]}:${householdUi.pairing.port}. The code works once and expires ${new Date(householdUi.pairing.expiresAt).toLocaleTimeString()}.`) : null,
+    ...devices.map((d) => hh('div', { class: 'ws-household-row' },
+      hh('span', { class: 'ws-household-text' }, `${d.label} — last synced ${d.lastSeenAt ? new Date(d.lastSeenAt).toLocaleString() : 'never'}, revision ${d.lastPulledRevision}`),
+      hh('button', { type: 'button', class: 'ws-chip is-reject', onclick: () => householdAction('revokeDevice', { id: d.id }, 'Phone unpaired. It can no longer sync.') }, 'Unpair'))),
+    ...(c.recentOps ?? []).slice(0, 3).map((op) => hh('p', { class: 'ws-household-evidence' }, `from phone: ${op.op} → ${op.result}${op.detail ? ` (${op.detail})` : ''}`)),
+  ];
+  return householdGroup('JUGAAD phone', devices.length, Boolean(householdUi.pairing), ...rows);
+}
 
 /** ══════════════════════════════════════════════════════════════════
  *  GOOGLE SERVICES (Connections): honest status + onboarding

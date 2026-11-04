@@ -1323,6 +1323,10 @@ function registerIpc(): void {
     if (!session) throw new Error('desktop session is not started');
     return session.getAssistantBrief({ external: options?.external === true });
   });
+  ipcMain.handle(DESKTOP_CHANNELS.household, async (_event, action: string, args?: Record<string, unknown>) => {
+    if (!session) throw new Error('desktop session is not started');
+    return session.household(String(action ?? ''), args && typeof args === 'object' ? args : {});
+  });
   ipcMain.handle(DESKTOP_CHANNELS.getDailyBriefRoutine, async () => {
     if (!session) throw new Error('desktop session is not started');
     return session.getDailyBriefRoutine();

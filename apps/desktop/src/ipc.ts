@@ -119,6 +119,7 @@ export const DESKTOP_CHANNELS = {
   /** Pandesh: the one proactive routine — a user-configured daily brief. */
   getDailyBriefRoutine: 'desktop:getDailyBriefRoutine',
   configureDailyBriefRoutine: 'desktop:configureDailyBriefRoutine',
+  household: 'desktop:household',
   /** Answers a pending approval from a visible card (Home included). */
   resolveAssistantApproval: 'desktop:resolveAssistantApproval',
   /** Resumes a task Core says can be retried safely. */
