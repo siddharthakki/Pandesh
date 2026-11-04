@@ -18,7 +18,6 @@ const EVENT_TYPES = new Set<ExecutionQualityEventType>([
   'identical_failure_refused',
   'identical_failure_repeated',
   'mutation_already_applied',
-  'mutation_outcome_uncertain',
   'exploration_budget_refused',
   'exploration_budget_nudge',
   'strategy_changed',

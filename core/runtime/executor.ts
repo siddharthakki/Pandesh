@@ -160,11 +160,8 @@ import {
 } from './identicalFailureTracker';
 import {
   ABSENT_FILE_SHA256,
-  decideMutationReplay,
   findMutationByResult,
-  latestMutationForPath,
   markMutationApplied,
-  mutationByFingerprint,
   mutationFingerprint,
   recordMutationIntent,
 } from '../domain/mutationLedger';

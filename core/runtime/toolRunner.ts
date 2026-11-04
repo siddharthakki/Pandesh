@@ -18,6 +18,7 @@ import {
   terminateProcessTree,
   type ProcessTreeTerminationResult,
 } from './processTree';
+import { ABSENT_FILE_SHA256, decideMutationOutcome } from '../domain/mutationLedger';
 import { recoverRepositoryPath, type RepositoryPathRecoveryResult } from './repositoryPathRecovery';
 import { isCredentialFilePath, redactSecrets } from '../platform/credentialStore';
 import { buildUnifiedDiff, describeBaseline, missingParentDirectories, readBaselineIdentity, sameBaseline, sha256OfBuffer, type WriteBaselineIdentity } from './writeProposal';
@@ -460,25 +461,33 @@ export class CoreToolRunner implements ToolRunner {
           pathRecovery: recovery,
         };
       }
-      if (!sameBaseline(current.baseline, ctx.expectedBaseline)) {
-        // M-benchmark P4: the outcome of an earlier attempt at THIS exact
-        // change is unknown when the file matches neither the pre-image the
-        // proposal was made against nor the content it produces. An unknown
-        // outcome is never replayed automatically.
-        const uncertain = Boolean(ctx.expectedResultSha256)
-          && current.baseline.kind === 'file'
-          && current.baseline.sha256 !== ctx.expectedResultSha256
-          && ctx.expectedBaseline.kind === 'file'
-          && ctx.expectedBaseline.sha256 !== ctx.expectedResultSha256;
+      // M-benchmark P4: one rule for a repeated write. The file either still
+      // holds the pre-image (the write never landed), already holds the
+      // result (it landed — a no-op), or holds neither (the outcome is
+      // UNKNOWN, and an unknown outcome is never replayed).
+      const outcome = decideMutationOutcome({
+        baselineSha256: ctx.expectedBaseline.kind === 'absent' ? ABSENT_FILE_SHA256 : ctx.expectedBaseline.sha256,
+        resultSha256: ctx.expectedResultSha256 ?? '',
+        currentSha256: current.baseline.kind === 'absent' ? ABSENT_FILE_SHA256 : current.baseline.sha256,
+      });
+      if (outcome === 'already_applied') {
+        return {
+          status: 'succeeded',
+          exitCode: 0,
+          output: `This content is already in '${recovery.selected}'; nothing was written again.`,
+          resultCategory: 'mutation_already_applied',
+          normalizedArguments,
+          pathRecovery: recovery,
+        };
+      }
+      if (outcome === 'uncertain') {
         return {
           status: 'failed',
           exitCode: null,
-          output: uncertain
-            ? `Stale proposal: '${recovery.selected}' was proposed against ${describeBaseline(ctx.expectedBaseline)} but now has ${describeBaseline(current.baseline)}. `
-              + 'The outcome of the earlier attempt at this change is unknown, so it was not repeated — repeating a side effect whose outcome is unknown can duplicate work. '
-              + 'Nothing was written; re-read the file and propose the change again against its current content.'
-            : `Stale proposal: '${recovery.selected}' was proposed against ${describeBaseline(ctx.expectedBaseline)} but now has ${describeBaseline(current.baseline)}. Nothing was written — re-read the file and propose the change again against its current content.`,
-          resultCategory: uncertain ? 'mutation_outcome_uncertain' : 'write_stale_baseline',
+          output: `Stale proposal: '${recovery.selected}' was proposed against ${describeBaseline(ctx.expectedBaseline)} but now has ${describeBaseline(current.baseline)}. `
+            + 'The outcome of the earlier attempt at this change is unknown, so it was not repeated — repeating a side effect whose outcome is unknown can duplicate work. '
+            + 'Nothing was written; re-read the file and propose the change again against its current content.',
+          resultCategory: 'write_stale_baseline',
           normalizedArguments,
           pathRecovery: recovery,
         };
@@ -567,37 +576,40 @@ export class CoreToolRunner implements ToolRunner {
     }
     if (ctx.expectedBaseline) {
       const current: WriteBaselineIdentity = { kind: 'file', sha256: sha256OfBuffer(buffer) };
-      if (!sameBaseline(current, ctx.expectedBaseline)) {
-        // M-benchmark P4: a replayed anchored edit. When the file already
-        // holds the exact content this APPROVED proposal produces, the edit
-        // landed (maybe before a crash that lost the completion record): it
-        // is reported as already applied and nothing is written again.
-        if (ctx.expectedResultSha256 && current.sha256 === ctx.expectedResultSha256) {
-          return {
-            status: 'succeeded',
-            exitCode: 0,
-            output: `This change is already present in '${recovery.selected}'; nothing was written again.`,
-            resultCategory: 'mutation_already_applied',
-            normalizedArguments,
-            pathRecovery: recovery,
-          };
-        }
-        // The file matches neither the pre-image nor the result: the outcome
-        // of the earlier attempt is UNKNOWN, and an unknown outcome is never
-        // replayed automatically.
-        const uncertain = Boolean(ctx.expectedResultSha256)
-          && current.sha256 !== ctx.expectedResultSha256
-          && ctx.expectedBaseline.kind === 'file'
-          && ctx.expectedBaseline.sha256 !== ctx.expectedResultSha256;
+      // M-benchmark P4: one rule for a repeated write (see `decideMutationOutcome`).
+      const outcome = decideMutationOutcome({
+        baselineSha256: ctx.expectedBaseline.kind === 'absent' ? ABSENT_FILE_SHA256 : ctx.expectedBaseline.sha256,
+        resultSha256: ctx.expectedResultSha256 ?? '',
+        currentSha256: current.sha256,
+      });
+      if (outcome === 'already_applied') {
+        return {
+          status: 'succeeded',
+          exitCode: 0,
+          output: `This change is already present in '${recovery.selected}'; nothing was written again.`,
+          resultCategory: 'mutation_already_applied',
+          normalizedArguments,
+          pathRecovery: recovery,
+        };
+      }
+      if (outcome === 'uncertain') {
         return {
           status: 'failed',
           exitCode: null,
-          output: uncertain
-            ? `Stale proposal: '${recovery.selected}' was proposed against ${describeBaseline(ctx.expectedBaseline)} but now has ${describeBaseline(current)}. `
-              + 'The outcome of the earlier attempt at this change is unknown, so it was not repeated — repeating a side effect whose outcome is unknown can duplicate work. '
-              + 'Nothing was written; re-read the file and propose the change again against its current content.'
-            : `Stale proposal: '${recovery.selected}' was proposed against ${describeBaseline(ctx.expectedBaseline)} but now has ${describeBaseline(current)}. Nothing was written — re-read the file and propose the change again against its current content.`,
-          resultCategory: uncertain ? 'mutation_outcome_uncertain' : 'write_stale_baseline',
+          output: `Stale proposal: '${recovery.selected}' was proposed against ${describeBaseline(ctx.expectedBaseline)} but now has ${describeBaseline(current)}. `
+            + 'The outcome of the earlier attempt at this change is unknown, so it was not repeated — repeating a side effect whose outcome is unknown can duplicate work. '
+            + 'Nothing was written; re-read the file and propose the change again against its current content.',
+          resultCategory: 'write_stale_baseline',
+          normalizedArguments,
+          pathRecovery: recovery,
+        };
+      }
+      if (!sameBaseline(current, ctx.expectedBaseline)) {
+        return {
+          status: 'failed',
+          exitCode: null,
+          output: `Stale proposal: '${recovery.selected}' was proposed against ${describeBaseline(ctx.expectedBaseline)} but now has ${describeBaseline(current)}. Nothing was written — re-read the file and propose the change again against its current content.`,
+          resultCategory: 'write_stale_baseline',
           normalizedArguments,
           pathRecovery: recovery,
         };

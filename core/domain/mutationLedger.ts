@@ -1,5 +1,5 @@
-/**
- * The durable mutation ledger — restart-safe, exactly-once workspace edits.
+﻿/**
+ * The durable mutation ledger â€” restart-safe, exactly-once workspace edits.
  *
  * THE PROBLEM
  * -----------
@@ -23,19 +23,19 @@
  * ledger records the INTENTION durably, before the write, together with the
  * exact pre-image and result identity:
  *
- *   - `baselineSha256` — the pre-image the edit was computed against
+ *   - `baselineSha256` â€” the pre-image the edit was computed against
  *     (`absent` for a file that did not exist yet);
- *   - `resultSha256` — the exact content the edit produces.
+ *   - `resultSha256` â€” the exact content the edit produces.
  *
  * When the same edit is dispatched again (a restart, a resumed approval, a
  * retried step) the ledger and the file together decide:
  *
- *   - the file already hashes to `resultSha256` → the write LANDED.
+ *   - the file already hashes to `resultSha256` â†’ the write LANDED.
  *     The edit is a no-op: it is reported as already applied and nothing is
  *     written again. This is the idempotent path.
- *   - the file still hashes to `baselineSha256` → the write did NOT land.
+ *   - the file still hashes to `baselineSha256` â†’ the write did NOT land.
  *     It is safe to apply it.
- *   - the file hashes to NEITHER → the workspace moved on in a way this
+ *   - the file hashes to NEITHER â†’ the workspace moved on in a way this
  *     proposal does not explain. The outcome is UNCERTAIN, and an uncertain
  *     side effect is NEVER replayed automatically. The caller is told.
  *
@@ -128,35 +128,6 @@ export function markMutationApplied(db: CoreDatabase, fingerprint: string, at?: 
   );
 }
 
-/** The most recent recorded mutation for one (tool, path). */
-export function latestMutationForPath(
-  db: CoreDatabase,
-  toolName: string,
-  path: string,
-): MutationLedgerRow | null {
-  const row = db.get<{
-    fingerprint: string; attemptId: string; toolName: string; path: string;
-    baselineSha256: string; resultSha256: string; status: MutationLedgerStatus;
-    recordedAt: string; completedAt: string | null;
-  }>(
-    'SELECT fingerprint, attemptId, toolName, path, baselineSha256, resultSha256, status, recordedAt, completedAt FROM mutation_ledger WHERE toolName = ? AND path = ? ORDER BY recordedAt DESC LIMIT 1',
-    [toolName, path],
-  );
-  return row ? { ...row } : null;
-}
-
-/** The recorded mutation with this exact identity, if there is one. */
-export function mutationByFingerprint(db: CoreDatabase, fingerprint: string): MutationLedgerRow | null {
-  const row = db.get<{
-    fingerprint: string; attemptId: string; toolName: string; path: string;
-    baselineSha256: string; resultSha256: string; status: MutationLedgerStatus;
-    recordedAt: string; completedAt: string | null;
-  }>(
-    'SELECT fingerprint, attemptId, toolName, path, baselineSha256, resultSha256, status, recordedAt, completedAt FROM mutation_ledger WHERE fingerprint = ?',
-    [fingerprint],
-  );
-  return row ? { ...row } : null;
-}
 
 /**
  * The recorded mutation that produced this exact content at one of these
@@ -186,50 +157,37 @@ export function findMutationByResult(
   return row ? { ...row } : null;
 }
 
-/** The decision a replayed mutation gets. */
+/** The decision a repeated mutation gets. */
 export type MutationReplayDecision =
   /** The write did not land: it is safe to apply it. */
-  | { decision: 'apply'; fingerprint?: string }
+  | 'apply'
   /** The write landed: repeating it would be a duplicate edit. */
-  | { decision: 'already_applied'; fingerprint: string; message: string }
+  | 'already_applied'
   /** The workspace moved on in a way this proposal does not explain. */
-  | { decision: 'uncertain'; fingerprint: string; message: string };
+  | 'uncertain';
 
 /**
- * Decides what a repeated mutation means. Pure: the caller supplies the
- * ledger row and the file's current identity.
+ * The three-way decision, from the identities alone.
+ *
+ * This is the single rule both the ledger and the writer obey:
+ *
+ *   - the file already hashes to the RESULT -> the write landed. It is a
+ *     no-op: report it and write nothing again;
+ *   - the file still hashes to the BASELINE -> the write never landed. It is
+ *     safe to apply it;
+ *   - the file hashes to NEITHER -> the outcome is UNCERTAIN, and an
+ *     uncertain side effect is NEVER replayed automatically.
+ *
+ * `currentSha256` is null when the file could not be read at all: that is
+ * uncertainty too.
  */
-export function decideMutationReplay(input: {
-  row: MutationLedgerRow | null;
-  /** The file's current identity, or null when it could not be read. */
+export function decideMutationOutcome(input: {
+  baselineSha256: string;
+  resultSha256: string;
   currentSha256: string | null;
-  toolName: string;
-  path: string;
 }): MutationReplayDecision {
-  const { row } = input;
-  if (!row) return { decision: 'apply' };
-  if (input.currentSha256 === null) {
-    return {
-      decision: 'uncertain',
-      fingerprint: row.fingerprint,
-      message: `The outcome of the earlier change to '${input.path}' is unknown: the file could not be read to check whether it was already applied. `
-        + 'It was NOT changed again. Inspect the file and decide what to do.',
-    };
-  }
-  if (input.currentSha256 === row.resultSha256) {
-    return {
-      decision: 'already_applied',
-      fingerprint: row.fingerprint,
-      message: `This change to '${input.path}' is already present in the file; nothing was written again.`,
-    };
-  }
-  if (input.currentSha256 === row.baselineSha256) {
-    return { decision: 'apply', fingerprint: row.fingerprint };
-  }
-  return {
-    decision: 'uncertain',
-    fingerprint: row.fingerprint,
-    message: `The outcome of the earlier change to '${input.path}' is unknown: the file changed since that change was proposed, and it does not match either the version it was computed from or the version it would have produced. `
-      + 'It was NOT changed again, because repeating a side effect whose outcome is unknown can duplicate work. Read the file and propose the change against its current content.',
-  };
+  if (input.currentSha256 === null) return 'uncertain';
+  if (input.currentSha256 === input.resultSha256) return 'already_applied';
+  if (input.currentSha256 === input.baselineSha256) return 'apply';
+  return 'uncertain';
 }
