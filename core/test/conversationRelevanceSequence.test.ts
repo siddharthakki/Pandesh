@@ -45,6 +45,7 @@ function scriptedReply(call: ModelCall): { text?: string; tool?: { name: string;
     return { text: `Result: ${typeof last.content === 'string' ? last.content : JSON.stringify(last.content)}` };
   }
   const text = JSON.stringify(last.content).toLowerCase();
+  if (text.includes('stay silent')) return { text: '' };
   if (text.includes('test page') && call.tools.includes('list_printers')) return { tool: { name: 'list_printers', args: '{}' } };
   if (text.includes('weather')) return { text: 'It is 18C and cloudy in Paris.' };
   if (text.includes('devices')) return { text: 'I can list the installed printers.' };
@@ -192,6 +193,16 @@ describe('P0 conversation relevance and real-action reliability (isolated sequen
     const events = db.all<{ eventType: string; metadata: string }>(`SELECT eventType, metadata FROM runtime_events WHERE eventType IN ('printer_inventory','print_test_page_submitting','print_test_page_result')`);
     expect(events.map((e) => e.eventType)).toEqual(['printer_inventory', 'print_test_page_submitting', 'print_test_page_result']);
     expect(db.all(`SELECT id FROM approvals WHERE summary LIKE '%print_test_page%'`).length).toBe(1);
+  }, 60_000);
+
+  it('a turn whose model says nothing never presents an earlier turn\'s answer as its own', async () => {
+    const conv = createConversation(db, { mode: 'baat_kar', actor: 'user', title: 'Silent turn' });
+    const first = await turn(conv.id, 'What is the weather in Paris?');
+    expect(first.result.reply).toContain('18C');
+    appendMessage(db, conv.id, { role: 'assistant', content: first.result.reply, actor: 'karkedikha:pi' });
+    const silent = await turn(conv.id, 'And the weather in Paris tomorrow? Please stay silent.');
+    expect(JSON.stringify(silent.calls[0].messages)).toContain('18C');
+    expect(silent.result.reply).not.toContain('18C');
   }, 60_000);
 
   it('does not print a second page when the same request is retried or recovered', async () => {

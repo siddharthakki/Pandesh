@@ -574,6 +574,7 @@ const CHAT_READ_TOOLS: ReadonlySet<string> = new Set([
   'get_system_info', 'list_system_drives', 'request_search_permission', 'find_project_roots', 'search_files', 'resolve_time',
   'dev_stories_status', 'list_reminders', 'list_commitments', 'list_scheduled_tasks', 'get_briefing_data', 'web_research',
   'find_duplicate_files', 'list_directory', 'get_project_context', 'read_file', 'search_recent_projects', 'list_printers',
+  'wish_status',
 ]);
 /** Pandesh's own record of what this turn did; it changes nothing outside the turn. */
 const CHAT_BOOKKEEPING_TOOLS: ReadonlySet<string> = new Set(['update_task_outcome']);
