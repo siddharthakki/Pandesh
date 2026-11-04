@@ -22,6 +22,7 @@ import { createFilesystemCapabilityAdapter } from './runtime/filesystemCapabilit
 import { createNetworkDriveCapabilityAdapter } from './runtime/networkDriveCapability';
 import { createSystemManagementCapabilityAdapter } from './runtime/systemManagementCapability';
 import { createPortManagementCapabilityAdapter } from './runtime/portManagementCapability';
+import { createJugaadDeviceCapabilityAdapter } from './runtime/jugaadDeviceCapability';
 import { createIntelligenceScoutCapabilityAdapter } from './runtime/intelligenceScoutCapability';
 import { createIntelligenceScout, type IntelligenceScout } from './runtime/intelligenceScout';
 import { createComputerUseCapabilityAdapter } from './runtime/computerUseCapability';
@@ -208,6 +209,7 @@ function buildCapabilityRegistry(dataDir: string, db: CoreDatabase, connectors: 
     .register(createNetworkDriveCapabilityAdapter())
     .register(createSystemManagementCapabilityAdapter())
   .register(createPortManagementCapabilityAdapter({ dataDir }))
+  .register(createJugaadDeviceCapabilityAdapter())
   .register(createIntelligenceScoutCapabilityAdapter({ dataDir, db, scout }));
   if (github) {
     registry.register(github);
