@@ -283,12 +283,27 @@ export function renderWishLedgerStatus(db: CoreDatabase, goalId: string): string
   const payment = realPaid ? 'REAL, RECONCILED' : demoPaid ? 'DEMONSTRATION / UNVERIFIED' : 'NONE RECEIVED';
   return [
     '— Ledger (written by Core, not by the model) —',
+    'This block is authoritative. Where anything above disagrees with it, this block is correct.',
     `Payment: ${payment}`,
     `Verified real revenue: ${m(funds.verifiedRevenueCents)}`,
     `Purchasing power: ${m(Math.max(0, funds.availableCents))}`,
     realPaid ? `${m(funds.verifiedRevenueCents)} of real payments reconciled by a person.` : 'No real payment reconciled.',
     ...(demoPaid ? [`${m(funds.demoRevenueCents)} of demonstration money exists; it never counts.`] : []),
   ].join('\n');
+}
+
+/**
+ * When the model's prose claims money arrived but the ledger holds no reconciled real payment, the claim is named and
+ * overruled in plain words. Sentences that deny a payment ("no payment received", "noch nicht bezahlt") are not claims.
+ */
+export function wishPaymentClaimCorrection(db: CoreDatabase, goalId: string, reply: string): string | null {
+  if (wishFunds(db, goalId).verifiedRevenueCents > 0) return null;
+  const claim = /\b(?:paid|payment (?:was |has )?(?:received|arrived|confirmed|complete)|received (?:the |your )?(?:payment|money)|money (?:is |has )?(?:in|arrived|received)|revenue (?:of|is|was)|purchasing power (?:of|is))\b|\b(?:bezahlt|eingegangen|zahlung erhalten)\b/i;
+  const denial = /\b(?:no|not|never|nothing|none|unverified|demonstration|until|once|when|if|kein|keine|noch nicht|nicht)\b/i;
+  const sentences = reply.split(/(?<=[.!?])\s+|\n+/);
+  const hit = sentences.find((x) => claim.test(x) && !denial.test(x));
+  if (!hit) return null;
+  return "Correction: the statement above that money has been received is not confirmed. Core's ledger below is the only authoritative financial result: no real payment is reconciled, and real revenue and purchasing power are as shown there.";
 }
 
 /** The commerce part of a goal's status, every figure from the records. Demo and real are never added together. */

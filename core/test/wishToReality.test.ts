@@ -17,7 +17,7 @@ import {
 } from '../domain/wishes';
 import { advanceWish, buildWebsiteDeliverable, extractOffers, parseEvidenceSources, renderOnePageSite, renderWishStatus } from '../runtime/wishPipeline';
 import { fulfilWishOrder, invoiceWishOrder, markWishOrderDelivered, normalizeSiteBrief } from '../runtime/wishFulfilment';
-import { acceptWishOrder, authorizeWishBusiness, createWishOrder, getWishOrder, renderWishLedgerStatus, resolveWishOrder, wishCommerceFigures } from '../domain/wishOrders';
+import { acceptWishOrder, authorizeWishBusiness, createWishOrder, getWishOrder, renderWishLedgerStatus, resolveWishOrder, wishCommerceFigures, wishPaymentClaimCorrection } from '../domain/wishOrders';
 import { classifyChatToolCall } from '../domain/permissionModes';
 
 const WISH = 'Pandesh, I want the AOC CU34G4ZCA monitor for €200. Find a legitimate way to earn enough money to buy it.';
@@ -293,6 +293,14 @@ describe('demonstration money is never purchasing power', () => {
     expect(block).toMatch(/Verified real revenue: €0\.00/);
     expect(block).toMatch(/Purchasing power: €0\.00/);
     expect(block).toMatch(/No real payment reconciled/);
+    expect(block).toMatch(/This block is authoritative/);
+  });
+
+  it('a model sentence claiming money arrived is overruled; denials are left alone', () => {
+    const { goal } = createWishGoal(db, { wish: WISH });
+    expect(wishPaymentClaimCorrection(db, goal.id, 'Great news: the payment was received and you have €290 revenue.')).toMatch(/not confirmed[\s\S]*authoritative/);
+    expect(wishPaymentClaimCorrection(db, goal.id, 'Die Kundin hat bezahlt, das Geld ist eingegangen.')).toMatch(/Correction/);
+    expect(wishPaymentClaimCorrection(db, goal.id, 'No payment received yet. Waiting for the bank statement.')).toBeNull();
   });
 });
 

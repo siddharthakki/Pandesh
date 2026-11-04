@@ -23,7 +23,7 @@ import { createResearchEvidenceRunner } from './researchCapability';
 import { advanceWish, buildWebsiteDeliverable, renderWishStatus } from './wishPipeline';
 import { fulfilWishOrder, invoiceWishOrder, markWishOrderDelivered, normalizeSiteBrief } from './wishFulfilment';
 import { createWishGoal, evaluateWishPurchase, formatMoney, isAssistantActor, listWishLedger, parseAmountToCents, prepareWishPurchase, recordWishLedgerClaim, resolveWishGoal, updateWishTarget, verifyWishLedgerEntry } from '../domain/wishes';
-import { acceptWishOrder, addWishOrderEvent, authorizeWishBusiness, createWishOrder, listWishOrders, renderWishLedgerStatus, resolveWishOrder, WISH_BUSINESS_SCOPES, wishOrderNextStep } from '../domain/wishOrders';
+import { acceptWishOrder, addWishOrderEvent, authorizeWishBusiness, createWishOrder, listWishOrders, renderWishLedgerStatus, resolveWishOrder, WISH_BUSINESS_SCOPES, wishOrderNextStep, wishPaymentClaimCorrection } from '../domain/wishOrders';
 import { completeReminder, createNote, createReminder, listReminders } from '../domain/everydayTools';
 import { buildDailyBriefing, renderDailyBriefing } from './dailyBriefing';
 import {
@@ -3919,8 +3919,12 @@ TRUTHFULNESS & BEHAVIORAL PROTOCOL:
     // ledger block is appended to the result, and any claim of a received payment is shown against it.
     if (toolCallsRecorded.some((t) => /^(?:record_wish_money|wish_order|wish_status|advance_wish|update_wish_goal|build_wish_deliverable)$/.test(t.tool))) {
       try {
-        const ledger = renderWishLedgerStatus(db, resolveWishGoal(db, null).id);
-        if (ledger && !finalReply.includes('— Ledger (written by Core')) finalReply += `\n\n${ledger}`;
+        const goalId = resolveWishGoal(db, null).id;
+        const ledger = renderWishLedgerStatus(db, goalId);
+        if (ledger && !finalReply.includes('— Ledger (written by Core')) {
+          const correction = wishPaymentClaimCorrection(db, goalId, finalReply);
+          finalReply += `${correction ? `\n\n${correction}` : ''}\n\n${ledger}`;
+        }
       } catch {}
     }
 
