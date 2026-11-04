@@ -298,3 +298,35 @@ const STOP_INTENT = /^\s*(?:(?:please|pls)\s+)?(?:stop|cancel|halt|abort|kill)(?
 export function isStopIntent(text: string): boolean {
   return STOP_INTENT.test(text);
 }
+
+/**
+ * A question about the user's own household data on their paired JUGAAD phone (Household Pulse,
+ * spending, Vault). Plain chat has no tool access, so like weather this is detected here and
+ * dispatched directly through the governed read-only `jugaad_*` capability, never left to the model's
+ * own tool-calling. Deliberately narrow: it needs a possessive/household phrase and never fires on
+ * build/code requests ("build an expense tracker").
+ */
+const JUGAAD_PHRASE =
+  /\b(?:household pulse|my pulse|(?:my|our) (?:household|spending|expenses?|vault|receipts?)|how much (?:have )?(?:i|we) (?:spent|spend)|what (?:have )?(?:i|we) spent|recovered receipts?|(?:in|from) (?:my|the) vault)\b/i;
+const JUGAAD_BUILD_VERBS = /\b(?:build|create|write|implement|generate|code|refactor|design|develop)\b/i;
+
+export interface JugaadReads {
+  pulse: boolean;
+  expenses: boolean;
+  vault: boolean;
+}
+
+export function detectJugaadIntent(text: string): boolean {
+  const trimmed = text.trim();
+  return !!trimmed && JUGAAD_PHRASE.test(trimmed) && !JUGAAD_BUILD_VERBS.test(trimmed);
+}
+
+/** Which reads the question asks for. A general "how is my household" asks for all three. */
+export function jugaadReadsFor(text: string): JugaadReads {
+  const reads: JugaadReads = {
+    pulse: /\bpulse\b|how is my household|household doing/i.test(text),
+    expenses: /\bspen[dt]|\bspending\b|\bexpenses?\b/i.test(text),
+    vault: /\bvault\b|\breceipts?\b/i.test(text),
+  };
+  return reads.pulse || reads.expenses || reads.vault ? reads : { pulse: true, expenses: true, vault: true };
+}

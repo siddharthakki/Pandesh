@@ -7094,7 +7094,105 @@ async function refreshTasksMissionsView() {
   }
 }
 
+// ── JUGAAD phone bridge card ─────────────────────────────────────────────
+// The token only ever lives in the password field until Connect; it is cleared immediately after
+// the host call and is never rendered or logged. Disconnect erases Pandesh's copy only.
+const JUGAAD_REASON_TEXT = {
+  no_session: 'Saved pairing is not active yet',
+  adb_unavailable: 'adb could not be started on this PC',
+  device_offline: 'Device not reachable over adb',
+  bridge_not_installed: 'This JUGAAD build has no Pandesh bridge',
+  bridge_disabled: 'Bridge is switched off in JUGAAD (Config)',
+  token_rejected: 'JUGAAD rejected this token (wrong, rotated or revoked)',
+  bridge_error: 'The bridge did not answer correctly',
+  core_error: 'Pandesh core is not reachable',
+};
+
+function jugaadRenderState(state) {
+  const badge = document.getElementById('integ-jugaad-badge');
+  const status = document.getElementById('integ-jugaad-status');
+  const notice = document.getElementById('integ-jugaad-notice');
+  const connectBtn = document.getElementById('btn-jugaad-connect');
+  const disconnectBtn = document.getElementById('btn-jugaad-disconnect');
+  const reasonText = state.reason ? (JUGAAD_REASON_TEXT[state.reason] || state.reason) : '';
+  if (badge) {
+    badge.textContent = state.connected ? 'Connected' : (state.stored ? 'Needs attention' : 'Not connected');
+    badge.className = state.connected ? 'int-badge online' : (state.stored ? 'int-badge warn' : 'int-badge');
+  }
+  if (status) {
+    status.textContent = state.connected
+      ? `Connected to ${state.serial || 'device'} · read-only · ${state.authorizedCalls ?? 0} authorized reads`
+      : (state.stored ? `Paired with ${state.serial || 'device'} but not working: ${reasonText}` : (reasonText || 'Not connected'));
+  }
+  if (notice) {
+    notice.textContent = state.notice || (state.detail && !state.connected ? state.detail : '');
+    notice.hidden = !notice.textContent;
+  }
+  if (connectBtn) connectBtn.textContent = state.stored ? 'Re-pair' : 'Connect';
+  if (disconnectBtn) disconnectBtn.hidden = !state.stored;
+}
+
+async function jugaadRefreshDevices(keepSelection) {
+  const select = document.getElementById('jugaad-device');
+  if (!select || typeof api?.jugaadListDevices !== 'function') return;
+  const previous = keepSelection ? select.value : '';
+  let result;
+  try { result = await api.jugaadListDevices(); } catch (err) { result = { devices: [], error: err instanceof Error ? err.message : String(err) }; }
+  select.replaceChildren();
+  const usable = (result.devices || []);
+  if (!usable.length) {
+    const none = document.createElement('option');
+    none.value = '';
+    none.textContent = result.error || 'No device found — connect the phone and allow USB debugging';
+    select.appendChild(none);
+    return;
+  }
+  for (const d of usable) {
+    const opt = document.createElement('option');
+    opt.value = d.serial;
+    opt.disabled = d.state !== 'device';
+    opt.textContent = `${d.model || 'Android device'}${d.emulator ? ' (emulator)' : ''} — ${d.serial}${d.state === 'device' ? '' : ` [${d.state}]`}`;
+    select.appendChild(opt);
+  }
+  const phone = usable.find((d) => d.state === 'device' && !d.emulator);
+  select.value = (previous && usable.some((d) => d.serial === previous)) ? previous : (phone ? phone.serial : '');
+}
+
+async function jugaadRefresh() {
+  if (typeof api?.jugaadState !== 'function') return;
+  try { jugaadRenderState(await api.jugaadState()); } catch (err) { jugaadRenderState({ connected: false, stored: false, reason: 'core_error' }); }
+  await jugaadRefreshDevices(true);
+}
+
+document.getElementById('btn-jugaad-refresh-devices')?.addEventListener('click', () => { void jugaadRefreshDevices(true); });
+
+document.getElementById('btn-jugaad-connect')?.addEventListener('click', async () => {
+  const tokenInput = document.getElementById('jugaad-token');
+  const select = document.getElementById('jugaad-device');
+  const btn = document.getElementById('btn-jugaad-connect');
+  const serial = select ? select.value : '';
+  const token = tokenInput ? tokenInput.value : '';
+  if (!serial) { jugaadRenderState({ connected: false, stored: false, detail: 'Select a device first.', reason: 'device_offline' }); return; }
+  if (!token.trim()) { jugaadRenderState({ connected: false, stored: false, detail: 'Paste the token from JUGAAD first.' }); return; }
+  if (btn) btn.disabled = true;
+  try {
+    jugaadRenderState(await api.jugaadConnect(serial, token));
+  } catch (err) {
+    jugaadRenderState({ connected: false, stored: false, detail: err instanceof Error ? err.message : String(err) });
+  } finally {
+    if (tokenInput) tokenInput.value = '';
+    if (btn) btn.disabled = false;
+  }
+});
+
+document.getElementById('btn-jugaad-disconnect')?.addEventListener('click', async () => {
+  try { jugaadRenderState(await api.jugaadDisconnect()); } catch (err) {
+    jugaadRenderState({ connected: false, stored: true, detail: err instanceof Error ? err.message : String(err) });
+  }
+});
+
 async function refreshIntegrationsView() {
+  void jugaadRefresh();
   // 1. Mobile pairing
   try {
     if (typeof api?.getMobilePairing === 'function') {

@@ -27,6 +27,9 @@ import {
   tryElectronSecretBox,
 } from './openRouterCredential';
 import { buildConnectorCredentialEnv, storeConnectorCredential, clearConnectorCredential } from './connectorCredentials';
+import { composeJugaadAnswer } from './jugaadAnswer';
+import { clearJugaadPairing, jugaadPairingPresent, loadJugaadPairing, storeJugaadPairing } from './jugaadCredential';
+import type { DesktopJugaadDevice, DesktopJugaadState } from '../ipc';
 import { createPortProcessManager } from '../../../../core/runtime/portManager';
 import { CLOUD_PUBLIC_TEXT_SYSTEM_PROMPT, decideCloudPublicText } from '../../../../core/runtime/cloudPublicText';
 import {
@@ -78,6 +81,8 @@ import {
   classifyTurnOutcomeKind,
   detectImageGenerationIntent,
   detectWeatherIntent,
+  detectJugaadIntent,
+  jugaadReadsFor,
   extractBareLocationAnswer,
   extractImageGenerationPrompt,
   selectImageCheckpoint,
@@ -938,6 +943,74 @@ export class DesktopSession {
     return this.gmailStatus();
   }
 
+  // -- JUGAAD phone bridge ------------------------------------------------
+  // The token is accepted only on connectJugaad, verified by Core through the read-only
+  // `jugaad_status` path, then stored DPAPI-encrypted (safeStorage). It is never returned, logged,
+  // or put on a snapshot. Core holds it in memory only and is re-seeded from the encrypted copy on
+  // every Core start.
+
+  async jugaadListDevices(): Promise<{ devices: DesktopJugaadDevice[]; error?: string }> {
+    const { devices, error } = await this.requireClient().listJugaadDevices();
+    return { devices: devices.map((d) => ({ serial: d.serial, state: d.state, model: d.model, emulator: d.emulator })), ...(error ? { error } : {}) };
+  }
+
+  async jugaadState(): Promise<DesktopJugaadState> {
+    const box = tryElectronSecretBox();
+    let stored = jugaadPairingPresent(this.dataDir);
+    let serial: string | null = null;
+    try { serial = loadJugaadPairing(this.dataDir, box)?.serial ?? null; } catch { stored = true; }
+    const base: DesktopJugaadState = { coreConnected: this.coreState === 'connected', stored, storageAvailable: !!box, serial, connected: false };
+    if (!base.coreConnected || !stored) return base;
+    try {
+      const status = await this.requireClient().getJugaadSession();
+      if (!status.present) return { ...base, reason: 'no_session', detail: 'Pandesh has a saved pairing but it is not active in this session' };
+      return { ...base, serial: status.serial ?? serial, connected: status.connected, reason: status.reason, detail: status.detail, authorizedCalls: status.authorizedCalls };
+    } catch (err) {
+      return { ...base, reason: 'core_error', detail: err instanceof Error ? err.message : String(err) };
+    }
+  }
+
+  async connectJugaad(serial: string, token: string): Promise<DesktopJugaadState> {
+    const box = tryElectronSecretBox();
+    if (!box) throw new Error('host encrypted storage is not available; refusing to store a JUGAAD token');
+    const client = this.requireClient();
+    const status = await client.putJugaadSession({ serial: serial.trim(), token: token.trim() });
+    if (!status.connected) {
+      // Nothing is stored for a pairing that did not verify.
+      return { coreConnected: true, stored: jugaadPairingPresent(this.dataDir), storageAvailable: true, serial: status.serial, connected: false, reason: status.reason, detail: status.detail };
+    }
+    try {
+      storeJugaadPairing(this.dataDir, { serial: serial.trim(), token: token.trim() }, box);
+    } catch (err) {
+      await client.deleteJugaadSession().catch(() => undefined);
+      throw err;
+    }
+    this.emit({ kind: 'status', at: nowIso(), summary: `JUGAAD paired with ${serial.trim()} (token stored encrypted)` });
+    return this.jugaadState();
+  }
+
+  /** Erases Pandesh's stored token and Core's in-memory copy. Does NOT revoke the token inside JUGAAD. */
+  async disconnectJugaad(): Promise<DesktopJugaadState> {
+    clearJugaadPairing(this.dataDir);
+    try { await this.requireClient().deleteJugaadSession(); } catch { /* Core not running: nothing in memory to erase */ }
+    this.emit({ kind: 'status', at: nowIso(), summary: 'JUGAAD disconnected (Pandesh token erased)' });
+    return {
+      coreConnected: this.coreState === 'connected', stored: false, storageAvailable: !!tryElectronSecretBox(), serial: null, connected: false,
+      notice: "Pandesh's saved token was erased. This does not revoke access inside JUGAAD: to invalidate the token on the phone, switch the bridge off or generate a new token in JUGAAD > Config.",
+    };
+  }
+
+  private async restoreJugaadPairing(): Promise<void> {
+    try {
+      const pairing = loadJugaadPairing(this.dataDir, tryElectronSecretBox());
+      if (!pairing) return;
+      const status = await this.requireClient().putJugaadSession(pairing);
+      this.options.log?.(`JUGAAD pairing restore: ${status.connected ? 'connected' : `not connected (${status.reason ?? 'unknown'})`}`);
+    } catch (err) {
+      this.options.log?.(`JUGAAD pairing restore failed: ${err instanceof Error ? err.message.replace(/[A-Za-z0-9_-]{32,}/g, '[redacted]') : 'error'}`);
+    }
+  }
+
   async disconnectGmail(): Promise<DesktopSnapshot['gmail']> {
     this.googleConnectError = null;
     await this.gmailTokenManager.disconnect();
@@ -1218,6 +1291,7 @@ export class DesktopSession {
     // (gmailAccessTokenStore.ts) — a fresh/restarted Core has none until
     // pushed, regardless of whether Gmail was already connected.
     void this.gmailTokenManager.onCoreReady();
+    void this.restoreJugaadPairing();
     this.reminderScheduler = new EverydayReminderScheduler({
       notify: async (input) => {
         // Mark notified first so sleep/resume cannot double-deliver the same due item.
@@ -1936,6 +2010,9 @@ export class DesktopSession {
     }
     if (staged.length === 0 && detectWeatherIntent(text)) {
       return this.handleWeatherIntent(text, clientOrigin);
+    }
+    if (staged.length === 0 && detectJugaadIntent(text) && jugaadPairingPresent(this.dataDir)) {
+      return this.handleJugaadIntent(text, clientOrigin);
     }
     if (this.awaitingWeatherLocation) {
       const bareLocation = extractBareLocationAnswer(text);
@@ -4059,6 +4136,72 @@ export class DesktopSession {
         summary: (err as Error).message,
         clientOrigin,
       });
+      this.drainSubmissionQueue();
+      throw err;
+    }
+  }
+
+  /** One governed, read-only `jugaad_*` dispatch. Never throws for a refused read; returns its text instead. */
+  private async jugaadRead(correlationId: string, toolName: string, args: Record<string, unknown>): Promise<{ output?: string; error?: string }> {
+    const result = await this.requireClient().dispatchCapability({ correlationId, toolName, arguments: args, cwd: this.folder ?? this.dataDir });
+    switch (result.outcome) {
+      case 'executed': {
+        const output = result.toolInvocation.evidence?.output;
+        const text = typeof output === 'string' ? output : '';
+        return result.toolInvocation.status === 'succeeded' ? { output: text } : { error: text || 'the read failed' };
+      }
+      case 'approval_required': return { error: 'this read unexpectedly asked for an approval, so it was not run' };
+      case 'denied':
+      case 'unavailable': return { error: result.reason };
+      default: return { error: 'JUGAAD is unavailable in the running Core' };
+    }
+  }
+
+  /** Mirrors handleWeatherIntent: plain chat has no tools, so a household question is dispatched directly through the
+   * governed read-only JUGAAD capability and answered from its output alone (no approval: local, read-only). */
+  private async handleJugaadIntent(text: string, clientOrigin: 'desktop' | 'mobile' = 'desktop'): Promise<{ requestId: string; attemptId: string; model: string }> {
+    if (this.active && !this.active.terminal) throw new Error('a task is already running');
+    this.interactionMode = 'chat';
+    this.lastTurnOutcome = null;
+    this.turnOutcomeKind = null;
+    this.blockedReason = null;
+    this.taskScope = null;
+    const requestId = `jugaad_req_${Date.now()}`;
+    const attemptId = `jugaad_att_${Date.now()}`;
+    this.active = { attemptId, requestId, conversationId: this.voiceConversationId ?? `jugaad_${Date.now()}`, goal: text, tokenBuffer: '', terminal: false, clientOrigin };
+    this.cockpitEvents = [];
+    this.emit({ kind: 'status', at: nowIso(), requestId, attemptId, summary: 'Reading your household data from the paired phone (read-only)', clientOrigin });
+    try {
+      const reads = jugaadReadsFor(text);
+      const correlationId = await this.ensureCapabilityConversation('JUGAAD household data');
+      const pad = (n: number) => String(n).padStart(2, '0');
+      const now = new Date();
+      const last = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();
+      const period = { from: `${now.getFullYear()}-${pad(now.getMonth() + 1)}-01`, to: `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(last)}` };
+      const errors: { pulse?: string; expenses?: string; vault?: string } = {};
+      const out: { pulse?: string; expenses?: string; vault?: string } = {};
+      if (reads.pulse) { const r = await this.jugaadRead(correlationId, 'jugaad_pulse', {}); if (r.error) errors.pulse = r.error; else out.pulse = r.output; }
+      if (reads.expenses) { const r = await this.jugaadRead(correlationId, 'jugaad_expenses', { from: period.from, to: period.to }); if (r.error) errors.expenses = r.error; else out.expenses = r.output; }
+      if (reads.vault) { const r = await this.jugaadRead(correlationId, 'jugaad_vault', { limit: 1 }); if (r.error) errors.vault = r.error; else out.vault = r.output; }
+      const reply = composeJugaadAnswer({
+        pulse: reads.pulse ? (out.pulse ?? undefined) : undefined,
+        expenses: reads.expenses ? (out.expenses ?? undefined) : undefined,
+        vault: reads.vault ? (out.vault ?? undefined) : undefined,
+        errors, period,
+      });
+      await this.recordConversationMessage(this.active.conversationId, 'assistant', reply);
+      this.active.terminal = true;
+      const failed = Object.keys(errors).length > 0 && Object.keys(out).length === 0;
+      this.lastTurnOutcome = failed ? 'failed' : 'completed';
+      this.turnOutcomeKind = failed ? 'failed' : 'answered';
+      this.emit({ kind: 'result', at: nowIso(), requestId, attemptId, summary: 'Household data', text: reply, clientOrigin });
+      this.drainSubmissionQueue();
+      return { requestId, attemptId, model: 'jugaad' };
+    } catch (err) {
+      this.active.terminal = true;
+      this.lastTurnOutcome = 'failed';
+      this.turnOutcomeKind = 'failed';
+      this.emit({ kind: 'error', at: nowIso(), requestId, attemptId, summary: (err as Error).message, clientOrigin });
       this.drainSubmissionQueue();
       throw err;
     }

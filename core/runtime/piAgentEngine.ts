@@ -2283,6 +2283,11 @@ LOCAL MODEL RUNTIME & PROVIDER (STRICT RULES):
 WEATHER & ENVIRONMENT (STRICT RULES):
 - For weather conditions or forecasts, call 'get_weather' with the location name (e.g. 'Paris', 'Tokyo', 'London'). It is read-only and queries current forecast data. Never guess or fabricate weather without calling 'get_weather'.
 
+HOUSEHOLD PHONE DATA — JUGAAD (STRICT RULES):
+- For the user's Household Pulse, spending/expenses or Vault (documents, receipts, recovered scans), call 'jugaad_pulse', 'jugaad_expenses' or 'jugaad_vault'. They are read-only and read the paired phone live. Never guess or invent these figures.
+- If a JUGAAD tool fails because the phone is not connected or the token was rejected, say exactly that and point the user to Settings > Integrations > JUGAAD. Do not retry in a loop.
+- 'jugaad_expenses' returns a deterministic 'summary'; report its 'complete' flag honestly. 'jugaad_vault' returns 'recoveredReceipts'. Report only what the tools returned.
+
 SYSTEM & DISK ANALYSIS (STRICT RULES):
 - For disk, storage, or hardware queries, use fast, bounded telemetry ('system_hardware_telemetry').
 - For comprehensive system diagnostics ("run diagnostics on this PC", "diagnose my computer", "what is my system health"), call 'run_system_diagnostics'.

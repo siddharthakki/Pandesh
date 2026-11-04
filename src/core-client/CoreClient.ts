@@ -3,6 +3,8 @@ import { WebSocket } from 'ws';
 import type { CoreConnectionState, CoreConnectionStatus } from './ConnectionState';
 import type { TaskOverviewRow } from '../../core/domain/taskOverview';
 import type {
+  JugaadDevice,
+  JugaadSessionStatus,
   BoardSnapshot,
   CoreInfo,
   StoryEventRecord,
@@ -1172,6 +1174,24 @@ export class CoreClient {
    * the token that made it true. */
   async clearGmailAccessToken(): Promise<{ ok: true; connector: ConnectorStatus }> {
     return this.request('/v1/connectors/gmail/access-token', { method: 'DELETE' });
+  }
+
+  /** JUGAAD phone bridge. The token is accepted by `putJugaadSession` only and is never returned. */
+  async listJugaadDevices(): Promise<{ devices: JugaadDevice[]; error?: string }> {
+    return this.request('/v1/jugaad/devices');
+  }
+
+  async putJugaadSession(input: { serial: string; token: string }): Promise<JugaadSessionStatus> {
+    return this.request('/v1/jugaad/session', { method: 'POST', body: input });
+  }
+
+  async getJugaadSession(): Promise<JugaadSessionStatus> {
+    return this.request('/v1/jugaad/session');
+  }
+
+  /** Erases Core's in-memory token. Does not revoke access inside JUGAAD. */
+  async deleteJugaadSession(): Promise<JugaadSessionStatus> {
+    return this.request('/v1/jugaad/session', { method: 'DELETE' });
   }
 
   /** Explicit operator-triggered re-probe (Gmail diagnostics "Retry"),

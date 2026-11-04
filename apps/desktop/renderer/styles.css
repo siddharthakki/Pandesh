@@ -6271,3 +6271,21 @@ header.apex-hud-top .topbar-status-controls { min-width: 0; flex-shrink: 1; }
 .dev-story, #dev-stories-list { min-width: 0; max-width: 100%; box-sizing: border-box; }
 .dev-story-approval { min-width: 0; }
 .dev-story-approval code { flex: 1 1 100%; }
+
+/* JUGAAD pairing card: token field and device picker follow the dark card theme. */
+#integ-card-jugaad input,
+#integ-card-jugaad select {
+  background: rgba(10, 22, 36, 0.9);
+  color: inherit;
+  border: 1px solid rgba(120, 170, 210, 0.3);
+  border-radius: 8px;
+  padding: 0.35rem 0.6rem;
+  font: inherit;
+  min-width: 0;
+  max-width: 100%;
+}
+#integ-card-jugaad input:focus,
+#integ-card-jugaad select:focus {
+  outline: none;
+  border-color: rgba(0, 220, 200, 0.7);
+}

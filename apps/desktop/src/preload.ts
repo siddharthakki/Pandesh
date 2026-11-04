@@ -6,6 +6,8 @@ import {
   type DesktopApprovalResolution,
   type DesktopOpenRouterKeyResult,
   type DesktopGmailStatus,
+  type DesktopJugaadState,
+  type DesktopJugaadDevice,
   type DesktopGmailActionResult,
   type DesktopSnapshot,
   type DesktopSpeakResult,
@@ -129,6 +131,10 @@ const desktopApi = {
     ipcRenderer.invoke(DESKTOP_CHANNELS.removeQueuedCommand, id),
   reorderQueuedCommand: (id: string, ordinal: number): Promise<DesktopSnapshot | null> =>
     ipcRenderer.invoke(DESKTOP_CHANNELS.reorderQueuedCommand, id, ordinal),
+  jugaadListDevices: (): Promise<{ devices: DesktopJugaadDevice[]; error?: string }> => ipcRenderer.invoke(DESKTOP_CHANNELS.jugaadListDevices),
+  jugaadState: (): Promise<DesktopJugaadState> => ipcRenderer.invoke(DESKTOP_CHANNELS.jugaadState),
+  jugaadConnect: (serial: string, token: string): Promise<DesktopJugaadState> => ipcRenderer.invoke(DESKTOP_CHANNELS.jugaadConnect, serial, token),
+  jugaadDisconnect: (): Promise<DesktopJugaadState> => ipcRenderer.invoke(DESKTOP_CHANNELS.jugaadDisconnect),
   connectGmail: (): Promise<DesktopGmailStatus> => ipcRenderer.invoke(DESKTOP_CHANNELS.connectGmail),
   disconnectGmail: (): Promise<DesktopGmailStatus> => ipcRenderer.invoke(DESKTOP_CHANNELS.disconnectGmail),
   dispatchGmailAction: (toolName: string, args: Record<string, unknown>): Promise<DesktopGmailActionResult> =>

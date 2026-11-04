@@ -80,6 +80,7 @@ import {
 } from '../domain/assistantRoutine';
 import { buildConnectorAdapters } from '../runtime/connectors/connectorDefinitions';
 import { setGmailAccessToken, clearGmailAccessToken } from '../runtime/connectors/gmailAccessTokenStore';
+import { defaultJugaadBridge } from '../runtime/jugaadDeviceCapability';
 import { summarizeGmailThreadLocally, type GmailSummaryMessageInput } from '../runtime/gmailSummary';
 import { OllamaModelBackend, type ModelBackend } from '../runtime/modelBackend';
 import type { ConnectorAdapter } from '../runtime/connectors/connectorCapability';
@@ -1929,6 +1930,28 @@ export function buildRouter(
     // survive a disconnect and leave dispatch falsely open.
     await Promise.all([connectors.get('gmail')?.probeHealth(), connectors.get('google_calendar')?.probeHealth()]);
     return { status: 200, body: { ok: true, connector: getConnectorStatus(ctx.db, connectors, 'gmail') } };
+  });
+
+  // JUGAAD phone bridge (read-only ADB client of the app's PandeshBridgeProvider). The Desktop
+  // host owns the DPAPI-encrypted token and pushes it here, in memory only, exactly like the Gmail
+  // access token. No route ever returns the token; DELETE erases Core's copy and does NOT revoke
+  // anything inside JUGAAD (that is a separate action on the phone).
+  router.get('/v1/jugaad/devices', async () => ({ status: 200, body: await defaultJugaadBridge.listDevices() }));
+
+  router.post('/v1/jugaad/session', async (ctx) => {
+    const body = asRecord(ctx.body);
+    const verification = await defaultJugaadBridge.connect(requireString(body, 'serial'), requireString(body, 'token'));
+    return { status: 200, body: { ...verification, ...defaultJugaadBridge.session() } };
+  });
+
+  router.get('/v1/jugaad/session', async () => {
+    const verification = await defaultJugaadBridge.verify();
+    return { status: 200, body: { ...verification, ...defaultJugaadBridge.session() } };
+  });
+
+  router.delete('/v1/jugaad/session', async () => {
+    defaultJugaadBridge.disconnect();
+    return { status: 200, body: { connected: false, ...defaultJugaadBridge.session() } };
   });
 
   // Explicit operator-triggered re-probe (Gmail diagnostics "Retry"), and

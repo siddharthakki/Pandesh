@@ -946,6 +946,22 @@ function registerIpc(): void {
     sendSnapshot();
     return result;
   });
+  ipcMain.handle(DESKTOP_CHANNELS.jugaadListDevices, async () => {
+    if (!session) throw new Error('desktop session is not started');
+    return session.jugaadListDevices();
+  });
+  ipcMain.handle(DESKTOP_CHANNELS.jugaadState, async () => {
+    if (!session) throw new Error('desktop session is not started');
+    return session.jugaadState();
+  });
+  ipcMain.handle(DESKTOP_CHANNELS.jugaadConnect, async (_event, serial: unknown, token: unknown) => {
+    if (!session) throw new Error('desktop session is not started');
+    return session.connectJugaad(String(serial ?? ''), String(token ?? ''));
+  });
+  ipcMain.handle(DESKTOP_CHANNELS.jugaadDisconnect, async () => {
+    if (!session) throw new Error('desktop session is not started');
+    return session.disconnectJugaad();
+  });
   ipcMain.handle(DESKTOP_CHANNELS.connectGmail, async () => {
     if (!session) throw new Error('desktop session is not started');
     const result = await session.connectGmail();

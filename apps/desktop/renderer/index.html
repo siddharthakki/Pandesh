@@ -779,6 +779,39 @@
               </div>
             </div>
 
+            <!-- JUGAAD phone bridge (read-only) -->
+            <div class="integration-card" id="integ-card-jugaad">
+              <div class="int-card-head">
+                <div class="int-icon-wrap">🏠</div>
+                <div>
+                  <h3 class="int-card-title">JUGAAD</h3>
+                  <span class="int-card-subtitle">Household app on your phone · read-only</span>
+                </div>
+                <span id="integ-jugaad-badge" class="int-badge">Checking…</span>
+              </div>
+              <p class="int-card-desc">Lets Pandesh read your Household Pulse, expenses and Vault metadata over USB/ADB. In JUGAAD open Config, switch the Pandesh bridge on and tap Generate &amp; Copy Token, then paste it here.</p>
+              <div class="int-details-box">
+                <div class="int-detail-row">
+                  <span class="int-detail-label">DEVICE:</span>
+                  <select id="jugaad-device" aria-label="Android device"></select>
+                  <button type="button" id="btn-jugaad-refresh-devices" class="apex-chip">Find devices</button>
+                </div>
+                <div class="int-detail-row">
+                  <span class="int-detail-label">TOKEN:</span>
+                  <input id="jugaad-token" type="password" spellcheck="false" autocomplete="off" placeholder="Paste the JUGAAD token" aria-label="JUGAAD pairing token" />
+                </div>
+                <div class="int-detail-row">
+                  <span class="int-detail-label">STATUS:</span>
+                  <span id="integ-jugaad-status" class="int-state-text">Not connected</span>
+                </div>
+              </div>
+              <p id="integ-jugaad-notice" class="int-card-desc" hidden></p>
+              <div class="int-card-actions">
+                <button type="button" id="btn-jugaad-connect" class="apex-chip">Connect</button>
+                <button type="button" id="btn-jugaad-disconnect" class="apex-chip" hidden>Disconnect</button>
+              </div>
+            </div>
+
             <!-- 2. ImageGeneration Studio Card -->
             <div class="integration-card" id="integ-card-studio">
               <div class="int-card-head">

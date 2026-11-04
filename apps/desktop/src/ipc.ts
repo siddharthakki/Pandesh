@@ -66,6 +66,11 @@ export const DESKTOP_CHANNELS = {
   event: 'desktop:event',
   /** Push wake / speech lifecycle events to the renderer. */
   voiceEvent: 'desktop:voiceEvent',
+  /** JUGAAD phone bridge: device discovery, pairing, status, local disconnect. */
+  jugaadListDevices: 'desktop:jugaadListDevices',
+  jugaadState: 'desktop:jugaadState',
+  jugaadConnect: 'desktop:jugaadConnect',
+  jugaadDisconnect: 'desktop:jugaadDisconnect',
   /** Gmail: OAuth connect/disconnect and the four typed tool actions. */
   connectGmail: 'desktop:connectGmail',
   disconnectGmail: 'desktop:disconnectGmail',
@@ -732,6 +737,28 @@ export interface DesktopResearchResultView {
   answer: string | null;
   failureClassification: string | null;
   sources: DesktopResearchSourceView[];
+}
+
+/** Non-secret JUGAAD pairing state. Never carries the token. */
+export interface DesktopJugaadState {
+  coreConnected: boolean;
+  /** An encrypted pairing exists on this PC (it survives restarts until Disconnect). */
+  stored: boolean;
+  storageAvailable: boolean;
+  serial: string | null;
+  connected: boolean;
+  reason?: string;
+  detail?: string;
+  authorizedCalls?: number;
+  /** Plain-language note shown after Disconnect: it only erases Pandesh's copy. */
+  notice?: string;
+}
+
+export interface DesktopJugaadDevice {
+  serial: string;
+  state: string;
+  model: string | null;
+  emulator: boolean;
 }
 
 /** Non-secret Gmail connection status. Never carries a token. */

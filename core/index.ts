@@ -18,6 +18,7 @@ import { openCoreDatabase } from './db/openCore';
 import { CoreDatabaseFailedError } from './db/preflight';
 import { failDeadExecutorAttemptsOnBoot, scanOrphanedAttemptsOnBoot } from './domain/bootReconciliation';
 import { createWeatherCapabilityAdapter } from './runtime/weatherCapability';
+import { defaultJugaadBridge } from './runtime/jugaadDeviceCapability';
 import { createFilesystemCapabilityAdapter } from './runtime/filesystemCapability';
 import { createNetworkDriveCapabilityAdapter } from './runtime/networkDriveCapability';
 import { createSystemManagementCapabilityAdapter } from './runtime/systemManagementCapability';
@@ -204,6 +205,7 @@ function buildCapabilityRegistry(dataDir: string, db: CoreDatabase, connectors: 
     .register(createComputerUseCapabilityAdapter({ dataDir }))
     .register(createHermesSkillCapabilityAdapter())
     .register(createWeatherCapabilityAdapter())
+    .register(defaultJugaadBridge.adapter)
     .register(createFilesystemCapabilityAdapter())
     .register(createNetworkDriveCapabilityAdapter())
     .register(createSystemManagementCapabilityAdapter())

@@ -168,6 +168,7 @@ const INFORMATIONAL_TOOL_NAMES = new Set([
   'read_file', 'read_file_outside_workspace', 'list_directory_outside_workspace',
   'system_list_processes', 'system_hardware_telemetry', 'run_system_diagnostics', 'system_list_models', 'system_list_services', 'system_list_startup_items',
   'list_network_drives', 'github_read_issue', 'image_list_checkpoints', 'get_weather',
+  'jugaad_status', 'jugaad_pulse', 'jugaad_expenses', 'jugaad_vault',
 ]);
 
 /** Adapter risk classification, when the caller can supply one. */

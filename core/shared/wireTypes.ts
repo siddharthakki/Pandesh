@@ -1409,3 +1409,28 @@ export interface DailyBriefRoutine {
   createdAt: string;
   updatedAt: string;
 }
+
+/** JUGAAD phone bridge — non-secret shapes only. No wire type ever carries the pairing token. */
+export interface JugaadDevice {
+  serial: string;
+  state: string;
+  model: string | null;
+  product: string | null;
+  emulator: boolean;
+}
+
+export type JugaadFailureReason =
+  | 'no_session' | 'adb_unavailable' | 'device_offline' | 'bridge_not_installed'
+  | 'bridge_disabled' | 'token_rejected' | 'bridge_error';
+
+export interface JugaadSessionStatus {
+  connected: boolean;
+  reason?: JugaadFailureReason;
+  detail?: string;
+  bridgeEnabled?: boolean;
+  authorizedCalls?: number;
+  app?: string;
+  /** Core holds a token in memory (a rejected/rotated token may still be held until Disconnect). */
+  present: boolean;
+  serial: string | null;
+}
