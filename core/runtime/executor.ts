@@ -162,7 +162,6 @@ import {
   ABSENT_FILE_SHA256,
   findMutationByResult,
   markMutationApplied,
-  mutationFingerprint,
   recordMutationIntent,
 } from '../domain/mutationLedger';
 import {
