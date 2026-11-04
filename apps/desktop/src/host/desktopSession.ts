@@ -91,6 +91,8 @@ import {
   type DesktopInteractionMode,
   type DesktopTurnOutcome,
   type DesktopTurnOutcomeKind,
+  PLACEHOLDER_CONVERSATION_PREFIX,
+  isPlaceholderConversationId,
 } from './desktopInteractionRouting';
 import {
   formatLocalInstant,
@@ -835,7 +837,8 @@ export class DesktopSession {
       stagedAttachments: this.attachmentStaging.list(),
       modelNote: this.modelNote,
       selectedConversationId: this.selectedConversationId,
-      activeConversationId: this.active?.conversationId ?? null,
+      // A host-side placeholder (image_*) is not a Core conversation; exposing it makes the UI open a conversation that does not exist.
+      activeConversationId: this.active && !isPlaceholderConversationId(this.active.conversationId) ? this.active.conversationId : null,
       cockpit: this.active
         ? projectMissionCockpit(this.cockpitEvents, {
           requestId: this.active.requestId,
@@ -2104,9 +2107,13 @@ export class DesktopSession {
       if (!visionChoice) {
         throw new Error('None of your installed models can see images. Install a vision model (for example: ollama pull gemma4:12b) and try again.');
       }
+      if (visionChoice.differsFromSelection) {
+        // The person chose this model explicitly: say what it lacks and offer alternatives; never swap it silently.
+        throw new Error(`${model} can't see images, so this message was not sent. Vision-capable models you have installed: ${visionModels.join(', ')}. Pick one of them, or send the message without the image.`);
+      }
       model = visionChoice.model;
       // Only explain a choice the person did not make themselves.
-      this.modelNote = visionChoice.differsFromSelection || isAutoModel ? visionChoice.reason : null;
+      this.modelNote = isAutoModel ? visionChoice.reason : null;
     }
     const attachmentIds: string[] = [];
     for (const item of staged) {
@@ -2167,11 +2174,12 @@ export class DesktopSession {
         ...(useOpenRouter ? { spendCapUsd: openRouterSelection!.maxUsd } : {}),
         selectionReason: useOpenRouter
           ? 'Operator explicitly selected OpenRouter for this submit'
-          : `Configured local Ollama chat model from ${this.provider!.source}`,
+          : `Operator explicitly selected local model ${model} (${this.provider!.source}); no substitution`,
         suitabilitySummary: useOpenRouter
           ? `Using OpenRouter ${model} with a $${openRouterSelection!.maxUsd} cap. No fallback.`
           : `Using local ${model}. Cloud fallback is disabled.`,
-        userOverrode: Boolean(useOpenRouter),
+        // Any explicit (non-Auto) selection is the operator's choice, local Ollama included: Core must never reroute or substitute it.
+        userOverrode: true,
         candidates: [{
           provider: selectedProvider,
           model,
@@ -2490,7 +2498,7 @@ export class DesktopSession {
         routingPolicy: 'local-only',
         selectionReason: 'Quick question asked while a task is working: same local model, answered alongside it',
         suitabilitySummary: `Using local ${model}. Cloud fallback is disabled.`,
-        userOverrode: false,
+        userOverrode: this.operatorSelectedModel !== AUTO_MODEL,
         candidates: [{ provider: 'ollama', model, available: true, capable: true, costRank: 1, rejectionReasons: [] }],
         escalationCandidates: [],
       },
@@ -3946,7 +3954,7 @@ export class DesktopSession {
     this.active = {
       attemptId,
       requestId,
-      conversationId: this.voiceConversationId ?? `image_${Date.now()}`,
+      conversationId: this.voiceConversationId ?? `${PLACEHOLDER_CONVERSATION_PREFIX}${Date.now()}`,
       goal: text,
       tokenBuffer: '',
       terminal: false,
@@ -4017,7 +4025,7 @@ export class DesktopSession {
       this.turnOutcomeKind = 'failed';
       // Show the actual reason in the conversation, not just a "Failed" label.
       const failureText = `I couldn't generate the image: ${(err as Error).message}`;
-      if (!this.active.conversationId.startsWith('image_')) await this.recordConversationMessage(this.active.conversationId, 'assistant', failureText);
+      if (!isPlaceholderConversationId(this.active.conversationId)) await this.recordConversationMessage(this.active.conversationId, 'assistant', failureText);
       this.emit({ kind: 'result', at: nowIso(), requestId, attemptId, summary: 'Image Generation Studio', text: failureText, clientOrigin });
       this.emit({
         kind: 'error',

@@ -7712,14 +7712,24 @@ function renderTaskCardSteps(cockpit, running, awaitingApproval = false) {
   }));
 }
 
+/**
+ * Elapsed time for the task card. Ticks from the real start time only while the task is actually running;
+ * a finished (or waiting) task keeps the runtime it had instead of counting on forever. Never negative or NaN,
+ * and never longer than the mission's absolute budget.
+ */
+function taskCardElapsedMs(cockpit, now) {
+  const reported = Number(cockpit?.elapsedMs);
+  const frozen = Number.isFinite(reported) ? Math.max(0, reported) : 0;
+  if (!cockpit || cockpit.terminal || !cockpit.running) return frozen;
+  const startedAt = cockpit.startedAt ? Date.parse(cockpit.startedAt) : NaN;
+  if (!Number.isFinite(startedAt)) return frozen;
+  return Math.max(0, now - startedAt);
+}
+
 /** Elapsed time, ticked from the attempt's real start time. */
 function updateTaskCardElapsed(snapshot) {
   if (!taskCardElapsed) return;
-  const cockpit = snapshot?.cockpit;
-  const startedAt = cockpit?.startedAt ? Date.parse(cockpit.startedAt) : NaN;
-  const elapsed = Number.isFinite(startedAt)
-    ? Math.max(0, Date.now() - startedAt)
-    : Number(cockpit?.elapsedMs ?? 0);
+  const elapsed = taskCardElapsedMs(snapshot?.cockpit, Date.now());
   const text = formatClock(elapsed);
   if (taskCardElapsed.textContent !== text) taskCardElapsed.textContent = text;
 }

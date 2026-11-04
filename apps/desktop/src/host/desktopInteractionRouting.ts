@@ -3,6 +3,14 @@
  * Pure helpers — unit-tested; used by desktopSession.submitTask and renderer.
  */
 
+import { hasSoftwareBuildIntent } from '../../../../core/domain/softwareIntent';
+
+/** Host-side stand-in id used before Core has created a conversation (image/video turns). It is never a Core conversation. */
+export const PLACEHOLDER_CONVERSATION_PREFIX = 'image_';
+export function isPlaceholderConversationId(id: string | null | undefined): boolean {
+  return typeof id === 'string' && id.startsWith(PLACEHOLDER_CONVERSATION_PREFIX);
+}
+
 export type DesktopInteractionMode = 'chat' | 'local_core' | 'mission';
 export type DesktopTurnOutcome = 'completed' | 'failed' | 'cancelled';
 export type DesktopRequestedMode = 'baat_kar' | 'saath_kar';
@@ -57,6 +65,8 @@ const IMAGE_GENERATION_IMAGINE_REFERENT = /\bimagine\b[\s\S]*?\b(generate|draw|p
 export function detectImageGenerationIntent(text: string): boolean {
   const trimmed = text.trim();
   if (!trimmed) return false;
+  // "Build an app that generates images" is software work: the build intent always wins over media keywords.
+  if (hasSoftwareBuildIntent(trimmed)) return false;
   if (IMAGE_GENERATION_IMAGINE_REFERENT.test(trimmed)) return true;
   return IMAGE_GENERATION_VERB.test(trimmed) && IMAGE_GENERATION_NOUN.test(trimmed);
 }
@@ -79,6 +89,7 @@ export type MediaFollowUp =
 export function detectImageFollowUp(text: string): MediaFollowUp | null {
   const t = text.trim();
   if (!t) return null;
+  if (hasSoftwareBuildIntent(t)) return null;
   if (ANIMATE_REQUEST.test(t)) return { kind: 'animate' };
   if (VARIATIONS_REQUEST.test(t)) {
     const m = /\b(\d+|one|two|three|four|couple)\b\s+(?:more\s+)?(?:variations?|versions|alternatives|variants)/i.exec(t);
@@ -91,7 +102,8 @@ export function detectImageFollowUp(text: string): MediaFollowUp | null {
 }
 
 export function detectVideoGenerationIntent(text: string): boolean {
-  return VIDEO_REQUEST.test(text.trim());
+  const t = text.trim();
+  return !hasSoftwareBuildIntent(t) && VIDEO_REQUEST.test(t);
 }
 
 /** "Generate a short cinematic clip of X" → "cinematic, X". */
