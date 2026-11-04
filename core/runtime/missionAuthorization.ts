@@ -184,6 +184,101 @@ export function buildMissionEnvelope(input: {
   };
 }
 
+/** The action class that lets a mission envelope cover chat `write_file` calls. Only `buildWorkspaceWriteEnvelope` sets it. */
+export const WORKSPACE_WRITE_ACTION_CLASS = 'write_file for in-scope text files';
+export const WORKSPACE_WRITE_LIMITS: MissionFileLimits = {
+  maxFiles: 64,
+  maxBytesPerFile: 512 * 1024,
+  maxTotalBytes: 8 * 1024 * 1024,
+};
+
+/**
+ * The envelope a chat turn asks the human to authorize before its first write in the selected workspace. It covers
+ * text-file writes inside that one folder for that one turn, within its limits, and nothing else: commands, commits,
+ * delegation and every path outside the folder keep their own approval.
+ */
+export function buildWorkspaceWriteEnvelope(input: { workspaceRoot: string; objective: string; model: string }): MissionAuthorizationEnvelope {
+  const resolvedPath = path.resolve(input.workspaceRoot);
+  return {
+    version: 1,
+    repository: path.basename(resolvedPath),
+    resolvedPath,
+    objective: input.objective.trim().slice(0, 2_000),
+    model: input.model.trim(),
+    routingPolicy: 'local-only',
+    allowedMutationScope: ['create or modify text files inside the selected workspace folder, for this task only'],
+    allowedActionClasses: [WORKSPACE_WRITE_ACTION_CLASS],
+    fileChangeLimits: { ...WORKSPACE_WRITE_LIMITS },
+    frozenEdits: [],
+    validationPlan: 'Commands, tests and builds keep their own approval under the conversation permission mode.',
+    browserVerificationPlan: 'None.',
+    deliveryPolicy: 'No commit, push or delivery is authorized by this envelope.',
+    deniedCapabilities: [
+      'paths outside the workspace folder',
+      'symlink, junction or parent-directory escape',
+      '.git/** and .karkedikha/**',
+      'credentials, secrets and environment files',
+      'binary or oversized files',
+      'deletion or rename',
+      'commands, installs, network access and delegation to other agents',
+    ],
+    pushAuthorized: false,
+    networkAuthorized: false,
+    installAuthorized: false,
+  };
+}
+
+/**
+ * Where `relativePath` really lands once symlinks and junctions are resolved: the nearest existing ancestor (and the
+ * file itself when it exists) must resolve inside the real workspace root, and the file must not itself be a link.
+ */
+export function realPathInside(workspaceRoot: string, relativePath: string): { ok: true } | { ok: false; reason: string } {
+  let realRoot: string;
+  try {
+    realRoot = fs.realpathSync.native(workspaceRoot);
+  } catch {
+    return { ok: false, reason: 'the workspace folder could not be resolved' };
+  }
+  const target = path.resolve(workspaceRoot, relativePath);
+  try {
+    if (fs.lstatSync(target).isSymbolicLink()) return { ok: false, reason: 'the file is a symbolic link' };
+  } catch {
+    // Does not exist yet: its nearest existing ancestor decides where it lands.
+  }
+  let probe = target;
+  while (!fs.existsSync(probe)) {
+    const parent = path.dirname(probe);
+    if (parent === probe) return { ok: false, reason: 'the path could not be resolved' };
+    probe = parent;
+  }
+  let real: string;
+  try {
+    real = fs.realpathSync.native(probe);
+  } catch {
+    return { ok: false, reason: 'the path could not be resolved' };
+  }
+  if (!isInsideWorkspace(realRoot, real)) {
+    return { ok: false, reason: 'the path resolves outside the workspace through a symbolic link or junction' };
+  }
+  if (['.git', '.karkedikha'].some((dir) => isInsideWorkspace(path.join(realRoot, dir), real))) {
+    return { ok: false, reason: 'the path resolves into a protected folder through a symbolic link or junction' };
+  }
+  return { ok: true };
+}
+
+/** Why an absolute write target outside any write envelope must never be written, even with a per-file approval. */
+export function protectedWriteReason(absolutePath: string): string | null {
+  const p = path.resolve(absolutePath);
+  if (isHostOwnedSearchPath(p) || PROTECTED_PATH_RE.test(p)) return 'host-owned or protected path is not authorized';
+  if (SECRET_NAME_RE.test(p)) return 'credentials, secrets, or environment files are not authorized';
+  try {
+    if (fs.lstatSync(p).isSymbolicLink()) return 'the file is a symbolic link';
+  } catch {
+    // Does not exist yet.
+  }
+  return null;
+}
+
 export function formatMissionEnvelopeCard(envelope: MissionAuthorizationEnvelope, digest: string): string {
   return [
     `Repository: ${envelope.repository}`,
@@ -300,6 +395,8 @@ export function evaluateMissionAction(input: {
   arguments: Record<string, unknown>;
   usedFiles?: number;
   usedBytes?: number;
+  /** write_file only: lower-cased workspace-relative paths this authorization already wrote. */
+  writtenPaths?: string[];
 }): MissionPolicyResult {
   const { envelope, toolName } = input;
   if (toolName === AUTHORIZE_MISSION_TOOL) {
@@ -374,6 +471,32 @@ export function evaluateMissionAction(input: {
     return review('anchored edit does not match an edit explicitly frozen in the mission authorization with a still-current baseline; human diff review is required', {
       normalizedPath: page.relative, contentBytes: bytes, contentDigest: editDigest,
     });
+  }
+  if (toolName === 'write_file') {
+    // Only an envelope built for chat writes covers them; the repository mission envelope never does.
+    if (!envelope.allowedActionClasses.includes(WORKSPACE_WRITE_ACTION_CLASS)) {
+      return review('this mission authorization does not cover write_file');
+    }
+    const content = input.arguments.content;
+    if (typeof content !== 'string') return deny('write_file requires text content');
+    const page = normalizeRelativePath(String(input.arguments.path ?? ''), envelope.resolvedPath);
+    if (!page.ok) return deny(page.reason, { normalizedPath: String(input.arguments.path ?? '') });
+    const real = realPathInside(envelope.resolvedPath, page.relative);
+    if (!real.ok) return deny(real.reason, { normalizedPath: page.relative });
+    if (BINARY_EXT_RE.test(page.relative) || content.includes('\u0000')) {
+      return deny('binary or non-text changes are not authorized', { normalizedPath: page.relative });
+    }
+    const bytes = Buffer.byteLength(content, 'utf8');
+    const digest = contentDigest(content);
+    const facts = { normalizedPath: page.relative, contentBytes: bytes, contentDigest: digest };
+    // Over a limit is not forbidden, only no longer pre-authorized: that one write goes to the human.
+    if (bytes > envelope.fileChangeLimits.maxBytesPerFile) return review('the file is larger than the authorized per-file limit', facts);
+    const written = input.writtenPaths ?? [];
+    if (!written.includes(page.relative.toLowerCase()) && written.length >= envelope.fileChangeLimits.maxFiles) {
+      return review('the authorized file-count limit for this task is reached', facts);
+    }
+    if ((input.usedBytes ?? 0) + bytes > envelope.fileChangeLimits.maxTotalBytes) return review('the authorized total-size limit for this task is reached', facts);
+    return allow('the write is inside the workspace folder and limits explicitly authorized for this task', facts);
   }
   if (toolName !== 'propose_file_change') {
     return review(`action '${toolName}' cannot be matched deterministically to the frozen envelope`);
@@ -605,7 +728,9 @@ export function evaluateAuthorizedDispatch(db: CoreDatabase, input: {
   if (!authorization || authorization.status !== 'authorized') {
     return review('no frozen mission authorization is in force');
   }
-  const usage = usageForAuthorization(db, authorization.id);
+  const usage: { usedFiles: number; usedBytes: number; writtenPaths?: string[] } = input.toolName === 'write_file'
+    ? writeUsageForAuthorization(db, authorization.id)
+    : usageForAuthorization(db, authorization.id);
   return {
     ...evaluateMissionAction({
       envelope: authorization.envelope,
@@ -613,7 +738,34 @@ export function evaluateAuthorizedDispatch(db: CoreDatabase, input: {
       arguments: input.arguments,
       usedFiles: usage.usedFiles,
       usedBytes: usage.usedBytes,
+      writtenPaths: usage.writtenPaths,
     }),
     authorization,
   };
+}
+
+/** write_file usage: distinct files (rewriting one file is not a new file) and total bytes written. */
+function writeUsageForAuthorization(db: CoreDatabase, authorizationId: string): { usedFiles: number; usedBytes: number; writtenPaths: string[] } {
+  const rows = db.all<{ normalizedPath: string | null; contentBytes: number | null }>(
+    `SELECT normalizedPath, contentBytes FROM mission_authorized_actions
+     WHERE authorizationId = ? AND action = 'write_file' AND policyDecision = 'auto_authorize'`,
+    [authorizationId],
+  );
+  const writtenPaths = [...new Set(rows.map((r) => String(r.normalizedPath ?? '').toLowerCase()).filter(Boolean))];
+  return { usedFiles: writtenPaths.length, usedBytes: rows.reduce((sum, r) => sum + Number(r.contentBytes ?? 0), 0), writtenPaths };
+}
+
+/**
+ * Creates the pending authorization row for a chat turn's write envelope (one per attempt). The approval card is the
+ * caller's ordinary approval request; resolving it marks this row through `resolveCapabilityApproval`.
+ */
+export function createPendingMissionAuthorization(db: CoreDatabase, attemptId: string, envelope: MissionAuthorizationEnvelope): MissionAuthorizationRecord {
+  const existing = getMissionAuthorization(db, attemptId);
+  if (existing) return existing;
+  db.run(
+    `INSERT INTO mission_authorizations (id, attemptId, digest, envelopeJson, status, createdAt)
+     VALUES (?, ?, ?, ?, 'pending', ?)`,
+    [newId('mauth'), attemptId, missionEnvelopeDigest(envelope), JSON.stringify(envelope), nowIso()],
+  );
+  return getMissionAuthorization(db, attemptId)!;
 }

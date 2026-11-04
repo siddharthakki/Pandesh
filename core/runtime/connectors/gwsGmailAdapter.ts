@@ -28,6 +28,7 @@
 import * as path from 'node:path';
 import type { ConnectorExecutor, ConnectorPrepare, ConnectorProbe } from './connectorCapability';
 import { analyzeInbox, applyPlan, planChanges, prepareOrganizeAction, undoPlan, type GmailOrganizeStore, type OrganizeEnv } from './gmailOrganize';
+import { createTask, nextBatch, settleTaskBatch, taskStatus, type GmailTaskStore } from './gmailTask';
 import type { ToolExecutionResult } from '../toolRunner';
 import {
   GWS_PINNED_SHA256_WINDOWS_X64,
@@ -82,7 +83,11 @@ export interface GwsGmailAdapterConfig {
   bindings: GwsGmailDraftBindingStore;
   /** Inbox organization (analysis, bulk preview, approved label changes, undo). Absent = those tools report not available. */
   organize?: {
+    /** What the user may be told about notifications right now (from the delivery outbox); absent = nothing verified. */
+    notifyCapability?: () => { canNotify: boolean; statement: string };
     store: GmailOrganizeStore;
+    /** Durable multi-batch tasks. Absent = the task tools report not available. */
+    tasks?: GmailTaskStore;
     /** True only when Google granted gmail.modify for the current token. */
     hasModifyScope: () => boolean;
     onProgress?: OrganizeEnv['onProgress'];
@@ -100,6 +105,8 @@ export interface GwsGmailAdapterConfig {
   runGwsFn?: typeof runGws;
   /** User's IANA zone for rendering message times. Defaults to the host's. */
   timeZone?: () => string;
+  /** Rate-limit wait. Tests only. */
+  sleepMs?: CallDeps['sleepMs'];
 }
 
 export function resolveBinary(config: GwsGmailAdapterConfig): { ok: true; path: string } | { ok: false; reason: string } {
@@ -129,11 +136,54 @@ export interface CallDeps {
   timeoutMs?: number;
   runGwsFn: typeof runGws;
   timeZone?: string;
+  /** Waits between rate-limit retries. Tests only; production sleeps for real. */
+  sleepMs?: (ms: number, signal?: AbortSignal) => Promise<void>;
 }
 
 export type GwsCallOutcome = { ok: true; data: unknown } | { ok: false; result: ToolExecutionResult };
 
+const RATE_LIMIT_SIGNAL = /\b429\b|rateLimitExceeded|userRateLimitExceeded|too many requests/i;
+const RATE_LIMIT_ATTEMPTS = 4;
+/** Longest wait done inside one call. A longer Retry-After is returned to the caller to schedule instead of blocking the turn. */
+const RATE_LIMIT_MAX_INLINE_WAIT_MS = 30_000;
+
+/** Google reports the wait either as "Retry-After: 12" or as "Retry after 2026-11-03T10:00:00.000Z". Null when absent. */
+export function parseRetryAfterMs(text: string, nowMs: number): number | null {
+  const stamp = /retry[- ]after[:\s]+(\d{4}-\d\d-\d\dT[\d:.]+Z)/i.exec(text);
+  if (stamp) {
+    const at = Date.parse(stamp[1]);
+    if (Number.isFinite(at)) return Math.max(0, at - nowMs);
+  }
+  const seconds = /retry[- ]after[:\s]+(\d+(?:\.\d+)?)\b(?!-)/i.exec(text);
+  return seconds ? Math.round(Number(seconds[1]) * 1000) : null;
+}
+
+function defaultSleep(ms: number, signal?: AbortSignal): Promise<void> {
+  return new Promise((resolve) => {
+    const timer = setTimeout(resolve, ms);
+    signal?.addEventListener('abort', () => { clearTimeout(timer); resolve(); }, { once: true });
+  });
+}
+
+/** Retries a call that Google rate-limited, honouring Retry-After, with backoff when none is given. */
 export async function callGws(deps: CallDeps, args: string[], resultCategoryOnFailure: string, options: { allowEmptyOutput?: boolean } = {}): Promise<GwsCallOutcome> {
+  let outcome = await callGwsOnce(deps, args, resultCategoryOnFailure, options);
+  for (let attempt = 1; attempt < RATE_LIMIT_ATTEMPTS && !outcome.ok && RATE_LIMIT_SIGNAL.test(outcome.result.output); attempt += 1) {
+    const requested = parseRetryAfterMs(outcome.result.output, Date.now());
+    const waitMs = requested ?? Math.min(RATE_LIMIT_MAX_INLINE_WAIT_MS, 1000 * 2 ** (attempt - 1) + Math.floor(Math.random() * 250));
+    if (waitMs > RATE_LIMIT_MAX_INLINE_WAIT_MS) break;
+    await (deps.sleepMs ?? defaultSleep)(waitMs, deps.signal);
+    if (deps.signal?.aborted) return { ok: false, result: { status: 'failed', exitCode: null, output: 'cancelled', resultCategory: 'gws_cancelled' } };
+    outcome = await callGwsOnce(deps, args, resultCategoryOnFailure, options);
+  }
+  if (!outcome.ok && RATE_LIMIT_SIGNAL.test(outcome.result.output)) {
+    const retryAfterMs = parseRetryAfterMs(outcome.result.output, Date.now());
+    return { ok: false, result: { ...outcome.result, resultCategory: 'gws_rate_limited', output: `${outcome.result.output}${retryAfterMs !== null ? ` [retryAfterMs=${retryAfterMs}]` : ''}` } };
+  }
+  return outcome;
+}
+
+async function callGwsOnce(deps: CallDeps, args: string[], resultCategoryOnFailure: string, options: { allowEmptyOutput?: boolean }): Promise<GwsCallOutcome> {
   const result = await deps.runGwsFn({
     binaryPath: deps.binaryPath,
     args,
@@ -587,7 +637,7 @@ export function createGwsGmailProbe(config: GwsGmailAdapterConfig): ConnectorPro
   };
 }
 
-const GMAIL_TOOL_NAMES = new Set(['gmail_search', 'gmail_read_thread', 'gmail_read_attachment', 'gmail_create_draft', 'gmail_send_draft', 'gmail_analyze_inbox', 'gmail_plan_changes', 'gmail_apply_plan', 'gmail_undo_plan']);
+const GMAIL_TOOL_NAMES = new Set(['gmail_search', 'gmail_read_thread', 'gmail_read_attachment', 'gmail_create_draft', 'gmail_send_draft', 'gmail_analyze_inbox', 'gmail_plan_changes', 'gmail_apply_plan', 'gmail_undo_plan', 'gmail_create_task', 'gmail_task_next_batch', 'gmail_task_status']);
 
 function organizeEnv(config: GwsGmailAdapterConfig, deps: CallDeps, accountEmail: string): OrganizeEnv {
   return {
@@ -597,6 +647,7 @@ function organizeEnv(config: GwsGmailAdapterConfig, deps: CallDeps, accountEmail
     hasModifyScope: config.organize!.hasModifyScope,
     ...(config.organize!.onProgress ? { onProgress: config.organize!.onProgress } : {}),
     ...(config.organize!.now ? { nowMs: config.organize!.now } : {}),
+    ...(config.organize!.tasks ? { afterPlanSettled: (plan, event, detail) => settleTaskBatch(config.organize!.tasks!, config.organize!.now ?? Date.now, plan, event, detail) } : {}),
   };
 }
 
@@ -639,6 +690,7 @@ export function createGwsGmailExecutor(config: GwsGmailAdapterConfig): Connector
       timeoutMs: config.timeoutMs,
       runGwsFn: config.runGwsFn ?? runGws,
       timeZone: config.timeZone?.() ?? (Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC'),
+      ...(config.sleepMs ? { sleepMs: config.sleepMs } : {}),
     };
     try {
       switch (toolName) {
@@ -655,13 +707,21 @@ export function createGwsGmailExecutor(config: GwsGmailAdapterConfig): Connector
         case 'gmail_analyze_inbox':
         case 'gmail_plan_changes':
         case 'gmail_apply_plan':
-        case 'gmail_undo_plan': {
+        case 'gmail_undo_plan':
+        case 'gmail_create_task':
+        case 'gmail_task_next_batch':
+        case 'gmail_task_status': {
           if (!config.organize) return { status: 'failed', exitCode: null, output: 'Inbox organization is not available in this build; no action was taken', resultCategory: 'connector_not_implemented' };
           const env = organizeEnv(config, deps, accountEmail);
           if (toolName === 'gmail_analyze_inbox') return await analyzeInbox(args, env);
           if (toolName === 'gmail_plan_changes') return await planChanges(args, env);
           if (toolName === 'gmail_apply_plan') return await applyPlan(args, env);
-          return await undoPlan(args, env);
+          if (toolName === 'gmail_undo_plan') return await undoPlan(args, env);
+          if (!config.organize.tasks) return { status: 'failed', exitCode: null, output: 'Gmail tasks are not available in this build; no action was taken', resultCategory: 'connector_not_implemented' };
+          const taskEnv = { ...env, tasks: config.organize.tasks, ...(config.organize.notifyCapability ? { notifyCapability: config.organize.notifyCapability } : {}) };
+          if (toolName === 'gmail_create_task') return await createTask(args, taskEnv);
+          if (toolName === 'gmail_task_next_batch') return await nextBatch(args, taskEnv);
+          return await taskStatus(args, taskEnv);
         }
         default:
           return { status: 'failed', exitCode: null, output: `unreachable: '${toolName}'`, resultCategory: 'gws_not_allowlisted' };

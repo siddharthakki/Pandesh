@@ -3,6 +3,7 @@ import type { ConversationRecord, ConversationMode, ConversationMessageRecord, M
 import { CoreError } from './errors';
 import { newId, nowIso } from './ids';
 import { recordRuntimeEvent } from './runtimeEvents';
+import { stripReasoningMarkers } from '../runtime/reasoningMarkers';
 
 export interface CreateConversationInput {
   mode: ConversationMode;
@@ -228,7 +229,9 @@ export interface AppendMessageInput {
  * route) — this is the durable substitute for the old file-based SessionStore
  * transcript, now Core-owned and shared across VS Code windows.
  */
-export function appendMessage(db: CoreDatabase, conversationId: string, input: AppendMessageInput): ConversationMessageRecord {
+export function appendMessage(db: CoreDatabase, conversationId: string, rawInput: AppendMessageInput): ConversationMessageRecord {
+  // A model's raw thought/channel markers are never part of what the operator is shown or what is stored.
+  const input = rawInput.role === 'assistant' ? { ...rawInput, content: stripReasoningMarkers(rawInput.content) } : rawInput;
   if (input.content.length > MAX_MESSAGE_CHARS) {
     throw new CoreError('invalid_request', `message content exceeds ${MAX_MESSAGE_CHARS} characters`);
   }

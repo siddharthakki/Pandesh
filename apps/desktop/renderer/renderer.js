@@ -929,12 +929,6 @@ function updatePandaAvatar(coreState, snapshot) {
   if (heroReactor) {
     heroReactor.dataset.presence = state;
   }
-
-  // The approved PAN-DA artwork is the only mascot image; states are CSS
-  // light/motion over it, driven by real runtime state.
-  if (pandaAvatar.getAttribute('src') !== 'assets/pan-da-hero.png') {
-    pandaAvatar.src = 'assets/pan-da-hero.png';
-  }
 }
 
 function updateCoreReactor(coreState, snapshot) {
@@ -4191,6 +4185,7 @@ function updateContextualWorkbenchTabs(snapshot) {
 }
 
 function renderSnapshot(snapshot) {
+  try { renderPermission(snapshot); } catch (err) { console.warn('[permission] render failed', err); }
   if (!snapshot) return;
   const previousOutcome = lastSnapshot?.lastTurnOutcome ?? null;
   const previousRunning = Boolean(lastSnapshot?.running);
@@ -4447,6 +4442,133 @@ inferenceProvider?.addEventListener('change', async () => {
     await refresh();
     showOperationError(err);
   }
+});
+
+// --- Chat permission mode (Ask / Auto / Plan only). Core stores and enforces it; this only shows and chooses. ---
+const permissionSelect = document.getElementById('permission-mode-select');
+const permissionPanel = document.getElementById('permission-panel');
+const permissionScope = document.getElementById('permission-scope');
+const permissionGrant = document.getElementById('permission-grant');
+const permissionCategories = document.getElementById('permission-categories');
+const permissionExpiry = document.getElementById('permission-expiry');
+const PERMISSION_LABELS = { ask: 'Ask permission', auto: 'Auto (governed)', plan: 'Plan only' };
+const WORKSPACE_PERMISSION_CATEGORIES = new Set(['workspace_read_commands', 'workspace_validation', 'workspace_git_commit', 'workspace_inspect_page']);
+
+function permissionTime(iso) {
+  try { return new Date(iso).toLocaleString([], { weekday: 'short', hour: '2-digit', minute: '2-digit' }); } catch { return iso; }
+}
+
+function permissionLine(parts) {
+  const line = document.createElement('div');
+  for (const part of parts) {
+    if (typeof part === 'string') line.append(part);
+    else line.append(part);
+  }
+  return line;
+}
+
+function strong(text) {
+  const b = document.createElement('b');
+  b.textContent = text;
+  return b;
+}
+
+function renderPermission(snapshot) {
+  const p = snapshot?.permission;
+  if (!permissionSelect || !p) return;
+  if (permissionGrant?.hidden !== false) permissionSelect.value = p.mode;
+  permissionSelect.dataset.mode = p.mode;
+  const lines = [];
+  if (p.activeTurnMode && p.activeTurnMode !== p.mode) {
+    lines.push(permissionLine(['The running task keeps ', strong(PERMISSION_LABELS[p.activeTurnMode]), ', fixed when it started; your change applies to the next message.']));
+  } else if (p.activeTurnMode) {
+    lines.push(permissionLine(['This task runs in ', strong(PERMISSION_LABELS[p.activeTurnMode]), ' mode.']));
+  }
+  if (p.mode === 'plan') lines.push(permissionLine([strong('Plan only:'), ' Pandesh researches and plans. Nothing is created, changed, sent or run.']));
+  if (p.mode === 'auto') {
+    if (p.authorizations.length === 0) lines.push(permissionLine([strong('Auto'), ' has no active authorization, so everything still asks you.']));
+    for (const a of p.authorizations) {
+      const where = a.workspaceRoot ? ` in ${a.workspaceRoot}` : '';
+      const scripts = a.pinnedScripts?.length ? ` (pinned npm scripts: ${a.pinnedScripts.join(', ')})` : '';
+      const revoke = document.createElement('button');
+      revoke.type = 'button';
+      revoke.dataset.revoke = a.id;
+      revoke.textContent = 'Revoke';
+      const list = document.createElement('ul');
+      for (const c of a.categories) {
+        const li = document.createElement('li');
+        li.textContent = p.categories?.[c] || c;
+        list.append(li);
+      }
+      lines.push(permissionLine([strong('Auto'), ` until ${permissionTime(a.expiresAt)}${where}${scripts}`, revoke, list]));
+    }
+  }
+  if (p.pending) lines.push(permissionLine([strong(PERMISSION_LABELS[p.mode]), p.mode === 'auto' ? ` applies from your next message, for ${p.pendingWorkspaceRoot || 'no workspace folder'} only.` : ' applies from your next message.']));
+  if (permissionScope) permissionScope.replaceChildren(...lines);
+  if (permissionPanel) permissionPanel.hidden = lines.length === 0 && permissionGrant?.hidden !== false;
+}
+
+function openPermissionGrant(snapshot) {
+  const cats = snapshot?.permission?.categories ?? {};
+  const hasFolder = Boolean(snapshot?.folder);
+  const rows = Object.entries(cats).map(([id, text]) => {
+    const disabled = WORKSPACE_PERMISSION_CATEGORIES.has(id) && !hasFolder;
+    const label = document.createElement('label');
+    const box = document.createElement('input');
+    box.type = 'checkbox';
+    box.value = id;
+    box.disabled = disabled;
+    const span = document.createElement('span');
+    span.textContent = `${text}${disabled ? ' (select a workspace folder first)' : ''}`;
+    label.append(box, ' ', span);
+    return label;
+  });
+  permissionCategories.replaceChildren(...rows);
+  permissionGrant.hidden = false;
+  permissionPanel.hidden = false;
+}
+
+permissionSelect?.addEventListener('change', async () => {
+  showOperationError(null);
+  const mode = permissionSelect.value;
+  if (mode === 'auto') {
+    openPermissionGrant(lastSnapshot);
+    return;
+  }
+  try {
+    if (permissionGrant) permissionGrant.hidden = true;
+    renderSnapshot(await api.setPermissionMode(mode));
+  } catch (err) {
+    await refresh();
+    showOperationError(err);
+  }
+});
+
+permissionGrant?.addEventListener('submit', async (event) => {
+  event.preventDefault();
+  showOperationError(null);
+  const categories = [...permissionCategories.querySelectorAll('input:checked')].map((el) => el.value);
+  if (categories.length === 0) { showOperationError(new Error('Tick at least one thing Auto may do, or choose Ask.')); return; }
+  try {
+    const snap = await api.setPermissionMode('auto', { categories, expiresInMinutes: Number(permissionExpiry.value) });
+    permissionGrant.hidden = true;
+    renderSnapshot(snap);
+  } catch (err) {
+    await refresh();
+    showOperationError(err);
+  }
+});
+
+document.getElementById('permission-grant-cancel')?.addEventListener('click', () => {
+  permissionGrant.hidden = true;
+  renderPermission(lastSnapshot);
+});
+
+permissionScope?.addEventListener('click', async (event) => {
+  const id = event.target?.closest?.('[data-revoke]')?.getAttribute('data-revoke');
+  if (!id) return;
+  showOperationError(null);
+  try { renderSnapshot(await api.revokeAuthorization(id)); } catch (err) { showOperationError(err); }
 });
 
 modelSelect?.addEventListener('change', async () => {
@@ -6863,8 +6985,58 @@ function wireAboutPanel() {
   }
 }
 
+/** Update & Restart: the host does the work (verify, make Core safe to stop, hand over to the updater). */
+async function refreshUpdateStatus() {
+  const say = (text) => { const el = document.getElementById('update-status'); if (el) el.textContent = text; };
+  const button = document.getElementById('update-restart');
+  if (!button || typeof api.getUpdateStatus !== 'function') return;
+  try {
+    const status = await api.getUpdateStatus();
+    button.disabled = !status.available;
+    const last = status.lastResult;
+    if (!status.available) { say('Updates need the latest Pandesh installer, run once.'); return; }
+    if (last && !last.acknowledged) {
+      const labels = {
+        success: `Updated to build b${last.revision}.`,
+        rolled_back: `Update to b${last.attemptedRevision} did not start correctly and was undone. You are on b${last.revision}. ${last.reason || ''}`,
+        aborted: `Update not applied: ${last.reason || 'nothing was changed.'}`,
+        rollback_failed: `Update failed and could not be undone automatically. Run the Pandesh installer to recover. ${last.reason || ''}`,
+      };
+      say(labels[last.status] || '');
+      return; // kept until the next Update & Restart click acknowledges it
+    }
+    say(`Installed build b${status.installedRevision ?? '?'}.`);
+  } catch {
+    say('');
+  }
+}
+
+function wireUpdateControl() {
+  const button = document.getElementById('update-restart');
+  if (!button || button.dataset.updateBound || typeof api.startUpdate !== 'function') return;
+  button.dataset.updateBound = '1';
+  button.addEventListener('click', async () => {
+    const say = (text) => { const el = document.getElementById('update-status'); if (el) el.textContent = text; };
+    button.disabled = true;
+    say('Checking the update…');
+    let applying = false;
+    try {
+      void api.acknowledgeUpdateResult?.();
+      const result = await api.startUpdate();
+      applying = result.status === 'applying';
+      say(result.message);
+    } catch (err) {
+      say(`Update failed to start: ${err && err.message ? err.message : err}`);
+    } finally {
+      button.disabled = applying;
+    }
+  });
+  void refreshUpdateStatus();
+}
+
 void applyAppMetadata();
 wireAboutPanel();
+wireUpdateControl();
 wireConnectionTabs();
 void refreshConversationsRail();
 void refreshIntegrationsView();
@@ -7916,30 +8088,23 @@ function updateComposerStatus() {
  * nothing is faked: when there is no task, the task card is hidden.
  * ══════════════════════════════════════════════════════════════════════ */
 
-/** Which panda picture and label match each real runtime state. */
+/** Which label matches each real runtime state. */
 const PANDA_PRESENCE = {
-  idle: { src: 'assets/panda/mascot-idle.webp', label: 'Ready' },
-  listening: { src: 'assets/panda/mascot-idle.webp', label: 'Listening…' },
-  thinking: { src: 'assets/panda/mascot-thinking.webp', label: 'Thinking…' },
-  executing: { src: 'assets/panda/mascot-working.webp', label: 'Working…' },
-  validating: { src: 'assets/panda/mascot-working.webp', label: 'Validating…' },
-  recovering: { src: 'assets/panda/mascot-working.webp', label: 'Recovering…' },
-  creating: { src: 'assets/panda/mascot-working.webp', label: 'Creating…' },
-  waiting_for_approval: { src: 'assets/panda/action-approval.webp', label: 'Needs your approval' },
-  completed: { src: 'assets/panda/mascot-done.webp', label: 'Done' },
-  failed: { src: 'assets/panda/action-failed.webp', label: 'Needs attention' },
-  speaking: { src: 'assets/panda/mascot-excited.webp', label: 'Speaking…' },
+  idle: { label: 'Ready' },
+  listening: { label: 'Listening…' },
+  thinking: { label: 'Thinking…' },
+  executing: { label: 'Working…' },
+  validating: { label: 'Validating…' },
+  recovering: { label: 'Recovering…' },
+  creating: { label: 'Creating…' },
+  waiting_for_approval: { label: 'Needs your approval' },
+  completed: { label: 'Done' },
+  failed: { label: 'Needs attention' },
+  speaking: { label: 'Speaking…' },
 };
 
-/** The badge on the header panda: what Panda is doing right now. */
-const PANDA_ACTIVITY_BADGE = [
-  { match: /code|write|edit|patch|implement|refactor/, src: 'assets/panda/action-coding.webp' },
-  { match: /read|search|repo|file|inspect|list|find/, src: 'assets/panda/action-reading.webp' },
-  { match: /check|test|validat|verify|build/, src: 'assets/panda/action-testing.webp' },
-  { match: /review|audit/, src: 'assets/panda/action-reviewing.webp' },
-  { match: /delegat|spawn|handoff/, src: 'assets/panda/action-delegating.webp' },
-  { match: /think|plan|reason/, src: 'assets/panda/action-thinking.webp' },
-];
+/** Activity badge pictures for the header panda. None ship until there is licensed artwork, so the badge stays hidden. */
+const PANDA_ACTIVITY_BADGE = [];
 
 /** Fine-grained presence states collapse into the presence the user reads. */
 function normalizePresence(rawState) {

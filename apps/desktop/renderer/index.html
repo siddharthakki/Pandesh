@@ -266,9 +266,9 @@
 
                         <div class="panda-center-halo"></div>
 
-                        <!-- Approved Cyber Panda Artwork in Perfect Circular Luminous Core -->
+                        <!-- The panda is the project's own vector symbol (#panda-hero above); no external artwork ships. -->
                       <div class="panda-mascot-frame">
-                          <img id="panda-avatar-img" class="panda-mascot-img" src="assets/pan-da-hero.png" alt="PAN-DA, the KarkeDikha cyber panda" />
+                          <svg id="panda-avatar-img" class="panda-mascot-img" viewBox="0 0 260 260" role="img" aria-label="PAN-DA, the Pandesh panda"><use href="#panda-hero" /></svg>
                           <div class="panda-eye-glow" aria-hidden="true"><span></span><span></span></div>
                           <div class="panda-scan" aria-hidden="true"></div>
                         </div>
@@ -989,6 +989,10 @@
                 <button id="about-copy-diagnostics" type="button" class="apex-chip">Copy diagnostics</button>
                 <span id="about-copy-status" class="muted" role="status"></span>
               </div>
+              <div class="advanced-row">
+                <button id="update-restart" type="button" class="apex-chip" title="Install a Pandesh update package from this computer, then restart">Update &amp; Restart…</button>
+                <span id="update-status" class="muted" role="status" aria-live="polite"></span>
+              </div>
             </div>
             </div>
           </div>
@@ -1002,6 +1006,25 @@
       <p id="operation-error" class="composer-error" role="alert" title="Click to dismiss" hidden></p>
       <p id="composer-status" class="composer-status" aria-live="polite">Ready</p>
       <div id="composer-attachments" class="composer-attachments" aria-label="Files attached to your next message" hidden></div>
+      <div id="permission-panel" class="permission-panel" hidden>
+        <div id="permission-scope" class="permission-scope" aria-live="polite"></div>
+        <form id="permission-grant" class="permission-grant" hidden>
+          <p class="permission-grant-title">Auto: choose what Pandesh may do in this conversation without asking</p>
+          <div id="permission-categories" class="permission-categories"></div>
+          <label class="permission-expiry">For
+            <select id="permission-expiry">
+              <option value="60">1 hour</option>
+              <option value="480">8 hours</option>
+              <option value="1440">24 hours</option>
+            </select>
+          </label>
+          <p class="permission-grant-note">Still asks you: outbound email and messages, purchases, payments, contracts, file edits, installs, git push, anything destructive and anything outside what you tick here.</p>
+          <div class="permission-grant-actions">
+            <button type="submit" id="permission-grant-ok">Turn on Auto</button>
+            <button type="button" id="permission-grant-cancel">Cancel</button>
+          </div>
+        </form>
+      </div>
       <div class="composer-capsule-wrap" id="composer-capsule">
         <label for="task-input" class="sr-only">Instruction or query for Pandesh</label>
         <textarea
@@ -1025,6 +1048,11 @@
           </div>
 
           <div class="composer-foot-right">
+            <select id="permission-mode-select" class="apex-chip apex-select composer-model-select composer-permission-select" title="Permission mode: what Pandesh may do without asking you" aria-label="Permission mode">
+              <option value="ask">Ask permission</option>
+              <option value="auto">Auto (governed)</option>
+              <option value="plan">Plan only</option>
+            </select>
             <select id="model-select" class="apex-chip apex-select composer-model-select" title="Active local model"></select>
             <span id="composer-provider-name" class="composer-provider">Local</span>
             <div class="composer-actions">

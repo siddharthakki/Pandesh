@@ -6271,3 +6271,16 @@ header.apex-hud-top .topbar-status-controls { min-width: 0; flex-shrink: 1; }
 .dev-story, #dev-stories-list { min-width: 0; max-width: 100%; box-sizing: border-box; }
 .dev-story-approval { min-width: 0; }
 .dev-story-approval code { flex: 1 1 100%; }
+
+/* Chat permission mode (Ask / Auto / Plan only). Core enforces it; this only shows and chooses. */
+.composer-permission-select { max-width: 9.5rem; }
+.composer-permission-select[data-mode="auto"] { color: var(--panda-accent, #4fd1c5); }
+.composer-permission-select[data-mode="plan"] { color: var(--panda-warning, #f6ad55); }
+.permission-panel { margin: 0 0 6px; padding: 8px 10px; border-radius: 10px; font-size: 0.78rem; color: var(--panda-text-faint); background: rgba(127, 127, 127, 0.08); }
+.permission-scope ul { margin: 4px 0 0; padding-left: 18px; }
+.permission-scope button { margin-left: 8px; font-size: 0.72rem; }
+.permission-grant-title { margin: 0 0 6px; font-weight: 600; }
+.permission-categories label { display: block; margin: 2px 0; }
+.permission-categories input:disabled + span { opacity: 0.5; }
+.permission-grant-note { margin: 6px 0; }
+.permission-grant-actions button { margin-right: 8px; }

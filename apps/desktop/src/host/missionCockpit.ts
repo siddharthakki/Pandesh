@@ -221,6 +221,15 @@ function coalesceCheckpoints(events: readonly DesktopActivityEvent[], nowMs: num
       continue;
     }
 
+    // Core decided under the turn's permission mode: shown as Core's decision, never as a click by the user.
+    if (/^Auto: .+ authorized by standing authorization/.test(event.summary)) {
+      push({ id: `auth-policy:${event.at}`, at: event.at, title: 'Authorized by standing authorization', detail: event.summary, outcome: 'ok' });
+      continue;
+    }
+    if (/^Plan Only: /.test(event.summary)) {
+      push({ id: `plan-only:${event.at}`, at: event.at, title: 'Blocked by Plan Only', detail: event.summary });
+      continue;
+    }
     if (/Waiting for .+ approval/.test(event.summary) || event.kind === 'approval') {
       push({ id: `auth:${event.at}`, at: event.at, title: 'Waiting for authorization', detail: event.summary });
       continue;

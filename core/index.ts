@@ -38,6 +38,7 @@ import { latestSequence } from './domain/events';
 import type { CoreInfo } from './shared/wireTypes';
 import { CORE_API_VERSION } from './shared/wireTypes';
 import { hashCoreBundle } from './runtime/coreBundle';
+import { drainWrites } from './runtime/updateGate';
 import type { CoreDatabase } from './db/connection';
 import { LocalAutonomySecurityKernel } from './security/kernel';
 import { GovernedCapabilityRegistry, createWorkspaceCapabilityAdapter } from './runtime/governedCapability';
@@ -54,7 +55,9 @@ import { createGwsGmailProbe, createGwsGmailExecutor, createGwsGmailPrepare, def
 import { getGmailAccessToken, getGmailAccountEmail, googleScopeGranted } from './runtime/connectors/gmailAccessTokenStore';
 import { CALENDAR_EVENTS_SCOPE, createGwsCalendarExecutor, createGwsCalendarPrepare, createGwsCalendarProbe, defaultGwsCalendarConfigDir } from './runtime/connectors/gwsCalendarAdapter';
 import { recordGmailDraftBinding, getGmailDraftBinding } from './domain/gmailDrafts';
-import { createGmailOrganizeStore } from './domain/gmailChangePlans';
+import { createGmailOrganizeStore, createGmailTaskStore } from './domain/gmailChangePlans';
+import { terminalNotice } from './runtime/connectors/gmailTask';
+import { enqueueNotification, notificationCapability } from './domain/notificationOutbox';
 import { GMAIL_MODIFY_SCOPE } from './runtime/connectors/gmailOrganize';
 import { recordRuntimeEvent } from './domain/runtimeEvents';
 import { configureDailyBriefRoutine, getDailyBriefRoutine } from './domain/assistantRoutine';
@@ -215,6 +218,12 @@ function buildConnectorRegistry(dataDir: string, db: CoreDatabase): Map<Connecto
     bindings,
     organize: {
       store: createGmailOrganizeStore(db),
+      tasks: createGmailTaskStore(db, (task) => {
+        // A task that finished (verified in Gmail) or is stuck is the only thing worth a notification.
+        const notice = terminalNotice(task, Date.now());
+        if (notice) enqueueNotification(db, notice);
+      }),
+      notifyCapability: () => notificationCapability(db),
       // Incremental consent: inbox changes need gmail.modify, which Desktop requests only when the user opts in.
       hasModifyScope: () => googleScopeGranted(GMAIL_MODIFY_SCOPE),
       onProgress: (event) => {
@@ -495,6 +504,8 @@ async function main(): Promise<void> {
   async function shutdown(): Promise<void> {
     if (shuttingDown) return;
     shuttingDown = true;
+    // A Gmail write that has started always finishes: stop only after it has settled (bounded, so a hung call cannot block exit).
+    if (!(await drainWrites(30_000))) redactedLog('shutdown: a Gmail call was still running after 30s; continuing shutdown');
     wsHandle.close();
     await closeAllBrowserSessions();
     await api.close();

@@ -37,8 +37,12 @@ import { resolveTimeExpression, localWallTimeToIso as zonedWallToIso, utcOffsetL
 import { cancelScheduledTask, createScheduledTask, listScheduledTasks } from '../domain/scheduledTasks';
 import { transitionAttempt, failAttempt, getAttempt, settleCancelledAttempt } from '../domain/attempts';
 import { createApproval, getApproval, listApprovalsForAttempt, expireApproval } from '../domain/approvals';
+import { classifyChatToolCall, decidePermission, frozenPermissionFor, READ_ONLY_CONSENT_TOOLS, recordPermissionDecision, STANDING_AUTHORIZATION_ACTOR } from '../domain/permissionModes';
 import { recordExecutionQuality } from '../domain/executionQuality';
+import { AUTHORIZE_MISSION_TOOL, buildWorkspaceWriteEnvelope, createPendingMissionAuthorization, evaluateAuthorizedDispatch, evaluateMissionAction, getMissionAuthorization, markMissionAuthorized, markMissionRejected, protectedWriteReason, recordAuthorizedAction } from './missionAuthorization';
 import { NON_WORKSPACE_MARKERS } from '../domain/taskToolSurface';
+import { auditPromises, classifyStatusRequest, composeStatusAnswer, hasActiveWorker, hasRecentGmailWork } from './assistantStatus';
+import { notificationCapability } from '../domain/notificationOutbox';
 import { boundConversationContext, isExplicitResumeRequest, isSmallTalk, selectRelevantTask, LATEST_REQUEST_AUTHORITATIVE } from '../domain/conversationRelevance';
 import type { PowerShellRunner } from './windowsPrinting';
 import { listInstalledPrinters, resolvePrinter, submitTestPage, hasPriorPrintSubmission, isShellPrintCommand, PRINT_SUBMITTING_EVENT, PRINT_FAILED_EVENT } from './windowsPrinting';
@@ -239,7 +243,7 @@ function mutateWithBroadcast<T>(
  * could not be created at all — neither is a refusal by the user.
  */
 export type PiToolApprovalOutcome =
-  | { outcome: 'approved' }
+  | { outcome: 'approved'; approvalId?: string }
   | { outcome: 'rejected' }
   | { outcome: 'timed_out' }
   | { outcome: 'not_requested'; reason: string };
@@ -889,11 +893,49 @@ export class PiAgentEngine implements EngineAdapter {
     type ToolApprovalOutcome = PiToolApprovalOutcome;
 
     async function requestToolApproval(summary: Record<string, unknown>, timeoutMs = 15 * 60_000): Promise<ToolApprovalOutcome> {
+      // Auto: a standing authorization in force when this turn started may cover this exact action. Core decides from
+      // the actual tool and arguments; the approval is recorded as Core's, never as a person's click.
+      const toolName = String(summary.toolName ?? '');
+      const permission = decidePermission(db, {
+        attemptIds: [attemptId],
+        toolName,
+        arguments: summary,
+        mutating: !READ_ONLY_CONSENT_TOOLS.has(toolName),
+        workspaceRoot: selectedWorkspace || null,
+      });
+      if (permission.decision === 'auto_authorize') {
+        let autoApprovalId: string | undefined;
+        try {
+          mutateWithBroadcast(db, broadcaster, () => {
+            const auto = createApproval(db, {
+              attemptId,
+              kind: 'mutation',
+              summary: { ...summary, policyDecision: 'auto_authorize', policyReason: permission.reason, standingAuthorizationId: permission.authorizationId, standingAuthorizationCategory: permission.category },
+              presentation: summary,
+              actor: STANDING_AUTHORIZATION_ACTOR,
+              initialResolution: 'approved',
+              resolvedBy: STANDING_AUTHORIZATION_ACTOR,
+            });
+            recordPermissionDecision(db, { attemptId, toolName, arguments: summary, decision: permission, approvalId: auto.id });
+            autoApprovalId = auto.id;
+          });
+          return { outcome: 'approved', approvalId: autoApprovalId };
+        } catch (err: any) {
+          console.error('[piAgentEngine] Failed to record a standing-authorization approval:', err);
+          // Fall through to the ordinary card: failing to auto-authorize must never authorize anything.
+        }
+      }
+      // Auto that still needs the human says why on the card and in the audit trail (e.g. the workspace changed).
+      if (permission.mode === 'auto') {
+        const note = `Auto did not cover this: ${permission.reason}`;
+        summary = { ...summary, policyDecision: 'review', policyReason: permission.reason, ...(typeof summary.cardText === 'string' ? { cardText: `${summary.cardText}\n${note}` } : {}) };
+      }
       let approval: any;
       try {
         mutateWithBroadcast(db, broadcaster, () => {
           transitionAttempt(db, attemptId, { toStatus: 'waiting_for_approval', fenceToken, actor });
           approval = createApproval(db, { attemptId, kind: 'mutation', summary, presentation: summary, actor });
+          if (permission.mode === 'auto') recordPermissionDecision(db, { attemptId, toolName, arguments: summary, decision: permission, approvalId: approval.id });
         });
       } catch (err: any) {
         // The request never reached the user. That is a system failure, not a
@@ -919,7 +961,7 @@ export class PiAgentEngine implements EngineAdapter {
           }
         });
       } catch {}
-      if (current.status === 'approved') return { outcome: 'approved' };
+      if (current.status === 'approved') return { outcome: 'approved', approvalId: approval.id };
       if (current.status === 'rejected') return { outcome: 'rejected' };
       // Nobody answered (or the turn was stopped while waiting). Retire the card
       // so it does not linger as an actionable approval for a turn that is over,
@@ -935,6 +977,95 @@ export class PiAgentEngine implements EngineAdapter {
         });
       } catch {}
       return { outcome: 'timed_out' };
+    }
+
+    type WriteGrant =
+      | { ok: true; source: 'mission_envelope' | 'human_approval'; reason: string; approvalId?: string; mission?: { id: string; digest: string; normalizedPath?: string; contentDigest?: string; contentBytes?: number } }
+      | { ok: false; reason: string; text: string };
+
+    /**
+     * Whether this turn may write `full`, and on whose authority. Search or read consent for a folder never grants a
+     * write, and neither does an Auto standing authorization. Inside the selected workspace, the first write asks the
+     * human to authorize a write envelope for this task (Core's mission authorization); later in-scope writes within
+     * its limits need no further card. Anything else is one human approval for that exact file. Unknown fails closed.
+     */
+    async function authorizeFileWrite(full: string, content: string): Promise<WriteGrant> {
+      const notDone = (reason: string, text: string): WriteGrant => ({ ok: false, reason, text });
+      if (frozenPermissionFor(db, [attemptId]).mode === 'plan') {
+        return notDone('Plan Only', 'NOT DONE (Plan Only mode): write_file would change something, so nothing was written. Describe this step in the plan instead.');
+      }
+      const bytes = Buffer.byteLength(content, 'utf8');
+      const rel = workspaceRelative(full);
+      let reviewNote = '';
+      if (selectedWorkspace && rel !== undefined) {
+        const writeArgs = { path: rel, content };
+        const envelope = buildWorkspaceWriteEnvelope({ workspaceRoot: selectedWorkspace, objective: requestText, model: selectedModel });
+        // Out-of-scope paths are refused before anyone is asked: no card can authorize them.
+        const scope = evaluateMissionAction({ envelope, toolName: 'write_file', arguments: writeArgs });
+        if (scope.decision === 'deny') return notDone(scope.reason, `Error: "${full}" cannot be written: ${scope.reason}. Nothing was written.`);
+        let mission = getMissionAuthorization(db, attemptId);
+        if (mission?.status === 'rejected') {
+          return notDone('the user declined file changes for this task', 'Not written: the user declined file changes in this workspace for this task. Nothing was changed. Ask the user how to proceed.');
+        }
+        if (!mission || mission.status !== 'authorized') {
+          try {
+            mission = mutateWithBroadcast(db, broadcaster, () => createPendingMissionAuthorization(db, attemptId, envelope));
+          } catch (err: any) {
+            return notDone('the write authorization could not be created', `Not written: Pandesh could not create the approval request (${err?.message ?? err}). Nothing was changed.`);
+          }
+          const limits = mission.envelope.fileChangeLimits;
+          const outcome = await requestToolApproval({
+            toolName: AUTHORIZE_MISSION_TOOL,
+            arguments: { digest: mission.digest, attemptId },
+            workspaceRoot: selectedWorkspace,
+            firstFile: rel,
+            cardText: [
+              `Pandesh wants to create or change files in ${selectedWorkspace} for this task.`,
+              `If you approve, it may write text files inside this folder until this reply finishes without asking for each one (up to ${limits.maxFiles} files, ${Math.round(limits.maxBytesPerFile / 1024)} KB each, ${Math.round(limits.maxTotalBytes / (1024 * 1024))} MB in total).`,
+              'Not covered: anything outside this folder, .git and .karkedikha, secrets and .env files, binary files, deleting or renaming, and running commands (those still ask).',
+              `First file: ${rel} (${bytes} bytes). Envelope ${mission.digest.slice(0, 19)}`,
+            ].join('\n'),
+          });
+          if (outcome.outcome !== 'approved') {
+            if (outcome.outcome === 'rejected') {
+              try { mutateWithBroadcast(db, broadcaster, () => { if (getMissionAuthorization(db, attemptId)?.status === 'pending') markMissionRejected(db, attemptId, actor); }); } catch {}
+              return notDone('the user declined file changes for this task', 'Not written: the user declined file changes in this workspace for this task. Nothing was changed. Ask the user how to proceed.');
+            }
+            return notDone(`write authorization ${outcome.outcome}`, `Not written: ${outcome.outcome === 'timed_out' ? 'no answer to the file-change approval was recorded' : 'the approval request could not be created'}. Nothing was changed. The request can be made again.`);
+          }
+          try {
+            mutateWithBroadcast(db, broadcaster, () => {
+              if (getMissionAuthorization(db, attemptId)?.status !== 'authorized') markMissionAuthorized(db, attemptId, `approval:${outcome.approvalId ?? 'unknown'}`);
+            });
+          } catch {}
+        }
+        const verdict = evaluateAuthorizedDispatch(db, { attemptId, toolName: 'write_file', arguments: writeArgs });
+        if (verdict.decision === 'auto_authorize' && verdict.authorization) {
+          return {
+            ok: true, source: 'mission_envelope', reason: verdict.reason,
+            mission: { id: verdict.authorization.id, digest: verdict.authorization.digest, normalizedPath: verdict.normalizedPath, contentDigest: verdict.contentDigest, contentBytes: verdict.contentBytes },
+          };
+        }
+        if (verdict.decision === 'deny') return notDone(verdict.reason, `Error: "${full}" cannot be written: ${verdict.reason}. Nothing was written.`);
+        reviewNote = `\nNot covered by this task's file authorization: ${verdict.reason}.`;
+      } else {
+        // Outside the selected workspace a folder the user let Pandesh search is a precondition, never the authority.
+        if (!isPathAuthorized(full)) {
+          return notDone('outside every authorized folder', `Error: Path "${full}" is outside the authorized workspace. Modification denied.`);
+        }
+        const protectedReason = protectedWriteReason(full) ?? (isCredentialFilePath(full) ? 'credential files are not authorized' : null);
+        if (protectedReason) return notDone(protectedReason, `Error: "${full}" cannot be written: ${protectedReason}. Nothing was written.`);
+      }
+      const outcome = await requestToolApproval({
+        toolName: 'write_file',
+        filePath: full,
+        arguments: { path: full, bytes },
+        workspaceRoot: selectedWorkspace || null,
+        cardText: `Pandesh wants to write ${full} (${bytes} bytes):${reviewNote}\n${redactCredentialShapes(content.slice(0, 600))}`,
+      });
+      if (outcome.outcome === 'approved') return { ok: true, source: 'human_approval', reason: `the user approved writing ${full}`, approvalId: outcome.approvalId };
+      if (outcome.outcome === 'rejected') return notDone('the user declined this write', `Not written: the user did not approve writing ${full}. Nothing was changed. Ask the user how to proceed.`);
+      return notDone(`approval ${outcome.outcome}`, `Not written: ${outcome.outcome === 'timed_out' ? 'no answer to the approval request was recorded' : 'the approval request could not be created'}. Nothing was changed. The request can be made again.`);
     }
 
     function getSystemDrives(): Array<{ drive: string; accessible: boolean }> {
@@ -2052,13 +2183,14 @@ export class PiAgentEngine implements EngineAdapter {
           const full = path.isAbsolute(raw)
             ? path.resolve(raw)
             : (selectedWorkspace ? path.resolve(selectedWorkspace, raw) : path.resolve(raw));
+          const refuse = (text: string, reason: string) => {
+            safeRecordRuntimeEvent(db, broadcaster, attemptId, 'file_write_refused', { path: full, reason }, actor);
+            return { content: [{ type: 'text', text }], isError: true };
+          };
+          if (typeof args.content !== 'string') return refuse('Error: write_file needs the full text content to write. Nothing was written.', 'no text content');
 
-          if (!isPathAuthorized(full)) {
-            return {
-              content: [{ type: 'text', text: `Error: Path "${full}" is outside the authorized workspace. Modification denied.` }],
-              isError: true,
-            };
-          }
+          const grant = await authorizeFileWrite(full, args.content);
+          if (!grant.ok) return refuse(grant.text, grant.reason);
 
           try {
             let before = '';
@@ -2066,6 +2198,38 @@ export class PiAgentEngine implements EngineAdapter {
             fs.mkdirSync(path.dirname(full), { recursive: true });
             fs.writeFileSync(full, args.content, 'utf8');
             const changeView = fileActivity(full, { diff: redactCredentialShapes(unifiedDiff(before, String(args.content ?? ''), workspaceRelative(full) ?? path.basename(full))) });
+            try {
+              mutateWithBroadcast(db, broadcaster, () => {
+                if (grant.mission) {
+                  recordAuthorizedAction(db, {
+                    authorizationId: grant.mission.id,
+                    attemptId,
+                    action: 'write_file',
+                    normalizedPath: grant.mission.normalizedPath,
+                    envelopeDigest: grant.mission.digest,
+                    contentDigest: grant.mission.contentDigest,
+                    contentBytes: grant.mission.contentBytes,
+                    policyDecision: 'auto_authorize',
+                    policyReason: grant.reason,
+                  });
+                }
+                recordRuntimeEvent(db, {
+                  domain: 'attempt', entityId: attemptId, eventType: 'file_write_authorized', actor,
+                  metadata: {
+                    path: full,
+                    authorizationSource: grant.source,
+                    reason: grant.reason,
+                    mode: frozenPermissionFor(db, [attemptId]).mode,
+                    approvalId: grant.approvalId ?? null,
+                    missionAuthorizationId: grant.mission?.id ?? null,
+                    envelopeDigest: grant.mission?.digest ?? null,
+                    contentBytes: Buffer.byteLength(args.content, 'utf8'),
+                  },
+                });
+              });
+            } catch (err) {
+              console.error('[piAgentEngine] Failed to audit an authorized write:', err);
+            }
             try {
               registerArtifact(db, {
                 attemptId,
@@ -2076,7 +2240,7 @@ export class PiAgentEngine implements EngineAdapter {
                 mimeType: 'text/plain',
                 absolutePath: full,
                 source: 'pi:write_file',
-                metadata: { summary: `Modified or created file: ${args.filePath}` },
+                metadata: { summary: `Modified or created file: ${args.filePath}`, authorizationSource: grant.source },
                 actor,
               });
             } catch {}
@@ -2113,18 +2277,24 @@ export class PiAgentEngine implements EngineAdapter {
               isError: true,
             };
           }
+          // Only plain read commands (dir, git status/diff/log/show) run unasked. Anything else runs code in the workspace
+          // (tests, scripts, builds), so it needs approval, or in Auto a standing authorization Core matches to the exact
+          // command and the pinned package.json scripts. Destructive commands always ask.
           const destructive = destructiveCommandReason(String(args.command || ''));
-          if (destructive) {
+          const readOnlyCommand = !destructive && classifyChatToolCall('run_checks', { command: String(args.command || '') }, new Set(), targetDir) === 'read';
+          if (!readOnlyCommand) {
+            const risk = destructive ?? 'runs code in this workspace (tests, scripts or programs)';
             const approved = await requestToolApproval({
               toolName: 'run_checks',
               command: String(args.command),
               workingDirectory: targetDir,
-              risk: destructive,
-              cardText: `Pandesh wants to run a command that ${destructive} in ${targetDir}:\n${String(args.command).slice(0, 600)}`,
+              risk,
+              ...(destructive ? { alwaysAsk: true } : {}),
+              cardText: `Pandesh wants to run a command that ${risk} in ${targetDir}:\n${String(args.command).slice(0, 600)}`,
             });
             if (approved.outcome !== 'approved') {
               return {
-                content: [{ type: 'text', text: `Not run: the user did not approve this command (${destructive}). Nothing was changed. Ask the user how to proceed.` }],
+                content: [{ type: 'text', text: `Not run: the user did not approve this command (${risk}). Nothing was changed. Ask the user how to proceed.` }],
                 isError: true,
               };
             }
@@ -2168,9 +2338,26 @@ export class PiAgentEngine implements EngineAdapter {
               isError: true,
             };
           }
-          if (!isPathAuthorized(targetDir)) {
+          // OpenCode edits files and runs commands on its own, so it needs the selected workspace (search consent for a
+          // folder is not enough) and the human's approval for each delegation. No envelope or standing grant covers it.
+          const insideWorkspace = Boolean(selectedWorkspace) && (path.resolve(targetDir).toLowerCase() === selectedWorkspace!.toLowerCase() || workspaceRelative(path.resolve(targetDir)) !== undefined);
+          if (!insideWorkspace) {
             return {
-              content: [{ type: 'text', text: `Error: Workspace "${targetDir}" is outside authorized scope.` }],
+              content: [{ type: 'text', text: `Error: Workspace "${targetDir}" is outside authorized scope. OpenCode can only work in the selected workspace folder.` }],
+              isError: true,
+            };
+          }
+          const delegation = await requestToolApproval({
+            toolName: 'delegate_to_opencode',
+            objective: String(args.objective ?? '').slice(0, 2_000),
+            workspacePath: targetDir,
+            workspaceRoot: selectedWorkspace,
+            cardText: `Pandesh wants OpenCode to work in ${targetDir}. OpenCode can create and change files and run commands there:
+${String(args.objective ?? '').slice(0, 600)}`,
+          });
+          if (delegation.outcome !== 'approved') {
+            return {
+              content: [{ type: 'text', text: `Not delegated: ${delegation.outcome === 'rejected' ? 'the user did not approve handing this to OpenCode' : 'no approval was recorded'}. Nothing was changed. Ask the user how to proceed.` }],
               isError: true,
             };
           }
@@ -2669,6 +2856,28 @@ export class PiAgentEngine implements EngineAdapter {
       safeRecordRuntimeEvent(db, broadcaster, attemptId, 'step_finish', { step: 1, engine: 'pi', durationMs: Date.now() - startTime, outcome: 'unverified', reason: 'project_unavailable' }, actor);
       return { success: false, reply };
     }
+    // Questions about Pandesh itself (notifications, Gmail progress, running tasks, reminders) are answered from the
+    // recorded state, with no model and no workspace: a model's prose is exactly where invented progress came from.
+    const statusTopics = classifyStatusRequest(requestText, hasRecentGmailWork(db, Date.now()));
+    if (statusTopics && !projectInspection) {
+      const reply = composeStatusAnswer(db, statusTopics);
+      let replyRecord: any = null;
+      try {
+        mutateWithBroadcast(db, broadcaster, () => {
+          replyRecord = appendMessage(db, conversationId, { role: 'assistant', content: reply, actor });
+        });
+      } catch {}
+      safeRecordRuntimeEvent(db, broadcaster, attemptId, 'assistant_status_answered', { topics: statusTopics, workspace: ctx.workspaceRoot ?? null }, actor);
+      try {
+        mutateWithBroadcast(db, broadcaster, () => {
+          ensureTaskOutcome(db, { attemptId, conversationId: conversationId || null, requestId, objective: objectiveFromRequest(requestText) });
+          finalizeTaskOutcome(db, attemptId, { verdict: 'conversational', reason: 'Answered from the recorded Pandesh state; no action was taken', performed: [], refused: [], failed: [] }, { answerMessageId: replyRecord?.id ?? null });
+        });
+      } catch {}
+      try { mutateWithBroadcast(db, broadcaster, () => { transitionAttempt(db, attemptId, { toStatus: 'completed', fenceToken, actor }); }); } catch {}
+      safeRecordRuntimeEvent(db, broadcaster, attemptId, 'step_finish', { step: 1, engine: 'pi', durationMs: Date.now() - startTime, outcome: 'completed' }, actor);
+      return { success: true, reply };
+    }
     if (projectEvidence) {
       safeRecordRuntimeEvent(db, broadcaster, attemptId, 'project_context_resolved', {
         project: projectEvidence.name,
@@ -2811,7 +3020,7 @@ TRUTHFULNESS & BEHAVIORAL PROTOCOL:
 8. BRIEFINGS, REMINDERS, SCHEDULES, EMAIL & CALENDAR:
    - For a daily briefing call 'get_briefing_data' once and present what it returns as written (Top 3 priorities, Calendar, Important email, Pending decisions, Can wait, Housekeeping, Suggested next action). It already ranks by importance and separates facts from suggestions: do not re-rank by recency, do not pad it, and keep it compact unless the user asks for details (then call it again with detail=true). Do not approve, reject, dismiss, cancel or reschedule anything the housekeeping lines mention unless the user asks: 'dismiss_reminder' marks a reminder done, 'cancel_scheduled_task' switches off the redundant duplicate briefing schedule the user chooses, and other items are reviewed in their own screens.
    - Email and calendar: use the gmail_* and calendar_* tools (they appear only as connected services allow). Current local time: ${new Date().toLocaleString('en-GB', { timeZone: localTimeZone, dateStyle: 'full', timeStyle: 'short' })} (${localTimeZone}) — resolve "tomorrow", "next Friday" etc. ONLY with 'resolve_time' and pass its 'iso' value. Email timestamps: quote 'receivedLocal' (already in the user's zone), never re-derive from raw header text; report counts exactly as the tool gives them (matched vs shown).
-   - Gmail tools: gmail_search, gmail_read_thread, gmail_read_attachment, gmail_create_draft, gmail_send_draft, and inbox organization: gmail_analyze_inbox (read-only counts by sender/category/class), gmail_plan_changes (bulk PREVIEW, changes nothing), gmail_apply_plan and gmail_undo_plan (approval card, verified, reversible). There is no delete or trash tool: never delete, trash or mark spam, and say it is not supported if asked.
+   - Gmail tools: gmail_search, gmail_read_thread, gmail_read_attachment, gmail_create_draft, gmail_send_draft, and inbox organization: gmail_analyze_inbox (read-only counts by sender/category/class), gmail_plan_changes (bulk PREVIEW, changes nothing), gmail_apply_plan and gmail_undo_plan (approval card, verified, reversible), plus durable multi-batch tasks: gmail_create_task, gmail_task_next_batch, gmail_task_status. There is no delete or trash tool: never delete, trash or mark spam, and say it is not supported if asked.
    - Gmail contract extraction & inventory:
      - Gmail connector tools ('gmail_search', 'gmail_read_thread', 'gmail_read_attachment') are available when present in your tool list. Distinguish tool availability from verified authentication and completed execution: tool availability means the connector tools are registered and callable, but verified access is established only when tool invocations successfully execute. Do not claim tools are missing or offer to set up an MCP server when Gmail tools are exposed in your tool list; invoke the available tools to search and read content.
      - Search relevant contract categories using 'gmail_search': queries like "contract", "agreement", "lease OR Mietvertrag OR rental", "employment OR offer letter", "service agreement OR terms of service", "NDA", and "has:attachment".
@@ -2834,7 +3043,7 @@ TRUTHFULNESS & BEHAVIORAL PROTOCOL:
      - If no confirmed contracts were found in the examined messages, present the inventory table showing the candidates / non-contract notifications found, report 0 confirmed contracts, and state what was checked truthfully. Never fabricate fictional contracts (such as 5 car-rental contracts) and never claim Gmail isn't connected.
      - NEVER fabricate contract details, counterparty names, dates, or terms. Quote only what the tools returned.
    - Mailbox analysis: ALWAYS state coverage.statement from gmail_analyze_inbox. If coverage.complete is false it is a PARTIAL sample: say how many were examined and of how many, never call it the whole mailbox or the whole period (80 emails is not "30 days"). Report counts exactly as returned.
-   - Organizing mail (move to Promotions, archive, label): first gmail_plan_changes, show the user the preview (count, senders, sample, what will change), and only when they asked for the change call gmail_apply_plan with the planId and planDigest. Report the verification line from the result; if it says unverified or partial, say so. Offer gmail_undo_plan to revert. If a tool says Google needs the gmail.modify permission, tell the user to open Connections, Google, Allow inbox organization.
+   - Organizing mail (move to Promotions, archive, label): first gmail_plan_changes, show the user the preview (count, senders, sample, what will change), and only when they asked for the change call gmail_apply_plan with the planId and planDigest. Report the verification line from the result; if it says unverified or partial, say so. Offer gmail_undo_plan to revert. For \"put mail from these senders under these labels\": call gmail_create_task ONCE (it lists real message ids; calling it again resumes the same task), then loop gmail_task_next_batch -> gmail_apply_plan, one approval per batch. Quote the task's \"progress\" text exactly and never state a total it does not give. After an approval, continue with the next batch; do not re-plan or ask the same question. Only add labels: never archive bank statements, security alerts or financial mail. If a tool says Google needs the gmail.modify permission, tell the user to open Connections, Google, Allow inbox organization.
     - Calendar: Reading (calendar_list_events, calendar_check_availability) is immediate. Creating, changing or deleting a calendar event (calendar_draft_event, calendar_create_event, calendar_update_event, calendar_delete_event) asks the user to approve an exact card; when a tool result says NOT DONE / declined / NOT AVAILABLE, say so plainly and never claim success. Only say an event was created, changed or deleted when the result says verified. To change or delete an event, find its id with calendar_list_events first.
     - For availability or suggestions ("when am I free", "suggest three meeting slots", "find a time"), call calendar_check_availability once: it returns suggestedSlots already computed in the user's time zone. Present those. NEVER call calendar_draft_event or any create/update/delete tool unless the user explicitly asked you to create, change or delete an event; "suggest", "find" and "without creating" mean read-only, and Core refuses such a call.
     - Only when the user asked you to create an event: check the slot with calendar_list_events or calendar_check_availability, then calendar_draft_event, then the create tool.
@@ -2909,6 +3118,31 @@ TRUTHFULNESS & BEHAVIORAL PROTOCOL:
       });
     } catch (err) {
       console.warn('[piAgentEngine] startModelInvocation warning:', err);
+    }
+
+    // Plan Only (frozen on this turn): every tool that could change something is refused at execution, whatever the
+    // model asks, including tools that never request approval. Unknown tools count as changes.
+    if (frozenPermissionFor(db, [attemptId]).mode === 'plan') {
+      const bridgeReadOnly = new Set<string>([
+        ...(ctx.connectors?.definitions ?? []).filter((d) => d.tier === 'read').map((d) => d.name),
+        ...(ctx.memory?.definitions ?? []).filter((d) => d.consequential === false).map((d) => d.name),
+        ...(ctx.capabilities?.definitions ?? []).filter((d) => d.consequential === false).map((d) => d.name),
+      ]);
+      for (let i = 0; i < tools.length; i += 1) {
+        const tool = tools[i];
+        const original = tool.execute;
+        tools[i] = {
+          ...tool,
+          execute: async (id: string, args: any, ...rest: any[]) => {
+            const a = (args && typeof args === 'object') ? args : {};
+            if (classifyChatToolCall(tool.name, a, bridgeReadOnly, selectedWorkspace || null) === 'read') return original(id, args, ...rest);
+            const decision = { decision: 'deny' as const, mode: 'plan' as const, reason: `Plan Only: ${tool.name} would change something, so it was not done. Nothing was changed.` };
+            try { mutateWithBroadcast(db, broadcaster, () => recordPermissionDecision(db, { attemptId, toolName: tool.name, arguments: a, decision })); } catch {}
+            return { content: [{ type: 'text', text: `NOT DONE (Plan Only mode): ${tool.name} would change something, so it was not run and nothing was changed. Describe this step in the plan instead; the user can switch to Ask or Auto to carry it out.` }], isError: true };
+          },
+        };
+      }
+      systemPrompt += '\n\nPLAN ONLY MODE: research, read and reason, then give the user a concrete step-by-step plan. Do not create, change, send, schedule, print or run anything that changes state; such tools are refused in this mode.';
     }
 
     const agent = new Agent({
@@ -3311,6 +3545,13 @@ TRUTHFULNESS & BEHAVIORAL PROTOCOL:
       for (const link of phoneShares) if (!finalReply.includes(link)) finalReply += `\n\n${link}`;
     } else if (/\b(?:sent|delivered|shared)\b[^.\n]{0,60}\bphone\b|\bphone\b[^.\n]{0,60}\b(?:sent|delivered|shared)\b/i.test(finalReply)) {
       finalReply += '\n\nCorrection: nothing was sent to your phone in this turn — no file was shared to the paired phone.';
+    }
+
+    // A reply may not promise background work or a notification that nothing is set up to deliver.
+    {
+      const capability = notificationCapability(db);
+      const correction = auditPromises(finalReply, { activeWorker: hasActiveWorker(db, conversationId), canNotify: capability.canNotify, notifyStatement: capability.statement });
+      if (correction) finalReply += "\n\n" + correction;
     }
 
     // A project question is answered only from the selected project's own files: a reply that asks which project, or that

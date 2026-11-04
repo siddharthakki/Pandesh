@@ -1214,6 +1214,70 @@ CREATE TABLE IF NOT EXISTS gmail_change_plans (
 CREATE INDEX IF NOT EXISTS idx_gmail_change_plans_account ON gmail_change_plans(accountEmail, createdAt);
 `;
 
+// Durable Gmail-organization tasks: the verified manifest of message ids, per-message state, batch history and
+// retry checkpoint, so a restart resumes instead of planning again. Sender/subject/date only, never a body.
+const MIGRATION_39_GMAIL_ORGANIZE_TASKS = `
+CREATE TABLE IF NOT EXISTS gmail_organize_tasks (
+  taskId TEXT PRIMARY KEY,
+  accountEmail TEXT NOT NULL,
+  status TEXT NOT NULL,
+  taskJson TEXT NOT NULL,
+  createdAt TEXT NOT NULL,
+  updatedAt TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_gmail_organize_tasks_account ON gmail_organize_tasks(accountEmail, status);
+`;
+
+// Notification outbox: what Pandesh intends to notify, and the host's own report of what happened. A row is
+// delivered only when the desktop host reports it; channels record which host can deliver right now.
+const MIGRATION_40_NOTIFICATION_OUTBOX = `
+CREATE TABLE IF NOT EXISTS notification_outbox (
+  id TEXT PRIMARY KEY,
+  kind TEXT NOT NULL,
+  sourceId TEXT NOT NULL,
+  title TEXT NOT NULL,
+  body TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'pending',
+  attempts INTEGER NOT NULL DEFAULT 0,
+  lastError TEXT,
+  deliveredVia TEXT,
+  createdAt TEXT NOT NULL,
+  deliveredAt TEXT,
+  UNIQUE (kind, sourceId)
+);
+CREATE INDEX IF NOT EXISTS idx_notification_outbox_status ON notification_outbox(status, createdAt);
+CREATE TABLE IF NOT EXISTS notification_channels (
+  channel TEXT PRIMARY KEY,
+  supported INTEGER NOT NULL,
+  detail TEXT NOT NULL,
+  registeredAt TEXT NOT NULL,
+  lastSeenAt TEXT NOT NULL
+);
+`;
+
+const MIGRATION_41_PERMISSION_MODES = `
+CREATE TABLE IF NOT EXISTS conversation_permission_modes (
+  conversationId TEXT PRIMARY KEY,
+  mode TEXT NOT NULL CHECK (mode IN ('ask', 'auto', 'plan')),
+  updatedAt TEXT NOT NULL,
+  updatedBy TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS standing_authorizations (
+  id TEXT PRIMARY KEY,
+  conversationId TEXT NOT NULL,
+  workspaceRoot TEXT,
+  categoriesJson TEXT NOT NULL,
+  pinsJson TEXT NOT NULL DEFAULT '{}',
+  createdAt TEXT NOT NULL,
+  createdBy TEXT NOT NULL,
+  expiresAt TEXT NOT NULL,
+  revokedAt TEXT,
+  revokedBy TEXT,
+  revokeReason TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_standing_authorizations_conversation ON standing_authorizations(conversationId, createdAt);
+`;
+
 const MIGRATION_36_BACKGROUND_TASKS = `
 CREATE TABLE IF NOT EXISTS background_tasks (
   id TEXT PRIMARY KEY,
@@ -1386,6 +1450,9 @@ export const MIGRATIONS: Migration[] = [
   { version: 36, description: 'Pandesh background delegated tasks: durable background worker execution, checkpoints and delivery ledger', sql: MIGRATION_36_BACKGROUND_TASKS },
   { version: 37, description: 'Panda bridge: browser pairings, relayed tasks (source reference, consent, routing) and durable checkpoints', sql: MIGRATION_37_PANDA_BRIDGE },
   { version: 38, description: 'Master operator: durable multi-step runs with per-step tool selection, approvals, evidence and an event trail', sql: MIGRATION_38_OPERATOR },
+  { version: 39, description: 'Gmail inbox organization: durable multi-batch tasks with a verified manifest, checkpoint and retry state', sql: MIGRATION_39_GMAIL_ORGANIZE_TASKS },
+  { version: 40, description: 'Notification outbox: durable notification intents with host-reported delivery status and the registered delivery channel', sql: MIGRATION_40_NOTIFICATION_OUTBOX },
+  { version: 41, description: 'Chat permission modes per conversation and standing authorizations (scope, pins, expiry, revocation)', sql: MIGRATION_41_PERMISSION_MODES },
 ];
 
 

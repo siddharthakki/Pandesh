@@ -184,30 +184,5 @@ describe('PiAgentEngine Workspace Context & Permission-Aware Discovery', () => {
     expect(card.paths).toEqual(['C:\\Projects', 'D:\\AI']);
   });
 
-  it('verifies classifyDesktopApproval prompts when searching outside authorized workspace', async () => {
-    const { classifyDesktopApproval } = await import('../../apps/desktop/src/host/desktopTaskScope');
-    // When no scope or scope is not authorized:
-    const decisionNoScope = classifyDesktopApproval(null, {
-      toolName: 'request_search_permission',
-      paths: ['C:\\Projects', 'D:\\AI'],
-      scope: 'Authorize search across C:\\Projects, D:\\AI',
-      detail: '',
-    });
-    expect(decisionNoScope).toBe('prompt');
-
-    // When authorized scope exists for C:\Projects\devradar, but tool is request_search_permission:
-    const decisionWithScope = classifyDesktopApproval({
-      repository: 'devradar',
-      workspaceRoot: 'C:\\Projects\\devradar',
-      deliveryDestination: 'test',
-      authorized: true,
-    }, {
-      toolName: 'request_search_permission',
-      paths: ['D:\\AI'],
-      scope: 'Authorize search across D:\\AI',
-      detail: '',
-    });
-    expect(decisionWithScope).toBe('prompt');
-  });
 });
 

@@ -55,6 +55,8 @@ import * as everydayTools from '../domain/everydayTools';
 import * as commandQueue from '../domain/commandQueue';
 import * as karkeDikha from '../domain/karkeDikhaLifecycle';
 import * as backgroundTasks from '../domain/backgroundTasks';
+import * as notificationOutbox from '../domain/notificationOutbox';
+import * as permissionModes from '../domain/permissionModes';
 import { cancelBackgroundTaskWorker, resumeBackgroundTask } from '../runtime/backgroundWorker';
 import { latestRuntimeSequence, listRuntimeEventsAfter, recordRuntimeEvent } from '../domain/runtimeEvents';
 import { isTerminalAttemptStatus } from '../domain/attemptTransitions';
@@ -70,7 +72,8 @@ import { listRecentWorkspaceCapabilityActions } from '../domain/capabilityAction
 import { listTaskHistory, getTaskHistoryDetail } from '../domain/history';
 import type { RuntimeExecutor } from '../runtime/executor';
 import { GovernedCapabilityRegistry, createWorkspaceCapabilityAdapter } from '../runtime/governedCapability';
-import { resolveCapabilityApproval, cancelCapabilityAction, listCapabilityActions } from '../domain/capabilityDispatch';
+import { resolveCapabilityApproval, cancelCapabilityAction, listCapabilityActions, hasInFlightCapabilityExecutions } from '../domain/capabilityDispatch';
+import { gmailWritesInFlight, isQuiescing, setQuiescing } from '../runtime/updateGate';
 import { dispatchConnectorAction } from '../domain/connectorDispatch';
 import { LocalAutonomySecurityKernel } from '../security/kernel';
 import { getConnectorStatus, listConnectorStatuses, setConnectorPermission } from '../domain/connectors';
@@ -263,6 +266,20 @@ export function buildRouter(
   router.delete('/v1/providers', () => {
     sharedCloudCredentials.clearAll();
     return { status: 200, body: { providers: [] } };
+  });
+
+  // Application update gate. In memory only (a restart clears it), so these bypass idempotency persistence like the
+  // provider credential routes. `quiesce` stops NEW Gmail writes; one already running is never interrupted.
+  const updateReadiness = () => ({
+    quiescing: isQuiescing(),
+    gmailWritesInFlight: gmailWritesInFlight(),
+    activeAttempts: executor?.activeCount() ?? 0,
+    capabilityInFlight: hasInFlightCapabilityExecutions(),
+  });
+  router.get('/v1/core/update-readiness', () => ({ status: 200, body: updateReadiness() }));
+  router.post('/v1/core/update-gate', (ctx) => {
+    setQuiescing(asRecord(ctx.body).quiesce === true);
+    return { status: 200, body: updateReadiness() };
   });
 
   router.post('/v1/core/shutdown', (ctx) => {
@@ -1499,6 +1516,106 @@ export function buildRouter(
         return { status: 200, body: result.task };
       }),
     );
+  });
+
+  // --- Chat permission modes and standing authorizations (Core decides; clients only record the user's choice) ---
+  router.get('/v1/conversations/:id/permission', (ctx, match) => ({
+    status: 200,
+    body: {
+      mode: permissionModes.getConversationPermissionMode(ctx.db, match.params.id),
+      authorizations: permissionModes.listStandingAuthorizations(ctx.db, match.params.id).map((a) => ({ ...a, active: permissionModes.isActive(a) })),
+      categories: permissionModes.AUTHORIZATION_CATEGORIES,
+      maxMinutes: permissionModes.MAX_AUTHORIZATION_MINUTES,
+    },
+  }));
+
+  router.post('/v1/conversations/:id/permission-mode', (ctx, match) => {
+    const key = requireIdempotencyKey(ctx);
+    const body = asRecord(ctx.body);
+    return withIdempotency(ctx.db, { key, clientId: ctx.clientId, routeId: `permission.mode:${match.params.id}` }, ctx.body, () =>
+      withRuntimeBroadcast(ctx, broadcaster, () => ({
+        status: 200,
+        body: permissionModes.setConversationPermissionMode(ctx.db, match.params.id, requireString(body, 'mode') as permissionModes.PermissionMode, ctx.actor),
+      })),
+    );
+  });
+
+  router.post('/v1/conversations/:id/authorizations', (ctx, match) => {
+    const key = requireIdempotencyKey(ctx);
+    const body = asRecord(ctx.body);
+    return withIdempotency(ctx.db, { key, clientId: ctx.clientId, routeId: `permission.grant:${match.params.id}` }, ctx.body, () =>
+      withRuntimeBroadcast(ctx, broadcaster, () => ({
+        status: 201,
+        body: permissionModes.createStandingAuthorization(ctx.db, {
+          conversationId: match.params.id,
+          categories: Array.isArray(body.categories) ? body.categories.map(String) : [],
+          workspaceRoot: typeof body.workspaceRoot === 'string' ? body.workspaceRoot : null,
+          expiresInMinutes: Number(body.expiresInMinutes),
+          actor: ctx.actor,
+        }),
+      })),
+    );
+  });
+
+  router.post('/v1/authorizations/:id/revoke', (ctx, match) => {
+    const key = requireIdempotencyKey(ctx);
+    const body = asRecord(ctx.body);
+    return withIdempotency(ctx.db, { key, clientId: ctx.clientId, routeId: `permission.revoke:${match.params.id}` }, ctx.body, () =>
+      withRuntimeBroadcast(ctx, broadcaster, () => ({
+        status: 200,
+        body: permissionModes.revokeStandingAuthorization(ctx.db, match.params.id, ctx.actor, typeof body.reason === 'string' ? body.reason : 'revoked by the user'),
+      })),
+    );
+  });
+
+  // --- Notification outbox: the host reports what the operating system really did ---
+  router.get('/v1/notifications', (ctx) => ({
+    status: 200,
+    body: { ...notificationOutbox.notificationReport(ctx.db), deliverable: notificationOutbox.listDeliverable(ctx.db) },
+  }));
+
+  router.post('/v1/notifications/channel', (ctx) => {
+    const key = requireIdempotencyKey(ctx);
+    const body = asRecord(ctx.body);
+    return withIdempotency(ctx.db, { key, clientId: ctx.clientId, routeId: 'notifications.channel' }, ctx.body, () => ({
+      status: 200,
+      body: notificationOutbox.registerChannel(ctx.db, {
+        channel: requireString(body, 'channel'),
+        supported: body.supported === true,
+        detail: typeof body.detail === 'string' ? body.detail : '',
+      }),
+    }));
+  });
+
+  router.post('/v1/notifications/test', (ctx) => {
+    const key = requireIdempotencyKey(ctx);
+    return withIdempotency(ctx.db, { key, clientId: ctx.clientId, routeId: 'notifications.test' }, ctx.body, () =>
+      withRuntimeBroadcast(ctx, broadcaster, () => {
+        const capability = notificationOutbox.notificationCapability(ctx.db);
+        const { record } = notificationOutbox.enqueueNotification(ctx.db, {
+          kind: 'test',
+          sourceId: `test_${key}`,
+          title: 'Pandesh test notification',
+          body: 'If you can read this, Pandesh can notify you on this computer.',
+        });
+        return { status: 201, body: { notification: record, capability } };
+      }),
+    );
+  });
+
+  router.post('/v1/notifications/:id/delivery', (ctx, match) => {
+    const key = requireIdempotencyKey(ctx);
+    const body = asRecord(ctx.body);
+    const status = body.status === 'delivered' ? 'delivered' : body.status === 'failed' ? 'failed' : null;
+    if (!status) throw new CoreError('invalid_request', "status must be 'delivered' or 'failed'");
+    return withIdempotency(ctx.db, { key, clientId: ctx.clientId, routeId: `notifications.delivery:${match.params.id}` }, ctx.body, () => ({
+      status: 200,
+      body: notificationOutbox.recordDelivery(ctx.db, match.params.id, {
+        status,
+        via: typeof body.via === 'string' && body.via ? body.via : 'unknown',
+        error: typeof body.error === 'string' ? body.error : undefined,
+      }),
+    }));
   });
 
   router.post('/v1/karke-dikha/attempts/:id/execution-quality', (ctx, match) => {

@@ -16,6 +16,7 @@ import {
   type ModelToolDefinition,
 } from './modelBackend';
 import { CostGuard, compactForCloud } from '../platform/cloudSkills';
+import { createReasoningFilter } from './reasoningMarkers';
 
 export const OPENROUTER_OFFICIAL_API_BASE = 'https://openrouter.ai/api/v1';
 export const OPENROUTER_API_KEY_ENV = 'KARKEDIKHA_OPENROUTER_API_KEY';
@@ -124,6 +125,7 @@ export class OpenAICompatibleModelBackend implements ModelBackend {
     }
 
     let content = '';
+    const reasoning = createReasoningFilter();
     let actualModel = request.model;
     let promptTokens: number | null = null;
     let completionTokens: number | null = null;
@@ -162,8 +164,8 @@ export class OpenAICompatibleModelBackend implements ModelBackend {
           const delta = chunk.choices?.[0]?.delta;
           if (!delta) continue;
           if (delta.content) {
-            content += delta.content;
-            onToken(delta.content);
+            const visible = reasoning.push(delta.content);
+            if (visible) { content += visible; onToken(visible); }
           }
           for (const tc of delta.tool_calls ?? []) {
             const idx = tc.index ?? 0;
@@ -184,6 +186,8 @@ export class OpenAICompatibleModelBackend implements ModelBackend {
       try { await reader.cancel(); } catch { /* ignore */ }
     }
 
+    const tail = reasoning.flush();
+    if (tail) { content += tail; onToken(tail); }
     const toolCalls: ModelToolCall[] = [...toolCallAccum.entries()]
       .sort(([a], [b]) => a - b)
       .map(([, acc]) => ({ name: acc.name, arguments: parseArgs(acc.argsRaw) }))

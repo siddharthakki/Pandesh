@@ -65,7 +65,6 @@ import {
 } from './desktopApproval';
 import {
   authorizeDesktopTaskScope,
-  classifyDesktopApproval,
   describeDesktopTaskScope,
   type DesktopTaskScope,
 } from './desktopTaskScope';
@@ -122,6 +121,9 @@ import type {
   DesktopOpenRouterKeyResult,
   DesktopOpenRouterStatus,
   DesktopSnapshot,
+  DesktopPermissionGrant,
+  DesktopPermissionMode,
+  DesktopPermissionState,
   DesktopSpeakResult,
   DesktopTranscribeResult,
   DesktopWakeAudioMeta,
@@ -191,6 +193,13 @@ export interface DesktopSessionOptions {
     revision: number;
   }) => void | Promise<void>;
   onQueueConfirmNotificationClick?: (commandId: string) => void;
+  /**
+   * Shows one outbox notification through the operating system and resolves with what really happened. Only a
+   * resolved `ok: true` is ever reported to Core as delivered.
+   */
+  deliverNotification?: (input: { id: string; kind: string; title: string; body: string }) => Promise<{ ok: boolean; via: string; error?: string }>;
+  /** What this host can honestly say about its notification channel. */
+  notificationChannel?: () => { supported: boolean; detail: string };
   ensureImageStudio?: (onStatus?: (text: string) => void) => Promise<ImageStudioServiceStatus>;
   probeImageStudio?: () => Promise<ImageStudioServiceStatus>;
   /** How long a Stop waits for Core to confirm the attempt reached a terminal
@@ -227,6 +236,12 @@ interface MediaPlan {
   arguments: Record<string, unknown>;
   /** The image attached to this message, to be registered as the edit/animation reference. */
   attachedImage?: StagedForSend;
+}
+
+/** The permission mode Core froze on a request (Ask when the request predates permission modes). */
+function frozenModeOf(request: { toolPermissionPolicy?: Record<string, unknown> } | null | undefined): DesktopPermissionMode {
+  const mode = (request?.toolPermissionPolicy?.permission as { mode?: string } | undefined)?.mode;
+  return mode === 'auto' || mode === 'plan' ? mode : 'ask';
 }
 
 export class DesktopSession {
@@ -844,6 +859,7 @@ export class DesktopSession {
       stagedAttachments: this.attachmentStaging.list(),
       modelNote: this.modelNote,
       selectedConversationId: this.selectedConversationId,
+      permission: this.permissionFor(this.selectedConversationId),
       // A host-side placeholder (image_*) is not a Core conversation; exposing it makes the UI open a conversation that does not exist.
       activeConversationId: this.active && !isPlaceholderConversationId(this.active.conversationId) ? this.active.conversationId : null,
       workspaceActivities: this.workspaceActivitiesForView(),
@@ -1305,6 +1321,7 @@ export class DesktopSession {
       log: this.options.log,
     });
     await this.refreshEverydayTools();
+    this.startNotificationDelivery();
     await this.reconcileRemindersAfterResume('startup');
     await this.refreshCommandQueue();
     await this.requireClient().reconcileCommandQueue();
@@ -1850,6 +1867,7 @@ export class DesktopSession {
     if (!conversationId) {
       const conversation = await client.createConversation({ mode: 'baat_kar', title: text.slice(0, 80) });
       conversationId = conversation.id;
+      this.discardPendingPermission('this conversation was started outside the chat composer');
     }
     this.voiceConversationId = conversationId;
     this.selectedConversationId = conversationId;
@@ -2095,6 +2113,8 @@ export class DesktopSession {
         title: text.slice(0, 80),
       });
       conversationId = conversation.id;
+      // The mode picked before this conversation existed must be in Core before the turn is submitted and frozen.
+      await this.applyPendingPermission(conversationId);
     }
     // Continuing an opened conversation must keep using the same Core
     // conversation ID; submitting from the default (never-opened) state
@@ -2840,12 +2860,67 @@ export class DesktopSession {
       clearInterval(this.queueOfferTimer);
       this.queueOfferTimer = null;
     }
+    if (this.notificationTimer) {
+      clearInterval(this.notificationTimer);
+      this.notificationTimer = null;
+    }
     this.reminderScheduler?.dispose();
     this.reminderScheduler = null;
     void this.pocketTts?.dispose();
     this.pocketTts = null;
     this.client?.dispose();
     this.client = undefined;
+  }
+
+  private notificationTimer: NodeJS.Timeout | null = null;
+  private notificationDrainRunning = false;
+
+  /**
+   * Registers this host's notification channel with Core and delivers whatever is waiting in the outbox. Runs at start
+   * (so anything queued while the app was closed is shown now), on every new outbox row, and on a short heartbeat that
+   * also keeps the channel registration fresh. Each row is reported back as delivered or failed, never assumed.
+   */
+  private startNotificationDelivery(): void {
+    if (!this.options.deliverNotification) return;
+    if (this.notificationTimer) clearInterval(this.notificationTimer);
+    void this.drainNotifications();
+    this.notificationTimer = setInterval(() => void this.drainNotifications(), 30_000);
+  }
+
+  async drainNotifications(): Promise<{ delivered: number; failed: number }> {
+    const result = { delivered: 0, failed: 0 };
+    const deliver = this.options.deliverNotification;
+    if (!deliver || this.notificationDrainRunning || !this.client) return result;
+    this.notificationDrainRunning = true;
+    try {
+      const channel = this.options.notificationChannel?.() ?? { supported: true, detail: 'Windows desktop notification' };
+      await this.client.registerNotificationChannel({ channel: 'desktop', supported: channel.supported, detail: channel.detail });
+      const { deliverable } = await this.client.getNotifications();
+      for (const item of deliverable) {
+        let report: { ok: boolean; via: string; error?: string };
+        try {
+          report = channel.supported ? await deliver({ id: item.id, kind: item.kind, title: item.title, body: item.body }) : { ok: false, via: 'none', error: 'desktop notifications are not supported on this system' };
+        } catch (err) {
+          report = { ok: false, via: 'desktop', error: (err as Error).message };
+        }
+        await this.client.reportNotificationDelivery(item.id, report.ok ? { status: 'delivered', via: report.via } : { status: 'failed', via: report.via, error: report.error ?? 'delivery failed' });
+        if (report.ok) result.delivered += 1; else result.failed += 1;
+        this.options.log?.(`notification ${item.id} (${item.kind}) ${report.ok ? 'delivered' : 'failed'} via ${report.via}${report.error ? `: ${report.error}` : ''}`);
+      }
+    } catch (err) {
+      this.options.log?.(`notification drain failed: ${(err as Error).message}`);
+    } finally {
+      this.notificationDrainRunning = false;
+    }
+    return result;
+  }
+
+  /** Queues one real test notification and delivers it now. Returns the recorded outcome, not an assumption. */
+  async sendTestNotification(): Promise<{ queued: boolean; delivered: number; failed: number; capability: Record<string, unknown> }> {
+    const client = this.requireClient();
+    const queued = await client.enqueueTestNotification();
+    const outcome = await this.drainNotifications();
+    return { queued: true, ...outcome, capability: queued.capability };
   }
 
   async refreshEverydayTools(): Promise<EverydayToolsSnapshot> {
@@ -3150,6 +3225,7 @@ export class DesktopSession {
     // A passive transcript refresh (select=false) only reads: it must never
     // re-select a conversation the person has already navigated away from.
     if (select) {
+      this.discardPendingPermission('another conversation was opened');
       this.selectedConversationId = conversationId;
       writeSelectedConversation(this.dataDir, conversationId);
       // A different conversation's restored (never-resolved) media approval
@@ -3224,9 +3300,118 @@ export class DesktopSession {
     return { title: conversation.title?.trim() || 'Jarvis conversation', content: exported.content };
   }
 
+  // --- Chat permission mode (Ask / Auto / Plan Only). Core stores and enforces it; the host only relays the choice. ---
+  private permission: DesktopPermissionState = { conversationId: null, mode: 'ask', authorizations: [], categories: {}, pending: false };
+  /**
+   * A mode chosen before the conversation exists; applied right after the next chat submit creates it, before Core
+   * freezes the turn. It is bound to the workspace selected when the user chose it: if the folder differs by then it is
+   * not applied, and any other way of leaving the blank conversation discards it, so nothing inherits it silently.
+   */
+  private pendingPermission: { mode: DesktopPermissionMode; grant?: DesktopPermissionGrant; workspaceRoot: string | null } | null = null;
+
+  private discardPendingPermission(why: string): void {
+    if (!this.pendingPermission) return;
+    const mode = this.pendingPermission.mode;
+    this.pendingPermission = null;
+    this.permission = { ...this.permission, mode: 'ask', pending: false, pendingWorkspaceRoot: null };
+    this.emit({ kind: 'status', at: nowIso(), summary: `The ${mode} mode you chose was not applied (${why}); choose it again for this conversation` });
+  }
+
+  /** Applies the parked mode to the conversation the chat submit just created, if it still matches what was chosen. */
+  private async applyPendingPermission(conversationId: string): Promise<void> {
+    const pending = this.pendingPermission;
+    if (!pending) return;
+    this.pendingPermission = null;
+    if (pending.grant && !sameFolder(pending.workspaceRoot, this.folder)) {
+      this.emit({ kind: 'status', at: nowIso(), summary: `Auto was not applied: you chose it for ${pending.workspaceRoot ?? 'no workspace'}, but the workspace is now ${this.folder ?? 'none'}. This conversation stays in Ask.` });
+      return;
+    }
+    await this.applyPermission(conversationId, pending.mode, pending.grant, pending.workspaceRoot);
+  }
+
+  private permissionLookupFailedFor: string | null = null;
+  /** The mode the running (or resumed) turn was frozen with, read once from Core's own request record. */
+  private activeModeCache: { attemptId: string; mode: DesktopPermissionMode } | null = null;
+  private activeModeFetchFor: string | null = null;
+
+  private activeTurnMode(): DesktopPermissionMode | null {
+    const active = this.active;
+    if (!active || active.terminal) return null;
+    if (this.activeModeCache?.attemptId === active.attemptId) return this.activeModeCache.mode;
+    if (this.client && this.activeModeFetchFor !== active.attemptId) {
+      this.activeModeFetchFor = active.attemptId;
+      const client = this.client;
+      // Never throws into snapshot(): a missing or failing lookup only leaves the mode unknown.
+      void Promise.resolve().then(() => client.getRequest(active.requestId)).then((request) => {
+        this.activeModeCache = { attemptId: active.attemptId, mode: frozenModeOf(request as { toolPermissionPolicy?: Record<string, unknown> }) };
+        this.emit({ kind: 'status', at: nowIso(), attemptId: active.attemptId, summary: `This task runs in ${this.activeModeCache.mode} mode (fixed when it started)` });
+      }).catch(() => undefined);
+    }
+    return null;
+  }
+
+  /** The permission shown for the selected conversation; a changed selection triggers one refresh from Core. */
+  private permissionFor(conversationId: string | null): DesktopPermissionState {
+    if (conversationId !== this.permission.conversationId && this.client && conversationId !== this.permissionLookupFailedFor) {
+      void this.refreshPermission().catch((err) => {
+        this.permissionLookupFailedFor = conversationId;
+        this.options.log?.(`permission lookup failed for ${conversationId}: ${(err as Error).message}`);
+      });
+    }
+    return { ...this.permission, activeTurnMode: this.activeTurnMode() };
+  }
+
+  async refreshPermission(): Promise<void> {
+    const conversationId = this.selectedConversationId;
+    if (!conversationId || !this.client) {
+      this.permission = { conversationId: null, mode: this.pendingPermission?.mode ?? 'ask', authorizations: [], categories: this.permission.categories, pending: Boolean(this.pendingPermission), pendingWorkspaceRoot: this.pendingPermission?.grant ? this.pendingPermission.workspaceRoot : null };
+    } else {
+      const state = await this.client.getConversationPermission(conversationId);
+      this.permission = {
+        conversationId,
+        mode: state.mode,
+        authorizations: state.authorizations.filter((a) => a.active).map((a) => ({
+          id: a.id, categories: a.categories, workspaceRoot: a.workspaceRoot, expiresAt: a.expiresAt, pinnedScripts: Object.keys(a.pins?.npmScripts ?? {}),
+        })),
+        categories: state.categories,
+        pending: false,
+      };
+    }
+    this.emit({ kind: 'status', at: nowIso(), summary: `Permission mode: ${this.permission.mode}` });
+  }
+
+  /** Sets the mode for the conversation's next turns, and in Auto records the standing authorization the user granted. */
+  async setPermissionMode(mode: DesktopPermissionMode, grant?: DesktopPermissionGrant): Promise<DesktopSnapshot> {
+    if (mode === 'auto' && (!grant || grant.categories.length === 0)) throw new Error('Auto needs at least one thing you authorize and an expiry.');
+    const conversationId = this.selectedConversationId;
+    if (!conversationId) {
+      this.pendingPermission = { mode, ...(grant ? { grant } : {}), workspaceRoot: this.folder };
+    } else {
+      await this.applyPermission(conversationId, mode, grant);
+    }
+    await this.refreshPermission();
+    return this.snapshot();
+  }
+
+  async revokeAuthorization(id: string): Promise<DesktopSnapshot> {
+    await this.requireClient().revokeStandingAuthorization(id, 'revoked by the user in Pandesh');
+    await this.refreshPermission();
+    return this.snapshot();
+  }
+
+  /** `workspaceRoot` is the folder selected when the user issued the grant; the grant is bound to it, never to a later one. */
+  private async applyPermission(conversationId: string, mode: DesktopPermissionMode, grant?: DesktopPermissionGrant, workspaceRoot: string | null = this.folder): Promise<void> {
+    const client = this.requireClient();
+    await client.setConversationPermissionMode(conversationId, mode);
+    if (mode === 'auto' && grant) {
+      await client.grantStandingAuthorization(conversationId, { categories: grant.categories, workspaceRoot, expiresInMinutes: grant.expiresInMinutes });
+    }
+  }
+
   /** Clears the selection so the next submit lazily creates a brand-new Core
    * conversation — never inherits the previous objective or context. */
   async newConversation(): Promise<void> {
+    this.discardPendingPermission('a new conversation was started');
     this.voiceConversationId = null;
     this.selectedConversationId = null;
     this.lastWeatherLocation = null;
@@ -3432,6 +3617,7 @@ export class DesktopSession {
         title: title.slice(0, 70),
       });
       conversationId = conversation.id;
+      this.discardPendingPermission('this conversation was started outside the chat composer');
       this.voiceConversationId = conversationId;
       this.selectedConversationId = conversationId;
       writeSelectedConversation(this.dataDir, conversationId);
@@ -3751,6 +3937,7 @@ export class DesktopSession {
         title: normalized.slice(0, 80),
       });
       conversationId = conversation.id;
+      this.discardPendingPermission('this conversation was started outside the chat composer');
       this.voiceConversationId = conversationId;
       this.selectedConversationId = conversationId;
       writeSelectedConversation(this.dataDir, conversationId);
@@ -4318,6 +4505,24 @@ export class DesktopSession {
   }
 
   private async handleRuntimeEvent(event: RuntimeEventRecord): Promise<void> {
+    // Core decided an action under the turn's permission mode: show who authorized it, never as the user's click.
+    if (event.domain === 'attempt' && (event.eventType === 'permission_auto_authorized' || event.eventType === 'permission_mode_blocked')
+      && this.active && this.active.attemptId === event.entityId) {
+      const m = (event.metadata ?? {}) as Record<string, unknown>;
+      this.emit({
+        kind: 'status',
+        at: event.createdAt,
+        attemptId: event.entityId,
+        summary: event.eventType === 'permission_auto_authorized'
+          ? `Auto: ${String(m.toolName)} authorized by standing authorization ${String(m.authorizationId)} (${String(m.category)}) — no prompt`
+          : `Plan Only: ${String(m.toolName)} was not run; nothing was changed`,
+      });
+      return;
+    }
+    if (event.domain === 'authorization' || (event.domain === 'conversation' && event.eventType === 'permission_mode_changed')) {
+      void this.refreshPermission();
+      return;
+    }
     if (event.domain === 'approval' && (event.eventType === 'approval_requested' || event.eventType === 'approval_resolved' || event.eventType === 'approval_superseded' || event.eventType === 'approval_expired')) {
       // A pending approval changed somewhere (this turn or another surface).
       // Home must re-read Core so the card appears and disappears truthfully.
@@ -4347,6 +4552,10 @@ export class DesktopSession {
         summary: 'This task was interrupted when Core restarted. It is not running. Resume it from Tasks to be asked again.',
       });
       this.drainSubmissionQueue();
+      return;
+    }
+    if (event.domain === 'notification' && event.eventType === 'notification_enqueued') {
+      void this.drainNotifications();
       return;
     }
     if (event.domain === 'assistant_routine' && event.eventType === 'daily_brief_delivered') {
@@ -4535,17 +4744,6 @@ export class DesktopSession {
       requestedActionDigest: this.pending.envelope.requestedActionDigest,
       frozenContextHash: this.pending.envelope.frozenContextHash,
     });
-    if (classifyDesktopApproval(this.taskScope, this.pending.card) === 'auto_approve') {
-      this.emit({
-        kind: 'status',
-        at: nowIso(),
-        attemptId: active.attemptId,
-        requestId: active.requestId,
-        summary: `In-scope Core gate auto-authorized: ${this.pending.card.scope}`,
-      });
-      await this.resolvePending(this.pending.card.approvalId, 'approved');
-      return;
-    }
     this.emit({
       kind: 'approval',
       at: nowIso(),
@@ -4968,4 +5166,11 @@ function sleep(ms: number): Promise<void> {
 
 function isLocalCoreWorker(workerId: string): boolean {
   return workerId === 'local-core';
+}
+
+/** Whether two workspace selections name the same folder (null means no workspace). */
+function sameFolder(a: string | null, b: string | null): boolean {
+  if (!a || !b) return a === b;
+  const norm = (p: string) => (process.platform === 'win32' ? path.resolve(p).toLowerCase() : path.resolve(p));
+  return norm(a) === norm(b);
 }

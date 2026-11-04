@@ -6,6 +6,8 @@ import {
   type DesktopApprovalResolution,
   type DesktopOpenRouterKeyResult,
   type DesktopGmailStatus,
+  type DesktopPermissionGrant,
+  type DesktopPermissionMode,
   type DesktopGmailActionResult,
   type DesktopSnapshot,
   type DesktopSpeakResult,
@@ -28,6 +30,8 @@ import {
   type DesktopDailyBriefRoutine,
   type DesktopCloudPublicTextPreview,
   type DesktopCloudState,
+  type DesktopUpdateStartResult,
+  type DesktopUpdateStatus,
 } from './ipc';
 
 const desktopApi = {
@@ -138,6 +142,10 @@ const desktopApi = {
   summarizeGmailThread: (messages: Array<{ from: string; subject: string; date: string; bodyText: string }>): Promise<{ summary: string }> =>
     ipcRenderer.invoke(DESKTOP_CHANNELS.summarizeGmailThread, messages),
   retryGmailProbe: (): Promise<DesktopGmailStatus> => ipcRenderer.invoke(DESKTOP_CHANNELS.retryGmailProbe),
+  /** Ask / Auto / Plan Only for this conversation's next turns. Auto needs the scope and expiry the user granted. */
+  setPermissionMode: (mode: DesktopPermissionMode, grant?: DesktopPermissionGrant): Promise<DesktopSnapshot> =>
+    ipcRenderer.invoke(DESKTOP_CHANNELS.setPermissionMode, mode, grant),
+  revokeAuthorization: (id: string): Promise<DesktopSnapshot> => ipcRenderer.invoke(DESKTOP_CHANNELS.revokeAuthorization, id),
   allowInboxOrganization: (): Promise<DesktopGmailStatus> => ipcRenderer.invoke(DESKTOP_CHANNELS.allowInboxOrganization),
   saveGoogleOAuthClient: (clientId: string, clientSecret: string): Promise<DesktopGmailStatus> =>
     ipcRenderer.invoke(DESKTOP_CHANNELS.saveGoogleOAuthClient, clientId, clientSecret),
@@ -238,6 +246,10 @@ const desktopApi = {
   copyToClipboard: (text: string): Promise<{ copied: boolean }> =>
     ipcRenderer.invoke(DESKTOP_CHANNELS.copyToClipboard, text),
   quitApp: (): Promise<void> => ipcRenderer.invoke(DESKTOP_CHANNELS.quitApp),
+  getUpdateStatus: (): Promise<DesktopUpdateStatus> => ipcRenderer.invoke(DESKTOP_CHANNELS.getUpdateStatus),
+  startUpdate: (testPackagePath?: string): Promise<DesktopUpdateStartResult> =>
+    ipcRenderer.invoke(DESKTOP_CHANNELS.startUpdate, testPackagePath),
+  acknowledgeUpdateResult: (): Promise<void> => ipcRenderer.invoke(DESKTOP_CHANNELS.acknowledgeUpdateResult),
   onEvent: (listener: (event: DesktopActivityEvent) => void): (() => void) => {
     const wrapped = (_event: unknown, payload: DesktopActivityEvent) => listener(payload);
     ipcRenderer.on(DESKTOP_CHANNELS.event, wrapped);

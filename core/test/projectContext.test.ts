@@ -58,6 +58,12 @@ describe('request detection', () => {
     'How do I run a marathon?',
     'hello',
     'Remind me to call mom tomorrow',
+    'but i didnt get any notification!!! Why is that ? how is your notifcation system configured and how does it work ?',
+    'How are your notifications configured?',
+    "What's the status of my Gmail organization?",
+    'What tasks are you running?',
+    'Show my reminders.',
+    'how does it work, the reminder thing?',
   ])('does not treat %j as one', (text) => expect(isProjectInspectionRequest(text)).toBe(false));
 });
 

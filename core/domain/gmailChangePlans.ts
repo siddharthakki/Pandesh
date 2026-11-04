@@ -7,6 +7,7 @@
  */
 import type { CoreDatabase } from '../db/connection';
 import type { GmailChangePlan, GmailOrganizeStore } from '../runtime/connectors/gmailOrganize';
+import type { GmailOrganizeTask, GmailTaskStore } from '../runtime/connectors/gmailTask';
 
 const RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
 
@@ -34,6 +35,31 @@ export function createGmailOrganizeStore(db: CoreDatabase, nowMs: () => number =
       const next = { ...current, ...patch, planId: current.planId } as GmailChangePlan;
       this.save(next);
       return next;
+    },
+  };
+}
+
+/** Durable store for Gmail-organization tasks (`gmail_organize_tasks`, migration 39). */
+/** `onSaved` runs after every durable save, so a task reaching a state the user must hear about is noticed once, in one place. */
+export function createGmailTaskStore(db: CoreDatabase, onSaved?: (task: GmailOrganizeTask) => void): GmailTaskStore {
+  return {
+    save(task: GmailOrganizeTask): void {
+      db.run(
+        `INSERT INTO gmail_organize_tasks (taskId, accountEmail, status, taskJson, createdAt, updatedAt)
+         VALUES (?, ?, ?, ?, ?, ?)
+         ON CONFLICT(taskId) DO UPDATE SET status = excluded.status, taskJson = excluded.taskJson, updatedAt = excluded.updatedAt`,
+        [task.taskId, task.accountEmail, task.status, JSON.stringify(task), task.createdAt, task.updatedAt],
+      );
+      try { onSaved?.(task); } catch { /* a notification problem never loses task progress */ }
+    },
+    get(taskId: string): GmailOrganizeTask | undefined {
+      const row = db.get<{ taskJson: string }>('SELECT taskJson FROM gmail_organize_tasks WHERE taskId = ?', [taskId]);
+      return row ? (JSON.parse(row.taskJson) as GmailOrganizeTask) : undefined;
+    },
+    findActive(accountEmail: string): GmailOrganizeTask[] {
+      return db
+        .all<{ taskJson: string }>(`SELECT taskJson FROM gmail_organize_tasks WHERE lower(accountEmail) = lower(?) AND status = 'active' ORDER BY createdAt DESC`, [accountEmail])
+        .map((row) => JSON.parse(row.taskJson) as GmailOrganizeTask);
     },
   };
 }

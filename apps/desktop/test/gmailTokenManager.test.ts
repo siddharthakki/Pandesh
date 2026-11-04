@@ -291,6 +291,36 @@ describe('GmailTokenManager: refresh without restarting Core', () => {
   });
 });
 
+describe('GmailTokenManager: a transient failure at start does not lose the connection', () => {
+  it('retries the refresh by itself and pushes a token to Core once Google is reachable', async () => {
+    const sink = fakeSink();
+    let tokenCall = 0;
+    const fetchFn: FetchLike = async (url) => {
+      const s = String(url);
+      if (s.includes('/token')) {
+        tokenCall += 1;
+        if (tokenCall === 1) return jsonRes(200, { access_token: 'at-1', refresh_token: 'rt-1', expires_in: 3600 });
+        if (tokenCall === 2) throw new Error('getaddrinfo ENOTFOUND oauth2.googleapis.com');
+        return jsonRes(200, { access_token: 'at-2', expires_in: 3600 });
+      }
+      return jsonRes(200, { email: 'me@example.com' });
+    };
+    const manager = new GmailTokenManager({
+      dataDir: dir, getSecretBox: memoryBox, getClient: () => sink, resolveClientConfig: alwaysConfigured,
+      openExternal: fakeOpenExternal(), fetchFn, retryBaseMs: 20,
+    });
+    await manager.connect();
+    const failed = await manager.ensureFreshAccessToken();
+    expect(failed.lastError).toMatch(/ENOTFOUND/);
+    const pushesBefore = sink.pushes.length;
+    await new Promise((r) => setTimeout(r, 120));
+    expect(sink.pushes.length).toBeGreaterThan(pushesBefore);
+    expect(sink.pushes[sink.pushes.length - 1].accessToken).toBe('at-2');
+    expect(manager.getStatus().lastError).toBeNull();
+    manager.dispose();
+  });
+});
+
 describe('GmailTokenManager: capability health, separate from OAuth connection', () => {
   it('a push that Core cannot probe successfully surfaces a capabilityBlocker while staying OAuth-connected', async () => {
     const sink = fakeSink();

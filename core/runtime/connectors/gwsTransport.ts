@@ -27,6 +27,7 @@
  *   child, not any descendant `gws` itself launches).
  */
 import { spawn, spawnSync } from 'node:child_process';
+import { beginWrite } from '../updateGate';
 import { LocalAutonomySecurityKernel } from '../../security/kernel';
 import * as crypto from 'node:crypto';
 import * as fs from 'node:fs';
@@ -129,7 +130,9 @@ function bound(text: string): string {
  * `spawn({ signal })` and `child.kill()` only reach the immediate process,
  * not any descendant `gws` itself launches. */
 export function runGws(input: RunGwsInput): Promise<RunGwsResult> {
-  return new Promise((resolve) => {
+  // Counted for the update gate: Core is not stopped for an update while a Gmail call is running.
+  const endWrite = beginWrite();
+  return new Promise<RunGwsResult>((resolve) => {
     const env = buildConstructedEnv({ accessToken: input.accessToken, configDir: input.configDir });
     fs.mkdirSync(input.configDir, { recursive: true });
     const child = spawn(input.binaryPath, input.args, {
@@ -193,7 +196,7 @@ export function runGws(input: RunGwsInput): Promise<RunGwsResult> {
       finish({ exitCode: null, timedOut, aborted });
     });
     child.on('close', (code) => finish({ exitCode: code, timedOut, aborted }));
-  });
+  }).finally(endWrite);
 }
 
 export type GwsJsonResult = { ok: true; data: unknown } | { ok: false; reason: string };

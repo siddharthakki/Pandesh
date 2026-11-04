@@ -20,7 +20,11 @@ import {
   type DesktopBuildIdentity,
 } from './host/desktopBuildIdentity';
 import { readHostPreferences, writeHostPreferences } from './host/desktopHostPreferences';
-import { DESKTOP_CHANNELS, type DesktopAppMetadata } from './ipc';
+import { DESKTOP_CHANNELS, type DesktopAppMetadata, type DesktopUpdateStartResult, type DesktopUpdateStatus } from './ipc';
+import {
+  acknowledgeUpdateResult, inspectPackage, launchUpdater, quiesceCore, readCoreReadiness, readUpdateResult,
+  setUpdateGate, updaterAvailable, writeUiHealth,
+} from './host/desktopUpdate';
 import { JarvisTrayController } from './host/jarvisTray';
 import { createAppIcon } from './host/appIcon';
 import { normalizeSafeExternalUrl, normalizeSafeBrowserUrl } from './host/desktopSafeOpen';
@@ -570,11 +574,32 @@ function showImageGenerationNotification(title: string, body: string): void {
   notification.show();
 }
 
-function showBackgroundTaskNotification(title: string, body: string): void {
-  if (!Notification.isSupported()) return;
-  const notification = new Notification({ title, body, silent: false });
-  notification.on('click', () => showJarvisWindow());
-  notification.show();
+/**
+ * Shows one outbox notification and waits for the operating system's own answer: 'show' means Windows accepted the
+ * toast, 'failed' carries its error. Silence for 8 s is reported as a failure, never as success.
+ */
+function deliverOutboxNotification(input: { id: string; title: string; body: string }): Promise<{ ok: boolean; via: string; error?: string }> {
+  const via = 'windows_toast';
+  if (!Notification.isSupported()) return Promise.resolve({ ok: false, via, error: 'desktop notifications are not supported on this system' });
+  return new Promise((resolve) => {
+    let settled = false;
+    const done = (result: { ok: boolean; via: string; error?: string }) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve(result);
+    };
+    const notification = new Notification({ title: input.title, body: input.body, silent: false });
+    const timer = setTimeout(() => done({ ok: false, via, error: 'Windows did not confirm showing the notification within 8 seconds' }), 8_000);
+    notification.on('show', () => done({ ok: true, via }));
+    notification.on('failed', (_event, error) => done({ ok: false, via, error: String(error || 'Windows reported the notification failed') }));
+    notification.on('click', () => showJarvisWindow());
+    try {
+      notification.show();
+    } catch (err) {
+      done({ ok: false, via, error: (err as Error).message });
+    }
+  });
 }
 
 async function ensureMainWindow(): Promise<BrowserWindow> {
@@ -696,6 +721,11 @@ async function createWindow(): Promise<void> {
     onReminderNotificationClick: (id) => showReminderFromNotification(id),
     notifyQueueConfirm: async (input) => showDesktopQueueConfirmNotification(input),
     onQueueConfirmNotificationClick: (id) => showQueueConfirmFromNotification(id),
+    deliverNotification: (input) => deliverOutboxNotification(input),
+    notificationChannel: () => ({
+      supported: Notification.isSupported(),
+      detail: Notification.isSupported() ? 'Windows desktop notifications (toast)' : 'desktop notifications unsupported on this system',
+    }),
   });
   session.onEvent((event) => {
     sendToRenderer(DESKTOP_CHANNELS.event, event);
@@ -710,11 +740,6 @@ async function createWindow(): Promise<void> {
         title: event.summary || 'Your daily brief is ready',
         body: event.text || 'Open KarkeDikha to read it.',
       });
-    } else if (event.eventType === 'background_task_completed') {
-      showBackgroundTaskNotification(
-        String((event as any).title || event.summary || 'Gmail Contract Extraction Completed'),
-        String((event as any).text || 'Contract inventory table generated and delivered to conversation.'),
-      );
     }
     if (
       event.kind === 'status'
@@ -985,6 +1010,21 @@ function registerIpc(): void {
   ipcMain.handle(DESKTOP_CHANNELS.summarizeGmailThread, async (_event, messages: Array<{ from: string; subject: string; date: string; bodyText: string }>) => {
     if (!session) throw new Error('desktop session is not started');
     return session.summarizeGmailThread(Array.isArray(messages) ? messages : []);
+  });
+  ipcMain.handle(DESKTOP_CHANNELS.setPermissionMode, async (_event, mode: unknown, grant: unknown) => {
+    if (!session) throw new Error('desktop session is not started');
+    if (mode !== 'ask' && mode !== 'auto' && mode !== 'plan') throw new Error('unknown permission mode');
+    const g = grant && typeof grant === 'object' ? grant as Record<string, unknown> : null;
+    const parsed = g ? { categories: Array.isArray(g.categories) ? g.categories.map(String) : [], expiresInMinutes: Number(g.expiresInMinutes) } : undefined;
+    const snapshot = await session.setPermissionMode(mode, parsed);
+    sendSnapshot();
+    return snapshot;
+  });
+  ipcMain.handle(DESKTOP_CHANNELS.revokeAuthorization, async (_event, id: unknown) => {
+    if (!session) throw new Error('desktop session is not started');
+    const snapshot = await session.revokeAuthorization(String(id));
+    sendSnapshot();
+    return snapshot;
   });
   ipcMain.handle(DESKTOP_CHANNELS.retryGmailProbe, async () => {
     if (!session) throw new Error('desktop session is not started');
@@ -1538,6 +1578,97 @@ function registerIpc(): void {
   ipcMain.handle(DESKTOP_CHANNELS.quitApp, () => {
     void shutdownAndQuit();
   });
+  ipcMain.handle(DESKTOP_CHANNELS.getUpdateStatus, (): DesktopUpdateStatus => {
+    const identity = currentBuildIdentity();
+    return {
+      available: updaterAvailable(productRoot),
+      installedRevision: identity.buildNumber,
+      version: identity.version,
+      lastResult: readUpdateResult(dataDir),
+    };
+  });
+  ipcMain.handle(DESKTOP_CHANNELS.acknowledgeUpdateResult, () => acknowledgeUpdateResult(dataDir));
+  ipcMain.handle(DESKTOP_CHANNELS.startUpdate, (_event, testPackagePath?: string) => startUpdate(testPackagePath));
+}
+
+/** Test hook: an isolated test instance may skip the confirmation dialogs and name its package. Never set in production. */
+const updateTestMode = process.env.KARKEDIKHA_UPDATE_TEST_AUTOCONFIRM === '1';
+let updateInProgress = false;
+
+/**
+ * Update & Restart. Verifies a user-chosen local package, makes Core safe to stop (no new Gmail writes, running ones
+ * finish), starts the separate updater and quits. Every refusal leaves the installation exactly as it was.
+ */
+async function startUpdate(testPackagePath?: string): Promise<DesktopUpdateStartResult> {
+  if (updateInProgress || isShuttingDown) return { status: 'blocked', message: 'An update is already in progress.' };
+  if (!updaterAvailable(productRoot)) {
+    return { status: 'unavailable', message: 'This installation does not include the updater. Run the latest Pandesh installer once to enable updates.' };
+  }
+  const node = process.env.KARKEDIKHA_DESKTOP_NODE?.trim() || path.join(productRoot, 'runtime', 'node.exe');
+  let packagePath = updateTestMode && testPackagePath ? testPackagePath : undefined;
+  if (!packagePath) {
+    const picked = await dialog.showOpenDialog(window!, {
+      title: 'Choose a Pandesh update package',
+      filters: [{ name: 'Pandesh update', extensions: ['pdupdate'] }],
+      properties: ['openFile'],
+    });
+    if (picked.canceled || !picked.filePaths[0]) return { status: 'cancelled', message: 'No update package was chosen.' };
+    packagePath = picked.filePaths[0];
+  }
+
+  let summary;
+  try {
+    summary = await inspectPackage({ productRoot, dataDir, node, packagePath });
+  } catch (err) {
+    hostLog(`update rejected: ${(err as Error).message}`);
+    return { status: 'rejected', message: (err as Error).message };
+  }
+
+  if (!updateTestMode) {
+    const active = (await readCoreReadiness(dataDir))?.activeAttempts ?? 0;
+    const detail = [
+      `Build b${summary.installedRevision} → b${summary.revision} (v${summary.version}), updating: ${summary.components.join(' + ')}.`,
+      summary.migrates ? `The database will be upgraded (schema ${summary.dbSchemaFrom} → ${summary.dbSchemaTo}); it is backed up first.` : 'No database change.',
+      'Your conversations, memory, settings and Google sign-in are kept. If the new version does not start, the previous one is restored automatically.',
+      active > 0 ? `${active} task(s) are running. They will be stopped at a safe point and can be resumed after the restart. A Gmail change that is already being written is always finished first.` : '',
+    ].filter(Boolean).join('\n\n');
+    const choice = await dialog.showMessageBox(window!, {
+      type: 'question', buttons: ['Update & Restart', 'Cancel'], defaultId: 1, cancelId: 1, title: 'Update Pandesh', message: `Update Pandesh to build b${summary.revision}?`, detail,
+    });
+    if (choice.response !== 0) return { status: 'cancelled', message: 'Update cancelled. Nothing was changed.' };
+  }
+
+  updateInProgress = true;
+  if (!(await quiesceCore(dataDir))) {
+    updateInProgress = false;
+    return { status: 'blocked', message: 'A Gmail change is still being written. Nothing was changed; try again in a minute.' };
+  }
+  try {
+    launchUpdater({ productRoot, dataDir, node });
+  } catch (err) {
+    await setUpdateGate(dataDir, false);
+    updateInProgress = false;
+    return { status: 'blocked', message: `The updater could not be started: ${(err as Error).message}` };
+  }
+  hostLog(`update to b${summary.revision} verified; handing over to the updater and quitting`);
+  void shutdownAndQuit();
+  return { status: 'applying', message: 'Updating… Pandesh will restart in a moment.' };
+}
+
+/** Once the window has loaded and Core is connected, say so on disk: the updater uses this to confirm a good update. */
+function startUiHealthMarker(): void {
+  const started = Date.now();
+  const timer = setInterval(() => {
+    if (isShuttingDown || Date.now() - started > 300_000) { clearInterval(timer); return; }
+    const loaded = Boolean(window && !window.isDestroyed() && !window.webContents.isLoading());
+    if (!loaded || session?.snapshot()?.coreState !== 'connected') return;
+    try {
+      writeUiHealth(dataDir, { buildNumber: currentBuildIdentity().buildNumber, rendererLoaded: true, coreConnected: true });
+    } catch (err) {
+      hostLog(`could not write ui health marker: ${(err as Error).message}`);
+    }
+    clearInterval(timer);
+  }, 1000);
 }
 
 if (gotSingleInstanceLock) {
@@ -1581,6 +1712,7 @@ if (gotSingleInstanceLock) {
       + `(${identity.releaseChannel}) commit=${identity.commit ?? 'unknown'} built=${identity.builtAt ?? 'unknown'} `
       + `installer=${identity.installerVersion ?? 'unknown'} electron=${process.versions.electron ?? 'n/a'}`,
     );
+    startUiHealthMarker();
     await createWindow();
     powerMonitor.on('resume', () => {
       hostLog('host resume — reconciling reminders');

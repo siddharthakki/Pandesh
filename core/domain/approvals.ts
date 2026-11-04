@@ -7,6 +7,7 @@ import { recordRuntimeEvent } from './runtimeEvents';
 import { getAttemptContext } from './attemptContext';
 import { isTerminalAttemptStatus } from './attemptTransitions';
 import { canonicalArgumentsDigest, canonicalJson, MAX_APPROVAL_ACTION_ARGUMENTS_BYTES } from './approvalArguments';
+import { PLAN_ONLY_ACTOR, planOnlyApprovalVeto } from './permissionModes';
 
 const MAX_SUMMARY_BYTES = 8192;
 /** The proposal-time presentation (a bounded diff) is rendering, not
@@ -195,7 +196,15 @@ export function createApproval(db: CoreDatabase, input: CreateApprovalInput): Ap
       throw new CoreError('invalid_transition', `attempt '${input.attemptId}' is terminal; approval cannot be requested`);
     }
     const context = getAttemptContext(db, input.attemptId);
-    const summary = input.summary ?? {};
+    let summary = input.summary ?? {};
+    // Plan Only: whatever the caller intended, a mutation in a Plan Only turn is born rejected by Core.
+    if (input.initialResolution !== 'rejected') {
+      const veto = planOnlyApprovalVeto(db, { attemptId: input.attemptId, kind: input.kind, summary });
+      if (veto) {
+        summary = { ...summary, policyDecision: 'denied', policyReason: veto.reason };
+        input = { ...input, initialResolution: 'rejected', resolvedBy: PLAN_ONLY_ACTOR };
+      }
+    }
     let actionArgumentsJson: string | null = null;
     if (input.actionArguments) {
       if (summary.argumentsDigest !== canonicalArgumentsDigest(input.actionArguments)) {

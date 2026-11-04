@@ -622,6 +622,50 @@ export class CoreClient {
     return this.request(`/v1/everyday/reminders/${encodeURIComponent(id)}/cancel`, { method: 'POST', body: {} });
   }
 
+  // --- Chat permission modes and standing authorizations (Core decides; the client records the user's choice) ---
+  async getConversationPermission(conversationId: string): Promise<{
+    mode: 'ask' | 'auto' | 'plan';
+    authorizations: Array<{ id: string; categories: string[]; workspaceRoot: string | null; expiresAt: string; createdAt: string; revokedAt: string | null; active: boolean; pins: { npmScripts?: Record<string, string> } }>;
+    categories: Record<string, string>;
+    maxMinutes: number;
+  }> {
+    return this.request(`/v1/conversations/${encodeURIComponent(conversationId)}/permission`);
+  }
+
+  async setConversationPermissionMode(conversationId: string, mode: 'ask' | 'auto' | 'plan'): Promise<{ mode: string; revoked: string[] }> {
+    return this.request(`/v1/conversations/${encodeURIComponent(conversationId)}/permission-mode`, { method: 'POST', body: { mode } });
+  }
+
+  async grantStandingAuthorization(conversationId: string, input: { categories: string[]; workspaceRoot?: string | null; expiresInMinutes: number }): Promise<Record<string, unknown>> {
+    return this.request(`/v1/conversations/${encodeURIComponent(conversationId)}/authorizations`, { method: 'POST', body: input });
+  }
+
+  async revokeStandingAuthorization(id: string, reason?: string): Promise<Record<string, unknown>> {
+    return this.request(`/v1/authorizations/${encodeURIComponent(id)}/revoke`, { method: 'POST', body: { reason: reason ?? 'revoked by the user' } });
+  }
+
+  // --- Notification outbox (the host reports what the operating system really did) ---
+  async getNotifications(): Promise<{
+    capability: { canNotify: boolean; channel: string | null; statement: string };
+    counts: { pending: number; delivered: number; failed: number };
+    deliverable: Array<{ id: string; kind: string; sourceId: string; title: string; body: string; status: string; attempts: number }>;
+    recent: Array<Record<string, unknown>>;
+  }> {
+    return this.request('/v1/notifications');
+  }
+
+  async registerNotificationChannel(input: { channel: string; supported: boolean; detail: string }): Promise<Record<string, unknown>> {
+    return this.request('/v1/notifications/channel', { method: 'POST', body: input });
+  }
+
+  async reportNotificationDelivery(id: string, input: { status: 'delivered' | 'failed'; via: string; error?: string }): Promise<Record<string, unknown>> {
+    return this.request(`/v1/notifications/${encodeURIComponent(id)}/delivery`, { method: 'POST', body: input });
+  }
+
+  async enqueueTestNotification(): Promise<{ notification: Record<string, unknown>; capability: Record<string, unknown> }> {
+    return this.request('/v1/notifications/test', { method: 'POST', body: {} });
+  }
+
   async markEverydayReminderNotified(id: string): Promise<Record<string, unknown>> {
     return this.request(`/v1/everyday/reminders/${encodeURIComponent(id)}/notified`, { method: 'POST', body: {} });
   }
