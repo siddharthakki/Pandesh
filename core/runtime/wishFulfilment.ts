@@ -318,7 +318,7 @@ export function invoiceWishOrder(db: CoreDatabase, dataDir: string, orderId: str
 <style>body{font:15px/1.5 system-ui,sans-serif;color:#1d2327;max-width:760px;margin:40px auto;padding:0 24px}table{width:100%;border-collapse:collapse;margin:24px 0}td,th{padding:8px;border-bottom:1px solid #ddd;text-align:left}td.r,th.r{text-align:right;white-space:nowrap}.demo{background:#fff4c2;padding:10px;font-weight:700;text-align:center}.small{color:#5b6770;font-size:13px}</style></head>
 <body>
 ${order.mode === 'demo' ? '<p class="demo">DEMO – KEINE GÜLTIGE RECHNUNG. Simulierter Auftrag, nichts zu bezahlen.</p>' : ''}
-<p>${esc(seller.legalName)}<br>${esc(seller.address)}<br>${esc(seller.email)}${seller.phone ? `<br>${esc(seller.phone)}` : ''}${seller.taxNumber ? `<br>Steuernummer: ${esc(seller.taxNumber)}` : ''}</p>
+<p>${esc(seller.legalName)}<br>${esc(seller.address)}<br>${esc(seller.email)}${seller.phone ? `<br>${esc(seller.phone)}` : ''}${seller.taxNumber ? `<br>${/^(steuer|st\.?-?nr|ust|kleinunternehmer)/i.test(seller.taxNumber) ? '' : 'Steuernummer: '}${esc(seller.taxNumber)}` : ''}</p>
 <p>${esc(order.customerName)}<br>${esc(order.customerAddress ?? '')}</p>
 <h1>Rechnung</h1>
 <p>Rechnungsnummer: ${esc(number)}<br>Rechnungsdatum: ${deDate(today)}<br>Leistungsdatum: ${deDate(deliveredAt)}</p>
@@ -478,7 +478,8 @@ Researched 2026-11-03; sources are guides and IHK pages, not statute text.
    - Either way: Fragebogen zur steuerlichen Erfassung via ELSTER (free), within about 4 weeks of starting. You get a Steuernummer.
    - Employed? Check your employment contract for side-work notification rules.
 2. VAT: Kleinunternehmerregelung (§19 UStG) — since 2025: prior-year turnover ≤ €25,000 and current year ≤ €100,000. Choose it in the Fragebogen.
-3. Invoices under §19: name and address of you and the customer, date, description of the service, amount, and the note that no VAT is charged under §19 UStG (§34a UStDV). Pandesh adds a sequential number and the service date.
+3. Invoices under §19 (§34a UStDV): name and address of you and the customer, the applicable Steuernummer, USt-IdNr or Kleinunternehmer-Identifikationsnummer, date, description of the service, amount, and the note that no VAT is charged under §19 UStG. Pandesh adds a sequential number and the service date.
+   - Which identifier you have, and whether §19 applies to you, come from the Finanzamt's letter / ELSTER Postfach (or the BZSt). Verify both there; Pandesh never assumes them.
    - E-invoicing: since 2025 you must be able to RECEIVE e-invoices; small businesses are exempt from ISSUING them, so a PDF/paper invoice is fine.
 4. Income tax: profit is taxable income (EÜR with the yearly return). Set a reserve percentage in the authorization.
 5. Your own Impressum (§5 DDG, replaced §5 TMG in May 2024) on any page or listing where you offer the service commercially: name, postal address, fast contact (e-mail/phone).
@@ -486,7 +487,7 @@ Researched 2026-11-03; sources are guides and IHK pages, not statute text.
 7. Data you receive from customers: keep it to what the order needs; delete what you no longer need.
 8. Marketing: no ads by e-mail/phone/messages to people who did not consent (§7 UWG). Use the channels in ACQUISITION-PLAN.md.
 
-When done, record in Pandesh: legal name, address, e-mail, Steuernummer, §19 status, what you registered and when, the tax reserve, payment details for invoices, and which actions are allowed (publish, contact, contract, payments).
+When done, record in Pandesh: legal name, address, e-mail, the verified invoice identifier with its label (e.g. "USt-IdNr. DE…"; a bare number is printed as Steuernummer), the verified §19 status, what you registered and when, the tax reserve, payment details for invoices, and which actions are allowed (publish, contact, contract, payments).
 `;
 
 /** Builds the website offering as files in Pandesh's own data folder. Nothing is published. */

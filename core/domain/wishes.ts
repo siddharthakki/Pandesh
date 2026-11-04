@@ -354,6 +354,10 @@ export function recordWishLedgerClaim(db: CoreDatabase, input: { goalId: string;
   if (evidenceRef) {
     const again = db.get<Record<string, unknown>>("SELECT * FROM wish_ledger WHERE goalId = ? AND kind = ? AND amountCents = ? AND evidenceRef = ? AND status != 'rejected'", [goal.id, input.kind, input.amountCents, evidenceRef]);
     if (again) return asLedger(again);
+    // A demonstration payment's reference stays demonstration money, whatever kind, amount or order it is reported as.
+    if (mode === 'real' && db.get("SELECT 1 FROM wish_ledger WHERE goalId = ? AND mode = 'demo' AND status != 'rejected' AND (evidenceRef = ? OR paymentReference = ?)", [goal.id, evidenceRef, evidenceRef])) {
+      throw new CoreError('invalid_request', `reference '${evidenceRef}' belongs to a DEMO payment; demonstration money never becomes real money`);
+    }
   }
   const id = newId('wledger');
   db.run(
@@ -383,6 +387,10 @@ export function verifyWishLedgerEntry(db: CoreDatabase, entryId: string, resolut
     const now = nowIso();
     if (resolution === 'verified' && row.kind === 'revenue') {
       if (!reference) throw new CoreError('invalid_request', 'give the payment reference from your bank or PayPal statement to reconcile this revenue');
+      // One statement line reconciles one payment; a real payment never borrows a demonstration's reference.
+      const used = db.get<{ id: string; mode: string }>("SELECT id, mode FROM wish_ledger WHERE id != ? AND status = 'verified' AND paymentReference = ?", [entryId, reference])
+        ?? (row.mode === 'real' ? db.get<{ id: string; mode: string }>("SELECT id, mode FROM wish_ledger WHERE id != ? AND mode = 'demo' AND status != 'rejected' AND evidenceRef = ?", [entryId, reference]) : undefined);
+      if (used) throw new CoreError('invalid_request', `reference '${reference}' already belongs to ${used.mode === 'demo' ? 'a DEMO payment' : 'another payment'} (${used.id}); one statement line reconciles one payment`);
       const order = row.orderId ? db.get<{ id: string; invoiceNumber: string | null; priceCents: number; eventsJson: string }>('SELECT id, invoiceNumber, priceCents, eventsJson FROM wish_orders WHERE id = ?', [String(row.orderId)]) : undefined;
       if (!order) throw new CoreError('invalid_request', 'revenue can only be reconciled against a customer order; this entry has none');
       if (!order.invoiceNumber) throw new CoreError('invalid_request', `order ${order.id} has no issued invoice yet`);

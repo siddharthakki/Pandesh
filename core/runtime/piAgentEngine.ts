@@ -2006,7 +2006,7 @@ export class PiAgentEngine implements EngineAdapter {
             action: { type: 'string', enum: ['record_business', 'verify_payment'] },
             goalId: { type: 'string' },
             legalName: { type: 'string' }, address: { type: 'string' }, email: { type: 'string' }, phone: { type: 'string' },
-            taxNumber: { type: 'string', description: 'The Steuernummer the Finanzamt assigned, as the user gave it.' },
+            taxNumber: { type: 'string', description: 'The invoice tax identifier exactly as the user read it from the Finanzamt/BZSt letter, with its label when it is not a Steuernummer (e.g. "USt-IdNr. DE…", "Kleinunternehmer-IdNr …"). Never guess which one applies.' },
             vatMode: { type: 'string', enum: ['kleinunternehmer', 'regular'] },
             registration: { type: 'string', description: 'What the user registered and when, in their words.' },
             taxReservePercent: { type: 'number' },
@@ -2026,7 +2026,7 @@ export class PiAgentEngine implements EngineAdapter {
               const allow = new Set((Array.isArray(args.allow) ? args.allow : []).map(String));
               cardText = 'Record your business authorization (only you can; Pandesh does not check it with any authority):\n'
                 + `Name: ${args.legalName ?? '—'}\nAddress: ${args.address ?? '—'}\nE-mail: ${args.email ?? '—'}${args.phone ? `\nPhone: ${args.phone}` : ''}\n`
-                + `Steuernummer: ${args.taxNumber || 'none'}\nVAT: ${args.vatMode === 'kleinunternehmer' ? '§19 UStG small business (no VAT on invoices)' : args.vatMode === 'regular' ? 'regular VAT' : '—'}\n`
+                + `Tax identifier (Steuernummer / USt-IdNr / Kleinunternehmer-IdNr, as verified): ${args.taxNumber || 'none'}\nVAT: ${args.vatMode === 'kleinunternehmer' ? '§19 UStG small business (no VAT on invoices)' : args.vatMode === 'regular' ? 'regular VAT' : '—'}\n`
                 + `Registered: ${args.registration ?? '—'}\nIncome-tax reserve: ${args.taxReservePercent ?? '—'}%\nPayment details: ${args.paymentDetails || 'none'}\n`
                 + `Allowed: ${WISH_BUSINESS_SCOPES.map((s) => `${s} ${allow.has(s) ? 'YES' : 'no'}`).join(', ')}`;
             } else if (args.action === 'verify_payment') {

@@ -242,6 +242,45 @@ describe('demonstration money is never purchasing power', () => {
     const first = recordWishLedgerClaim(db, claim);
     expect(recordWishLedgerClaim(db, { ...claim, description: 'dieselbe Zahlung' }).id).toBe(first.id);
   });
+
+  it('a demo payment never becomes real revenue, whatever arguments the model passes and however often it repeats them', () => {
+    const { goal } = createWishGoal(db, { wish: WISH });
+    authorizeWishBusiness(db, {
+      legalName: 'Sid Example', address: 'Hauptstr. 1, 04109 Leipzig', email: 'sid@mail.de', vatMode: 'kleinunternehmer', taxNumber: '231/123/45678',
+      registration: 'Gewerbeanmeldung 2026-11-10', taxReservePercent: 0, paymentDetails: 'IBAN DE00 0000 0000 0000 0000 00, Sid Example', scopes: { publish: true, contact: true, contract: true, payments: true },
+    }, 'client:desktop-1');
+    const invoiced = (mode: 'demo' | 'real', customerName: string, email: string) => {
+      let o = createWishOrder(db, { goalId: goal.id, mode, channel: mode === 'demo' ? 'demo' : 'personal_network', customerName, customerAddress: 'Lindenweg 4, 04109 Leipzig', priceCents: 29_000 });
+      o = fulfilWishOrder(db, dir, acceptWishOrder(db, o.id, realBrief(email)).id);
+      return invoiceWishOrder(db, dir, markWishOrderDelivered(db, o.id).id, goal, T0);
+    };
+    const demo = invoiced('demo', 'Demo-Kundin (fiktiv)', 'demo@example.com');
+    const real = invoiced('real', 'Maria Muster', 'maria.muster@web.de');
+    const pi = 'karkedikha:pi';
+
+    const demoPay = { goalId: goal.id, kind: 'revenue', amountCents: 29_000, description: 'Demo-Zahlung', evidenceRef: 'DEMO-SEPA-7', orderId: demo.id, recordedBy: pi };
+    const demoClaim = recordWishLedgerClaim(db, demoPay);
+    verifyWishLedgerEntry(db, demoClaim.id, 'verified', 'client:desktop-1', { paymentReference: 'DEMO-SEPA-7' });
+    // Repeated, relabelled or moved to the real order: still the demo payment, or refused.
+    expect(recordWishLedgerClaim(db, { ...demoPay, description: 'nochmal' }).id).toBe(demoClaim.id);
+    expect(recordWishLedgerClaim(db, { ...demoPay, orderId: real.id }).id).toBe(demoClaim.id);
+    expect(() => recordWishLedgerClaim(db, { ...demoPay, mode: 'real' })).toThrow(/demo order; its money is demo money/);
+    expect(() => recordWishLedgerClaim(db, { ...demoPay, amountCents: 28_999, orderId: real.id })).toThrow(/belongs to a DEMO payment/);
+    expect(() => recordWishLedgerClaim(db, { ...demoPay, kind: 'funds', orderId: null })).toThrow(/belongs to a DEMO payment/);
+    // Confirming the real order with the demo's statement line is refused, even with a person's approval.
+    const realClaim = recordWishLedgerClaim(db, { goalId: goal.id, kind: 'revenue', amountCents: 29_000, description: 'Zahlung Maria', orderId: real.id, recordedBy: pi });
+    expect(() => verifyWishLedgerEntry(db, realClaim.id, 'verified', 'client:desktop-1', { paymentReference: 'DEMO-SEPA-7' })).toThrow(/belongs to a DEMO payment/);
+    expect(getWishOrder(db, real.id).status).toBe('invoiced');
+    expect(wishFunds(db, goal.id)).toMatchObject({ verifiedRevenueCents: 0, verifiedOwnFundsCents: 0, availableCents: 0, demoRevenueCents: 29_000 });
+
+    // The real payment counts once; the same statement line cannot pay a second order.
+    verifyWishLedgerEntry(db, realClaim.id, 'verified', 'client:desktop-1', { paymentReference: 'SEPA 992' });
+    const second = invoiced('real', 'Max Muster', 'max.muster@web.de');
+    const again = recordWishLedgerClaim(db, { goalId: goal.id, kind: 'revenue', amountCents: 29_000, description: 'Zahlung Max', orderId: second.id, recordedBy: pi });
+    expect(() => verifyWishLedgerEntry(db, again.id, 'verified', 'client:desktop-1', { paymentReference: 'SEPA 992' })).toThrow(/already belongs to another payment/);
+    expect(wishFunds(db, goal.id)).toMatchObject({ verifiedRevenueCents: 29_000, demoRevenueCents: 29_000 });
+    expect(wishCommerceFigures(db, goal.id, 'real')).toMatchObject({ paidOrders: 1, revenueCents: 29_000 });
+  });
 });
 
 describe('a real order after the owner authorizes the business', () => {
