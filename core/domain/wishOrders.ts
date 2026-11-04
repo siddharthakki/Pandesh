@@ -267,6 +267,30 @@ export function wishCommerceFigures(db: CoreDatabase, goalId: string, mode: Wish
   };
 }
 
+/**
+ * The financial status the user is shown, written by Core from the ledger alone. A model's sentence about payments is
+ * never the source: whatever it said, this block states what is reconciled. Null when the goal has no money records.
+ */
+export function renderWishLedgerStatus(db: CoreDatabase, goalId: string): string | null {
+  const goal = getWishGoal(db, goalId);
+  const entries = listWishLedger(db, goalId);
+  const orders = listWishOrders(db, goalId);
+  if (!entries.length && !orders.length) return null;
+  const m = (c: number) => formatMoney(c, goal.currency);
+  const funds = wishFunds(db, goalId);
+  const demoPaid = funds.demoRevenueCents > 0;
+  const realPaid = funds.verifiedRevenueCents > 0;
+  const payment = realPaid ? 'REAL, RECONCILED' : demoPaid ? 'DEMONSTRATION / UNVERIFIED' : 'NONE RECEIVED';
+  return [
+    '— Ledger (written by Core, not by the model) —',
+    `Payment: ${payment}`,
+    `Verified real revenue: ${m(funds.verifiedRevenueCents)}`,
+    `Purchasing power: ${m(Math.max(0, funds.availableCents))}`,
+    realPaid ? `${m(funds.verifiedRevenueCents)} of real payments reconciled by a person.` : 'No real payment reconciled.',
+    ...(demoPaid ? [`${m(funds.demoRevenueCents)} of demonstration money exists; it never counts.`] : []),
+  ].join('\n');
+}
+
 /** The commerce part of a goal's status, every figure from the records. Demo and real are never added together. */
 export function renderWishCommerce(db: CoreDatabase, goalId: string): string[] {
   const goal = getWishGoal(db, goalId);

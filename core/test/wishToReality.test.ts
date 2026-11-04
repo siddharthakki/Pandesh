@@ -17,7 +17,7 @@ import {
 } from '../domain/wishes';
 import { advanceWish, buildWebsiteDeliverable, extractOffers, parseEvidenceSources, renderOnePageSite, renderWishStatus } from '../runtime/wishPipeline';
 import { fulfilWishOrder, invoiceWishOrder, markWishOrderDelivered, normalizeSiteBrief } from '../runtime/wishFulfilment';
-import { acceptWishOrder, authorizeWishBusiness, createWishOrder, getWishOrder, resolveWishOrder, wishCommerceFigures } from '../domain/wishOrders';
+import { acceptWishOrder, authorizeWishBusiness, createWishOrder, getWishOrder, renderWishLedgerStatus, resolveWishOrder, wishCommerceFigures } from '../domain/wishOrders';
 import { classifyChatToolCall } from '../domain/permissionModes';
 
 const WISH = 'Pandesh, I want the AOC CU34G4ZCA monitor for €200. Find a legitimate way to earn enough money to buy it.';
@@ -280,6 +280,19 @@ describe('demonstration money is never purchasing power', () => {
     expect(() => verifyWishLedgerEntry(db, again.id, 'verified', 'client:desktop-1', { paymentReference: 'SEPA 992' })).toThrow(/already belongs to another payment/);
     expect(wishFunds(db, goal.id)).toMatchObject({ verifiedRevenueCents: 29_000, demoRevenueCents: 29_000 });
     expect(wishCommerceFigures(db, goal.id, 'real')).toMatchObject({ paidOrders: 1, revenueCents: 29_000 });
+  });
+
+  it('the user-facing financial status is written from the ledger: a demo payment reads DEMONSTRATION / UNVERIFIED with €0 real', () => {
+    const { goal } = createWishGoal(db, { wish: WISH });
+    let o = createWishOrder(db, { goalId: goal.id, mode: 'demo', channel: 'demo', customerName: 'Demo-Kundin (fiktiv)', customerAddress: 'Fiktivweg 1, 00000 Nirgendwo', priceCents: 29_000 });
+    o = invoiceWishOrder(db, dir, markWishOrderDelivered(db, fulfilWishOrder(db, dir, acceptWishOrder(db, o.id, realBrief('demo@example.com')).id).id).id, goal, T0);
+    const pay = recordWishLedgerClaim(db, { goalId: goal.id, kind: 'revenue', amountCents: 29_000, description: 'Das Geld ist echt eingegangen!', orderId: o.id, recordedBy: 'karkedikha:pi' });
+    verifyWishLedgerEntry(db, pay.id, 'verified', 'client:desktop-1', { paymentReference: 'DEMO-REF-1' });
+    const block = renderWishLedgerStatus(db, goal.id)!;
+    expect(block).toMatch(/Payment: DEMONSTRATION \/ UNVERIFIED/);
+    expect(block).toMatch(/Verified real revenue: €0\.00/);
+    expect(block).toMatch(/Purchasing power: €0\.00/);
+    expect(block).toMatch(/No real payment reconciled/);
   });
 });
 

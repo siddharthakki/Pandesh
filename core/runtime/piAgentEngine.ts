@@ -23,7 +23,7 @@ import { createResearchEvidenceRunner } from './researchCapability';
 import { advanceWish, buildWebsiteDeliverable, renderWishStatus } from './wishPipeline';
 import { fulfilWishOrder, invoiceWishOrder, markWishOrderDelivered, normalizeSiteBrief } from './wishFulfilment';
 import { createWishGoal, evaluateWishPurchase, formatMoney, isAssistantActor, listWishLedger, parseAmountToCents, prepareWishPurchase, recordWishLedgerClaim, resolveWishGoal, updateWishTarget, verifyWishLedgerEntry } from '../domain/wishes';
-import { acceptWishOrder, addWishOrderEvent, authorizeWishBusiness, createWishOrder, listWishOrders, resolveWishOrder, WISH_BUSINESS_SCOPES, wishOrderNextStep } from '../domain/wishOrders';
+import { acceptWishOrder, addWishOrderEvent, authorizeWishBusiness, createWishOrder, listWishOrders, renderWishLedgerStatus, resolveWishOrder, WISH_BUSINESS_SCOPES, wishOrderNextStep } from '../domain/wishOrders';
 import { completeReminder, createNote, createReminder, listReminders } from '../domain/everydayTools';
 import { buildDailyBriefing, renderDailyBriefing } from './dailyBriefing';
 import {
@@ -3913,6 +3913,15 @@ TRUTHFULNESS & BEHAVIORAL PROTOCOL:
       for (const link of phoneShares) if (!finalReply.includes(link)) finalReply += `\n\n${link}`;
     } else if (/\b(?:sent|delivered|shared)\b[^.\n]{0,60}\bphone\b|\bphone\b[^.\n]{0,60}\b(?:sent|delivered|shared)\b/i.test(finalReply)) {
       finalReply += '\n\nCorrection: nothing was sent to your phone in this turn — no file was shared to the paired phone.';
+    }
+
+    // Financial status comes from Core's ledger, never from the model's words: when a wish tool ran this turn, the
+    // ledger block is appended to the result, and any claim of a received payment is shown against it.
+    if (toolCallsRecorded.some((t) => /^(?:record_wish_money|wish_order|wish_status|advance_wish|update_wish_goal|build_wish_deliverable)$/.test(t.tool))) {
+      try {
+        const ledger = renderWishLedgerStatus(db, resolveWishGoal(db, null).id);
+        if (ledger && !finalReply.includes('— Ledger (written by Core')) finalReply += `\n\n${ledger}`;
+      } catch {}
     }
 
     // A reply may not promise background work or a notification that nothing is set up to deliver.
