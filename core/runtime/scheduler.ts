@@ -13,6 +13,8 @@ import type { IntelligenceScout } from './intelligenceScout';
 import type { ConnectorAdapter } from './connectors/connectorCapability';
 import type { ConnectorId } from '../shared/wireTypes';
 import { SCHEDULER_CLIENT_ID } from '../domain/processTerminationPolicy';
+import { HOUSEHOLD_ROUTINES, recordMissedRun, settleInterruptedRuns } from '../domain/householdRoutines';
+import { runHouseholdRoutine } from './householdRoutineRunner';
 
 const ACTOR = SCHEDULER_CLIENT_ID;
 
@@ -41,10 +43,17 @@ export function startScheduledTaskLoop(
   intervalMs = 30_000,
   options: ScheduledTaskLoopOptions = {},
 ): () => void {
+  try {
+    const settled = settleInterruptedRuns(db);
+    if (settled) console.log(`[karkedikha-core ${new Date().toISOString()}] ${settled} household routine run(s) interrupted by the last shutdown recorded as failed`);
+  } catch { /* the routine tables are optional in very old databases */ }
   const tick = () => {
     let claimed: ReturnType<typeof claimDueScheduledTasks>;
     try {
-      claimed = claimDueScheduledTasks(db);
+      claimed = claimDueScheduledTasks(db, new Date(), (task, dueAt) => {
+        recordMissedRun(db, task, dueAt);
+        console.log(`[karkedikha-core ${new Date().toISOString()}] scheduled task ${task.id} missed its ${dueAt} run (outside the catch-up window); recorded`);
+      });
     } catch (err) {
       console.error(`[karkedikha-core ${new Date().toISOString()}] scheduler claim failed:`, err instanceof Error ? err.message : err);
       return;
@@ -62,6 +71,16 @@ export function startScheduledTaskLoop(
           }).catch((err) => {
             console.error(`[karkedikha-core ${new Date().toISOString()}] daily brief ${task.id} failed:`, err instanceof Error ? err.message : err);
           });
+          continue;
+        }
+        if (task.routine && HOUSEHOLD_ROUTINES.has(task.routine)) {
+          void runHouseholdRoutine(db, broadcaster, task, late ? 'catch_up' : 'schedule', { connectorRegistry: options.connectorRegistry, cwd: options.cwd })
+            .then((result) => {
+              console.log(`[karkedikha-core ${new Date().toISOString()}] household routine ${task.id} (${task.routine}) ${result.reason}`);
+            })
+            .catch((err) => {
+              console.error(`[karkedikha-core ${new Date().toISOString()}] household routine ${task.id} failed:`, err instanceof Error ? err.message : err);
+            });
           continue;
         }
         if (task.routine === SCOUT_ROUTINE) {

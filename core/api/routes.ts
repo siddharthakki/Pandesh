@@ -13,6 +13,7 @@ import * as devStories from '../runtime/kandev/devStories';
 import { KandevClient } from '../runtime/kandev/kandevClient';
 import { registerBridgeRoutes } from './bridgeRoutes';
 import { registerOperatorRoutes } from './operatorRoutes';
+import { registerHouseholdRoutes } from './householdRoutes';
 
 const kandevClient = new KandevClient();
 import * as dependencies from '../domain/dependencies';
@@ -483,6 +484,8 @@ export function buildRouter(
   if (bridge) registerBridgeRoutes(router, { dataDir: bridge.dataDir, executor, kandev: kandevClient });
   // --- Master operator: one instruction, many tools (core/api/operatorRoutes.ts) ---
   if (bridge) registerOperatorRoutes(router, { dataDir: bridge.dataDir, executor, kandev: kandevClient });
+  // --- Household OS: PC organization, routines, obligations, JUGAAD phone (core/api/householdRoutes.ts) ---
+  if (bridge) registerHouseholdRoutes(router, { dataDir: bridge.dataDir, connectors, broadcaster });
 
   // --- Stories ---
   router.get('/v1/stories', (ctx) => {
