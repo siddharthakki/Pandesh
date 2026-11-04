@@ -168,3 +168,39 @@ default) Auto may pick another LOCAL model or nothing at all.
 | `core/test/platform/windowsProcessTreeCancellation.platform.test.ts` | the Core path's real tree (repaired: it needed a real grant and an in-workspace fixture) |
 | `core/test/benchmarkImprovements.test.ts` | the bounded anchor context, the safe escape repair, the identical-failure tracker, the validation tiers, the context budget |
 | `core/test/benchmarkRealExecution.test.ts` | the REAL Core executor: edit-and-repair with the bounded context, and a change written once when it is proposed again |
+
+Run them with:
+
+```
+npm run test:platform:win32          # the real process trees
+npx vitest run core/test/benchmarkImprovements.test.ts core/test/benchmarkRealExecution.test.ts core/test/processTreeTermination.test.ts
+```
+
+### Verification status at the time of writing
+
+| suite | result |
+| --- | --- |
+| `core/test` | 2244 passed, 2 failed — both pre-existing (verified against `main`) |
+| `core/test/platform` | 3 passed |
+| `src/test` | 3417 passed, 4 failed — all pre-existing (verified against `main`) |
+| `tsc -p tsconfig.core.json` | clean |
+| `tsc -p ./` | clean |
+
+The pre-existing failures, unchanged by this work and confirmed on `main`:
+
+- `core/test/windowsConfinement.test.ts` — the suite cannot build: the C#
+  source it compiles (`core/runtime/windowsConfinement/WindowsConfinementLauncher.cs`)
+  is not in the repository.
+- `core/test/m54RealityAcceptance.reality.test.ts` — "Reality J": the static
+  architecture guard reports four files that import `node:child_process`
+  without being on the allowlist (`core/domain/permissionModes.ts`,
+  `core/platform/osSecretProtector.ts`, `core/runtime/capabilityInventory.ts`,
+  `core/runtime/mediaProduction.ts`). This change adds exactly one new
+  allowlist entry, for `core/runtime/processTree.ts`.
+- `core/test/piAgentWorkspaceDiscovery.test.ts` — "Scenario D": the
+  workspace-discovery fixture is not created.
+- `src/test/suite/coreLauncher.test.ts`,
+  `src/test/suite/coreUnavailableMessaging.test.ts`,
+  `src/test/suite/m34PandaIdentity.test.ts` — missing packaged assets and
+  bundle-dependent behaviour.
+
