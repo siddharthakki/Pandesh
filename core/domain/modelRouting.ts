@@ -100,6 +100,8 @@ export function routeModel(
 
   const candidates = chain.map((model, index) => {
     const available = catalog.reachable && installed.has(model);
+    const contextWindowTokens = catalog.contextWindows?.[model];
+    const reasoningTokens = catalog.reasoningTokens?.[model];
     return {
       provider: 'ollama',
       model,
@@ -109,6 +111,8 @@ export function routeModel(
       rejectionReasons: available
         ? []
         : [catalog.reachable ? 'model is not installed' : 'Ollama catalog is unreachable'],
+      ...(contextWindowTokens !== undefined ? { contextWindowTokens } : {}),
+      ...(reasoningTokens !== undefined ? { reasoningTokens } : {}),
     };
   });
   const selectedIndex = chain.indexOf(selectedModel);
@@ -123,10 +127,18 @@ export function routeModel(
   const window = resolveContextWindowChain({
     explicit: options.contextWindowOverrideTokens,
     provider: catalog.contextWindows?.[selectedModel],
+    reasoningTokens: catalog.reasoningTokens?.[selectedModel],
   });
   const windowEvidence = window.source === 'assumed_default'
     ? {}
     : { contextWindowTokens: window.contextTokens, contextWindowSource: window.source };
+  // A reasoning model's thinking is charged against the same window as the
+  // answer, so the reserve is frozen with the selection too: every turn of
+  // this attempt budgets the same way, and a restart rebuilds the same
+  // budget.
+  const reasoningEvidence = window.reasoningTokens === undefined
+    ? {}
+    : { reasoningTokens: window.reasoningTokens };
 
   return {
     requiredCapabilities: requirementsFor(resolvedMode, profile),
@@ -143,5 +155,6 @@ export function routeModel(
     escalationCandidates,
     routingPolicy: 'local-only',
     ...windowEvidence,
+    ...reasoningEvidence,
   };
 }

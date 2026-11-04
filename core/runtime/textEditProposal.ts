@@ -14,6 +14,7 @@
  */
 import * as fs from 'node:fs';
 import { recoverRepositoryPath } from './repositoryPathRecovery';
+import { buildAnchorContext, type AnchorMissKind } from './anchorContext';
 import {
   buildUnifiedDiff,
   readBaselineIdentity,
@@ -23,19 +24,64 @@ import {
 
 export type AnchorResolution =
   | { ok: true; content: string }
-  | { ok: false; reason: string };
+  | {
+      ok: false;
+      reason: string;
+      /** Stable code so a caller can react without parsing the reason text. */
+      code: 'anchor_empty' | 'anchor_not_found' | 'anchor_ambiguous';
+      /** Bounded, verbatim context of the current file, when the anchor missed. */
+      context?: string;
+    };
 
 /**
  * Applies one anchored find/replace against baseline text. `find` must occur
  * exactly once — zero occurrences (missing anchor) or more than one
  * (ambiguous anchor) are both refused without producing any content.
+ *
+ * When the anchor misses, the failure carries BOUNDED, VERBATIM context of the
+ * current file: a model cannot copy an anchor it was never shown, so the
+ * next attempt needs to see the region it was aiming at.
  */
-export function resolveAnchoredEdit(baselineText: string, find: string, replace: string): AnchorResolution {
-  if (find === '') return { ok: false, reason: 'find must not be empty' };
+export function resolveAnchoredEdit(
+  baselineText: string,
+  find: string,
+  replace: string,
+  options: { relativePath?: string } = {},
+): AnchorResolution {
+  if (find === '') return { ok: false, reason: 'find must not be empty', code: 'anchor_empty' };
   const occurrences = baselineText.split(find).length - 1;
-  if (occurrences === 0) return { ok: false, reason: 'find text was not found in the file' };
-  if (occurrences > 1) return { ok: false, reason: `find text occurs ${occurrences} times; it must occur exactly once` };
+  if (occurrences === 0) {
+    return {
+      ok: false,
+      reason: 'find text was not found in the file',
+      code: 'anchor_not_found',
+      ...anchorContextFor('not_found', options.relativePath, baselineText, find),
+    };
+  }
+  if (occurrences > 1) {
+    return {
+      ok: false,
+      reason: `find text occurs ${occurrences} times; it must occur exactly once`,
+      code: 'anchor_ambiguous',
+      ...anchorContextFor('ambiguous', options.relativePath, baselineText, find),
+    };
+  }
   return { ok: true, content: baselineText.split(find).join(replace) };
+}
+
+function anchorContextFor(
+  kind: AnchorMissKind,
+  relativePath: string | undefined,
+  baselineText: string,
+  find: string,
+): { context?: string } {
+  if (!relativePath) return {};
+  try {
+    return { context: buildAnchorContext({ relativePath, fileText: baselineText, find, kind }) };
+  } catch {
+    // Context is an aid, never a reason to fail differently.
+    return {};
+  }
 }
 
 export interface TextEditProposal {
@@ -48,6 +94,21 @@ export interface TextEditProposal {
   content: string;
   presentation: WriteProposalPresentation;
 }
+
+/**
+ * The outcome of building one anchored proposal. A refused proposal carries
+ * the reason AND, when the anchor simply missed, the bounded verbatim
+ * context the model needs to aim at the right text next time.
+ */
+export interface TextEditProposalRefusal {
+  error: string;
+  /** Stable code so a caller can react without parsing the reason text. */
+  code?: 'anchor_empty' | 'anchor_not_found' | 'anchor_ambiguous';
+  /** Bounded, verbatim context of the current file, when the anchor missed. */
+  context?: string;
+}
+
+export type TextEditProposalResult = TextEditProposal | TextEditProposalRefusal | undefined;
 
 /** Never read more than this from disk to build a baseline preview — matches
  * the equivalent bound in `writeProposal.ts`. */
@@ -74,7 +135,7 @@ export function buildTextEditProposal(input: {
   requestedPath: string;
   find: string;
   replace: string;
-}): TextEditProposal | { error: string } | undefined {
+}): TextEditProposalResult {
   const recovery = recoverRepositoryPath({
     workspaceRoot: input.workspaceRoot,
     requestedPath: input.requestedPath,
@@ -100,8 +161,10 @@ export function buildTextEditProposal(input: {
     return { error: err instanceof Error ? err.message : String(err) };
   }
 
-  const resolved = resolveAnchoredEdit(baselineText, input.find, input.replace);
-  if (!resolved.ok) return { error: resolved.reason };
+  const resolved = resolveAnchoredEdit(baselineText, input.find, input.replace, { relativePath: selectedPath });
+  if (!resolved.ok) {
+    return { error: resolved.reason, code: resolved.code, ...(resolved.context ? { context: resolved.context } : {}) };
+  }
 
   const baselineLines = splitLines(baselineText);
   const proposedLines = splitLines(resolved.content);

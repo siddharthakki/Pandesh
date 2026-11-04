@@ -27,6 +27,10 @@ export const AUTHORITATIVE_PROCESS_SPAWN_ALLOWLIST: ReadonlySet<string> = new Se
   // (one PID, read-only) and never terminates anything itself: the kill is
   // always the caller's, and only after the boundary verified ownership.
   'core/runtime/processOwnership.ts',
+  // The shared process-TREE termination mechanism: it enumerates the owned
+  // tree, terminates it with the platform tree primitive and VERIFIES that
+  // the processes are gone. Every "stop the work" path uses it.
+  'core/runtime/processTree.ts',
 
   // Core quarantined / platform capabilities
   'core/attachments/audioProcessing.ts',

@@ -1708,6 +1708,28 @@ CREATE TABLE IF NOT EXISTS bridge_task_checkpoints (
 CREATE INDEX IF NOT EXISTS idx_bridge_checkpoints_task ON bridge_task_checkpoints(taskId, id);
 `;
 
+// Migration 46: the durable mutation ledger. It records the INTENTION of a
+// workspace edit BEFORE the write, with the exact pre-image and result
+// identity. That makes a replayed edit idempotent (the file already has the
+// result -> no second write) and makes an edit whose outcome is UNCERTAIN
+// non-replayable (the file matches neither -> the side effect is never
+// repeated on a guess).
+const MIGRATION_46_MUTATION_LEDGER = `
+CREATE TABLE IF NOT EXISTS mutation_ledger (
+  fingerprint TEXT PRIMARY KEY,
+  attemptId TEXT NOT NULL,
+  toolName TEXT NOT NULL,
+  path TEXT NOT NULL,
+  baselineSha256 TEXT NOT NULL,
+  resultSha256 TEXT NOT NULL,
+  status TEXT NOT NULL,
+  recordedAt TEXT NOT NULL,
+  completedAt TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_mutation_ledger_path ON mutation_ledger(toolName, path);
+CREATE INDEX IF NOT EXISTS idx_mutation_ledger_attempt ON mutation_ledger(attemptId);
+`;
+
 export const MIGRATIONS: Migration[] = [
   { version: 1, description: 'bootstrap core_metadata and schema_migrations', sql: MIGRATION_1_BOOTSTRAP },
   { version: 2, description: 'M31 domain schema (projects/repositories/stories/events/etc.)', sql: MIGRATION_2_DOMAIN },
@@ -1754,6 +1776,7 @@ export const MIGRATIONS: Migration[] = [
   { version: 43, description: 'Wish-to-Reality real revenue: demo vs real money, reconciled payments, business authorization and customer orders', sql: MIGRATION_43_WISH_COMMERCE },
   { version: 44, description: 'Household OS: PC organization move journal and rules, bounded recurring routines with run history, household obligations with evidence, JUGAAD companion sync', sql: MIGRATION_44_HOUSEHOLD_OS },
   { version: 45, description: 'Household OS hardening: replay nonces that survive a restart, per-folder document-reading grants', sql: MIGRATION_45_HOUSEHOLD_HARDENING },
+  { version: 46, description: 'Durable mutation ledger: restart-safe, idempotent workspace edits and non-replayable uncertain mutations', sql: MIGRATION_46_MUTATION_LEDGER },
 ];
 
 

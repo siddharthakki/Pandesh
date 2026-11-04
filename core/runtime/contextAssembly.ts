@@ -19,6 +19,7 @@ export function contextWindowForAttempt(context: AttemptContextRecord): ContextW
     contextTokens: selection?.contextWindowTokens,
     source: selection?.contextWindowSource,
     maxOutputTokens: selection?.maxOutputTokens,
+    reasoningTokens: selection?.reasoningTokens,
   });
 }
 

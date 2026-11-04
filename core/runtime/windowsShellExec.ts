@@ -1,6 +1,7 @@
 import { spawn, spawnSync } from 'node:child_process';
 import { LocalAutonomySecurityKernel } from '../security/kernel';
 import { createSanitizedChildEnvironment } from '../security/childEnvironment';
+import { terminateProcessTree, type ProcessTreeTerminationResult } from './processTree';
 
 const DEFAULT_MAX_OUTPUT_CHARS = 8_000;
 const DEFAULT_TIMEOUT_MS = 20_000;
@@ -55,7 +56,7 @@ export function runPowerShellScript(
     if (child.pid) {
       unregisterProc = kernel.getSafeModeManager().registerChildProcess(
         child.pid,
-        () => killTree(),
+        () => { void killTree(); },
         `powershell: ${script.slice(0, 100)}`,
         undefined,
         // Provenance: Pandesh started this child at this moment. The SAFE_MODE
@@ -70,11 +71,25 @@ export function runPowerShellScript(
     child.stderr?.on('data', append);
     let settled = false;
     let killedByAbort = false;
-    const killTree = () => {
-      if (!child.pid) return;
-      try { spawnSyncFn('taskkill', ['/pid', String(child.pid), '/t', '/f'], { windowsHide: true }); } catch { /* best-effort */ }
+    let termination: ProcessTreeTerminationResult | undefined;
+    let killPromise: Promise<void> | undefined;
+    // The tree is terminated with the platform tree primitive and then
+    // VERIFIED: a `taskkill` that exits 0 is not evidence that the processes
+    // are gone, and a stop that only killed the shell left the script's own
+    // children running.
+    const killTree = (): Promise<void> => {
+      if (killPromise) return killPromise;
+      killPromise = (async () => {
+        if (!child.pid) return;
+        termination = await terminateProcessTree(child.pid, {
+          killTree: async (pid: number) => {
+            try { spawnSyncFn('taskkill', ['/pid', String(pid), '/t', '/f'], { windowsHide: true }); } catch { /* verified by the caller */ }
+          },
+        });
+      })();
+      return killPromise;
     };
-    const onAbort = () => { killedByAbort = true; killTree(); };
+    const onAbort = () => { killedByAbort = true; void killTree(); };
     options.signal?.addEventListener('abort', onAbort, { once: true });
     const finish = (result: ShellExecResult) => {
       if (settled) return;
@@ -85,16 +100,21 @@ export function runPowerShellScript(
       resolve(result);
     };
     const timer = setTimeout(() => {
-      killTree();
-      finish({ succeeded: false, exitCode: null, output: `${bound(out, maxOutputChars)}\n…[timed out after ${timeoutMs}ms]` });
+      void killTree().then(() => {
+        finish({ succeeded: false, exitCode: null, output: `${bound(out, maxOutputChars)}\n…[timed out after ${timeoutMs}ms]` });
+      });
     }, timeoutMs);
     timer.unref?.();
     if (options.signal?.aborted) onAbort();
     child.on('error', (err) => finish({ succeeded: false, exitCode: null, output: `${bound(out, maxOutputChars)}\n${err.message}` }));
-    child.on('close', (code) => finish({
-      succeeded: !killedByAbort && code === 0,
-      exitCode: code,
-      output: killedByAbort ? `${bound(out, maxOutputChars)}\n…[aborted]` : bound(out, maxOutputChars),
-    }));
+    child.on('close', (code) => {
+      const result: ShellExecResult = {
+        succeeded: !killedByAbort && code === 0,
+        exitCode: code,
+        output: killedByAbort ? `${bound(out, maxOutputChars)}\n…[aborted]` : bound(out, maxOutputChars),
+      };
+      if (killPromise) { void killPromise.then(() => finish(result)); return; }
+      finish(result);
+    });
   });
 }

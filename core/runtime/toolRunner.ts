@@ -8,10 +8,16 @@
  * are intentionally few and bounded — this is a durable execution seam, not a
  * re-implementation of the full Extension-Host tool catalogue.
  */
-import { spawn, spawnSync } from 'node:child_process';
+import { spawn } from 'node:child_process';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import type { ModelToolDefinition, ModelToolCall } from './modelBackend';
+import {
+  createProcessTreeTracker,
+  describeTermination,
+  terminateProcessTree,
+  type ProcessTreeTerminationResult,
+} from './processTree';
 import { recoverRepositoryPath, type RepositoryPathRecoveryResult } from './repositoryPathRecovery';
 import { isCredentialFilePath, redactSecrets } from '../platform/credentialStore';
 import { buildUnifiedDiff, describeBaseline, missingParentDirectories, readBaselineIdentity, sameBaseline, sha256OfBuffer, type WriteBaselineIdentity } from './writeProposal';
@@ -520,13 +526,16 @@ export class CoreToolRunner implements ToolRunner {
         };
       }
     }
-    const resolved = resolveAnchoredEdit(buffer.toString('utf8'), find, replace);
+    const resolved = resolveAnchoredEdit(buffer.toString('utf8'), find, replace, {
+      relativePath: recovery.selected ?? rel,
+    });
     if (!resolved.ok) {
+      const context = resolved.context ? `\n${resolved.context}` : '';
       return {
         status: 'failed',
         exitCode: null,
-        output: `Anchored edit refused: ${resolved.reason}. Nothing was written.`,
-        resultCategory: 'anchor_unresolved',
+        output: `Anchored edit refused: ${resolved.reason}. Nothing was written.${context}`,
+        resultCategory: resolved.code === 'anchor_ambiguous' ? 'anchor_ambiguous' : 'anchor_unresolved',
         normalizedArguments,
         pathRecovery: recovery,
       };
@@ -598,18 +607,28 @@ export class CoreToolRunner implements ToolRunner {
       child.stderr?.on('data', append);
       let settled = false;
       let killedByAbort = false;
-      const killTree = () => {
-        if (unregisterProc) { unregisterProc(); unregisterProc = undefined; }
-        if (!child.pid) return;
-        if (process.platform === 'win32') {
-          try { spawnSync('taskkill', ['/pid', String(child.pid), '/t', '/f'], { windowsHide: true }); } catch { /* best-effort */ }
-        } else {
-          try { process.kill(-child.pid, 'SIGKILL'); } catch { try { child.kill('SIGKILL'); } catch { /* already gone */ } }
-        }
+      let killPromise: Promise<void> | undefined;
+      // The tracker remembers the descendants of this shell while it is
+      // alive, so a command whose shell exits early (backgrounding a
+      // grandchild) still has its grandchildren accounted for at stop time.
+      const tree = child.pid ? createProcessTreeTracker(child.pid) : undefined;
+      let treeTermination: ProcessTreeTerminationResult | undefined;
+      const killTree = (): Promise<void> => {
+        if (killPromise) return killPromise;
+        killPromise = (async () => {
+          if (unregisterProc) { unregisterProc(); unregisterProc = undefined; }
+          if (!child.pid) return;
+          // Verified termination: the whole owned tree is killed and the
+          // survivors are re-read, so a stop is never merely assumed.
+          treeTermination = tree
+            ? await tree.terminate()
+            : await terminateProcessTree(child.pid);
+        })();
+        return killPromise;
       };
       const onAbort = () => {
         killedByAbort = true;
-        killTree();
+        void killTree();
       };
       ctx.signal?.addEventListener('abort', onAbort, { once: true });
       const finish = (result: ToolExecutionResult) => {
@@ -624,18 +643,43 @@ export class CoreToolRunner implements ToolRunner {
           normalizedArguments: { command: command.replace(/\s+/g, ' ').trim() },
         });
       };
+      // The stop is only reported once the tree has actually been verified
+      // dead. A kill that "succeeded" but left a grandchild running is
+      // surfaced as an incomplete stop, not as a clean abort.
+      const finishAfterTermination = async (result: ToolExecutionResult) => {
+        await killPromise;
+        if (treeTermination && !treeTermination.terminated) {
+          finish({
+            ...result,
+            status: 'failed',
+            output: `${result.output}\n…[${describeTermination(treeTermination)}]`,
+          });
+          return;
+        }
+        finish(result);
+      };
       const timer = setTimeout(() => {
-        killTree();
-        finish({ status: 'failed', exitCode: null, output: `${bound(out)}\n…[timed out after ${this.commandTimeoutMs}ms]` });
+        void killTree().then(() => {
+          finish({
+            status: 'failed',
+            exitCode: null,
+            output: `${bound(out)}\n…[timed out after ${this.commandTimeoutMs}ms]`
+              + (treeTermination && !treeTermination.terminated ? `\n…[${describeTermination(treeTermination)}]` : ''),
+          });
+        });
       }, this.commandTimeoutMs);
       timer.unref?.();
       if (ctx.signal?.aborted) onAbort();
       child.on('error', (err) => finish({ status: 'failed', exitCode: null, output: `${bound(out)}\n${err.message}` }));
-      child.on('close', (code) => finish({
-        status: !killedByAbort && code === 0 ? 'succeeded' : 'failed',
-        exitCode: code,
-        output: killedByAbort ? `${bound(out)}\n…[aborted]` : bound(out),
-      }));
+      child.on('close', (code) => {
+        const result: ToolExecutionResult = {
+          status: !killedByAbort && code === 0 ? 'succeeded' : 'failed',
+          exitCode: code,
+          output: killedByAbort ? `${bound(out)}\n…[aborted]` : bound(out),
+        };
+        if (killPromise) { void finishAfterTermination(result); return; }
+        finish(result);
+      });
     });
   }
 }

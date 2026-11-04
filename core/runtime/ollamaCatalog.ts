@@ -1,10 +1,18 @@
 import { DEFAULT_OLLAMA_URL } from './modelBackend';
+import { CORE_ASSUMED_CONTEXT_TOKENS, reasoningReserveForReasoningModel } from '../shared/contextBudget';
 
 export interface InstalledModelsCatalog {
   models: string[];
   reachable: boolean;
   /** Provider-introspected context windows (tokens) for models that reported one. */
   contextWindows?: Record<string, number>;
+  /**
+   * The reasoning reserve (tokens) for models the provider says can think.
+   * A reasoning model charges its thinking against the same window as the
+   * answer, so the context budget has to reserve room for it or the visible
+   * answer — the tool call — never arrives.
+   */
+  reasoningTokens?: Record<string, number>;
 }
 
 export interface FetchOllamaCatalogOptions {
@@ -143,5 +151,17 @@ export async function withContextWindows(
   const lengths = await Promise.all(wanted.map(async (model) => [model, await getOllamaContextLength(model, options)] as const));
   const contextWindows: Record<string, number> = {};
   for (const [model, length] of lengths) if (length !== undefined) contextWindows[model] = length;
-  return Object.keys(contextWindows).length > 0 ? { ...catalog, contextWindows } : catalog;
+  // A model the provider says can THINK needs a reasoning reserve. The
+  // evidence is the provider's own capability list, never the model's name.
+  const reasoningTokens: Record<string, number> = {};
+  for (const model of wanted) {
+    const capabilities = await getOllamaCapabilities(model);
+    if (!capabilities || !capabilities.includes('thinking')) continue;
+    reasoningTokens[model] = reasoningReserveForReasoningModel(contextWindows[model] ?? CORE_ASSUMED_CONTEXT_TOKENS);
+  }
+  return {
+    ...catalog,
+    ...(Object.keys(contextWindows).length > 0 ? { contextWindows } : {}),
+    ...(Object.keys(reasoningTokens).length > 0 ? { reasoningTokens } : {}),
+  };
 }

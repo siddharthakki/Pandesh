@@ -28,6 +28,25 @@ import { discoverPolyglotValidationGates } from './polyglotSignals';
 
 export type ValidationGateCategory = 'syntax' | 'compile' | 'typecheck' | 'unit_test' | 'lint';
 
+/**
+ * How expensive a gate is.
+ *
+ * `lightweight` gates answer "does this still parse / compile?" in seconds.
+ * `full` gates answer "does the whole suite still pass?" in minutes.
+ *
+ * The distinction matters because a validation that runs after EVERY edit
+ * turns a three-edit task into three full test suites — the model waits
+ * minutes per keystroke, and the context window fills with test output that
+ * has nothing to do with the next edit. So: lightweight gates run after
+ * every edit, and the full suite runs once, at the end.
+ */
+export type ValidationGateTier = 'lightweight' | 'full';
+
+/** The tier a gate belongs to. */
+export function validationGateTier(category: ValidationGateCategory): ValidationGateTier {
+  return category === 'unit_test' || category === 'lint' ? 'full' : 'lightweight';
+}
+
 export interface ValidationGate {
   id: string;
   category: ValidationGateCategory;
@@ -50,6 +69,10 @@ export interface WorkspaceValidationOutcome {
   results: ValidationGateResult[];
   /** Model- and human-readable one-block summary. */
   summary: string;
+  /** The tier that was requested. */
+  tier: ValidationGateTier;
+  /** True when the requested tier had no gate and a cheaper/fuller one was used instead. */
+  tierSubstituted: boolean;
 }
 
 /**
@@ -58,6 +81,12 @@ export interface WorkspaceValidationOutcome {
  * sweep remains Karke Dikha's job.
  */
 const MAX_GATES_PER_MUTATION = 1;
+/**
+ * How many gates the FULL tier runs. Higher than the per-mutation bound on
+ * purpose: the full tier runs once, at the end, and is the one chance to
+ * prove the whole suite passes.
+ */
+const MAX_GATES_PER_FULL_RUN = 3;
 const VALIDATION_TIMEOUT_MS = 180_000;
 
 export type ValidationCommandRunner = (
@@ -181,6 +210,26 @@ export function discoverValidationGates(cwd: string): ValidationGate[] {
 }
 
 /**
+ * Picks the gates for one tier.
+ *
+ * `lightweight` keeps only the cheap gates (syntax, compile, typecheck).
+ * `full` keeps every gate. When the requested tier has no gate at all, the
+ * caller is told so it can substitute the other tier deliberately — a
+ * validation plan is never silently swapped.
+ */
+export function selectValidationGates(
+  gates: readonly ValidationGate[],
+  tier: ValidationGateTier,
+  maxGates: number,
+): { gates: ValidationGate[]; substituted: boolean } {
+  const matching = gates.filter((gate) => validationGateTier(gate.category) === tier);
+  if (matching.length > 0) return { gates: matching.slice(0, maxGates), substituted: false };
+  const other: ValidationGateTier = tier === 'lightweight' ? 'full' : 'lightweight';
+  const fallback = gates.filter((gate) => validationGateTier(gate.category) === other);
+  return { gates: fallback.slice(0, maxGates), substituted: fallback.length > 0 };
+}
+
+/**
  * Runs the bounded validation plan for a workspace. Returns `ran: false` (and
  * says so honestly) when the workspace declares no gate — it never invents a
  * command, and it never claims validation happened when it did not.
@@ -192,8 +241,20 @@ export async function runWorkspaceValidation(input: {
   gates?: ValidationGate[];
   /** Syntax-floor gates. All of them run, before the mechanical gates, and any failure fails validation. */
   syntaxGates?: ValidationGate[];
+  /** Which tier to run. Defaults to the historical behaviour (the strongest single gate). */
+  tier?: ValidationGateTier;
 }): Promise<WorkspaceValidationOutcome> {
-  const mechanical = (input.gates ?? discoverValidationGates(input.cwd)).slice(0, MAX_GATES_PER_MUTATION);
+  const discovered = input.gates ?? discoverValidationGates(input.cwd);
+  const tier = input.tier;
+  let mechanical: ValidationGate[];
+  let substituted = false;
+  if (tier) {
+    const selected = selectValidationGates(discovered, tier, tier === 'full' ? MAX_GATES_PER_FULL_RUN : MAX_GATES_PER_MUTATION);
+    mechanical = selected.gates;
+    substituted = selected.substituted;
+  } else {
+    mechanical = discovered.slice(0, MAX_GATES_PER_MUTATION);
+  }
   const gates = [...(input.syntaxGates ?? []), ...mechanical];
   if (gates.length === 0) {
     return {
@@ -201,6 +262,8 @@ export async function runWorkspaceValidation(input: {
       passed: false,
       results: [],
       summary: 'Validation: no mechanical validation gate is configured in this workspace, so none was run.',
+      tier: tier ?? 'lightweight',
+      tierSubstituted: false,
     };
   }
   const run = input.runner ?? defaultValidationCommandRunner();
@@ -229,5 +292,5 @@ export async function runWorkspaceValidation(input: {
       + (result.status === 'failed' ? `\n${result.output}` : ''),
     ),
   ].join('\n');
-  return { ran: true, passed, results, summary };
+  return { ran: true, passed, results, summary, tier: tier ?? 'lightweight', tierSubstituted: substituted };
 }

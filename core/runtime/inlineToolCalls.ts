@@ -7,12 +7,16 @@
  *   -> validate ALL names/arguments -> ordered call list (or one precise failure).
  *
  * The whole sequence is accepted or refused as a unit; the caller executes nothing on failure.
- * The only repair is appending up to MAX_APPENDED_CLOSERS missing `}`/`]` when the reply ends
- * outside a string with only object/array delimiters open. No string content, escape, path,
- * tool name, value or field is ever altered or invented.
+ * The repairs are deliberately narrow and none of them can change WHAT the model asked for:
+ *   - appending up to MAX_APPENDED_CLOSERS missing `}`/`]` when the reply ends outside a
+ *     string with only object/array delimiters open;
+ *   - escaping a literal control character inside a string value, and removing a `\'`
+ *     escape JSON does not define (see `jsonArgumentRepair.ts`).
+ * No Unicode folding, no quote substitution, no whitespace normalisation, no invented value.
  */
 import type { ModelToolCall, ModelToolDefinition } from './modelBackend';
 import { validateToolArguments } from './toolArgumentSchema';
+import { parseJsonWithSafeRepair, type AppliedRepair } from './jsonArgumentRepair';
 
 export const MAX_INLINE_TOOL_CALLS = 4;
 export const MAX_APPENDED_CLOSERS = 2;
@@ -28,6 +32,8 @@ export type InlineToolCallFailureCode =
 export interface StructuralRepairRecord {
   step: 'structural_repair_applied';
   appendedClosers: string;
+  /** The safe escape repairs that were applied to the arguments, if any. */
+  escapeRepairs?: AppliedRepair[];
 }
 
 export type InlineToolCallsResult =
@@ -167,21 +173,44 @@ export function parseInlineToolCalls(content: string, tools: ModelToolDefinition
 
   const calls: ModelToolCall[] = [];
   let appended = '';
+  const escapeRepairs: AppliedRepair[] = [];
   for (let index = 0; index < candidates.length; index++) {
     const candidate = candidates[index];
     const label = candidates.length > 1 ? ` (tool call ${index + 1} of ${candidates.length})` : '';
-    // Escape faults are reported precisely and never repaired.
+    // Escape faults are reported precisely and never repaired — EXCEPT for the
+    // two safe classes the model plainly wrote (a literal control character
+    // inside a string, and a `\'` escape JSON does not define).
     const badEscape = findInvalidEscape(candidate.text);
-    if (badEscape !== null) return fail('invalid_escape', `JSON string contains an invalid escape near ${near(candidate.text, badEscape)}${label}`);
-    if (candidate.unterminated) return fail('invalid_json', `${candidate.unterminated}${label}`);
     let parsed: unknown;
-    try {
-      parsed = JSON.parse(candidate.text);
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      return fail('invalid_json', candidate.appended
-        ? `missing closing delimiter(s) at EOF; appending "${candidate.appended}" did not give valid JSON (${message})${label}`
-        : `${message}${label}`);
+    let appliedRepairs: AppliedRepair[] = [];
+    if (badEscape !== null) {
+      const repaired = parseJsonWithSafeRepair(candidate.text);
+      if (!repaired) {
+        return fail('invalid_escape', `JSON string contains an invalid escape near ${near(candidate.text, badEscape)}${label}`);
+      }
+      parsed = repaired.value;
+      appliedRepairs = repaired.applied;
+    } else if (candidate.unterminated) {
+      return fail('invalid_json', `${candidate.unterminated}${label}`);
+    } else {
+      let strictError = 'the reply is not valid JSON';
+      let strictOk = false;
+      try {
+        parsed = JSON.parse(candidate.text);
+        strictOk = true;
+      } catch (err) {
+        strictError = err instanceof Error ? err.message : String(err);
+      }
+      if (!strictOk) {
+        const repaired = parseJsonWithSafeRepair(candidate.text);
+        if (!repaired) {
+          return fail('invalid_json', candidate.appended
+            ? `missing closing delimiter(s) at EOF; appending "${candidate.appended}" did not give valid JSON (${strictError})${label}`
+            : `${strictError}${label}`);
+        }
+        parsed = repaired.value;
+        appliedRepairs = repaired.applied;
+      }
     }
     const shaped = toCall(parsed);
     if (!shaped) return fail('ambiguous_json', `object is not a {"name": ..., "arguments": {...}} tool call${label}`);
@@ -190,18 +219,30 @@ export function parseInlineToolCalls(content: string, tools: ModelToolDefinition
     if (!tool) return fail('unknown_tool', `'${shaped.name}' is not an available tool${label}`);
     let args = shaped.args;
     if (typeof args === 'string') {
-      try { args = JSON.parse(args); } catch { return fail('invalid_arguments', `${tool.name} arguments string is not valid JSON${label}`); }
+      const parsedArgs = parseJsonWithSafeRepair(args);
+      if (!parsedArgs) return fail('invalid_arguments', `${tool.name} arguments string is not valid JSON${label}`);
+      args = parsedArgs.value;
+      appliedRepairs = [...appliedRepairs, ...parsedArgs.applied];
     }
     if (!args || typeof args !== 'object' || Array.isArray(args)) return fail('invalid_arguments', `${tool.name} arguments must be a JSON object${label}`);
     const problem = validateArguments(tool, args as Record<string, unknown>);
     if (problem) return fail('invalid_arguments', `${problem}${label}`);
     calls.push({ name: tool.name, arguments: args as Record<string, unknown> });
     appended += candidate.appended;
+    escapeRepairs.push(...appliedRepairs);
   }
   return {
     kind: 'calls',
     calls,
-    ...(appended ? { structuralRepair: { step: 'structural_repair_applied' as const, appendedClosers: appended } } : {}),
+    ...(appended || escapeRepairs.length > 0
+      ? {
+          structuralRepair: {
+            step: 'structural_repair_applied' as const,
+            appendedClosers: appended,
+            ...(escapeRepairs.length > 0 ? { escapeRepairs } : {}),
+          },
+        }
+      : {}),
   };
 }
 

@@ -1,3 +1,5 @@
+import type { ProcessTreeTerminationResult } from '../../core/runtime/processTree';
+
 export type ValidationCategory =
   | 'compile'
   | 'typecheck'
@@ -82,6 +84,12 @@ export interface CommandExecutionResult {
   stderr: string;
   durationMs: number;
   timedOut: boolean;
+  /**
+   * The verified outcome of the process-tree termination, when the command
+   * was stopped. `terminated` is false when owned processes survived the
+   * stop — that is reported, never assumed away.
+   */
+  termination?: ProcessTreeTerminationResult;
 }
 
 export interface ValidationCommandExecutor {

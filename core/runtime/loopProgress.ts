@@ -30,6 +30,7 @@ export interface PriorOperation {
 }
 
 import type { ReadEvidenceState } from './readEvidence';
+import type { IdenticalFailureState } from './identicalFailureTracker';
 
 export interface LoopProgressState {
   /** Increments when a mutating workspace call executed successfully. */
@@ -60,6 +61,13 @@ export interface LoopProgressState {
   pinnedPaths?: string[];
   /** M53: the seed pass over the host pack already ran for this attempt. */
   packSeeded?: boolean;
+  /**
+   * M-benchmark P3: the repeated-identical-failure streaks of this attempt,
+   * keyed by the target the call acted on. Persisted with the rest of the
+   * loop state, so a restart does not forget that the same edit has already
+   * failed three times.
+   */
+  identicalFailures?: IdenticalFailureState;
 }
 
 export const INITIAL_LOOP_PROGRESS: LoopProgressState = Object.freeze({ revision: 0, nonProgressTurns: 0 });
