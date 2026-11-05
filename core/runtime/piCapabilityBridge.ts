@@ -73,6 +73,14 @@ export const CHAT_CAPABILITY_IDS = [
   'ollama-management',
   'plan',
   'wish',
+  // The brief is proven now (the acceptance runs show a local model choosing
+  // between the exposed tools and reporting what is unavailable), so the
+  // remaining genuinely working capabilities can join them. A capability the
+  // registry does not own simply contributes no tools, so listing one that
+  // this build does not have is harmless.
+  'research',
+  'network-drives',
+  'github',
 ] as const;
 
 
