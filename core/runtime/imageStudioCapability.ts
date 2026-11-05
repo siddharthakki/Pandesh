@@ -147,7 +147,10 @@ export function createImageStudioCapabilityAdapter(options: ImageStudioCapabilit
     conversationId: string | null;
     attemptId: string | null;
   }): string {
-    const fileName = `pandesh-${params.promptId}-${params.index}.png`;
+    // The prompt id comes from ComfyUI's HTTP response. Keep it a file-name
+    // component so even a compromised local service cannot escape this folder.
+    const safePromptId = String(params.promptId).replace(/[^A-Za-z0-9_-]/g, '_').slice(0, 80) || 'job';
+    const fileName = `pandesh-${safePromptId}-${params.index}.png`;
     const absolutePath = path.join(comfyOutputDir, fileName);
     fs.mkdirSync(comfyOutputDir, { recursive: true });
     fs.writeFileSync(absolutePath, params.bytes);

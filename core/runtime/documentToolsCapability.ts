@@ -10,8 +10,14 @@
  *
  * Everything runs locally. No document byte and no media byte is sent to a
  * model, a cloud service or an API. The download path is deliberately narrow:
- * one http(s) URL, no playlist, a size cap, and a destination folder the
- * approval names — Pandesh never fetches and runs anything.
+ * one http(s) URL, no playlist, a size cap, and a destination inside the one
+ * downloads folder Pandesh owns — Pandesh never fetches and runs anything.
+ *
+ * A direct read names one file and is gated by a per-file approval: that
+ * approval IS the person's consent for that file. The household
+ * document-reading grants govern unattended scans and routines, where no one
+ * is present to approve a file; they are deliberately not a second gate on a
+ * read a person already approved.
  */
 import * as fs from 'node:fs';
 import * as os from 'node:os';
@@ -20,13 +26,30 @@ import type { GovernedCapabilityAdapter } from './governedCapability';
 import type { ModelToolCall } from './modelBackend';
 import type { ToolExecutionResult } from './toolRunner';
 import { nowIso } from '../domain/ids';
+import { isCredentialFilePath, redactSecrets } from '../platform/credentialStore';
 import { OcrError, ocrFile, resolveOcrTools, runLocalTool, type OcrTools } from './documentOcr';
+import { isNonPublicAddress } from './browserHostPolicy';
+import { startEgressProxy, vetHost, type EgressProxy } from './browserEgressProxy';
 
 const MAX_OCR_CHARS = 120_000;
 const MAX_DOWNLOAD_BYTES = 512 * 1024 * 1024;
 
+const PROTECTED_PATH_RE = /(^|[\\/])(\.git|\.karkedikha|\.ssh|\.gnupg|\.aws|\.azure|\.config[\\/]gcloud)([\\/]|$)/i;
+
 function failure(output: string, category: string): ToolExecutionResult {
   return { status: 'failed', exitCode: null, output, resultCategory: category };
+}
+
+export function isProtectedDocumentPath(filePath: string): boolean {
+  if (isCredentialFilePath(filePath)) return true;
+  if (PROTECTED_PATH_RE.test(filePath)) return true;
+  try {
+    const canonical = fs.realpathSync.native(filePath);
+    if (isCredentialFilePath(canonical) || PROTECTED_PATH_RE.test(canonical)) return true;
+  } catch {
+    /* not on disk or unresolvable */
+  }
+  return false;
 }
 
 /** Only an absolute path to an existing file may be read. */
@@ -41,11 +64,57 @@ function resolveDocumentPath(raw: unknown): { path?: string; error?: ToolExecuti
     return { error: failure(`"${resolved}" does not exist`, 'document_not_found') };
   }
   if (!stat.isFile()) return { error: failure(`"${resolved}" is not a file`, 'document_not_a_file') };
+  // The same invariant the filesystem capability enforces: a credential file
+  // or protected application data is never read into the conversation.
+  if (isProtectedDocumentPath(resolved)) {
+    return { error: failure(`"${path.basename(resolved)}" holds credentials or protected application data. Protected files are never read into the conversation.`, 'document_credential_file_refused') };
+  }
   return { path: resolved };
 }
 
-/** A media URL is only ever an http(s) URL. */
-function resolveMediaUrl(raw: unknown): { url?: string; error?: ToolExecutionResult } {
+/** Downloads stay inside the one folder Pandesh owns; the model may name a
+ * subfolder, never an arbitrary directory such as a Windows startup folder. */
+function resolveDownloadDirectory(raw: unknown, root: string): { directory?: string; error?: ToolExecutionResult } {
+  let canonicalRoot: string;
+  try {
+    canonicalRoot = fs.existsSync(root) ? fs.realpathSync.native(root) : path.resolve(root);
+  } catch {
+    canonicalRoot = path.resolve(root);
+  }
+  const trimmed = typeof raw === 'string' ? raw.trim() : '';
+  const resolved = trimmed ? (path.isAbsolute(trimmed) ? path.resolve(trimmed) : path.resolve(canonicalRoot, trimmed)) : canonicalRoot;
+
+  let canonicalTarget = resolved;
+  try {
+    if (fs.existsSync(resolved)) {
+      canonicalTarget = fs.realpathSync.native(resolved);
+    } else {
+      let cur = path.dirname(resolved);
+      while (cur && cur !== path.dirname(cur)) {
+        if (fs.existsSync(cur)) {
+          const c = fs.realpathSync.native(cur);
+          const r = path.relative(canonicalRoot, c);
+          if (r !== '' && (r.startsWith('..') || path.isAbsolute(r))) {
+            return { error: failure(`Pandesh only writes downloads inside its downloads folder (${root}); "${resolved}" escapes via symlink to "${c}".`, 'media_download_outside_downloads') };
+          }
+          break;
+        }
+        cur = path.dirname(cur);
+      }
+    }
+  } catch {
+    /* ignore */
+  }
+
+  const relative = path.relative(canonicalRoot, canonicalTarget);
+  if (relative !== '' && (relative.startsWith('..') || path.isAbsolute(relative))) {
+    return { error: failure(`Pandesh only writes downloads inside its downloads folder (${root}); "${resolved}" is outside it.`, 'media_download_outside_downloads') };
+  }
+  return { directory: resolved };
+}
+
+/** A media URL is only ever an http(s) URL pointing to a public site. */
+function resolveMediaUrl(raw: unknown): { url?: string; parsed?: URL; error?: ToolExecutionResult } {
   const trimmed = typeof raw === 'string' ? raw.trim() : '';
   if (!trimmed) return { error: failure('url is required', 'invalid_arguments') };
   let parsed: URL;
@@ -57,7 +126,22 @@ function resolveMediaUrl(raw: unknown): { url?: string; error?: ToolExecutionRes
   if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
     return { error: failure(`only http(s) URLs are allowed; "${parsed.protocol}" is not`, 'media_url_refused') };
   }
-  return { url: parsed.toString() };
+  if (parsed.username || parsed.password) {
+    return { error: failure('URLs with embedded credentials are not allowed', 'media_url_refused') };
+  }
+  const host = parsed.hostname.toLowerCase().replace(/^\[|\]$/g, '');
+  const isIpLiteral = /^\d+\.\d+\.\d+\.\d+$/.test(host) || host.includes(':');
+  if (
+    host === 'localhost' ||
+    host.endsWith('.localhost') ||
+    host.endsWith('.local') ||
+    host.endsWith('.internal') ||
+    !host.includes('.') ||
+    (isIpLiteral && isNonPublicAddress(host))
+  ) {
+    return { error: failure(`host '${host}' is a local or private-network address; media downloads only fetch from public sites`, 'media_url_refused') };
+  }
+  return { url: parsed.toString(), parsed };
 }
 
 export interface DocumentToolsOptions {
@@ -171,7 +255,7 @@ export function createDocumentToolsAdapter(options: DocumentToolsOptions = {}): 
       }
       return {
         status: 'succeeded', exitCode: 0,
-        output: renderDocumentRead({ engine: result.engine, pageCount: result.pageCount, sections: result.sections.map((s) => ({ page: s.page, text: s.text })), notes: result.notes, truncated: result.truncated }),
+        output: redactSecrets(renderDocumentRead({ engine: result.engine, pageCount: result.pageCount, sections: result.sections.map((s) => ({ page: s.page, text: s.text })), notes: result.notes, truncated: result.truncated })),
         resultCategory: 'document_ocr_completed',
         normalizedArguments: { path: resolved.path },
       };
@@ -197,7 +281,7 @@ export function createDocumentToolsAdapter(options: DocumentToolsOptions = {}): 
       }
       return {
         status: 'succeeded', exitCode: 0,
-        output: renderDocumentRead(result),
+        output: redactSecrets(renderDocumentRead(result)),
         resultCategory: 'document_read_completed',
         normalizedArguments: { path: resolved.path },
       };
@@ -211,18 +295,42 @@ export function createDocumentToolsAdapter(options: DocumentToolsOptions = {}): 
     const args = call.arguments ?? {};
     const resolvedUrl = resolveMediaUrl(args.url);
     if (resolvedUrl.error) return resolvedUrl.error;
+
+    // DNS pre-flight verification ensures the hostname resolves exclusively to public IPs
+    const vetted = await vetHost(resolvedUrl.parsed!.hostname);
+    if (!vetted.ok) {
+      return failure(`media download target refused: ${vetted.reason}`, 'media_url_refused');
+    }
+
+    const resolvedDir = resolveDownloadDirectory(args.directory, downloadsDir);
+    if (resolvedDir.error) return resolvedDir.error;
+    const targetDir = resolvedDir.directory!;
     const ytdlp = options.ytdlp ?? resolveDownloadBinary();
     if (!ytdlp) {
       return failure('yt-dlp is not installed on this PC, so Pandesh cannot download media.', 'media_download_unavailable');
     }
-    const targetDir = typeof args.directory === 'string' && args.directory.trim()
-      ? path.resolve(args.directory.trim())
-      : downloadsDir;
     try {
       fs.mkdirSync(targetDir, { recursive: true });
     } catch {
       return failure(`the download folder "${targetDir}" could not be created`, 'media_download_unavailable');
     }
+    const snapshot = (): Map<string, string> => new Map(fs.readdirSync(targetDir).map((name) => {
+      try {
+        const stat = fs.statSync(path.join(targetDir, name));
+        return [name, `${stat.size}:${stat.mtimeMs}`];
+      } catch {
+        return [name, 'missing'];
+      }
+    }));
+    const before = snapshot();
+
+    let proxy: EgressProxy | null = null;
+    try {
+      proxy = await startEgressProxy();
+    } catch (e) {
+      return failure(`could not initialize egress security proxy: ${e instanceof Error ? e.message : String(e)}`, 'media_download_unavailable');
+    }
+
     const argv = [
       '--no-playlist',
       '--no-exec',
@@ -231,6 +339,7 @@ export function createDocumentToolsAdapter(options: DocumentToolsOptions = {}): 
       '--max-filesize', String(MAX_DOWNLOAD_BYTES),
       '--socket-timeout', '30',
       '--retries', '2',
+      '--proxy', `http://127.0.0.1:${proxy.port}`,
       '-o', path.join(targetDir, '%(title).80s.%(ext)s'),
     ];
     if (typeof args.format === 'string' && args.format.trim()) argv.push('-f', args.format.trim());
@@ -240,9 +349,13 @@ export function createDocumentToolsAdapter(options: DocumentToolsOptions = {}): 
       if (run.code !== 0) {
         return failure(`yt-dlp could not fetch that URL (exit ${run.code ?? 'none'}): ${run.stderr.trim().split(/\r?\n/).slice(-3).join(' ')}`.slice(0, 400), 'media_download_failed');
       }
-      const files = fs.readdirSync(targetDir).filter((name) => !name.endsWith('.part') && !name.endsWith('.ytdl'));
+      // Report only what THIS download wrote; files already in the folder are
+      // not evidence of this call.
+      const files = [...snapshot()].filter(([name, signature]) => (
+        !name.endsWith('.part') && !name.endsWith('.ytdl') && before.get(name) !== signature
+      )).map(([name]) => name);
       if (files.length === 0) {
-        return failure('yt-dlp reported success but no file was written.', 'media_download_no_file');
+        return failure('yt-dlp reported success but no new file was written.', 'media_download_no_file');
       }
       const written = files.map((name) => {
         const full = path.join(targetDir, name);
@@ -258,6 +371,8 @@ export function createDocumentToolsAdapter(options: DocumentToolsOptions = {}): 
     } catch (error) {
       if (error instanceof OcrError) return failure(error.message, `media_download_${error.reason}`);
       return failure(error instanceof Error ? error.message : String(error), 'media_download_failed');
+    } finally {
+      if (proxy) await proxy.close();
     }
   }
 
@@ -293,12 +408,12 @@ export function createDocumentToolsAdapter(options: DocumentToolsOptions = {}): 
       },
       {
         name: 'media_download',
-        description: 'Download one media file from an http(s) URL with yt-dlp into a named folder. One URL only, no playlist, size capped, nothing is ever executed. The person approves the exact URL and folder first and stays responsible for the rights to the material. Consequential.',
+        description: 'Download one media file from an http(s) URL with yt-dlp into Pandesh\'s downloads folder (or a subfolder of it). One URL only, no playlist, size capped, nothing is ever executed. The person approves the exact URL and folder first and stays responsible for the rights to the material. Consequential.',
         parameters: {
           type: 'object',
           properties: {
             url: { type: 'string', description: 'The http(s) URL to download.' },
-            directory: { type: 'string', description: 'Where to write the file.' },
+            directory: { type: 'string', description: 'Optional subfolder inside Pandesh\'s downloads folder.' },
             format: { type: 'string', description: 'Optional yt-dlp format selector.' },
           },
           required: ['url'],

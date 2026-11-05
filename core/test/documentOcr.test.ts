@@ -42,6 +42,92 @@ describe('document tools — refusals and argument handling', () => {
     expect(result.resultCategory).toBe('media_url_refused');
   });
 
+  it('never reads a credential file or symlink into a protected file into the conversation', async () => {
+    const dir = tempDir('pandesh-credential-doc-');
+    const file = path.join(dir, 'credentials.pdf');
+    fs.writeFileSync(file, Buffer.from('%PDF-1.4 not really a pdf'));
+    const secretFile = path.join(dir, 'secret.env');
+    fs.writeFileSync(secretFile, 'KEY=supersecret');
+    const link = path.join(dir, 'innocent-looking.pdf');
+    try {
+      fs.symlinkSync(secretFile, link);
+    } catch {
+      // In case symlink creation requires admin privilege on Windows, test with file directly
+    }
+
+    const adapter = createDocumentToolsAdapter({ tools });
+    for (const targetPath of [file, fs.existsSync(link) ? link : null].filter(Boolean) as string[]) {
+      for (const name of ['document_read', 'document_ocr']) {
+        const result = await adapter.run({ name, arguments: { path: targetPath } }, {});
+        expect(result.status).toBe('failed');
+        expect(result.resultCategory).toBe('document_credential_file_refused');
+        expect(result.output).not.toContain('%PDF');
+        expect(result.output).not.toContain('supersecret');
+      }
+    }
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('refuses to read files from protected system or git folders', async () => {
+    const dir = tempDir('pandesh-protected-doc-');
+    const gitDir = path.join(dir, '.git');
+    fs.mkdirSync(gitDir, { recursive: true });
+    const gitConfig = path.join(gitDir, 'config');
+    fs.writeFileSync(gitConfig, '[core]\nrepositoryformatversion = 0\n');
+
+    const adapter = createDocumentToolsAdapter({ tools });
+    for (const name of ['document_read', 'document_ocr']) {
+      const result = await adapter.run({ name, arguments: { path: gitConfig } }, {});
+      expect(result.status).toBe('failed');
+      expect(result.resultCategory).toBe('document_credential_file_refused');
+      expect(result.output).not.toContain('repositoryformatversion');
+    }
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('refuses to write a download outside Pandesh\'s downloads folder, including traversal and symlinks', async () => {
+    const downloadsDir = tempDir('pandesh-downloads-');
+    const outside = tempDir('pandesh-downloads-outside-');
+    const adapter = createDocumentToolsAdapter({ tools, downloadsDir, ytdlp: 'C:/does-not-exist/yt-dlp.exe' });
+
+    // Absolute path outside
+    const result1 = await adapter.run({ name: 'media_download', arguments: { url: 'https://example.com/clip.mp4', directory: outside } }, {});
+    expect(result1.status).toBe('failed');
+    expect(result1.resultCategory).toBe('media_download_outside_downloads');
+
+    // Traversal outside
+    const result2 = await adapter.run({ name: 'media_download', arguments: { url: 'https://example.com/clip.mp4', directory: '../escaping' } }, {});
+    expect(result2.status).toBe('failed');
+    expect(result2.resultCategory).toBe('media_download_outside_downloads');
+
+    fs.rmSync(downloadsDir, { recursive: true, force: true });
+    fs.rmSync(outside, { recursive: true, force: true });
+  });
+
+  it('refuses private, loopback, link-local, credentials and non-public media URLs (SSRF protection)', async () => {
+    const downloadsDir = tempDir('pandesh-ssrf-downloads-');
+    const adapter = createDocumentToolsAdapter({ tools, downloadsDir, ytdlp: 'C:/does-not-exist/yt-dlp.exe' });
+
+    const forbiddenUrls = [
+      'http://127.0.0.1/video.mp4',
+      'http://localhost/video.mp4',
+      'http://169.254.169.254/latest/meta-data',
+      'http://10.0.0.1/internal.mp4',
+      'http://192.168.1.1/router.mp4',
+      'http://172.16.0.1/intranet.mp4',
+      'http://internal-host/video.mp4',
+      'https://user:password@example.com/video.mp4',
+    ];
+
+    for (const url of forbiddenUrls) {
+      const result = await adapter.run({ name: 'media_download', arguments: { url } }, {});
+      expect(result.status).toBe('failed');
+      expect(result.resultCategory).toBe('media_url_refused');
+    }
+
+    fs.rmSync(downloadsDir, { recursive: true, force: true });
+  });
+
   it('reports an honest health state when no document tool is installed', () => {
     const adapter = createDocumentToolsAdapter({ tools: { tesseract: null, pdftoppm: null, pdftotext: null, pdfinfo: null } });
     expect(adapter.health().state).toBe('unavailable');

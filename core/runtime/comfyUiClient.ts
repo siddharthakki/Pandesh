@@ -26,7 +26,8 @@ export interface ComfyUiOptions {
 export function comfyUiBaseUrl(raw?: string): string {
   const candidate = raw ?? process.env.KARKEDIKHA_COMFYUI_URL ?? DEFAULT_COMFYUI_URL;
   const url = new URL(candidate);
-  if (url.protocol !== 'http:' || !['127.0.0.1', 'localhost', '::1'].includes(url.hostname)) {
+  const host = url.hostname.toLowerCase().replace(/^\[|\]$/g, '');
+  if (url.protocol !== 'http:' || !['127.0.0.1', 'localhost', '::1'].includes(host)) {
     throw new Error('the ComfyUI endpoint must be loopback HTTP');
   }
   return url.origin;
@@ -60,6 +61,7 @@ async function request(url: URL, options: ComfyRequestOptions = {}): Promise<Res
       headers: options.body === undefined ? undefined : { 'Content-Type': 'application/json' },
       body: options.body === undefined ? undefined : JSON.stringify(options.body),
       signal: controller.signal,
+      redirect: 'error',
     });
     if (!response.ok) {
       const text = await response.text().catch(() => '');
