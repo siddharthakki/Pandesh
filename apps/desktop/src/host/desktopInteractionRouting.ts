@@ -169,11 +169,16 @@ const WEATHER_NOUN = /\b(weather|temperature|forecast|rain(?:ing|y)?|snow(?:ing|
 const WEATHER_LOCATION_PHRASE =
   /\b(?:weather|temperature|forecast)\b(?:\s+\w+)*?\s+(?:in|for|at)\s+([a-z][a-z\s.',-]*?)(?=\s+(?:right now|today|tonight|tomorrow|currently|now|this (?:week|morning|afternoon|evening|weekend)|for (?:today|tonight|tomorrow|now|this)|please)\b|[?.!]|$)/i;
 
-export function detectWeatherIntent(text: string): boolean {
+export function detectWeatherIntent(text: string, lastLocation?: string | null): boolean {
   const trimmed = text.trim();
   if (!trimmed) return false;
   if (detectImageGenerationIntent(trimmed)) return false;
-  return WEATHER_NOUN.test(trimmed);
+  if (WEATHER_NOUN.test(trimmed)) return true;
+  // If a weather location is already established in context, relative time follow-ups are weather queries
+  if (lastLocation && /\b(?:tomorrow|evening|morning|tonight|this afternoon|weekend)\b/i.test(trimmed)) {
+    return true;
+  }
+  return false;
 }
 
 /** Extracts the place name from a weather question ("what's the weather in

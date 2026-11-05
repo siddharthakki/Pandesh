@@ -223,6 +223,7 @@ interface ActiveTurn {
    * turn-scoped flag (not a Set) since ActiveTurn already models "one turn
    * at a time" and resets on every new submission. */
   firstTokenLogged?: boolean;
+  startedAt?: string;
 }
 
 /** A staged attachment handed to one send (host-private path included). */
@@ -2014,7 +2015,7 @@ export class DesktopSession {
       if (media.attachedImage) this.attachmentStaging.release(staged);
       return result;
     }
-    if (staged.length === 0 && detectWeatherIntent(text)) {
+    if (staged.length === 0 && detectWeatherIntent(text, this.lastWeatherLocation)) {
       return this.handleWeatherIntent(text, clientOrigin);
     }
     if (this.awaitingWeatherLocation) {
@@ -2231,6 +2232,7 @@ export class DesktopSession {
       voiceTurnId,
       firstTokenLogged: false,
       clientOrigin,
+      startedAt: nowIso(),
     };
     this.cockpitEvents = [];
     this.approvedApproval = null;
@@ -4048,6 +4050,7 @@ export class DesktopSession {
       tokenBuffer: '',
       terminal: false,
       clientOrigin,
+      startedAt: nowIso(),
     };
     this.cockpitEvents = [];
     this.emit({
@@ -4117,6 +4120,7 @@ export class DesktopSession {
       tokenBuffer: '',
       terminal: false,
       clientOrigin,
+      startedAt: nowIso(),
     };
     this.cockpitEvents = [];
     this.emit({ kind: 'status', at: nowIso(), requestId, attemptId, summary: 'Everyday Tools (no repository required)', clientOrigin });
@@ -4379,6 +4383,7 @@ export class DesktopSession {
       tokenBuffer: '',
       terminal: false,
       clientOrigin,
+      startedAt: nowIso(),
     };
     this.cockpitEvents = [];
     this.emit({ kind: 'status', at: nowIso(), requestId, attemptId, summary: 'Looking up weather (no repository required)', clientOrigin });
@@ -4418,7 +4423,11 @@ export class DesktopSession {
       } else if (result.outcome === 'executed') {
         reply = result.message;
       } else {
-        reply = `I could not get the weather: ${result.reason}`;
+        reply = result.reason ? `I could not get the weather: ${result.reason}` : 'I could not get the weather.';
+        if (result.reason?.includes('ambiguous') || result.reason?.includes('clarify')) {
+          this.awaitingWeatherLocation = true;
+          this.lastWeatherLocation = null;
+        }
       }
       await this.recordConversationMessage(conversationId, 'assistant', reply);
       this.active.terminal = true;
@@ -4829,7 +4838,7 @@ export class DesktopSession {
     }
     this.pending = undefined;
     if (outcome === 'completed') {
-      const content = await this.fetchAssistant(active.conversationId, active.tokenBuffer);
+      const content = await this.fetchAssistant(active.conversationId, active.tokenBuffer, active.startedAt);
       this.recordEvidence({ type: 'completed', attemptId: active.attemptId, requestId: active.requestId, content });
       this.emit({
         kind: 'result',
@@ -4909,11 +4918,17 @@ export class DesktopSession {
     }
   }
 
-  private async fetchAssistant(conversationId: string, fallback: string): Promise<string> {
+  private async fetchAssistant(conversationId: string, fallback: string, afterTimestamp?: string): Promise<string> {
     try {
       const { messages } = await this.requireClient().listMessages(conversationId);
       for (let i = messages.length - 1; i >= 0; i--) {
-        if (messages[i].role === 'assistant' && messages[i].content.trim()) return messages[i].content;
+        const msg = messages[i];
+        if (msg.role === 'assistant' && msg.content.trim()) {
+          // Never pick an internal truncation marker
+          if (/^\s*\[(?:earlier message )?truncated\]\s*$/i.test(msg.content.trim())) continue;
+          if (afterTimestamp && msg.createdAt && msg.createdAt < afterTimestamp) continue;
+          return msg.content;
+        }
       }
     } catch (err) {
       this.options.log?.(`failed to fetch durable assistant message: ${(err as Error).message}`);

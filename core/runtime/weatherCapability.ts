@@ -125,17 +125,31 @@ export function createWeatherCapabilityAdapter(options: WeatherCapabilityOptions
         }
       }
 
-      let place: GeocodePlace | undefined;
-      if (expectedCountry) {
-        place = candidates.find((c) => matchesCountry(c, expectedCountry!));
-        if (!place) {
-          return failure(`No location found matching "${cityName}" in ${expectedCountry}. Please verify the city and country name.`, 'weather_location_not_found');
-        }
-      } else {
-        place = candidates[0];
+      const matchedCandidates = expectedCountry
+        ? candidates.filter((c) => matchesCountry(c, expectedCountry!))
+        : candidates;
+
+      if (matchedCandidates.length === 0) {
+        return failure(`No location found matching "${cityName}"${expectedCountry ? ` in ${expectedCountry}` : ''}. Please verify the city and country name.`, 'weather_location_not_found');
       }
 
-      if (!place) return failure(`No location found matching "${location}"`, 'weather_location_not_found');
+      // Check for exact match on city name (case-insensitive)
+      const normCity = cityName.trim().toLowerCase();
+      const exactMatch = matchedCandidates.find((c) => c.name.trim().toLowerCase() === normCity);
+
+      let place: GeocodePlace;
+      if (exactMatch) {
+        place = exactMatch;
+      } else {
+        // No exact match. The name is ambiguous or an approximate spelling (e.g. "Ull" matching "Ulla").
+        // DO NOT silently pick the first fuzzy candidate (e.g. Ulla) and do NOT silently assume Ulm!
+        // Ask for clarification with the top candidates.
+        const suggestions = matchedCandidates.slice(0, 3).map((c) => [c.name, c.admin1, c.country].filter(Boolean).join(', '));
+        return failure(
+          `The location "${cityName}"${expectedCountry ? ` in ${expectedCountry}` : ''} is ambiguous or an approximate spelling. Did you mean ${suggestions.join(' or ')}? Please clarify the location.`,
+          'weather_location_ambiguous',
+        );
+      }
 
       const forecast = await json(
         `https://api.open-meteo.com/v1/forecast?latitude=${place.latitude}&longitude=${place.longitude}`

@@ -2583,6 +2583,8 @@ function renderLiveReply() {
   if (atBottom) {
     result.scrollTop = result.scrollHeight;
     scrollConversationToEnd();
+    finishLiveReply(liveReply.attemptId);
+    liveReply = { attemptId: null, text: '', finished: true };
   }
 }
 
@@ -5495,6 +5497,8 @@ submit.addEventListener('click', async () => {
 
     result.scrollTop = result.scrollHeight;
     scrollConversationToEnd();
+    finishLiveReply(liveReply.attemptId);
+    liveReply = { attemptId: null, text: '', finished: true };
   }
 
   // Switch to Conversations surface so user immediately sees their request and streaming reply
@@ -5689,7 +5693,7 @@ api.onEvent((event) => {
       // The streamed reply row IS this answer: finish it in place with the authoritative final text
       // instead of appending a second copy beside it (the durable transcript replaces it at terminal).
       const liveRow = !existing ? result.querySelector('[data-live-reply="1"]') : null;
-      if (liveRow && (!event.attemptId || !liveReply.attemptId || liveReply.attemptId === event.attemptId)) {
+      if (liveRow && (!event.attemptId || liveReply.attemptId === event.attemptId)) {
         finishLiveReply(event.attemptId);
         if (event.attemptId) liveRow.dataset.attemptId = event.attemptId;
         renderMarkdownLite(liveRow.lastElementChild, event.text);
