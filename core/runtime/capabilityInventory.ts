@@ -292,7 +292,7 @@ async function probeWebReach(fetchFn: typeof fetch, env: NodeJS.ProcessEnv): Pro
   try {
     const res = await fetchFn(target, { method: 'GET', signal: AbortSignal.timeout(4_000), redirect: 'manual' });
     const ok = res.status < 500;
-    return { id: 'web_research', category: 'web', label: 'Web research', status: ok ? 'working' : 'unreachable', permission: 'approval_per_use', provides: ['web_research'], detail: ok ? `search endpoint reachable (${new URL(target).hostname}); each run asks before sending queries` : `HTTP ${res.status}` };
+    return { id: 'web_research', category: 'web', label: 'Web research', status: ok ? 'working' : 'unreachable', permission: 'approval_per_use', provides: ['web_research'], driver: 'tool:governed_research', detail: ok ? `search endpoint reachable (${new URL(target).hostname}); each run asks before sending queries` : `HTTP ${res.status}` };
   } catch (err) {
     return { id: 'web_research', category: 'web', label: 'Web research', status: 'unreachable', permission: 'approval_per_use', provides: ['web_research'], detail: `no route to the search endpoint (${err instanceof Error ? err.message : String(err)})` };
   }
@@ -332,7 +332,7 @@ async function probeDevices(adbItem: InventoryItem | undefined, deps: Required<P
         if (!fs.existsSync(root)) continue;
         const st = fs.statfsSync(root);
         const total = st.blocks * st.bsize; const free = st.bavail * st.bsize;
-        items.push({ id: `drive:${letter}`, category: 'devices', label: `Drive ${letter}:`, status: 'working', permission: 'approval_per_use', provides: ['storage'], detail: `${(free / 1e9).toFixed(0)} GB free of ${(total / 1e9).toFixed(0)} GB` });
+        items.push({ id: `drive:${letter}`, category: 'devices', label: `Drive ${letter}:`, status: 'working', permission: 'approval_per_use', provides: ['storage'], driver: 'tool:propose_file_change', detail: `${(free / 1e9).toFixed(0)} GB free of ${(total / 1e9).toFixed(0)} GB` });
       } catch { /* not ready (card reader, disconnected network drive) */ }
     }
   }

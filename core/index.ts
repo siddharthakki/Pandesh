@@ -50,6 +50,7 @@ import { createImageStudioCapabilityAdapter } from './runtime/imageStudioCapabil
 import { createDocumentToolsAdapter } from './runtime/documentToolsCapability';
 import { createOllamaManagementAdapter } from './runtime/ollamaManagementCapability';
 import { createExecutionPlanAdapter } from './runtime/executionPlanCapability';
+import { createWishCapabilityAdapter } from './runtime/wishCapability';
 import { resolveHostBrowserBin } from './runtime/hostBrowserBin';
 import { closeAllBrowserSessions, reapOrphanedBrowsers } from './runtime/browserSession';
 import { buildConnectorAdapters, CONNECTOR_CREDENTIAL_ENV } from './runtime/connectors/connectorDefinitions';
@@ -321,6 +322,7 @@ function buildCapabilityRegistry(dataDir: string, db: CoreDatabase, connectors: 
   // declared plan against the capabilities that really exist), so it is
   // added last.
   registry.register(createExecutionPlanAdapter({ db, registry }));
+  registry.register(createWishCapabilityAdapter({ db, dataDir }));
   if (github) {
     registry.register(github);
   }

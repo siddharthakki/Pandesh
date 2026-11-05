@@ -72,6 +72,7 @@ export const CHAT_CAPABILITY_IDS = [
   'document-tools',
   'ollama-management',
   'plan',
+  'wish',
 ] as const;
 
 

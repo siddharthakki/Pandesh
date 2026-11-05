@@ -70,6 +70,7 @@ const CAPABILITY_LABELS: Record<string, string> = {
   'document-tools': 'reading documents (OCR) and downloading media',
   'ollama-management': 'installing and freeing the local models',
   plan: 'declaring and checking the plan of a multi-step task',
+  wish: 'the Wish-to-Reality goal, its offering and its deliverables',
   'network-drives': 'network drives',
   github: 'GitHub issues',
   research: 'web research',
