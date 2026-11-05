@@ -38,6 +38,20 @@ export const AUTHORITATIVE_PROCESS_SPAWN_ALLOWLIST: ReadonlySet<string> = new Se
   'core/runtime/connectors/gwsTransport.ts',
   'core/runtime/githubCapability.ts',
   'core/runtime/browserInspection.ts',
+  // Reads the workspace's own git configuration with a fixed `git config
+  // --list` argv (no shell, no model-supplied argument) so a standing
+  // authorization can be bound to the repository it applies to.
+  'core/domain/permissionModes.ts',
+  // Protects a secret with the Windows DPAPI through one encoded PowerShell
+  // command: no shell string, a fixed argv, a bounded timeout.
+  'core/platform/osSecretProtector.ts',
+  // Probes what this PC can really do: each executable is run with its own
+  // fixed version argv (no shell) and a bounded timeout. The probe never
+  // runs anything the model supplied.
+  'core/runtime/capabilityInventory.ts',
+  // Renders and inspects media with FFmpeg/FFprobe: a fixed argv, no shell,
+  // a bounded timeout, and a verified output file.
+  'core/runtime/mediaProduction.ts',
   // Launches the host browser (path from the host-pinned env var or fixed install paths, never model input)
   // with a fixed argv and no shell, and force-kills only the PIDs it recorded itself (taskkill, no shell).
   'core/runtime/browserSession.ts',
@@ -52,6 +66,12 @@ export const AUTHORITATIVE_PROCESS_SPAWN_ALLOWLIST: ReadonlySet<string> = new Se
   'core/runtime/operatorTestRun.ts',
   // Reads the local GPU's name and VRAM with one fixed-argument `nvidia-smi` query (no caller-supplied input); bounds concurrent GPU workloads.
   'core/runtime/hardwareCapacity.ts',
+  // Local OCR and PDF text extraction: runs Poppler's `pdftoppm`/`pdftotext`
+  // and Tesseract with a fixed argv (no shell, no model-supplied flags), a
+  // sanitized child environment, a bounded timeout and a verified
+  // process-tree kill. Every argument is either a resolved binary path or a
+  // document path the caller already had to be authorized for.
+  'core/runtime/documentOcr.ts',
 
   // Core external engine and agent runtimes
   'core/runtime/hermesEngine.ts',

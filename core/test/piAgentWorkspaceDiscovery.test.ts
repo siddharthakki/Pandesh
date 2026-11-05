@@ -10,6 +10,7 @@ import { createRequest } from '../domain/requests';
 import { createAttempt, getAttempt } from '../domain/attempts';
 import { resolveCapabilityApproval } from '../domain/capabilityDispatch';
 import { listApprovalsForAttempt } from '../domain/approvals';
+import { searchWorkspace } from '../runtime/missionSearch';
 
 describe('PiAgentEngine Workspace Context & Permission-Aware Discovery', () => {
   let tempDir: string;
@@ -149,13 +150,28 @@ describe('PiAgentEngine Workspace Context & Permission-Aware Discovery', () => {
   });
 
   it('Scenario D: searches files within authorized roots accurately', async () => {
-    const root = process.cwd();
-    const query = 'HANDOFF.md';
-    const targetFile = path.join(root, 'HANDOFF.md');
-    expect(fs.existsSync(targetFile)).toBe(true);
+    // The search must find a real file inside the authorized root. The test
+    // builds its OWN root and file: a test that depends on an untracked file
+    // in the repository root silently stops testing anything the moment that
+    // file is absent.
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'pandesh-discovery-'));
+    try {
+      const targetFile = path.join(root, 'HANDOFF.md');
+      fs.writeFileSync(targetFile, '# Handoff\n\nHANDOFF notes for the authorized-root search.\n', 'utf8');
+      expect(fs.existsSync(targetFile)).toBe(true);
 
-    const stat = fs.statSync(targetFile);
-    expect(stat.size).toBeGreaterThan(0);
+      const stat = fs.statSync(targetFile);
+      expect(stat.size).toBeGreaterThan(0);
+
+      // The search itself must find the file's content, and must not step
+      // outside the authorized root.
+      const result = searchWorkspace({ workspaceRoot: root, query: 'HANDOFF' });
+      expect(result.ok, result.output).toBe(true);
+      expect(result.resultCount).toBeGreaterThan(0);
+      expect(result.output).toContain('HANDOFF.md');
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
   });
 
   it('verifies desktopApproval card scopeSummary and affectedPaths for request_search_permission', async () => {

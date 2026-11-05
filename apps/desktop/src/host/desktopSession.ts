@@ -3519,7 +3519,7 @@ export class DesktopSession {
   }
 
   async listArtifacts(conversationId?: string): Promise<DesktopArtifactView[]> {
-    const result = await this.requireClient().listArtifacts(conversationId);
+    const result = await this.durableReadClient().listArtifacts(conversationId);
     // A page screenshot is a preview of work in the workspace, not a result.
     return result.artifacts
       .filter((record) => record.source !== BROWSER_SCREENSHOT_SOURCE)
@@ -3527,7 +3527,7 @@ export class DesktopSession {
   }
 
   private async verifiedArtifact(id: string): Promise<{ record: import('../../../../core/shared/wireTypes').ArtifactRecord; bytes: Buffer }> {
-    const record = await this.requireClient().getArtifact(id);
+    const record = await this.durableReadClient().getArtifact(id);
     if (record.availability !== 'ready') throw new Error(`Artifact is ${record.availability}`);
     const bytes = fs.readFileSync(record.absolutePath);
     if (bytes.length !== record.byteSize || crypto.createHash('sha256').update(bytes).digest('hex') !== record.sha256) {
@@ -4450,6 +4450,26 @@ export class DesktopSession {
     if (!this.client || this.coreState !== 'connected') {
       throw new Error(this.coreDetail ?? 'Core is not connected');
     }
+    return this.client;
+  }
+
+  /**
+   * The Core client for a DURABLE READ.
+   *
+   * `requireClient` refuses every call while the live event stream is not in
+   * the 'connected' state. That is the right rule for an action: a mutation
+   * must not start against a Core whose channel is flapping. A durable read
+   * is different — the HTTP request itself proves the Core answers, and the
+   * answer is verified (an artifact's recorded digest is checked against the
+   * bytes on disk before they are handed out).
+   *
+   * Refusing such a read because the *stream* was momentarily reconnecting
+   * turned a reachable artifact into a permanent "Core is not connected"
+   * error in the workspace panel right after a restart — the very moment the
+   * person looks for the image or video they just made.
+   */
+  private durableReadClient(): CoreClient {
+    if (!this.client) throw new Error(this.coreDetail ?? 'Core is not connected');
     return this.client;
   }
 

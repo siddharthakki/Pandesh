@@ -22,10 +22,19 @@ import type { CoreDatabase } from '../db/connection';
 import type { CapabilityDispatchResult } from '../shared/wireTypes';
 import { dispatchCapability } from '../domain/capabilityDispatch';
 import type { GovernedCapabilityRegistry } from './governedCapability';
+import { buildCapabilityBrief } from './capabilityBrief';
+import type { CapabilityInventory } from './capabilityInventory';
 
 export interface PiCapabilityBridge {
   definitions: Array<{ name: string; description: string; parameters: any; consequential: boolean }>;
   dispatch(toolName: string, args: Record<string, unknown>): Promise<CapabilityDispatchResult>;
+  /**
+   * The honest, current capability brief: what this build can really do and
+   * what is unavailable right now, with the reason. It is built from the
+   * registry - the one authority that can execute - so it never lists a
+   * capability that has no working tool behind it.
+   */
+  brief: string;
 }
 
 /**
@@ -37,20 +46,31 @@ export interface PiCapabilityBridge {
  * tool list. Each id below is a capability whose tools the Pandesh system
  * prompt already instructs the model to use, or a capability that is useless
  * without a conversational route.
+ *
+ * The list grows in deliberate steps, and the capability brief travels with
+ * it: a larger list is only safe when the model is told what is in it and
+ * what is not.
  */
 export const CHAT_CAPABILITY_IDS = [
-  'port-management',
-  'system-management',
-  'intelligence-scout',
-  'browser',
-  'computer-use',
-  'hermes',
-  'weather',
-  'capability-inventory',
-  'pc-organizer',
+  // The bounded operator set. This is deliberately NOT every capability the
+  // registry owns: a live turn with the previous 20-capability list produced
+  // 149 tools and ~29k prompt tokens, and the local model answered with one
+  // token and no tool call. The same model answered a plain greeting, so the
+  // limit is the tool surface, not the model call. These ten cover the
+  // acceptance workflows (documents, ComfyUI, phone, plan, wish, browser,
+  // research) plus honest capability reporting.
+  'image-studio',
+  'filesystem',
+  'document-tools',
   'household',
-  'media-production',
+  'plan',
+  'wish',
+  'browser',
+  'research',
+  'capability-inventory',
+  'ollama-management',
 ] as const;
+
 
 export interface BuildPiCapabilityBridgeOptions {
   db: CoreDatabase;
@@ -64,7 +84,18 @@ export interface BuildPiCapabilityBridgeOptions {
   ownerAttemptId?: string;
   /** Tool names already offered by another surface (workspace, connectors, memory). */
   excludeToolNames?: string[];
+  /** The live inventory, when the caller already has one: it adds the
+   * "installed here but no Pandesh workflow drives it" line to the brief. */
+  inventory?: CapabilityInventory | null;
   signal?: AbortSignal;
+  /**
+   * The capability ids this surface offers. Defaults to the bounded chat
+   * allowlist. A different surface (or a test proving that a capability the
+   * chat list omits is still executable) can name a different set; the brief
+   * follows the same set, so what the model is told and what it can call never
+   * diverge.
+   */
+  capabilityIds?: readonly string[];
 }
 
 /**
@@ -73,7 +104,8 @@ export interface BuildPiCapabilityBridgeOptions {
  */
 export function buildPiCapabilityBridge(options: BuildPiCapabilityBridgeOptions): PiCapabilityBridge | undefined {
   const { registry } = options;
-  const allowed = new Set<string>(CHAT_CAPABILITY_IDS);
+  const capabilityIds = options.capabilityIds ?? CHAT_CAPABILITY_IDS;
+  const allowed = new Set<string>(capabilityIds);
   const excluded = new Set(options.excludeToolNames ?? []);
   const definitions = registry.definitions().filter((def) => {
     if (excluded.has(def.name)) return false;
@@ -81,6 +113,11 @@ export function buildPiCapabilityBridge(options: BuildPiCapabilityBridgeOptions)
     return owner !== undefined && allowed.has(owner);
   });
   if (definitions.length === 0) return undefined;
+  const brief = buildCapabilityBrief({
+    registry,
+    exposedCapabilityIds: capabilityIds,
+    inventory: options.inventory ?? null,
+  });
   return {
     definitions: definitions.map((def) => ({
       name: def.name,
@@ -88,6 +125,7 @@ export function buildPiCapabilityBridge(options: BuildPiCapabilityBridgeOptions)
       parameters: def.parameters,
       consequential: registry.classify(def.name)?.risk === 'consequential',
     })),
+    brief: brief.text,
     dispatch: (toolName, args) => dispatchCapability(options.db, registry, {
       correlationId: options.correlationId,
       // The anchor attempt is NOT owned by the chat attempt: it is the

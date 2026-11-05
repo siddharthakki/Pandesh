@@ -8467,6 +8467,9 @@ const workspacePreviewCache = new Map();
 const WORKSPACE_PREVIEW_CACHE_LIMIT = 24;
 /** Previews that could not be loaded, by artifact id → when; retried, never cached. */
 const workspacePreviewFailures = new Map();
+/** How often a preview that could not be loaded yet is retried, and how often. */
+const WORKSPACE_PREVIEW_RETRY_MS = 1500;
+const WORKSPACE_PREVIEW_MAX_ATTEMPTS = 8;
 
 const ACTIVITY_KIND_LABEL = { browser: 'Browser', code: 'Code', document: 'Document', image: 'Image', video: 'Video', tool: 'Tool' };
 const ACTIVITY_STATE_LABEL = { running: 'Running', completed: 'Completed', failed: 'Failed', cancelled: 'Cancelled' };
@@ -9026,20 +9029,43 @@ function activityArtifactPreview(artifactId, item) {
   note.textContent = 'Loading preview…';
   holder.appendChild(note);
   if (typeof api?.loadArtifactPreview !== 'function') return holder;
-  if (lastSnapshot?.coreState !== 'connected') {
-    note.textContent = 'Preview appears when Pandesh is connected…';
-    return holder;
-  }
-  api.loadArtifactPreview(artifactId).then((preview) => {
-    workspacePreviewCache.set(artifactId, preview);
-    if (workspacePreviewCache.size > WORKSPACE_PREVIEW_CACHE_LIMIT) {
-      workspacePreviewCache.delete(workspacePreviewCache.keys().next().value);
+
+  // The preview heals itself. A Core that is still starting, or whose event
+  // stream is reconnecting after a restart, must not leave a permanent
+  // "Preview unavailable" on a result the person can still see: the request
+  // is retried on a bounded schedule until it answers, and only a settled
+  // failure is shown.
+  let attempts = 0;
+  let retryTimer = null;
+  const transient = (message) => /not connected|reconnect|starting|unavailable|ECONNREFUSED|fetch failed|network|timed? ?out/i.test(String(message ?? ''));
+  const attempt = () => {
+    if (lastSnapshot?.coreState !== 'connected') {
+      note.textContent = 'Preview appears when Pandesh is connected…';
+      if (attempts < WORKSPACE_PREVIEW_MAX_ATTEMPTS) {
+        attempts += 1;
+        retryTimer = setTimeout(attempt, WORKSPACE_PREVIEW_RETRY_MS);
+      }
+      return;
     }
-    draw(preview);
-  }).catch((err) => {
-    workspacePreviewFailures.set(artifactId, Date.now());
-    note.textContent = `Preview unavailable: ${err?.message ?? err}`;
-  });
+    attempts += 1;
+    api.loadArtifactPreview(artifactId).then((preview) => {
+      workspacePreviewCache.set(artifactId, preview);
+      if (workspacePreviewCache.size > WORKSPACE_PREVIEW_CACHE_LIMIT) {
+        workspacePreviewCache.delete(workspacePreviewCache.keys().next().value);
+      }
+      draw(preview);
+    }).catch((err) => {
+      workspacePreviewFailures.set(artifactId, Date.now());
+      if (transient(err?.message) && attempts < WORKSPACE_PREVIEW_MAX_ATTEMPTS) {
+        note.textContent = 'Loading preview…';
+        retryTimer = setTimeout(attempt, WORKSPACE_PREVIEW_RETRY_MS);
+        return;
+      }
+      note.textContent = `Preview unavailable: ${err?.message ?? err}`;
+    });
+  };
+  attempt();
+  holder.addEventListener('remove', () => { if (retryTimer) clearTimeout(retryTimer); });
   return holder;
 }
 

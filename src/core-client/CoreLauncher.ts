@@ -328,11 +328,27 @@ export class CoreLauncher {
         }
       }
       if (earlyExitCode !== null && earlyExitCode !== 0) {
-        return { state: 'database_failed', detail: `Core process exited early with code ${earlyExitCode} (see Core logs)` };
+        // The Core wrote WHY it gave up into its own log. Without that line
+        // the operator (and the test) only sees "exited early with code 1",
+        // which says nothing about the real cause.
+        return { state: 'database_failed', detail: `Core process exited early with code ${earlyExitCode}${this.coreLogTail() ? `: ${this.coreLogTail()}` : ' (see Core logs)'}` };
       }
       await sleep(POLL_INTERVAL_MS);
     }
     return { state: 'unavailable', detail: `Core did not become healthy within ${STARTUP_TIMEOUT_MS}ms` };
+  }
+
+  /** The last lines of the Core's own log, for a failed start. */
+  private coreLogTail(): string {
+    try {
+      const logPath = path.join(this.dataDir, 'logs', 'core.log');
+      if (!fs.existsSync(logPath)) return '';
+      const text = fs.readFileSync(logPath, 'utf8').trim();
+      if (!text) return '';
+      return text.split(/\r?\n/).slice(-3).join(' | ').slice(0, 400);
+    } catch {
+      return '';
+    }
   }
 }
 

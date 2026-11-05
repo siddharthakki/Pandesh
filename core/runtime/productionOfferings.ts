@@ -42,14 +42,14 @@ export const OFFERINGS: ProductionOffering[] = [
     needs: ['ocr', 'pdf_text'], optional: [], machineMinutes: [1, 10], humanMinutes: [10, 30],
     humanInvolvement: ['the client hands over the scans and consents to their processing', 'spot-check OCR accuracy on names and numbers'],
     limitations: ['OCR errors on handwriting and poor scans', 'personal documents need a data-processing agreement (AVV) under GDPR'],
-    sampleTool: null,
+    sampleTool: 'document_read',
   },
   {
     id: 'ai_imagery', name: 'AI-generated background or decoration images', deliverable: 'PNG images generated locally with ComfyUI',
     needs: ['image_generation', 'gpu'], optional: [], machineMinutes: [1, 5], humanMinutes: [10, 30],
     humanInvolvement: ['choose and approve every image', 'label AI-generated images as such where they are published'],
     limitations: ['must never be presented as photos of real food, places or people', 'model licences restrict some commercial uses'],
-    sampleTool: null,
+    sampleTool: 'image_generate',
   },
   {
     id: 'office_conversion', name: 'Document conversion and formatting', deliverable: 'Word/Excel/Markdown converted to PDF or DOCX',
@@ -88,7 +88,15 @@ export function renderOfferings(assessments: OfferingAssessment[]): string {
   const lines = ['Deliverables this PC can produce now (from the live capability inventory):'];
   for (const a of assessments) {
     const o = a.offering;
-    const state = !a.achievable ? 'NOT YET' : o.sampleTool ? 'ACHIEVABLE' : 'TOOLS PRESENT (no Pandesh workflow yet — manual work)';
+    // An offering is only ACHIEVABLE when every capability it needs is
+    // operable through a real tool AND a real tool can produce the sample.
+    // A missing sampleTool means the tools are there but no workflow drives
+    // them yet — that is a different thing from "Pandesh can do this".
+    const state = !a.achievable
+      ? 'NOT YET'
+      : o.sampleTool
+        ? 'ACHIEVABLE'
+        : 'TOOLS PRESENT (no Pandesh workflow yet — manual work)';
     lines.push('', `${state} — ${o.name}`);
     lines.push(`  deliverable: ${o.deliverable}`);
     if (!a.achievable) lines.push(`  missing: ${a.missing.join(', ')}`);

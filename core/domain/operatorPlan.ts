@@ -13,7 +13,7 @@
  */
 import { classifySensitivity } from './pandaBridge';
 
-export type WorkflowKind = 'public_research' | 'local_files' | 'coding' | 'unsupported';
+export type WorkflowKind = 'public_research' | 'local_files' | 'coding' | 'unsupported' | 'model_plan';
 export type PrivacyClass = 'local_only' | 'public';
 
 export type CapabilityNeed = 'web_research' | 'local_filesystem' | 'pdf_reader' | 'local_model' | 'coding_executor';
@@ -48,13 +48,19 @@ export interface RunConsent {
 export type StepKind =
   | 'approve_egress' | 'search' | 'synthesize' | 'verify_research'
   | 'discover_files' | 'read_documents' | 'propose_organization' | 'verify_proposal' | 'approve_move' | 'apply_move' | 'verify_move'
-  | 'select_executor' | 'run_executor' | 'verify_deliverable';
+  | 'select_executor' | 'run_executor' | 'verify_deliverable'
+  // A step the MODEL declared for a multi-step task (see
+  // core/runtime/executionPlanCapability.ts). It names the capability it
+  // needs rather than one of the fixed workflows above.
+  | 'model_step';
 
 export interface PlannedStep {
   kind: StepKind;
   title: string;
-  /** The capability to select a tool for; absent for approvals and pure verification. */
-  needs: CapabilityNeed | null;
+  /** The capability to select a tool for; absent for approvals and pure
+   * verification. A model-declared plan names a capability id directly, so
+   * this is any capability name rather than only the fixed needs above. */
+  needs: string | null;
   /** Steps that mutate or send data and therefore stop for an explicit human decision. */
   approval: 'egress' | 'file_move' | null;
   maxAttempts: number;
