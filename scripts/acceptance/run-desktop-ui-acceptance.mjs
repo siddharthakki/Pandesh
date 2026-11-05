@@ -48,16 +48,57 @@ function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-function readCoreDbInvocations() {
+function readCoreDbInvocations(filter = {}) {
   const dbPath = path.join(desktopDir, 'core.db');
   if (!fs.existsSync(dbPath)) return [];
   try {
     const db = new DatabaseSync(dbPath, { readOnly: true });
-    const rows = db.prepare('SELECT id, attemptId, toolName, status, startedAt FROM tool_invocations ORDER BY startedAt ASC').all();
+    let sql = 'SELECT id, attemptId, toolName, status, startedAt, endedAt, exitCode FROM tool_invocations';
+    const conditions = [];
+    const params = [];
+    if (filter.attemptId) {
+      conditions.push('attemptId = ?');
+      params.push(filter.attemptId);
+    } else if (Array.isArray(filter.attemptIds) && filter.attemptIds.length > 0) {
+      conditions.push(`attemptId IN (${filter.attemptIds.map(() => '?').join(',')})`);
+      params.push(...filter.attemptIds);
+    }
+    if (conditions.length > 0) {
+      sql += ' WHERE ' + conditions.join(' AND ');
+    }
+    sql += ' ORDER BY startedAt ASC';
+    const rows = db.prepare(sql).all(...params);
     db.close();
     return rows;
   } catch (e) {
     console.error('readCoreDbInvocations error:', e.message);
+    return [];
+  }
+}
+
+function readCoreDbModelInvocations(filter = {}) {
+  const dbPath = path.join(desktopDir, 'core.db');
+  if (!fs.existsSync(dbPath)) return [];
+  try {
+    const db = new DatabaseSync(dbPath, { readOnly: true });
+    let sql = 'SELECT id, attemptId, requestedModel, actualModel, status, startedAt FROM model_invocations';
+    const conditions = [];
+    const params = [];
+    if (filter.attemptId) {
+      conditions.push('attemptId = ?');
+      params.push(filter.attemptId);
+    } else if (Array.isArray(filter.attemptIds) && filter.attemptIds.length > 0) {
+      conditions.push(`attemptId IN (${filter.attemptIds.map(() => '?').join(',')})`);
+      params.push(...filter.attemptIds);
+    }
+    if (conditions.length > 0) {
+      sql += ' WHERE ' + conditions.join(' AND ');
+    }
+    sql += ' ORDER BY startedAt ASC';
+    const rows = db.prepare(sql).all(...params);
+    db.close();
+    return rows;
+  } catch (e) {
     return [];
   }
 }
@@ -75,16 +116,57 @@ function readCoreDbApprovals() {
   }
 }
 
-function readCoreDbArtifacts() {
+function readCoreDbArtifacts(filter = {}) {
   const dbPath = path.join(desktopDir, 'core.db');
   if (!fs.existsSync(dbPath)) return [];
   try {
     const db = new DatabaseSync(dbPath, { readOnly: true });
-    const rows = db.prepare('SELECT id, kind, title, absolutePath, mimeType, byteSize FROM artifacts ORDER BY id ASC').all();
+    let sql = 'SELECT id, conversationId, requestId, attemptId, kind, title, absolutePath, mimeType, byteSize, createdAt FROM artifacts';
+    const conditions = [];
+    const params = [];
+    if (filter.attemptId) {
+      conditions.push('attemptId = ?');
+      params.push(filter.attemptId);
+    } else if (Array.isArray(filter.attemptIds) && filter.attemptIds.length > 0) {
+      conditions.push(`attemptId IN (${filter.attemptIds.map(() => '?').join(',')})`);
+      params.push(...filter.attemptIds);
+    }
+    if (filter.afterCreatedAt) {
+      conditions.push('createdAt >= ?');
+      params.push(filter.afterCreatedAt);
+    }
+    if (conditions.length > 0) {
+      sql += ' WHERE ' + conditions.join(' AND ');
+    }
+    sql += ' ORDER BY createdAt ASC, id ASC';
+    const rows = db.prepare(sql).all(...params);
     db.close();
     return rows;
   } catch (e) {
     return [];
+  }
+}
+
+function getConversationAttemptIds(attemptId) {
+  if (!attemptId) return [];
+  const dbPath = path.join(desktopDir, 'core.db');
+  if (!fs.existsSync(dbPath)) return [attemptId];
+  try {
+    const db = new DatabaseSync(dbPath, { readOnly: true });
+    const row = db.prepare('SELECT r.conversationId FROM attempts a JOIN requests r ON r.id = a.requestId WHERE a.id = ?').get(attemptId);
+    if (!row?.conversationId) {
+      db.close();
+      return [attemptId];
+    }
+    const convAttempts = db.prepare(`
+      SELECT a.id FROM attempts a
+      JOIN requests r ON r.id = a.requestId
+      WHERE r.conversationId = ?
+    `).all(row.conversationId);
+    db.close();
+    return convAttempts.map((r) => r.id);
+  } catch {
+    return [attemptId];
   }
 }
 
@@ -132,6 +214,7 @@ async function waitForTurnCompletion(client, {
   let lastApprovalKey = '';
   let attemptStarted = false;
   let currentAttemptId = null;
+  const seenAttemptIds = new Set();
 
   while (Date.now() < deadline) {
     // 1. Poll snapshot state
@@ -142,12 +225,18 @@ async function waitForTurnCompletion(client, {
     });
     const snap = snapResult.result?.value;
 
+    if (snap?.attemptId) seenAttemptIds.add(snap.attemptId);
+    if (snap?.pendingApproval?.attemptId) seenAttemptIds.add(snap.pendingApproval.attemptId);
+    if (snap?.pendingImageApproval?.attemptId) seenAttemptIds.add(snap.pendingImageApproval.attemptId);
+
     if (!attemptStarted) {
       if (snap?.running || (snap?.attemptId && snap.attemptId !== beforeAttemptId) || snap?.pendingApproval || snap?.pendingImageApproval) {
         attemptStarted = true;
-        currentAttemptId = snap?.attemptId;
+        currentAttemptId = snap?.attemptId ?? snap?.pendingImageApproval?.attemptId ?? snap?.pendingApproval?.attemptId ?? null;
         console.log(`[${scenarioName}] Turn active detected (attemptId=${currentAttemptId}, running=${snap?.running})`);
       }
+    } else if (!currentAttemptId && (snap?.attemptId || snap?.pendingImageApproval?.attemptId || snap?.pendingApproval?.attemptId)) {
+      currentAttemptId = snap?.attemptId ?? snap?.pendingImageApproval?.attemptId ?? snap?.pendingApproval?.attemptId ?? null;
     }
 
     // 2. Check for pending approval in snapshot OR DOM
@@ -202,7 +291,13 @@ async function waitForTurnCompletion(client, {
       }
       await sleep(1500);
       console.log(`[${scenarioName}] Turn completed: outcome=${snap?.lastTurnOutcome}`);
-      return { ok: true, snap, approvedCount };
+      return {
+        ok: true,
+        snap,
+        approvedCount,
+        attemptId: currentAttemptId,
+        attemptIds: Array.from(seenAttemptIds),
+      };
     }
 
     await sleep(800);
@@ -338,7 +433,7 @@ async function main() {
     const promptA = `Read this scanned invoice at ${builtInvoice.pdfPath}, extract its invoice number and total, and write a summary to the current workspace.`;
     await submitPrompt(client, promptA);
 
-    await waitForTurnCompletion(client, {
+    const turnA = await waitForTurnCompletion(client, {
       scenarioName: 'scenario_a',
       timeoutMs: 180000,
       approvalPrefix: 'scenario-a-approval',
@@ -348,12 +443,20 @@ async function main() {
     // Capture completion UI screenshot
     await captureScreenshot(client, 'scenario-a-complete.png');
 
-    // Verify OCR tool invocation from Core DB
-    const invocationsA = readCoreDbInvocations();
+    // Verify OCR tool invocation from Core DB scoped to current scenario attempt/conversation
+    const attemptIdsA = Array.from(new Set([
+      ...(turnA.attemptIds || []),
+      ...getConversationAttemptIds(turnA.attemptId),
+    ])).filter(Boolean);
+
+    const invocationsA = readCoreDbInvocations({ attemptIds: attemptIdsA });
     const ocrInvocation = invocationsA.find((i) => i.toolName === 'document_read' || i.toolName === 'document_ocr');
-    record('scenario_a_model_selected_ocr_tool', Boolean(ocrInvocation) ? 'PASS' : 'FAIL', {
+    const ocrSucceeded = Boolean(ocrInvocation && ocrInvocation.status === 'succeeded');
+    record('scenario_a_model_selected_ocr_tool', ocrSucceeded ? 'PASS' : 'FAIL', {
       toolName: ocrInvocation?.toolName,
       status: ocrInvocation?.status,
+      attemptId: ocrInvocation?.attemptId,
+      scopedAttemptIds: attemptIdsA,
     });
 
     // Verify written summary file in workspace
@@ -393,11 +496,12 @@ async function main() {
     // SCENARIO B: ComfyUI → Activity Workspace → Core Restart
     // ─────────────────────────────────────────────────────────────────────────
     console.log('\n--- STARTING SCENARIO B: ComfyUI → Activity Workspace → Restart ---');
+    const scenarioBStartTime = new Date(Date.now() - 2000).toISOString();
     const snapBeforeB = (await client.Runtime.evaluate({ expression: 'window.karkedikhaDesktop.getSnapshot()', awaitPromise: true, returnByValue: true })).result?.value;
     const promptB = 'Generate an illustration of a lighthouse at sunset using ComfyUI and save it to the current activity workspace.';
     await submitPrompt(client, promptB);
 
-    await waitForTurnCompletion(client, {
+    const turnB = await waitForTurnCompletion(client, {
       scenarioName: 'scenario_b',
       timeoutMs: 240000,
       approvalPrefix: 'scenario-b-approval',
@@ -417,12 +521,48 @@ async function main() {
     console.log('Snapshot B after generation:');
     console.log('  lastTurnOutcome:', snapB?.lastTurnOutcome);
 
-    // List artifacts via DB and client
-    const artifactsDb = readCoreDbArtifacts();
-    const imageArtifact = artifactsDb.find((a) => a.kind === 'image' || a.mimeType?.startsWith('image/'));
+    // Verify tool invocation scoped to Scenario B's attempt/conversation and required to have succeeded
+    const attemptIdsB = Array.from(new Set([
+      ...(turnB.attemptIds || []),
+      ...getConversationAttemptIds(turnB.attemptId),
+    ])).filter(Boolean);
+
+    const invocationsB = readCoreDbInvocations({ attemptIds: attemptIdsB });
+    const imageInvocation = invocationsB.find((i) => i.toolName === 'image_generate' || i.toolName === 'image_studio');
+    const imageInvocationSucceeded = Boolean(imageInvocation && imageInvocation.status === 'succeeded');
+    record('scenario_b_image_tool_invoked', imageInvocationSucceeded ? 'PASS' : 'FAIL', {
+      toolName: imageInvocation?.toolName,
+      status: imageInvocation?.status,
+      attemptId: imageInvocation?.attemptId,
+      scopedAttemptIds: attemptIdsB,
+    });
+
+    // Distinguish outcomes: verify actual invocation origin (desktop_host routing vs model_selected)
+    const modelInvocationsB = readCoreDbModelInvocations({ attemptIds: attemptIdsB });
+    const hasModelInvocationB = modelInvocationsB.length > 0;
+    const originB = hasModelInvocationB ? 'model_selected' : 'desktop_host';
+    record('scenario_b_image_invocation_origin', 'PASS', {
+      origin: originB,
+      hostRouted: !hasModelInvocationB,
+      modelSelected: hasModelInvocationB,
+      modelInvocationsCount: modelInvocationsB.length,
+      scopedAttemptIds: attemptIdsB,
+      details: hasModelInvocationB
+        ? 'Autonomous model tool selection in chat path'
+        : 'Dispatched via desktop host planMediaRequest -> dispatchCapability directly (deterministic media path, no LLM tool-calling in chat mode)',
+    });
+
+    // List artifacts created during Scenario B (ensure checking artifact created during this scenario, not an older artifact)
+    const artifactsB = readCoreDbArtifacts({ afterCreatedAt: scenarioBStartTime });
+    const imageArtifact = artifactsB.find((a) =>
+      (a.kind === 'image' || a.mimeType?.startsWith('image/')) &&
+      (attemptIdsB.length === 0 || attemptIdsB.includes(a.attemptId) || a.createdAt >= scenarioBStartTime)
+    );
     record('scenario_b_image_artifact_created', Boolean(imageArtifact) ? 'PASS' : 'FAIL', {
       artifact: imageArtifact,
-      count: artifactsDb.length,
+      countInScenario: artifactsB.length,
+      scenarioStartTime: scenarioBStartTime,
+      createdAt: imageArtifact?.createdAt,
     });
 
     // Verify real file on disk
@@ -488,13 +628,13 @@ async function main() {
       coreState: restartedSnap?.coreState,
     });
 
-    // Verify artifact remains durable and recoverable after restart
+    // Verify artifact remains durable and recoverable after restart (specifically checking the artifact created in Scenario B)
     const artifactsAfterDb = readCoreDbArtifacts();
-    const restoredArtifact = artifactsAfterDb.find((a) => a.id === imageArtifact?.id || (a.kind === 'image' && a.title === imageArtifact?.title));
+    const restoredArtifact = artifactsAfterDb.find((a) => a.id === imageArtifact?.id);
     record('scenario_b_artifact_durable_across_restart', Boolean(restoredArtifact) ? 'PASS' : 'FAIL', {
       originalId: imageArtifact?.id,
       restoredId: restoredArtifact?.id,
-      countBefore: artifactsDb.length,
+      countBefore: artifactsB.length,
       countAfter: artifactsAfterDb.length,
     });
 
@@ -518,7 +658,7 @@ async function main() {
     const promptC = `Research the product price at ${targetUrl} using the browser. Write a summary note with the product title, price, and source URL to price-check.md in the current workspace.`;
     await submitPrompt(client, promptC);
 
-    await waitForTurnCompletion(client, {
+    const turnC = await waitForTurnCompletion(client, {
       scenarioName: 'scenario_c',
       timeoutMs: 240000,
       approvalPrefix: 'scenario-c-approval',
@@ -528,15 +668,23 @@ async function main() {
     // Capture completion UI screenshot
     await captureScreenshot(client, 'scenario-c-complete.png');
 
-    // Verify browser / research tool invocation from Core DB
-    const invocationsC = readCoreDbInvocations();
+    // Verify browser / research tool invocation from Core DB scoped to Scenario C and required to have succeeded
+    const attemptIdsC = Array.from(new Set([
+      ...(turnC.attemptIds || []),
+      ...getConversationAttemptIds(turnC.attemptId),
+    ])).filter(Boolean);
+
+    const invocationsC = readCoreDbInvocations({ attemptIds: attemptIdsC });
     const browserTool = invocationsC.find((i) => /browse|browser|inspect_page|search|research/i.test(i.toolName));
-    record('scenario_c_model_selected_research_or_browser_tool', Boolean(browserTool) ? 'PASS' : 'FAIL', {
+    const browserSucceeded = Boolean(browserTool && browserTool.status === 'succeeded');
+    record('scenario_c_model_selected_research_or_browser_tool', browserSucceeded ? 'PASS' : 'FAIL', {
       toolName: browserTool?.toolName,
       status: browserTool?.status,
+      attemptId: browserTool?.attemptId,
+      scopedAttemptIds: attemptIdsC,
     });
 
-    // Verify research note in workspace
+    // Verify research note in workspace (MUST be a real file on disk containing verified facts & source URL; chat text alone cannot satisfy)
     const workspaceFilesAfterC = fs.readdirSync(workspaceDir);
     console.log('Files in isolated workspace after Scenario C:', workspaceFilesAfterC);
 
@@ -553,24 +701,20 @@ async function main() {
       }
     }
 
-    // Also check DOM body text for grounded facts if written in chat
-    const bodyTextRes = await client.Runtime.evaluate({
-      expression: 'document.body.innerText',
-      returnByValue: true,
-    });
-    const domText = bodyTextRes.result?.value ?? '';
+    const groundedPrice = /51\.77/i.test(researchNoteContent);
+    const groundedSource = /books\.toscrape\.com/i.test(researchNoteContent) || /toscrape/i.test(researchNoteContent);
 
-    const groundedPrice = /51\.77/i.test(researchNoteContent) || /51\.77/i.test(domText);
-    const groundedSource = /books\.toscrape\.com/i.test(researchNoteContent) || /books\.toscrape\.com/i.test(domText) || /toscrape/i.test(domText);
-
-    record('scenario_c_research_note_produced', Boolean(researchNoteFile) || (groundedPrice && groundedSource) ? 'PASS' : 'FAIL', {
+    // Requirement: For Scenario C, require a real saved document containing the verified facts and source URL. Chat text alone cannot satisfy the file assertion.
+    record('scenario_c_research_note_produced', Boolean(researchNoteFile) ? 'PASS' : 'FAIL', {
       file: researchNoteFile,
-      excerpt: researchNoteContent ? researchNoteContent.slice(0, 300) : domText.slice(0, 300),
+      allFiles: workspaceFilesAfterC,
+      excerpt: researchNoteContent ? researchNoteContent.slice(0, 300) : null,
     });
-    record('scenario_c_references_grounded_in_webpage', groundedPrice && groundedSource ? 'PASS' : 'FAIL', {
+    record('scenario_c_references_grounded_in_webpage', (Boolean(researchNoteFile) && groundedPrice && groundedSource) ? 'PASS' : 'FAIL', {
+      file: researchNoteFile,
       containsPrice: groundedPrice,
       containsSourceUrl: groundedSource,
-      excerpt: (researchNoteContent || domText).slice(0, 400),
+      excerpt: researchNoteContent ? researchNoteContent.slice(0, 400) : null,
     });
 
   } finally {

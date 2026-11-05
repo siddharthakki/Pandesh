@@ -6,7 +6,8 @@
  * pull begins is stopped as soon as Ollama reports a size that does not fit.
  * They also pin the delete guards.
  */
-import { describe, expect, it } from 'vitest';
+import * as fs from 'node:fs';
+import { describe, expect, it, vi } from 'vitest';
 import { createOllamaManagementAdapter, defaultFreeDiskBytes } from '../runtime/ollamaManagementCapability';
 
 const GB = 1024 ** 3;
@@ -123,6 +124,63 @@ describe('ollama management — disk guards', () => {
       if (original === undefined) delete process.env.OLLAMA_MODELS;
       else process.env.OLLAMA_MODELS = original;
     }
+  });
+
+  it('fails closed when statfs fails, refusing to authorize download', async () => {
+    const failingStatfs = () => {
+      throw new Error('EACCES: permission denied, statfs');
+    };
+    const free = defaultFreeDiskBytes(failingStatfs);
+    expect(free).toBe(0);
+
+    const { impl, calls } = fakeFetch((url) => {
+      if (url.endsWith('/api/tags')) return jsonResponse({ models: [] });
+      if (url.endsWith('/api/ps')) return jsonResponse({ models: [] });
+      throw new Error(`unexpected ${url}`);
+    });
+    const adapter = createOllamaManagementAdapter({
+      fetchImpl: impl,
+      freeDiskBytes: () => defaultFreeDiskBytes(failingStatfs),
+    });
+    const result = await adapter.run({ name: 'ollama_pull_model', arguments: { model: 'safety:7b' } }, {});
+    expect(result.status).toBe('failed');
+    expect(result.resultCategory).toBe('ollama_insufficient_disk');
+    expect(result.output).toContain('Unknown storage capacity does not authorize downloading');
+    expect(calls.some((call) => call.url.endsWith('/api/pull'))).toBe(false);
+  });
+
+  it('fails closed on invalid measurement (NaN or negative or throwing), refusing to download', async () => {
+    const { impl, calls } = fakeFetch((url) => {
+      if (url.endsWith('/api/tags')) return jsonResponse({ models: [] });
+      if (url.endsWith('/api/ps')) return jsonResponse({ models: [] });
+      throw new Error(`unexpected ${url}`);
+    });
+
+    // NaN measurement
+    const adapterNan = createOllamaManagementAdapter({ fetchImpl: impl, freeDiskBytes: () => NaN });
+    const resultNan = await adapterNan.run({ name: 'ollama_pull_model', arguments: { model: 'nan:7b' } }, {});
+    expect(resultNan.status).toBe('failed');
+    expect(resultNan.resultCategory).toBe('ollama_insufficient_disk');
+    expect(calls.some((call) => call.url.endsWith('/api/pull'))).toBe(false);
+
+    // Negative measurement
+    const adapterNeg = createOllamaManagementAdapter({ fetchImpl: impl, freeDiskBytes: () => -100 });
+    const resultNeg = await adapterNeg.run({ name: 'ollama_pull_model', arguments: { model: 'neg:7b' } }, {});
+    expect(resultNeg.status).toBe('failed');
+    expect(resultNeg.resultCategory).toBe('ollama_insufficient_disk');
+    expect(calls.some((call) => call.url.endsWith('/api/pull'))).toBe(false);
+
+    // Throwing measurement
+    const adapterThrow = createOllamaManagementAdapter({
+      fetchImpl: impl,
+      freeDiskBytes: () => {
+        throw new Error('drive unmounted');
+      },
+    });
+    const resultThrow = await adapterThrow.run({ name: 'ollama_pull_model', arguments: { model: 'throw:7b' } }, {});
+    expect(resultThrow.status).toBe('failed');
+    expect(resultThrow.resultCategory).toBe('ollama_insufficient_disk');
+    expect(calls.some((call) => call.url.endsWith('/api/pull'))).toBe(false);
   });
 });
 

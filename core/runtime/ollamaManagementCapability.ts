@@ -75,7 +75,7 @@ function nearestExistingDirectory(start: string): string | null {
 }
 
 /** The free bytes on the volume Ollama keeps its models on. */
-export function defaultFreeDiskBytes(): number {
+export function defaultFreeDiskBytes(statfsImpl: (targetPath: string) => { bavail: number | bigint; bsize: number | bigint } = fs.statfsSync): number {
   try {
     // OLLAMA_MODELS is where Ollama actually writes its blobs; USERPROFILE is
     // only the usual default and can even be on a different volume.
@@ -85,10 +85,11 @@ export function defaultFreeDiskBytes(): number {
       ?? nearestExistingDirectory(defaultDir)
       ?? nearestExistingDirectory(process.env.USERPROFILE ?? '')
       ?? process.cwd();
-    const stats = fs.statfsSync(target);
-    return stats.bavail * stats.bsize;
+    const stats = statfsImpl(target);
+    const free = Number(stats.bavail) * Number(stats.bsize);
+    return Number.isFinite(free) && free > 0 ? free : 0;
   } catch {
-    return Number.MAX_SAFE_INTEGER;
+    return 0;
   }
 }
 
@@ -210,11 +211,14 @@ export function createOllamaManagementAdapter(options: OllamaManagementOptions =
     let free: number;
     try {
       const measured = freeDiskBytes();
-      free = Number.isFinite(measured) ? measured : Number.MAX_SAFE_INTEGER;
+      free = typeof measured === 'number' && Number.isFinite(measured) && measured > 0 ? measured : 0;
     } catch {
-      // An unmeasurable disk is not a reason to invent a refusal, but it is
-      // also not a reason to skip the floor below: it simply cannot bind.
-      free = Number.MAX_SAFE_INTEGER;
+      // Fail closed: an unmeasurable disk or capacity check failure must not
+      // authorize downloading a model without verified headroom.
+      free = 0;
+    }
+    if (free <= 0) {
+      return failure(`Cannot verify available storage capacity on the volume for "${requested}". Unknown storage capacity does not authorize downloading a model. Free some space or check disk access first.`, 'ollama_insufficient_disk');
     }
     const knownSize = already?.sizeBytes ?? 0;
     const requiredForKnownSize = knownSize > 0 ? knownSize + PULL_DISK_RESERVE_BYTES : 0;
