@@ -142,7 +142,8 @@ export function buildImportGraph(repoRoot, sourceFiles) {
  * `testFiles` — absolute paths of the discovered test files.
  * `importers` — reverse import graph (module -> importers).
  */
-export function impactedTestFiles(changed, testFiles, importers, repoRoot) {
+export function impactedTestFiles(changed, testFiles, importers, repoRoot, options = {}) {
+  const { oneHop = true } = options;
   const changedSet = new Set(changed.map(toPosix));
   const direct = new Set();
   const oneHopModules = new Set();
@@ -158,15 +159,18 @@ export function impactedTestFiles(changed, testFiles, importers, repoRoot) {
   }
 
   // A test that imports a module which imports a changed module is also
-  // affected: the change is one hop away from what the test exercises.
-  for (const testFile of testFiles) {
-    const testRel = relPosix(repoRoot, testFile);
-    if (direct.has(testRel)) continue;
-    for (const specifier of importsOf(testFile)) {
-      const resolved = resolveRelative(testFile, specifier, repoRoot);
-      if (!resolved) continue;
-      const parents = importers.get(resolved) ?? [];
-      if (parents.some((parent) => changedSet.has(parent))) { direct.add(testRel); break; }
+  // affected: the change is one hop away from what the test exercises. The
+  // fast unit tier opts out of this widening; the regression tier keeps it.
+  if (oneHop) {
+    for (const testFile of testFiles) {
+      const testRel = relPosix(repoRoot, testFile);
+      if (direct.has(testRel)) continue;
+      for (const specifier of importsOf(testFile)) {
+        const resolved = resolveRelative(testFile, specifier, repoRoot);
+        if (!resolved) continue;
+        const parents = importers.get(resolved) ?? [];
+        if (parents.some((parent) => changedSet.has(parent))) { direct.add(testRel); break; }
+      }
     }
   }
 

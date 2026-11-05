@@ -133,10 +133,13 @@ async function tierUnit() {
     }
     const sourceFiles = discoverSourceFiles(repoRoot);
     const importers = buildImportGraph(repoRoot, sourceFiles);
-    const impact = impactedTestFiles(changed, testFiles, importers, repoRoot);
+    // Unit feedback stays narrow: only tests that import a changed module
+    // directly. The one-hop widening belongs to the regression tier; adding
+    // it here turned a two-file edit into a seven-minute sweep.
+    const impact = impactedTestFiles(changed, testFiles, importers, repoRoot, { oneHop: false });
     selected = impact.files.map((rel) => path.join(repoRoot, rel));
     console.log(`Changed source files: ${changed.length}`);
-    console.log(`Impacted test files: ${selected.length} (governance surface touched: ${impact.governanceTouched ? 'yes' : 'no'})`);
+    console.log(`Directly impacted test files: ${selected.length} (governance surface touched: ${impact.governanceTouched ? 'yes' : 'no'})`);
   }
   const typecheckResult = typecheck();
   if (!typecheckResult.ok) {
@@ -147,7 +150,11 @@ async function tierUnit() {
   }
   let ok = true;
   if (selected.length > 0) {
-    const result = await runVitest(repoRoot, selected, { maxWorkers: 1, label: `unit (${selected.length} files)` });
+    const result = await runVitest(repoRoot, selected, {
+      maxWorkers: Math.min(4, Number(process.env.KARKEDIKHA_UNIT_WORKERS ?? 4)),
+      fileParallelism: true,
+      label: `unit (${selected.length} files)`,
+    });
     ok = result.code === 0;
   } else {
     console.log('No impacted test files to run.');
