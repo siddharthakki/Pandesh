@@ -185,7 +185,16 @@ async function tierRegression() {
   if (impact.governanceTouched) console.log('Governed surface changed: privacy/approval/mutation/cancellation invariants included.');
   let ok = true;
   if (selected.length > 0) {
-    const result = await runVitest(repoRoot, selected, { maxWorkers: 1, label: `regression (${selected.length} files)` });
+    // The full sweep already runs every file in parallel against the same
+    // config, so the impacted subset is safe to parallelise. A large
+    // cross-milestone diff can select hundreds of files; serial execution
+    // turns a 1–3 minute feedback loop into ten minutes. The worker count is
+    // bounded and overridable for a memory-constrained machine.
+    const result = await runVitest(repoRoot, selected, {
+      maxWorkers: Number(process.env.KARKEDIKHA_REGRESSION_WORKERS ?? 4),
+      fileParallelism: true,
+      label: `regression (${selected.length} files)`,
+    });
     ok = result.code === 0;
   }
   const report = {
