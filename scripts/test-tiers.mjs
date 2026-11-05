@@ -27,7 +27,7 @@ import {
   impactedTestFiles,
   relPosix,
 } from './lib/test-impact.mjs';
-import { runVitest, runVitestBatched, writeJsonReport } from './lib/vitest-runner.mjs';
+import { runVitest, writeJsonReport } from './lib/vitest-runner.mjs';
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const evidenceRoot = path.join(repoRoot, '.tmp', 'validation');
@@ -211,24 +211,24 @@ async function tierFull() {
   const started = Date.now();
   const testFiles = discoverTestFiles(repoRoot);
   console.log(`Full sweep over ${testFiles.length} test files.`);
-  const budgetMs = Number(arg('budget-ms', '150000'));
-  const result = await runVitestBatched(repoRoot, testFiles, {
-    budgetMs,
-    initialBatchSize: Number(arg('batch-size', '10')),
-    maxWorkers: 1,
+  const workers = Number(process.env.KARKEDIKHA_TEST_MAX_WORKERS ?? 4);
+  const result = await runVitest(repoRoot, [], {
+    maxWorkers: workers,
+    fileParallelism: true,
+    useConfigIncludes: true,
+    label: `full suite (${testFiles.length} files)`,
   });
   const report = {
     tier: 'full',
-    ok: result.ok,
+    ok: result.code === 0,
     fingerprint: workspaceFingerprint(),
     fileCount: testFiles.length,
     durationMs: Date.now() - started,
-    batches: result.results.map((r) => ({ files: r.files.length, durationMs: r.durationMs, code: r.code })),
     at: new Date().toISOString(),
   };
   const file = record(report);
-  console.log(`\n[full] ${result.ok ? 'PASS' : 'FAIL'} in ${((Date.now() - started) / 1000).toFixed(1)}s — ${file}`);
-  if (!result.ok) process.exitCode = 1;
+  console.log(`\n[full] ${result.code === 0 ? 'PASS' : 'FAIL'} in ${((Date.now() - started) / 1000).toFixed(1)}s — ${file}`);
+  if (result.code !== 0) process.exitCode = 1;
 }
 
 // ---------------------------------------------------------------------------

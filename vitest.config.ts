@@ -10,7 +10,16 @@ export default defineConfig({
   test: {
     environment: 'node',
     include: ['src/test/suite/**/*.{test,spec}.ts', 'core/test/**/*.{test,spec}.ts', 'apps/desktop/test/**/*.{test,spec}.ts'],
-    exclude: ['core/test/platform/**', 'src/test/suite/agentPromptLive.test.ts'],
+    // The exclusions mirror scripts/lib/test-impact.mjs's discovery rules
+    // exactly: the platform tier has its own config, the live-model test
+    // needs a real model, and the physical dogfood drives a real person's
+    // workspace. A drift between the two would mean the "full sweep" and
+    // the "impacted" tier disagree about what the repository contains.
+    exclude: [
+      'core/test/platform/**',
+      'src/test/suite/agentPromptLive.test.ts',
+      'src/test/suite/physicalDogfoodAcceptance.test.ts',
+    ],
     setupFiles: ['src/test/setup/agentPanelHydration.ts'],
     // M15 autonomous-runtime tests drive real multi-stage governed graph runs
     // (fs + git + durable-queue round-trips per stage); the previous 5s default

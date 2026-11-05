@@ -47,6 +47,8 @@ import { createResearchCapabilityAdapter } from './runtime/researchCapability';
 import { createMemoryCapabilityAdapter } from './runtime/memoryCapability';
 import { createBrowserCapabilityAdapter } from './runtime/browserCapability';
 import { createImageStudioCapabilityAdapter } from './runtime/imageStudioCapability';
+import { createDocumentToolsAdapter } from './runtime/documentToolsCapability';
+import { createOllamaManagementAdapter } from './runtime/ollamaManagementCapability';
 import { resolveHostBrowserBin } from './runtime/hostBrowserBin';
 import { closeAllBrowserSessions, reapOrphanedBrowsers } from './runtime/browserSession';
 import { buildConnectorAdapters, CONNECTOR_CREDENTIAL_ENV } from './runtime/connectors/connectorDefinitions';
@@ -287,7 +289,14 @@ function buildCapabilityRegistry(dataDir: string, db: CoreDatabase, connectors: 
     .register(createWorkspaceCapabilityAdapter())
     .register(research)
     .register(memory)
-    .register(createImageStudioCapabilityAdapter({ db, studioRoot: imageStudioRoot }))
+    .register(createImageStudioCapabilityAdapter({
+      db,
+      studioRoot: imageStudioRoot,
+      // Pandesh keeps the images it generated through ComfyUI in its OWN data
+      // directory: they are Core artifacts with durable ids, and they must
+      // survive a restart of either Core or the desktop app.
+      outputDir: path.join(dataDir, 'comfyui-output'),
+    }))
     .register(createBrowserCapabilityAdapter({ browserBin: resolveHostBrowserBin(), db, previewDir: path.join(dataDir, 'activity-previews', 'browser'), dataDir }))
     .register(createComputerUseCapabilityAdapter({ dataDir }))
     .register(createHermesSkillCapabilityAdapter())
@@ -304,6 +313,8 @@ function buildCapabilityRegistry(dataDir: string, db: CoreDatabase, connectors: 
     }))
     .register(createPcOrganizerAdapter({ db }))
     .register(createHouseholdCapabilityAdapter({ db, connectorRegistry: connectors }))
+    .register(createDocumentToolsAdapter({ downloadsDir: path.join(dataDir, 'downloads') }))
+    .register(createOllamaManagementAdapter({ db }))
     .register(createMediaProductionAdapter({}));
   if (github) {
     registry.register(github);

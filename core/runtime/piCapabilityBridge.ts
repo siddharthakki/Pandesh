@@ -22,10 +22,19 @@ import type { CoreDatabase } from '../db/connection';
 import type { CapabilityDispatchResult } from '../shared/wireTypes';
 import { dispatchCapability } from '../domain/capabilityDispatch';
 import type { GovernedCapabilityRegistry } from './governedCapability';
+import { buildCapabilityBrief } from './capabilityBrief';
+import type { CapabilityInventory } from './capabilityInventory';
 
 export interface PiCapabilityBridge {
   definitions: Array<{ name: string; description: string; parameters: any; consequential: boolean }>;
   dispatch(toolName: string, args: Record<string, unknown>): Promise<CapabilityDispatchResult>;
+  /**
+   * The honest, current capability brief: what this build can really do and
+   * what is unavailable right now, with the reason. It is built from the
+   * registry - the one authority that can execute - so it never lists a
+   * capability that has no working tool behind it.
+   */
+  brief: string;
 }
 
 /**
@@ -37,6 +46,10 @@ export interface PiCapabilityBridge {
  * tool list. Each id below is a capability whose tools the Pandesh system
  * prompt already instructs the model to use, or a capability that is useless
  * without a conversational route.
+ *
+ * The list grows in deliberate steps, and the capability brief travels with
+ * it: a larger list is only safe when the model is told what is in it and
+ * what is not.
  */
 export const CHAT_CAPABILITY_IDS = [
   'port-management',
@@ -50,7 +63,16 @@ export const CHAT_CAPABILITY_IDS = [
   'pc-organizer',
   'household',
   'media-production',
+  // Image and video generation, the scoped filesystem, and local document
+  // reading (OCR). These three were registered, healthy and unreachable
+  // from a conversation: the desktop reached the image studio through a
+  // regex on the user's words, and the model was never asked.
+  'image-studio',
+  'filesystem',
+  'document-tools',
+  'ollama-management',
 ] as const;
+
 
 export interface BuildPiCapabilityBridgeOptions {
   db: CoreDatabase;
@@ -64,6 +86,9 @@ export interface BuildPiCapabilityBridgeOptions {
   ownerAttemptId?: string;
   /** Tool names already offered by another surface (workspace, connectors, memory). */
   excludeToolNames?: string[];
+  /** The live inventory, when the caller already has one: it adds the
+   * "installed here but no Pandesh workflow drives it" line to the brief. */
+  inventory?: CapabilityInventory | null;
   signal?: AbortSignal;
 }
 
@@ -81,6 +106,11 @@ export function buildPiCapabilityBridge(options: BuildPiCapabilityBridgeOptions)
     return owner !== undefined && allowed.has(owner);
   });
   if (definitions.length === 0) return undefined;
+  const brief = buildCapabilityBrief({
+    registry,
+    exposedCapabilityIds: CHAT_CAPABILITY_IDS,
+    inventory: options.inventory ?? null,
+  });
   return {
     definitions: definitions.map((def) => ({
       name: def.name,
@@ -88,6 +118,7 @@ export function buildPiCapabilityBridge(options: BuildPiCapabilityBridgeOptions)
       parameters: def.parameters,
       consequential: registry.classify(def.name)?.risk === 'consequential',
     })),
+    brief: brief.text,
     dispatch: (toolName, args) => dispatchCapability(options.db, registry, {
       correlationId: options.correlationId,
       // The anchor attempt is NOT owned by the chat attempt: it is the

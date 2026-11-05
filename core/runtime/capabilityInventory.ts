@@ -48,11 +48,41 @@ export interface InventoryItem {
   /** What using it requires, in Pandesh's own permission terms. */
   permission: 'none' | 'approval_per_use' | 'connector_grant' | 'device_pairing';
   provides: CapabilityKey[];
+  /**
+   * What makes this item OPERABLE through Pandesh.
+   *
+   * `tool:<name>` — a governed tool drives it, so Pandesh can really use it.
+   * `detected_only` — the binary is on this PC and answers its version flag,
+   * but no tool drives it: Pandesh can report it and cannot do anything with
+   * it. This distinction is the difference between "Pandesh can OCR a scan"
+   * and "Tesseract is installed"; the old inventory reported both as
+   * "working", which made the product advertise work it could not do.
+   */
+  driver?: 'detected_only' | `tool:${string}`;
 }
+
+/** Which governed tool drives each connector. A connector with no executor
+ * (WhatsApp has no official API; the printer connector has none either) is
+ * detected only and must never read as operable. */
+const CONNECTOR_DRIVERS: Record<string, InventoryItem['driver']> = {
+  gmail: 'tool:gmail_search',
+  google_calendar: 'tool:calendar_list_events',
+  whatsapp: 'detected_only',
+  printer: 'detected_only',
+};
 
 export interface Recommendation { capability: CapabilityKey; utility: string; label: string; wingetId: string; why: string }
 
-export interface CapabilitySummary { key: CapabilityKey; available: boolean; providers: string[]; recommendation: Recommendation | null }
+export interface CapabilitySummary {
+  key: CapabilityKey;
+  /** True only when a governed tool can really drive it. */
+  available: boolean;
+  /** The labels of the items a tool drives. */
+  providers: string[];
+  /** The labels of the items that were detected but that no tool drives. */
+  detected: string[];
+  recommendation: Recommendation | null;
+}
 
 export interface CapabilityInventory {
   probedAt: string;
@@ -70,31 +100,34 @@ interface ExecutableSpec {
   category: InventoryItem['category'];
   known?: string[];
   wingetId?: string;
+  /** The governed tool that drives this binary, when one does. */
+  driver?: InventoryItem['driver'];
 }
 
 const EXECUTABLES: ExecutableSpec[] = [
-  { id: 'ffmpeg', label: 'FFmpeg', names: ['ffmpeg'], versionArgs: ['-version'], provides: ['video_production', 'audio_processing'], category: 'media', wingetId: 'Gyan.FFmpeg' },
-  { id: 'ffprobe', label: 'FFprobe (media inspection)', names: ['ffprobe'], versionArgs: ['-version'], provides: ['video_production'], category: 'media', wingetId: 'Gyan.FFmpeg' },
-  { id: 'imagemagick', label: 'ImageMagick', names: ['magick'], versionArgs: ['-version'], provides: ['image_editing'], category: 'media', wingetId: 'ImageMagick.ImageMagick' },
-  { id: 'exiftool', label: 'ExifTool', names: ['exiftool'], versionArgs: ['-ver'], provides: ['image_metadata'], category: 'media', wingetId: 'OliverBetz.ExifTool' },
-  { id: 'yt-dlp', label: 'yt-dlp', names: ['yt-dlp'], versionArgs: ['--version'], provides: ['media_download'], category: 'media' },
-  { id: 'tesseract', label: 'Tesseract OCR', names: ['tesseract'], versionArgs: ['--version'], provides: ['ocr'], category: 'documents', known: ['C:\\Program Files\\Tesseract-OCR\\tesseract.exe'], wingetId: 'UB-Mannheim.TesseractOCR' },
-  { id: 'pdftotext', label: 'Poppler pdftotext', names: ['pdftotext'], versionArgs: ['-v'], provides: ['pdf_text'], category: 'documents', wingetId: 'oschwartz10612.Poppler' },
-  { id: 'libreoffice', label: 'LibreOffice', names: ['soffice'], versionArgs: ['--version'], provides: ['office_documents'], category: 'documents', known: ['C:\\Program Files\\LibreOffice\\program\\soffice.exe'], wingetId: 'TheDocumentFoundation.LibreOffice' },
-  { id: 'pandoc', label: 'Pandoc', names: ['pandoc'], versionArgs: ['--version'], provides: ['office_documents'], category: 'documents', wingetId: 'JohnMacFarlane.Pandoc' },
-  { id: '7zip', label: '7-Zip', names: ['7z'], versionArgs: null, provides: ['archives'], category: 'documents', known: ['C:\\Program Files\\7-Zip\\7z.exe'], wingetId: '7zip.7zip' },
-  { id: 'tar', label: 'Windows tar (zip/tar)', names: ['tar'], versionArgs: ['--version'], provides: ['archives'], category: 'documents', known: ['C:\\Windows\\System32\\tar.exe'] },
-  { id: 'python', label: 'Python', names: ['python'], versionArgs: ['--version'], provides: ['python', 'data_analysis'], category: 'runtime', wingetId: 'Python.Python.3.12' },
-  { id: 'node', label: 'Node.js', names: ['node'], versionArgs: ['--version'], provides: ['node', 'data_analysis'], category: 'runtime', wingetId: 'OpenJS.NodeJS.LTS' },
-  { id: 'git', label: 'Git', names: ['git'], versionArgs: ['--version'], provides: ['version_control'], category: 'runtime', wingetId: 'Git.Git' },
-  { id: 'gh', label: 'GitHub CLI', names: ['gh'], versionArgs: ['--version'], provides: ['version_control'], category: 'runtime' },
-  { id: 'docker', label: 'Docker', names: ['docker'], versionArgs: ['--version'], provides: ['containers'], category: 'runtime' },
-  { id: 'winget', label: 'winget (Windows Package Manager)', names: ['winget'], versionArgs: ['--version'], provides: ['software_install'], category: 'system' },
-  { id: 'adb', label: 'Android Debug Bridge', names: ['adb'], versionArgs: ['version'], provides: [], category: 'devices' },
-  { id: 'claude', label: 'Claude Code', names: ['claude'], versionArgs: ['--version'], provides: ['coding_agent'], category: 'agents' },
-  { id: 'opencode', label: 'OpenCode', names: ['opencode'], versionArgs: ['--version'], provides: ['coding_agent'], category: 'agents' },
-  { id: 'hermes', label: 'Hermes agent', names: ['hermes'], versionArgs: ['--version'], provides: ['coding_agent'], category: 'agents' },
-  { id: 'vscode', label: 'VS Code', names: ['code'], versionArgs: null, provides: [], category: 'agents' },
+  { id: 'ffmpeg', label: 'FFmpeg', names: ['ffmpeg'], versionArgs: ['-version'], provides: ['video_production', 'audio_processing'], category: 'media', wingetId: 'Gyan.FFmpeg', driver: 'tool:media_create_video' },
+  { id: 'ffprobe', label: 'FFprobe (media inspection)', names: ['ffprobe'], versionArgs: ['-version'], provides: ['video_production'], category: 'media', wingetId: 'Gyan.FFmpeg', driver: 'tool:media_create_video' },
+  { id: 'imagemagick', label: 'ImageMagick', names: ['magick'], versionArgs: ['-version'], provides: ['image_editing'], category: 'media', wingetId: 'ImageMagick.ImageMagick', driver: 'detected_only' },
+  { id: 'exiftool', label: 'ExifTool', names: ['exiftool'], versionArgs: ['-ver'], provides: ['image_metadata'], category: 'media', wingetId: 'OliverBetz.ExifTool', driver: 'detected_only' },
+  { id: 'yt-dlp', label: 'yt-dlp', names: ['yt-dlp'], versionArgs: ['--version'], provides: ['media_download'], category: 'media', driver: 'tool:media_download' },
+  { id: 'tesseract', label: 'Tesseract OCR', names: ['tesseract'], versionArgs: ['--version'], provides: ['ocr'], category: 'documents', known: ['C:\\Program Files\\Tesseract-OCR\\tesseract.exe'], wingetId: 'UB-Mannheim.TesseractOCR', driver: 'tool:document_ocr' },
+  { id: 'pdftoppm', label: 'Poppler pdftoppm (page rendering for OCR)', names: ['pdftoppm'], versionArgs: ['-v'], provides: ['ocr', 'pdf_text'], category: 'documents', wingetId: 'oschwartz10612.Poppler', driver: 'tool:document_ocr' },
+  { id: 'pdftotext', label: 'Poppler pdftotext', names: ['pdftotext'], versionArgs: ['-v'], provides: ['pdf_text'], category: 'documents', wingetId: 'oschwartz10612.Poppler', driver: 'tool:document_read' },
+  { id: 'libreoffice', label: 'LibreOffice', names: ['soffice'], versionArgs: ['--version'], provides: ['office_documents'], category: 'documents', known: ['C:\\Program Files\\LibreOffice\\program\\soffice.exe'], wingetId: 'TheDocumentFoundation.LibreOffice', driver: 'detected_only' },
+  { id: 'pandoc', label: 'Pandoc', names: ['pandoc'], versionArgs: ['--version'], provides: ['office_documents'], category: 'documents', wingetId: 'JohnMacFarlane.Pandoc', driver: 'detected_only' },
+  { id: '7zip', label: '7-Zip', names: ['7z'], versionArgs: null, provides: ['archives'], category: 'documents', known: ['C:\\Program Files\\7-Zip\\7z.exe'], wingetId: '7zip.7zip', driver: 'detected_only' },
+  { id: 'tar', label: 'Windows tar (zip/tar)', names: ['tar'], versionArgs: ['--version'], provides: ['archives'], category: 'documents', known: ['C:\\Windows\\System32\\tar.exe'], driver: 'detected_only' },
+  { id: 'python', label: 'Python', names: ['python'], versionArgs: ['--version'], provides: ['python', 'data_analysis'], category: 'runtime', wingetId: 'Python.Python.3.12', driver: 'detected_only' },
+  { id: 'node', label: 'Node.js', names: ['node'], versionArgs: ['--version'], provides: ['node', 'data_analysis'], category: 'runtime', wingetId: 'OpenJS.NodeJS.LTS', driver: 'detected_only' },
+  { id: 'git', label: 'Git', names: ['git'], versionArgs: ['--version'], provides: ['version_control'], category: 'runtime', wingetId: 'Git.Git', driver: 'detected_only' },
+  { id: 'gh', label: 'GitHub CLI', names: ['gh'], versionArgs: ['--version'], provides: ['version_control'], category: 'runtime', driver: 'detected_only' },
+  { id: 'docker', label: 'Docker', names: ['docker'], versionArgs: ['--version'], provides: ['containers'], category: 'runtime', driver: 'detected_only' },
+  { id: 'winget', label: 'winget (Windows Package Manager)', names: ['winget'], versionArgs: ['--version'], provides: ['software_install'], category: 'system', driver: 'tool:pc_install_utility' },
+  { id: 'adb', label: 'Android Debug Bridge', names: ['adb'], versionArgs: ['version'], provides: [], category: 'devices', driver: 'detected_only' },
+  { id: 'claude', label: 'Claude Code', names: ['claude'], versionArgs: ['--version'], provides: ['coding_agent'], category: 'agents', driver: 'detected_only' },
+  { id: 'opencode', label: 'OpenCode', names: ['opencode'], versionArgs: ['--version'], provides: ['coding_agent'], category: 'agents', driver: 'tool:delegate_to_opencode' },
+  { id: 'hermes', label: 'Hermes agent', names: ['hermes'], versionArgs: ['--version'], provides: ['coding_agent'], category: 'agents', driver: 'tool:hermes_invoke_skill' },
+  { id: 'vscode', label: 'VS Code', names: ['code'], versionArgs: null, provides: [], category: 'agents', driver: 'detected_only' },
 ];
 
 /** Vetted utilities Pandesh may offer to install, keyed by the capability that is missing. Only these ids can be installed. */
@@ -192,7 +225,7 @@ function firstLine(text: string): string {
 
 async function probeExecutable(spec: ExecutableSpec, deps: Required<Pick<InventoryProbeDeps, 'exec' | 'env'>>): Promise<InventoryItem> {
   const location = resolveExecutable(spec.names, deps.env, spec.known ?? []);
-  const base = { id: spec.id, category: spec.category, label: spec.label, provides: spec.provides, permission: 'approval_per_use' as const };
+  const base = { id: spec.id, category: spec.category, label: spec.label, provides: spec.provides, permission: 'approval_per_use' as const, driver: spec.driver ?? 'detected_only' };
   if (!location) return { ...base, status: 'missing', detail: spec.wingetId ? `not found; installable as winget package ${spec.wingetId}` : 'not found on this PC' };
   // Script shims (.cmd/.bat) need a shell to run; Pandesh never runs them through one just to read a version.
   if (!spec.versionArgs || /\.(cmd|bat|ps1)$/i.test(location)) {
@@ -212,9 +245,12 @@ async function probeOllama(deps: InventoryProbeDeps, fetchFn: typeof fetch): Pro
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     models = ((await res.json()) as { models?: Array<{ name: string; size?: number }> }).models ?? [];
   } catch (err) {
-    return [{ id: 'ollama', category: 'ai', label: 'Ollama (local models)', status: 'unreachable', permission: 'none', provides: [], detail: `not reachable at ${base}: ${err instanceof Error ? err.message : String(err)}` }];
+    return [{
+      id: 'ollama', category: 'ai', label: 'Ollama (local models)', status: 'unreachable', permission: 'none', provides: [], driver: 'tool:system_list_models',
+      detail: `not reachable at ${base}: ${err instanceof Error ? err.message : String(err)}`,
+    }];
   }
-  const items: InventoryItem[] = [{ id: 'ollama', category: 'ai', label: 'Ollama (local models)', status: 'working', permission: 'none', provides: [], detail: `${models.length} models installed at ${base}` }];
+  const items: InventoryItem[] = [{ id: 'ollama', category: 'ai', label: 'Ollama (local models)', status: 'working', permission: 'none', provides: [], driver: 'tool:system_list_models', detail: `${models.length} models installed at ${base}` }];
   const shown = await Promise.all(models.slice(0, 40).map(async (m) => {
     try {
       const res = await fetchFn(`${base}/api/show`, { method: 'POST', body: JSON.stringify({ model: m.name }), headers: { 'Content-Type': 'application/json' }, signal: AbortSignal.timeout(4_000) });
@@ -227,7 +263,7 @@ async function probeOllama(deps: InventoryProbeDeps, fetchFn: typeof fetch): Pro
     const vision = caps ? caps.includes('vision') : /\bvl\b|vision|llava/i.test(m.name);
     const provides: CapabilityKey[] = embedding ? ['embedding_model'] : vision ? ['chat_model', 'vision_model'] : ['chat_model'];
     items.push({
-      id: `ollama:${m.name}`, category: 'ai', label: m.name, status: 'working', permission: 'none', provides,
+      id: `ollama:${m.name}`, category: 'ai', label: m.name, status: 'working', permission: 'none', provides, driver: 'tool:system_list_models',
       detail: `${caps ? `reports ${caps.join(', ')}` : 'capabilities not reported'}${m.size ? `; ${(m.size / 1e9).toFixed(1)} GB` : ''}`,
     });
   }
@@ -242,12 +278,12 @@ async function probeComfy(deps: InventoryProbeDeps, fetchFn: typeof fetch): Prom
     const body = await res.json() as { system?: { comfyui_version?: string }; devices?: Array<{ name?: string; vram_total?: number }> };
     const device = body.devices?.[0];
     return {
-      id: 'comfyui', category: 'ai', label: 'ComfyUI', status: 'working', permission: 'approval_per_use', provides: ['image_generation'],
+      id: 'comfyui', category: 'ai', label: 'ComfyUI', status: 'working', permission: 'approval_per_use', provides: ['image_generation'], driver: 'tool:image_generate',
       version: body.system?.comfyui_version, location: base,
       detail: `server answering at ${base}${device?.name ? ` on ${device.name.replace(/^cuda:\d+\s*/, '').slice(0, 60)}` : ''}`,
     };
   } catch (err) {
-    return { id: 'comfyui', category: 'ai', label: 'ComfyUI', status: 'unreachable', permission: 'approval_per_use', provides: ['image_generation'], detail: `no server at ${base} (${err instanceof Error ? err.message : String(err)}); start ComfyUI to generate images` };
+    return { id: 'comfyui', category: 'ai', label: 'ComfyUI', status: 'unreachable', permission: 'approval_per_use', provides: ['image_generation'], driver: 'tool:image_generate', detail: `no server at ${base} (${err instanceof Error ? err.message : String(err)}); start ComfyUI to generate images` };
   }
 }
 
@@ -280,15 +316,15 @@ async function probeDevices(adbItem: InventoryItem | undefined, deps: Required<P
       const emulator = d.serial.startsWith('emulator-');
       items.push({
         id: `android:${d.serial}`, category: 'devices', label: `${emulator ? 'Android emulator' : 'Android phone'} ${d.model ?? d.serial}`,
-        status: d.state === 'device' ? 'working' : 'unreachable', permission: 'device_pairing', provides: d.state === 'device' ? ['android_device'] : [],
+        status: d.state === 'device' ? 'working' : 'unreachable', permission: 'device_pairing', provides: d.state === 'device' ? ['android_device'] : [], driver: 'detected_only',
         detail: d.state === 'device' ? `connected over adb (${d.serial})` : `adb reports ${d.state}`,
       });
     }
   }
   const gpu = detectGpu();
   items.push(gpu
-    ? { id: 'gpu', category: 'devices', label: gpu.name, status: 'working', permission: 'none', provides: ['gpu'], detail: `${Math.round(gpu.totalVramMb / 1024)} GB VRAM, ${Math.round(gpu.freeVramMb / 1024)} GB free now` }
-    : { id: 'gpu', category: 'devices', label: 'GPU', status: 'missing', permission: 'none', provides: [], detail: 'no NVIDIA GPU reported by nvidia-smi' });
+    ? { id: 'gpu', category: 'devices', label: gpu.name, status: 'working', permission: 'none', provides: ['gpu'], driver: 'tool:system_hardware_telemetry', detail: `${Math.round(gpu.totalVramMb / 1024)} GB VRAM, ${Math.round(gpu.freeVramMb / 1024)} GB free now` }
+    : { id: 'gpu', category: 'devices', label: 'GPU', status: 'missing', permission: 'none', provides: [], driver: 'detected_only', detail: 'no NVIDIA GPU reported by nvidia-smi' });
   if (process.platform === 'win32') {
     for (const letter of 'CDEFGHIJKLMNOPQRSTUVWXYZ') {
       const root = `${letter}:\\`;
@@ -310,7 +346,8 @@ async function probePrinters(exec: ExecRunner): Promise<InventoryItem> {
   const printers = r.stdout.split(/\r?\n/).map((l) => l.trim()).filter(Boolean).map((l) => l.split('|')[0]);
   const physical = printers.filter((p) => !/pdf|xps|onenote|fax/i.test(p));
   return {
-    id: 'printers', category: 'devices', label: 'Printers', status: r.code === 0 && printers.length ? 'working' : 'missing', permission: 'approval_per_use', provides: r.code === 0 && printers.length ? ['printing'] : [],
+    id: 'printers', category: 'devices', label: 'Printers', status: r.code === 0 && printers.length ? 'working' : 'missing', permission: 'approval_per_use',
+    provides: r.code === 0 && printers.length ? ['printing'] : [], driver: 'tool:print_test_page',
     detail: r.code === 0 ? `${printers.length} installed (${physical.length} physical${physical.length ? `: ${physical.slice(0, 4).join(', ')}` : ''})` : 'printer list could not be read',
   };
 }
@@ -318,7 +355,7 @@ async function probePrinters(exec: ExecRunner): Promise<InventoryItem> {
 function probeOffice(): InventoryItem | null {
   for (const root of ['C:\\Program Files\\Microsoft Office\\root\\Office16', 'C:\\Program Files (x86)\\Microsoft Office\\root\\Office16']) {
     const found = ['WINWORD.EXE', 'EXCEL.EXE', 'POWERPNT.EXE'].filter((f) => fs.existsSync(path.join(root, f)));
-    if (found.length) return { id: 'msoffice', category: 'documents', label: 'Microsoft Office', status: 'installed_unverified', permission: 'approval_per_use', provides: ['office_documents'], location: root, detail: `${found.map((f) => f.replace('.EXE', '').toLowerCase()).join(', ')} installed (not started by the inventory)` };
+    if (found.length) return { id: 'msoffice', category: 'documents', label: 'Microsoft Office', status: 'installed_unverified', permission: 'approval_per_use', provides: ['office_documents'], driver: 'detected_only', location: root, detail: `${found.map((f) => f.replace('.EXE', '').toLowerCase()).join(', ')} installed (not started by the inventory)` };
   }
   return null;
 }
@@ -333,22 +370,23 @@ function probeAccounts(deps: InventoryProbeDeps): InventoryItem[] {
       const whatsappNote = c.id === 'whatsapp' ? ' — personal WhatsApp chats have no official API; Pandesh never scrapes a WhatsApp Web session' : '';
       items.push({
         id: `connector:${c.id}`, category: 'accounts', label: c.label, status: connected ? 'working' : 'not_connected', permission: 'connector_grant', provides,
+        driver: CONNECTOR_DRIVERS[c.id] ?? 'detected_only',
         detail: `${c.state}${connected ? `; granted: ${grants}` : c.reason ? `: ${c.reason}` : ''}${whatsappNote}`,
       });
     }
     const channel = notificationCapability(deps.db);
-    items.push({ id: 'notifications', category: 'system', label: 'Desktop notifications', status: channel.canNotify ? 'working' : 'not_connected', permission: 'none', provides: channel.canNotify ? ['notifications'] : [], detail: channel.statement });
+    items.push({ id: 'notifications', category: 'system', label: 'Desktop notifications', status: channel.canNotify ? 'working' : 'not_connected', permission: 'none', provides: channel.canNotify ? ['notifications'] : [], driver: 'detected_only', detail: channel.statement });
     const routines = deps.scheduledRoutines?.() ?? 0;
-    items.push({ id: 'scheduler', category: 'system', label: 'Durable scheduler', status: 'working', permission: 'approval_per_use', provides: ['scheduler'], detail: `Core's SQLite scheduler; ${routines} active scheduled task(s)` });
+    items.push({ id: 'scheduler', category: 'system', label: 'Durable scheduler', status: 'working', permission: 'approval_per_use', provides: ['scheduler'], driver: 'tool:schedule_task', detail: `Core's SQLite scheduler; ${routines} active scheduled task(s)` });
   }
   const phones = deps.companionDevices?.();
   if (phones !== undefined) {
-    items.push({ id: 'jugaad', category: 'devices', label: 'JUGAAD phone companion', status: phones > 0 ? 'working' : 'not_connected', permission: 'device_pairing', provides: phones > 0 ? ['companion_phone'] : [], detail: phones > 0 ? `${phones} paired phone(s)` : 'no phone paired; pair it from Pandesh to sync Important Dates' });
+    items.push({ id: 'jugaad', category: 'devices', label: 'JUGAAD phone companion', status: phones > 0 ? 'working' : 'not_connected', permission: 'device_pairing', provides: phones > 0 ? ['companion_phone'] : [], driver: 'tool:jugaad_send', detail: phones > 0 ? `${phones} paired phone(s)` : 'no phone paired; pair it from Pandesh to sync Important Dates' });
   }
   const browser = resolveHostBrowserBin();
   items.push(browser
-    ? { id: 'browser', category: 'web', label: 'Managed browser (Edge/Chrome)', status: 'working', permission: 'approval_per_use', provides: ['browser_automation'], location: browser, detail: 'found; opened headless by the governed browser capability' }
-    : { id: 'browser', category: 'web', label: 'Managed browser', status: 'missing', permission: 'approval_per_use', provides: [], detail: 'no Edge or Chrome executable found' });
+    ? { id: 'browser', category: 'web', label: 'Managed browser (Edge/Chrome)', status: 'working', permission: 'approval_per_use', provides: ['browser_automation'], driver: 'tool:browser_open_site', location: browser, detail: 'found; opened headless by the governed browser capability' }
+    : { id: 'browser', category: 'web', label: 'Managed browser', status: 'missing', permission: 'approval_per_use', provides: [], driver: 'tool:browser_open_site', detail: 'no Edge or Chrome executable found' });
   return items;
 }
 
@@ -361,9 +399,17 @@ const ALL_KEYS: CapabilityKey[] = [
 
 export function summarizeCapabilities(items: InventoryItem[]): CapabilitySummary[] {
   return ALL_KEYS.map((key) => {
-    const providers = items.filter((i) => i.status === 'working' && i.provides.includes(key)).map((i) => i.label);
-    const rec = providers.length === 0 && RECOMMEND_FOR[key] ? INSTALLABLE_UTILITIES[RECOMMEND_FOR[key]!] : null;
-    return { key, available: providers.length > 0, providers, recommendation: rec };
+    const relevant = items.filter((i) => i.provides.includes(key));
+    const operable = relevant.filter((i) => i.status === 'working' && i.driver !== 'detected_only');
+    const detected = relevant.filter((i) => i.status === 'working' && i.driver === 'detected_only');
+    const rec = operable.length === 0 && RECOMMEND_FOR[key] ? INSTALLABLE_UTILITIES[RECOMMEND_FOR[key]!] : null;
+    return {
+      key,
+      available: operable.length > 0,
+      providers: operable.map((i) => i.label),
+      detected: detected.map((i) => i.label),
+      recommendation: rec,
+    };
   });
 }
 
@@ -410,6 +456,21 @@ export function workingExecutable(inventory: CapabilityInventory, id: string): s
 
 const STATUS_MARK: Record<InventoryStatus, string> = { working: 'WORKING', installed_unverified: 'FOUND (unverified)', unreachable: 'NOT RESPONDING', missing: 'MISSING', not_connected: 'NOT CONNECTED' };
 
+/**
+ * How an item reads to the person and to the model.
+ *
+ * `WORKING` alone used to mean "the binary answered its version flag", which
+ * made an installed-but-undriven utility look like an operational capability.
+ * The driver is now part of the wording: an item a tool drives says which
+ * tool, and an item no tool drives says so plainly.
+ */
+function itemMark(item: InventoryItem): string {
+  const mark = STATUS_MARK[item.status];
+  if (item.status !== 'working') return mark;
+  if (!item.driver || item.driver === 'detected_only') return 'FOUND (no Pandesh tool drives it)';
+  return `${mark} · via ${item.driver.replace(/^tool:/, '')}`;
+}
+
 export function renderInventory(inv: CapabilityInventory, category?: string): string {
   const lines = [`PC capability inventory (probed ${inv.probedAt}) — ${inv.host.os}, ${inv.host.cpu}, ${inv.host.cores} threads, ${inv.host.ramGb} GB RAM`];
   const groups = new Map<string, InventoryItem[]>();
@@ -420,7 +481,7 @@ export function renderInventory(inv: CapabilityInventory, category?: string): st
   }
   for (const [cat, items] of groups) {
     lines.push('', `## ${cat}`);
-    for (const i of items) lines.push(`- ${i.label}: ${STATUS_MARK[i.status]}${i.version ? ` — ${i.version}` : ''} — ${i.detail}`);
+    for (const i of items) lines.push(`- ${i.label}: ${itemMark(i)}${i.version ? ` — ${i.version}` : ''} — ${i.detail}`);
   }
   if (!category || category === 'ai') {
     const models = inv.items.filter((i) => i.id.startsWith('ollama:'));
@@ -433,8 +494,12 @@ export function renderInventory(inv: CapabilityInventory, category?: string): st
     }
   }
   const available = inv.capabilities.filter((c) => c.available).map((c) => c.key);
-  const missing = inv.capabilities.filter((c) => !c.available);
-  lines.push('', `Capabilities available: ${available.join(', ')}`);
+  const detectedOnly = inv.capabilities.filter((c) => !c.available && c.detected.length > 0);
+  const missing = inv.capabilities.filter((c) => !c.available && c.detected.length === 0);
+  lines.push('', `Operable through Pandesh (a tool drives it): ${available.join(', ') || 'none'}`);
+  if (detectedOnly.length) {
+    lines.push(`Installed but NOT operable (no Pandesh tool drives them): ${detectedOnly.map((c) => `${c.key} (${c.detected.join(', ')})`).join('; ')}`);
+  }
   if (missing.length) {
     lines.push(`Not available: ${missing.map((c) => c.key).join(', ')}`);
     const recs = missing.filter((c) => c.recommendation);

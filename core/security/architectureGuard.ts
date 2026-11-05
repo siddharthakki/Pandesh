@@ -66,6 +66,12 @@ export const AUTHORITATIVE_PROCESS_SPAWN_ALLOWLIST: ReadonlySet<string> = new Se
   'core/runtime/operatorTestRun.ts',
   // Reads the local GPU's name and VRAM with one fixed-argument `nvidia-smi` query (no caller-supplied input); bounds concurrent GPU workloads.
   'core/runtime/hardwareCapacity.ts',
+  // Local OCR and PDF text extraction: runs Poppler's `pdftoppm`/`pdftotext`
+  // and Tesseract with a fixed argv (no shell, no model-supplied flags), a
+  // sanitized child environment, a bounded timeout and a verified
+  // process-tree kill. Every argument is either a resolved binary path or a
+  // document path the caller already had to be authorized for.
+  'core/runtime/documentOcr.ts',
 
   // Core external engine and agent runtimes
   'core/runtime/hermesEngine.ts',

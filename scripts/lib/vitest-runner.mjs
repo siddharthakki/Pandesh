@@ -41,6 +41,13 @@ export function runVitest(repoRoot, files, options = {}) {
     env = process.env,
     timeoutMs = 0,
     label = '',
+    /**
+     * Run the repository's configured include set instead of an explicit file
+     * list. Windows caps a command line at 32 KiB, and the full suite's file
+     * paths do not fit in one: the config's include patterns are the way to
+     * ask for the whole suite in one invocation.
+     */
+    useConfigIncludes = false,
   } = options;
   const vitest = path.join(repoRoot, 'node_modules', 'vitest', 'vitest.mjs');
   const args = [
@@ -48,7 +55,7 @@ export function runVitest(repoRoot, files, options = {}) {
     `--maxWorkers=${maxWorkers}`,
     `--fileParallelism=${fileParallelism ? 'true' : 'false'}`,
     ...extraArgs,
-    ...files,
+    ...(useConfigIncludes ? [] : files),
   ];
   const started = Date.now();
   return new Promise((resolve) => {

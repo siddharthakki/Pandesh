@@ -3454,6 +3454,16 @@ TRUTHFULNESS & BEHAVIORAL PROTOCOL:
     const priorMessages: any[] = [];
     let priorTurnsTotal = 0;
     let omittedTurnsCount = 0;
+
+    // The capability brief: the honest, current answer to "what can you
+    // actually do". It is built from the governed registry, so a capability
+    // that is down is listed as down (with the reason) and never as a tool
+    // the model should reach for. This is what makes the larger exposed tool
+    // list safe for a local model.
+    if (ctx.capabilities?.brief) {
+      systemPrompt += `\n\n${ctx.capabilities.brief}`;
+    }
+
     if (conversationId) {
       try {
         const dbMsgs = listMessages(db, conversationId);
