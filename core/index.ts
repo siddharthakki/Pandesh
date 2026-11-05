@@ -49,6 +49,7 @@ import { createBrowserCapabilityAdapter } from './runtime/browserCapability';
 import { createImageStudioCapabilityAdapter } from './runtime/imageStudioCapability';
 import { createDocumentToolsAdapter } from './runtime/documentToolsCapability';
 import { createOllamaManagementAdapter } from './runtime/ollamaManagementCapability';
+import { createExecutionPlanAdapter } from './runtime/executionPlanCapability';
 import { resolveHostBrowserBin } from './runtime/hostBrowserBin';
 import { closeAllBrowserSessions, reapOrphanedBrowsers } from './runtime/browserSession';
 import { buildConnectorAdapters, CONNECTOR_CREDENTIAL_ENV } from './runtime/connectors/connectorDefinitions';
@@ -316,6 +317,10 @@ function buildCapabilityRegistry(dataDir: string, db: CoreDatabase, connectors: 
     .register(createDocumentToolsAdapter({ downloadsDir: path.join(dataDir, 'downloads') }))
     .register(createOllamaManagementAdapter({ db }))
     .register(createMediaProductionAdapter({}));
+  // The plan capability reads the registry it is registered in (it checks a
+  // declared plan against the capabilities that really exist), so it is
+  // added last.
+  registry.register(createExecutionPlanAdapter({ db, registry }));
   if (github) {
     registry.register(github);
   }

@@ -69,6 +69,7 @@ const CAPABILITY_LABELS: Record<string, string> = {
   filesystem: 'reading files outside the workspace',
   'document-tools': 'reading documents (OCR) and downloading media',
   'ollama-management': 'installing and freeing the local models',
+  plan: 'declaring and checking the plan of a multi-step task',
   'network-drives': 'network drives',
   github: 'GitHub issues',
   research: 'web research',
