@@ -109,6 +109,16 @@ export async function maybeAutoReroute(deps: AutoRerouteDeps, attemptId: string)
     const failedKey = attemptModelKey(context.selectedProvider, context.selectedModel);
     const spend = context.modelSelection?.cloudSpend;
     const policy: CloudSpendPolicy = spend ? { mode: spend.mode, allowCredits: spend.allowCredits } : DEFAULT_SPEND_POLICY;
+    // A cloud model is a reroute candidate ONLY when the attempt's frozen
+    // routing policy says a cloud fallback is permitted. Under `local-only`
+    // (the default) Auto may pick another LOCAL model or nothing at all:
+    // a task must never quietly move to a cloud provider because the local
+    // one struggled.
+    const routingPolicy = context.modelSelection?.routingPolicy ?? 'local-only';
+    const cloudFallbackPermitted = routingPolicy === 'local-first-cloud-fallback';
+    const candidates = env.models
+      .filter(d => modelKey(d) === failedKey || !used.has(modelKey(d)))
+      .filter(d => d.locality !== 'cloud' || cloudFallbackPermitted);
     const requirements: ModelRequirements = {
       tools: attempt.kind === 'saath_kar' ? true : undefined,
       vision: context.modelSelection?.requiredCapabilities.vision ? true : undefined,
@@ -120,7 +130,7 @@ export async function maybeAutoReroute(deps: AutoRerouteDeps, attemptId: string)
       failedModelKey: failedKey,
       reroutesSoFar,
       maxReroutes: DEFAULT_MAX_REROUTES,
-      models: env.models.filter(d => modelKey(d) === failedKey || !used.has(modelKey(d))),
+      models: candidates,
       reachableLocalKeys: env.reachableLocalKeys,
       connectedProviders: env.connectedProviders,
       catalog: env.catalog,

@@ -3,6 +3,11 @@ import * as path from 'path';
 import * as crypto from 'crypto';
 import { spawn } from 'child_process';
 import { createSanitizedChildEnvironment } from '../../core/security/childEnvironment';
+import {
+  createProcessTreeTracker,
+  terminateProcessTree,
+  type ProcessTreeTerminationResult,
+} from '../../core/runtime/processTree';
 import { TaskStore } from '../agent/TaskStore';
 import {
   CommandExecutionResult,
@@ -62,6 +67,24 @@ export class ShellValidationExecutor implements ValidationCommandExecutor {
         env: createSanitizedChildEnvironment(),
       });
 
+      // The shell is only the root of the owned tree. A validation command
+      // (`npm test`, `vitest`, `tsc`) spawns children of its own, and killing
+      // only the shell left those running after a stop. The tree is
+      // terminated AND VERIFIED before the result is reported.
+      const tree = child.pid ? createProcessTreeTracker(child.pid) : undefined;
+      let termination: ProcessTreeTerminationResult | undefined;
+      let killPromise: Promise<void> | undefined;
+      const killTree = (): Promise<void> => {
+        if (killPromise) return killPromise;
+        killPromise = (async () => {
+          if (!child.pid) return;
+          termination = tree
+            ? await tree.terminate()
+            : await terminateProcessTree(child.pid);
+        })();
+        return killPromise;
+      };
+
       let stdout = '';
       let stderr = '';
       let settled = false;
@@ -78,20 +101,16 @@ export class ShellValidationExecutor implements ValidationCommandExecutor {
           stderr,
           durationMs: Math.max(0, Date.now() - started),
           timedOut,
+          ...(termination ? { termination } : {}),
         });
       };
 
-      const stopChild = () => {
-        try { child.kill('SIGTERM'); } catch { /* best effort */ }
-      };
       const onAbort = () => {
-        stopChild();
-        finish(130);
+        void killTree().then(() => finish(130));
       };
       const timer = setTimeout(() => {
         timedOut = true;
-        stopChild();
-        finish(124);
+        void killTree().then(() => finish(124));
       }, Math.max(1, timeoutMs));
 
       child.stdout?.on('data', chunk => { stdout += String(chunk); });
@@ -103,7 +122,10 @@ export class ShellValidationExecutor implements ValidationCommandExecutor {
         signal?.removeEventListener('abort', onAbort);
         reject(error);
       });
-      child.on('close', code => finish(code ?? 1));
+      child.on('close', code => {
+        if (killPromise) { void killPromise.then(() => finish(code ?? 1)); return; }
+        finish(code ?? 1);
+      });
 
       if (signal?.aborted) {
         onAbort();

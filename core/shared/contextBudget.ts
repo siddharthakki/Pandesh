@@ -44,6 +44,17 @@ export interface ContextWindow {
   contextTokens: number;
   source: ContextWindowSource;
   maxOutputTokens?: number;
+  /**
+   * Tokens the model spends on REASONING before it emits the visible answer.
+   *
+   * A reasoning model ("think" mode) charges its thinking against the same
+   * window as the answer. Without this reserve the budget hands the model an
+   * output allowance it can spend entirely on thinking, and the visible
+   * answer — the tool call — never arrives. The benchmark saw exactly that:
+   * a reasoning model with a 4096-token output budget produced no tool call
+   * at all.
+   */
+  reasoningTokens?: number;
 }
 
 function positiveInt(value: unknown): number | undefined {
@@ -59,15 +70,17 @@ const ASSUMED_WINDOW: ContextWindow = { contextTokens: CORE_ASSUMED_CONTEXT_TOKE
 /** Clamps a labelled window into range. An absent, unlabelled or invalid one
  * becomes the assumed default rather than a guess. */
 export function normalizeContextWindow(
-  raw?: { contextTokens?: unknown; source?: unknown; maxOutputTokens?: unknown },
+  raw?: { contextTokens?: unknown; source?: unknown; maxOutputTokens?: unknown; reasoningTokens?: unknown },
 ): ContextWindow {
   const contextTokens = positiveInt(raw?.contextTokens);
   if (contextTokens === undefined || !isContextWindowSource(raw?.source)) return { ...ASSUMED_WINDOW };
   const maxOutputTokens = positiveInt(raw?.maxOutputTokens);
+  const reasoningTokens = positiveInt(raw?.reasoningTokens);
   return {
     contextTokens: Math.min(MAX_CONTEXT_TOKENS, Math.max(MIN_CONTEXT_TOKENS, contextTokens)),
     source: raw.source as ContextWindowSource,
     ...(maxOutputTokens !== undefined ? { maxOutputTokens } : {}),
+    ...(reasoningTokens !== undefined ? { reasoningTokens } : {}),
   };
 }
 
@@ -85,6 +98,7 @@ export function resolveContextWindowChain(input: {
   provider?: number;
   catalog?: number;
   maxOutputTokens?: number;
+  reasoningTokens?: number;
 }): ContextWindow {
   const explicit = positiveInt(input.explicit);
   const router = positiveInt(input.router);
@@ -100,7 +114,7 @@ export function resolveContextWindowChain(input: {
   } else if (catalog !== undefined) {
     picked = { contextTokens: catalog, source: 'catalog_metadata' };
   }
-  return normalizeContextWindow({ ...picked, maxOutputTokens: input.maxOutputTokens });
+  return normalizeContextWindow({ ...picked, maxOutputTokens: input.maxOutputTokens, reasoningTokens: input.reasoningTokens });
 }
 
 /** Output the model still has to write: an explicit allowance capped at half
@@ -111,13 +125,44 @@ export function outputReserveTokens(window: ContextWindow): number {
   return Math.min(8_192, Math.max(1_024, Math.floor(ctx * 0.2)));
 }
 
+/**
+ * The tokens the model spends on reasoning before the visible answer.
+ *
+ * This is charged against the SAME window as the visible output, so it is
+ * part of the generation reserve, not part of the input budget.
+ */
+export function reasoningReserveTokens(window: ContextWindow): number {
+  const declared = window.reasoningTokens;
+  if (declared !== undefined && declared > 0) return declared;
+  return 0;
+}
+
+/** The whole generation reserve: what the model may spend before it answers. */
+export function generationReserveTokens(window: ContextWindow): number {
+  return outputReserveTokens(window) + reasoningReserveTokens(window);
+}
+
+/**
+ * The tokens a reasoning model needs for its thinking phase.
+ *
+ * Derived from the window, never from a model NAME: a model that declares a
+ * reasoning capability is assumed to spend a quarter of its window thinking,
+ * bounded to [1024, 8192]. The reserve is deliberately conservative —
+ * under-reserving means the model runs out of room before it emits the tool
+ * call, which is worse than a slightly smaller input budget.
+ */
+export function reasoningReserveForReasoningModel(contextTokens: number): number {
+  const ctx = positiveInt(contextTokens) ?? CORE_ASSUMED_CONTEXT_TOKENS;
+  return Math.min(8_192, Math.max(1_024, Math.floor(ctx * 0.25)));
+}
+
 /** chars/4 under-counts code and chat-template overhead. */
 export function safetyMarginTokens(window: ContextWindow): number {
   return Math.floor(window.contextTokens * 0.1);
 }
 
 export function usableInputTokens(window: ContextWindow): number {
-  return Math.max(0, window.contextTokens - outputReserveTokens(window) - safetyMarginTokens(window));
+  return Math.max(0, window.contextTokens - generationReserveTokens(window) - safetyMarginTokens(window));
 }
 
 export function conversationReplayCapTokens(surface: ContextSurface, window: ContextWindow): number {
@@ -144,6 +189,8 @@ export interface AssemblyAllocation {
   surface: ContextSurface;
   window: ContextWindow;
   outputReserveTokens: number;
+  /** Tokens reserved for the model's reasoning, when it declares a need. */
+  reasoningReserveTokens: number;
   usableInputTokens: number;
   fixedChars: number;
   /** Characters left for replay + loop delta + ledger after the fixed parts. */
@@ -187,6 +234,7 @@ export function allocateContextAtAssembly(input: {
     surface,
     window,
     outputReserveTokens: outputReserveTokens(window),
+    reasoningReserveTokens: reasoningReserveTokens(window),
     usableInputTokens: usable,
     fixedChars,
     remainingChars,
@@ -194,5 +242,80 @@ export function allocateContextAtAssembly(input: {
     loopDeltaChars,
     missionLedgerChars,
     fixedOverflow: fixedTokens > usable,
+  };
+}
+
+/* ------------------------------------------------------------------ */
+/* Fit assessment                                                      */
+/* ------------------------------------------------------------------ */
+
+/** What the host may do about a request that does not fit. */
+export type ContextFitAction =
+  /** It fits. */
+  | 'fits'
+  /** Something can be compacted or reduced without losing the objective. */
+  | 'reduce'
+  /** Another authorized model with a bigger window could serve it. */
+  | 'select_another_model'
+  /** Nothing can make it fit; the host must report the limitation. */
+  | 'report_limitation';
+
+export interface ContextFitAssessment {
+  action: ContextFitAction;
+  /** Why the decision was made, in one line. */
+  reason: string;
+  /** The characters that must be shed to fit. Zero when it already fits. */
+  overflowChars: number;
+  /** The window that would be needed, when a bigger one could serve it. */
+  requiredContextTokens?: number;
+}
+
+/**
+ * Decides what to do when a request does not fit the model's window.
+ *
+ * The order is deliberate and it never involves a cloud model:
+ *
+ *   1. `reduce` — shed the eligible, compressible context (the conversation
+ *      replay, the repository evidence, the loop delta). The objective and
+ *      the tool surface are never shed: without them the model cannot act.
+ *   2. `select_another_model` — an authorized model with a bigger window
+ *      could serve the request. Only a model the host is ALREADY authorized
+ *      to use counts; this function never widens authority.
+ *   3. `report_limitation` — nothing can make it fit. The host says so
+ *      plainly instead of sending a request that will be truncated.
+ */
+export function assessContextFit(input: {
+  allocation: AssemblyAllocation;
+  /** Characters of compressible context that may be shed. */
+  reducibleChars: number;
+  /** Context tokens of other models the host is already authorized to use. */
+  authorizedAlternativeWindows?: readonly number[];
+}): ContextFitAssessment {
+  const { allocation } = input;
+  if (!allocation.fixedOverflow) {
+    return { action: 'fits', reason: 'the request fits the model context window', overflowChars: 0 };
+  }
+  const overflowChars = Math.max(0, allocation.fixedChars - allocation.remainingChars);
+  if (input.reducibleChars > 0) {
+    return {
+      action: 'reduce',
+      reason: `${overflowChars} character(s) of compressible context can be shed to fit the window`,
+      overflowChars,
+    };
+  }
+  const alternatives = (input.authorizedAlternativeWindows ?? []).filter((tokens) => tokens > allocation.window.contextTokens);
+  if (alternatives.length > 0) {
+    const required = Math.max(...alternatives);
+    return {
+      action: 'select_another_model',
+      reason: `the request needs about ${Math.ceil((allocation.fixedChars / CONTEXT_CHARS_PER_TOKEN) + allocation.outputReserveTokens + allocation.reasoningReserveTokens)} tokens, and another authorized model offers ${required}`,
+      overflowChars,
+      requiredContextTokens: required,
+    };
+  }
+  return {
+    action: 'report_limitation',
+    reason: `the request needs about ${Math.ceil((allocation.fixedChars / CONTEXT_CHARS_PER_TOKEN) + allocation.outputReserveTokens + allocation.reasoningReserveTokens)} tokens but the model's window is ${allocation.window.contextTokens} and nothing can be shed`,
+    overflowChars,
   };
 }

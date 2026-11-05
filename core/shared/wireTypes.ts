@@ -527,6 +527,10 @@ export interface ModelSelectionCandidateEvidence {
   capable: boolean;
   costRank: number;
   rejectionReasons: string[];
+  /** The provider-introspected context window, when it reported one. */
+  contextWindowTokens?: number;
+  /** The reasoning reserve this candidate needs, when it declared one. */
+  reasoningTokens?: number;
 }
 
 /** Frozen, bounded diagnostic explaining the selected execution model. */
@@ -558,6 +562,13 @@ export interface ModelSelectionEvidence {
   cloudPublicTextApproved?: boolean;
   /** Frozen routing label for authorization envelopes. */
   routingPolicy?: 'local-only' | 'local-first-cloud-fallback' | 'explicit-openrouter' | 'explicit-orcarouter' | 'explicit-cloud';
+  /**
+   * The tokens this model needs for its REASONING phase, when the provider
+   * says it has one. Frozen with the selection so the context budget
+   * charges the same reserve on every turn of the attempt and after a
+   * restart. Absent means the model declared no reasoning requirement.
+   */
+  reasoningTokens?: number;
   /**
    * True when the selected model was technically viable (no hard
    * incompatibility) but did not clear the task's preferred reliability
@@ -645,6 +656,9 @@ export type ExecutionQualityEventType =
   | 'repository_path_blocked'
   | 'loop_detected'
   | 'redundant_exploration_refused'
+  | 'identical_failure_refused'
+  | 'identical_failure_repeated'
+  | 'mutation_already_applied'
   | 'exploration_budget_refused'
   | 'exploration_budget_nudge'
   | 'strategy_changed'

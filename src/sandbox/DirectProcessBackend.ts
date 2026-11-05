@@ -1,5 +1,6 @@
 import { spawn } from 'child_process';
 import { createSanitizedChildEnvironment } from '../../core/security/childEnvironment';
+import { createProcessTreeTracker, terminateProcessTree } from '../../core/runtime/processTree';
 import { SandboxBackend, SandboxPlan } from './SandboxRunner';
 
 const INHERITED_ENV_KEYS = [
@@ -40,13 +41,22 @@ export class DirectProcessBackend implements SandboxBackend {
       const stderrState = { bytes: 0 };
       let settled = false;
 
-      const stop = () => {
-        if (!child.killed) {
-          child.kill();
-        }
+      // The sandboxed process is only the root of the owned tree; a command
+      // it launches is a descendant and must die with it. The stop is
+      // verified before the cancellation is reported.
+      const tree = child.pid ? createProcessTreeTracker(child.pid) : undefined;
+      let killPromise: Promise<void> | undefined;
+      const stop = (): Promise<void> => {
+        if (killPromise) return killPromise;
+        killPromise = (async () => {
+          if (!child.pid) return;
+          if (tree) { await tree.terminate(); return; }
+          await terminateProcessTree(child.pid);
+        })();
+        return killPromise;
       };
-      const timeout = setTimeout(stop, plan.limits.timeoutMs);
-      const onAbort = () => stop();
+      const timeout = setTimeout(() => { void stop(); }, plan.limits.timeoutMs);
+      const onAbort = () => { void stop(); };
       signal.addEventListener('abort', onAbort, { once: true });
 
       child.stdout.on('data', chunk => {
@@ -70,7 +80,10 @@ export class DirectProcessBackend implements SandboxBackend {
         if (signal.aborted) {
           const error = new Error('Sandbox execution cancelled.');
           error.name = 'AbortError';
-          reject(error);
+          // The cancellation is only reported once the owned tree has been
+          // terminated and verified, so "cancelled" never means "the children
+          // are still running".
+          void (killPromise ?? Promise.resolve()).then(() => reject(error));
           return;
         }
         resolve({
@@ -78,7 +91,6 @@ export class DirectProcessBackend implements SandboxBackend {
           stdout: Buffer.concat(stdout).toString('utf8'),
           stderr: Buffer.concat(stderr).toString('utf8'),
         });
-      });
-    });
+      });    });
   }
 }

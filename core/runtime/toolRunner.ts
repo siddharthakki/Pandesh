@@ -8,10 +8,17 @@
  * are intentionally few and bounded — this is a durable execution seam, not a
  * re-implementation of the full Extension-Host tool catalogue.
  */
-import { spawn, spawnSync } from 'node:child_process';
+import { spawn } from 'node:child_process';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import type { ModelToolDefinition, ModelToolCall } from './modelBackend';
+import {
+  createProcessTreeTracker,
+  describeTermination,
+  terminateProcessTree,
+  type ProcessTreeTerminationResult,
+} from './processTree';
+import { ABSENT_FILE_SHA256, decideMutationOutcome } from '../domain/mutationLedger';
 import { recoverRepositoryPath, type RepositoryPathRecoveryResult } from './repositoryPathRecovery';
 import { isCredentialFilePath, redactSecrets } from '../platform/credentialStore';
 import { buildUnifiedDiff, describeBaseline, missingParentDirectories, readBaselineIdentity, sameBaseline, sha256OfBuffer, type WriteBaselineIdentity } from './writeProposal';
@@ -75,6 +82,18 @@ export interface ToolExecutionContext {
    * ungoverned local tool call), which behaves exactly as before.
    */
   expectedBaseline?: WriteBaselineIdentity;
+  /**
+   * The SHA-256 of the content the APPROVED proposal produces, frozen into
+   * the approval with the baseline.
+   *
+   * It is what makes a replayed write idempotent: when the file on disk
+   * already hashes to this value, the write landed (maybe before a crash
+   * that lost the completion record), so the write is reported as already
+   * applied and nothing is written again. When the file hashes to neither
+   * the baseline nor this value, the outcome of the earlier attempt is
+   * UNKNOWN — and an unknown outcome is never replayed.
+   */
+  expectedResultSha256?: string;
   /**
    * Draft-bound Gmail send safety: the canonical digest that was frozen into
    * the `gmail_send_draft` approval at proposal time (see
@@ -191,6 +210,17 @@ function coerceCommand(raw: unknown): string {
 }
 
 /** The default Core tool set: run a command and read a file, both scoped to cwd. */
+/** The current text of a file, or null when it cannot be read as text. */
+function readFileTextOrNull(absolutePath: string): string | null {
+  try {
+    const buffer = fs.readFileSync(absolutePath);
+    if (buffer.includes(0)) return null;
+    return buffer.toString('utf8');
+  } catch {
+    return null;
+  }
+}
+
 export class CoreToolRunner implements ToolRunner {
   constructor(private readonly commandTimeoutMs = DEFAULT_COMMAND_TIMEOUT_MS) {}
 
@@ -398,6 +428,22 @@ export class CoreToolRunner implements ToolRunner {
         pathRecovery: recovery,
       };
     }
+    // M-benchmark P4: an idempotent write. When the file already holds the
+    // exact content this proposal produces, the write is a NO-OP: it is
+    // reported as already applied and nothing is written again. This is
+    // what makes a replayed edit (a restart that lost the completion
+    // record, or the same proposal submitted twice) safe.
+    const currentContent = readFileTextOrNull(recovery.resolvedPath);
+    if (currentContent !== null && currentContent === content) {
+      return {
+        status: 'succeeded',
+        exitCode: 0,
+        output: `This content is already in '${recovery.selected}'; nothing was written again.`,
+        resultCategory: 'mutation_already_applied',
+        normalizedArguments,
+        pathRecovery: recovery,
+      };
+    }
     if (ctx.expectedBaseline) {
       // Immediately before the mutation — not at proposal time, and not at
       // approval time — so nothing can slip in between this check and the
@@ -415,11 +461,32 @@ export class CoreToolRunner implements ToolRunner {
           pathRecovery: recovery,
         };
       }
-      if (!sameBaseline(current.baseline, ctx.expectedBaseline)) {
+      // M-benchmark P4: one rule for a repeated write. The file either still
+      // holds the pre-image (the write never landed), already holds the
+      // result (it landed — a no-op), or holds neither (the outcome is
+      // UNKNOWN, and an unknown outcome is never replayed).
+      const outcome = decideMutationOutcome({
+        baselineSha256: ctx.expectedBaseline.kind === 'absent' ? ABSENT_FILE_SHA256 : ctx.expectedBaseline.sha256,
+        resultSha256: ctx.expectedResultSha256 ?? '',
+        currentSha256: current.baseline.kind === 'absent' ? ABSENT_FILE_SHA256 : current.baseline.sha256,
+      });
+      if (outcome === 'already_applied') {
+        return {
+          status: 'succeeded',
+          exitCode: 0,
+          output: `This content is already in '${recovery.selected}'; nothing was written again.`,
+          resultCategory: 'mutation_already_applied',
+          normalizedArguments,
+          pathRecovery: recovery,
+        };
+      }
+      if (outcome === 'uncertain') {
         return {
           status: 'failed',
           exitCode: null,
-          output: `Stale proposal: '${recovery.selected}' was proposed against ${describeBaseline(ctx.expectedBaseline)} but now has ${describeBaseline(current.baseline)}. Nothing was written — re-read the file and propose the change again against its current content.`,
+          output: `Stale proposal: '${recovery.selected}' was proposed against ${describeBaseline(ctx.expectedBaseline)} but now has ${describeBaseline(current.baseline)}. `
+            + 'The outcome of the earlier attempt at this change is unknown, so it was not repeated — repeating a side effect whose outcome is unknown can duplicate work. '
+            + 'Nothing was written; re-read the file and propose the change again against its current content.',
           resultCategory: 'write_stale_baseline',
           normalizedArguments,
           pathRecovery: recovery,
@@ -509,6 +576,34 @@ export class CoreToolRunner implements ToolRunner {
     }
     if (ctx.expectedBaseline) {
       const current: WriteBaselineIdentity = { kind: 'file', sha256: sha256OfBuffer(buffer) };
+      // M-benchmark P4: one rule for a repeated write (see `decideMutationOutcome`).
+      const outcome = decideMutationOutcome({
+        baselineSha256: ctx.expectedBaseline.kind === 'absent' ? ABSENT_FILE_SHA256 : ctx.expectedBaseline.sha256,
+        resultSha256: ctx.expectedResultSha256 ?? '',
+        currentSha256: current.sha256,
+      });
+      if (outcome === 'already_applied') {
+        return {
+          status: 'succeeded',
+          exitCode: 0,
+          output: `This change is already present in '${recovery.selected}'; nothing was written again.`,
+          resultCategory: 'mutation_already_applied',
+          normalizedArguments,
+          pathRecovery: recovery,
+        };
+      }
+      if (outcome === 'uncertain') {
+        return {
+          status: 'failed',
+          exitCode: null,
+          output: `Stale proposal: '${recovery.selected}' was proposed against ${describeBaseline(ctx.expectedBaseline)} but now has ${describeBaseline(current)}. `
+            + 'The outcome of the earlier attempt at this change is unknown, so it was not repeated — repeating a side effect whose outcome is unknown can duplicate work. '
+            + 'Nothing was written; re-read the file and propose the change again against its current content.',
+          resultCategory: 'write_stale_baseline',
+          normalizedArguments,
+          pathRecovery: recovery,
+        };
+      }
       if (!sameBaseline(current, ctx.expectedBaseline)) {
         return {
           status: 'failed',
@@ -520,13 +615,16 @@ export class CoreToolRunner implements ToolRunner {
         };
       }
     }
-    const resolved = resolveAnchoredEdit(buffer.toString('utf8'), find, replace);
+    const resolved = resolveAnchoredEdit(buffer.toString('utf8'), find, replace, {
+      relativePath: recovery.selected ?? rel,
+    });
     if (!resolved.ok) {
+      const context = resolved.context ? `\n${resolved.context}` : '';
       return {
         status: 'failed',
         exitCode: null,
-        output: `Anchored edit refused: ${resolved.reason}. Nothing was written.`,
-        resultCategory: 'anchor_unresolved',
+        output: `Anchored edit refused: ${resolved.reason}. Nothing was written.${context}`,
+        resultCategory: resolved.code === 'anchor_ambiguous' ? 'anchor_ambiguous' : 'anchor_unresolved',
         normalizedArguments,
         pathRecovery: recovery,
       };
@@ -598,18 +696,28 @@ export class CoreToolRunner implements ToolRunner {
       child.stderr?.on('data', append);
       let settled = false;
       let killedByAbort = false;
-      const killTree = () => {
-        if (unregisterProc) { unregisterProc(); unregisterProc = undefined; }
-        if (!child.pid) return;
-        if (process.platform === 'win32') {
-          try { spawnSync('taskkill', ['/pid', String(child.pid), '/t', '/f'], { windowsHide: true }); } catch { /* best-effort */ }
-        } else {
-          try { process.kill(-child.pid, 'SIGKILL'); } catch { try { child.kill('SIGKILL'); } catch { /* already gone */ } }
-        }
+      let killPromise: Promise<void> | undefined;
+      // The tracker remembers the descendants of this shell while it is
+      // alive, so a command whose shell exits early (backgrounding a
+      // grandchild) still has its grandchildren accounted for at stop time.
+      const tree = child.pid ? createProcessTreeTracker(child.pid) : undefined;
+      let treeTermination: ProcessTreeTerminationResult | undefined;
+      const killTree = (): Promise<void> => {
+        if (killPromise) return killPromise;
+        killPromise = (async () => {
+          if (unregisterProc) { unregisterProc(); unregisterProc = undefined; }
+          if (!child.pid) return;
+          // Verified termination: the whole owned tree is killed and the
+          // survivors are re-read, so a stop is never merely assumed.
+          treeTermination = tree
+            ? await tree.terminate()
+            : await terminateProcessTree(child.pid);
+        })();
+        return killPromise;
       };
       const onAbort = () => {
         killedByAbort = true;
-        killTree();
+        void killTree();
       };
       ctx.signal?.addEventListener('abort', onAbort, { once: true });
       const finish = (result: ToolExecutionResult) => {
@@ -624,18 +732,43 @@ export class CoreToolRunner implements ToolRunner {
           normalizedArguments: { command: command.replace(/\s+/g, ' ').trim() },
         });
       };
+      // The stop is only reported once the tree has actually been verified
+      // dead. A kill that "succeeded" but left a grandchild running is
+      // surfaced as an incomplete stop, not as a clean abort.
+      const finishAfterTermination = async (result: ToolExecutionResult) => {
+        await killPromise;
+        if (treeTermination && !treeTermination.terminated) {
+          finish({
+            ...result,
+            status: 'failed',
+            output: `${result.output}\n…[${describeTermination(treeTermination)}]`,
+          });
+          return;
+        }
+        finish(result);
+      };
       const timer = setTimeout(() => {
-        killTree();
-        finish({ status: 'failed', exitCode: null, output: `${bound(out)}\n…[timed out after ${this.commandTimeoutMs}ms]` });
+        void killTree().then(() => {
+          finish({
+            status: 'failed',
+            exitCode: null,
+            output: `${bound(out)}\n…[timed out after ${this.commandTimeoutMs}ms]`
+              + (treeTermination && !treeTermination.terminated ? `\n…[${describeTermination(treeTermination)}]` : ''),
+          });
+        });
       }, this.commandTimeoutMs);
       timer.unref?.();
       if (ctx.signal?.aborted) onAbort();
       child.on('error', (err) => finish({ status: 'failed', exitCode: null, output: `${bound(out)}\n${err.message}` }));
-      child.on('close', (code) => finish({
-        status: !killedByAbort && code === 0 ? 'succeeded' : 'failed',
-        exitCode: code,
-        output: killedByAbort ? `${bound(out)}\n…[aborted]` : bound(out),
-      }));
+      child.on('close', (code) => {
+        const result: ToolExecutionResult = {
+          status: !killedByAbort && code === 0 ? 'succeeded' : 'failed',
+          exitCode: code,
+          output: killedByAbort ? `${bound(out)}\n…[aborted]` : bound(out),
+        };
+        if (killPromise) { void finishAfterTermination(result); return; }
+        finish(result);
+      });
     });
   }
 }

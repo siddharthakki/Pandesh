@@ -60,16 +60,27 @@ export async function runCommand(
   if (cleanStdout.trim()) { combinedParts.push(cleanStdout.trim()); }
   if (cleanStderr.trim()) { combinedParts.push(`STDERR:\n${cleanStderr.trim()}`); }
   if (cmdResult.timedOut) { combinedParts.push(`[timed out after ${Config.getCommandTimeoutMs() / 1000}s]`); }
+  if (cmdResult.cancelled) { combinedParts.push('[stopped by the user]'); }
+  // An incomplete stop is reported as such: the shell died but at least one
+  // owned descendant was still running when it was checked.
+  if (cmdResult.termination && !cmdResult.termination.terminated) {
+    combinedParts.push(`[stop incomplete: ${cmdResult.termination.reason}]`);
+  }
 
   const rawCombined = combinedParts.join('\n');
   const { text: output, truncated } = OutputLimiter.truncate(rawCombined, max, 'command output');
 
-  const succeeded = cmdResult.exitCode === 0 && !cmdResult.timedOut;
+  const succeeded = cmdResult.exitCode === 0 && !cmdResult.timedOut && !cmdResult.cancelled;
 
   // Produce a clear error message — distinguish "binary not found" from "script error"
   let errorMsg: string | undefined;
   if (!succeeded) {
-    if (cmdResult.timedOut) {
+    if (cmdResult.cancelled) {
+      const incomplete = cmdResult.termination && !cmdResult.termination.terminated
+        ? ` Some owned processes were still running when the stop was verified: ${cmdResult.termination.survivors.join(', ')}.`
+        : ' The whole owned process tree was terminated and verified dead.';
+      errorMsg = `The command was stopped before it finished.${incomplete}`;
+    } else if (cmdResult.timedOut) {
       errorMsg = `Command timed out after ${Config.getCommandTimeoutMs() / 1000}s.`;
     } else if (isNotFound(cleanStderr)) {
       const hint = pythonHint(command);
@@ -88,6 +99,10 @@ export async function runCommand(
       stderr: OutputLimiter.truncate(cleanStderr, max).text,
       exitCode: cmdResult.exitCode,
       timedOut: cmdResult.timedOut,
+      cancelled: cmdResult.cancelled,
+      ...(cmdResult.termination
+        ? { stopVerified: cmdResult.termination.terminated, survivingPids: cmdResult.termination.survivors }
+        : {}),
       durationMs,
       output,
       truncated,

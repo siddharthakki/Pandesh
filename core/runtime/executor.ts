@@ -53,11 +53,26 @@ import { CoreToolRunner } from './toolRunner';
 import * as crypto from 'node:crypto';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import { buildWriteFileProposal, isSuspiciousWholeFileReplacement, type WriteFileProposal, type WriteBaselineIdentity, type WriteProposalPresentation } from './writeProposal';
+import { buildWriteFileProposal, isSuspiciousWholeFileReplacement, readBaselineIdentity, type WriteFileProposal, type WriteBaselineIdentity, type WriteProposalPresentation } from './writeProposal';
 import { buildTextEditProposal } from './textEditProposal';
 import { projectEventArguments } from '../domain/eventArguments';
 import { reconcileExecutionClaims, withholdUnexecutedChangeClaims } from './executionClaims';
-import { discoverSyntaxGates, discoverValidationGates, runWorkspaceValidation, type ValidationCommandRunner } from './workspaceValidation';
+import {
+  discoverSyntaxGates,
+  discoverValidationGates,
+  effectiveValidationTier,
+  runWorkspaceValidation,
+  validationGateTier,
+  type ValidationCommandRunner,
+  type ValidationGateTier,
+} from './workspaceValidation';
+import {
+  coversFullGateSet,
+  fullValidationCovers,
+  workspaceRevision,
+  type RecordedFullValidation,
+  type RecordedInvocation,
+} from './validationFreshness';
 import { isStaticHtmlPath, summarizeStaticHtmlCheck, validateStaticHtml } from './staticHtmlValidation';
 import { NARROW_READ_LINES, decideRead, isPinnedReadKey, normalizeReadPath, recordRead, refusedReadMessage, seedFromPack, splitLines, type ReadGuardResult } from './readEvidence';
 import type { GovernedCapabilityRegistry } from './governedCapability';
@@ -146,9 +161,21 @@ import {
   type TurnObservations,
 } from './loopProgress';
 import {
+  clearIdenticalFailure,
+  noteIdenticalFailure,
+  peekIdenticalFailure,
+} from './identicalFailureTracker';
+import {
+  ABSENT_FILE_SHA256,
+  findMutationByResult,
+  markMutationApplied,
+  recordMutationIntent,
+} from '../domain/mutationLedger';
+import {
   CONTEXT_CHARS_PER_TOKEN,
   LOOP_DELTA_MAX_CHARS,
   allocateContextAtAssembly,
+  assessContextFit,
   measurePromptChars,
   outputReserveTokens,
   usableInputTokens,
@@ -208,6 +235,8 @@ const MAX_IMAGE_ATTACHMENT_BYTES = 10 * 1024 * 1024;
 const MAX_EXTRACTED_TEXT_APPEND_CHARS = 50 * 1024;
 
 const CORE_ACTOR = 'core:executor';
+/** How many gates the full validation tier runs at completion. */
+const MAX_FULL_VALIDATION_GATES = 3;
 const EXECUTOR_LEASE_MS = 120_000;
 const EXECUTOR_HEARTBEAT_MS = 30_000;
 
@@ -278,6 +307,32 @@ const REPOSITORY_CONTEXT_FRAMING: Readonly<Record<'baat_kar' | 'saath_kar', stri
  * real local models that explore with run_command before proposing. */
 
 /**
+ * The shell command a recorded invocation ran, when it ran one.
+ *
+ * A recorded invocation stores its arguments as JSON; an unreadable summary
+ * simply carries no command, which is the safe reading (nothing is assumed
+ * to have changed the workspace).
+ */
+function recordedCommand(argsSummary: string): string | undefined {
+  try {
+    const parsed = JSON.parse(argsSummary) as { command?: unknown };
+    return typeof parsed.command === 'string' ? parsed.command : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/** The result category a recorded invocation ended with, when it recorded one. */
+function recordedResultCategory(evidence: string): string | undefined {
+  try {
+    const parsed = JSON.parse(evidence) as { resultCategory?: unknown };
+    return typeof parsed.resultCategory === 'string' ? parsed.resultCategory : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
  * M55: whether the accepted objective is a change request. Routing only marks file modification as required for the
  * autonomous modes, so a Saath Kar "make a copy and refactor" request reached the loop with every mutation-completion
  * guard switched off and "Let me continue reading." was accepted as a final answer. The objective's own wording
@@ -290,6 +345,23 @@ function taskExpectsMutation(context: AttemptContextRecord, mutationPolicy: 'all
   if (conditionalMutationDirective(context.taskInput)) return false;
   return context.modelSelection?.requiredCapabilities.fileModification === true
     || hasAffirmativeMutationIntent(context.taskInput);
+}
+
+/**
+ * The FULL validation tier's verdict for the CURRENT workspace state.
+ *
+ * The tier is evidence about one revision of the workspace: when an edit
+ * lands after it ran, the result is stale and the tier runs again against
+ * the new state. `ran` says whether the gates were executed just now or a
+ * recorded result for this exact revision was reused.
+ */
+interface FinalFullValidation {
+  /** Whether the full gate set passed against the current workspace revision. */
+  passed: boolean;
+  /** The model/human-readable summary of what ran. */
+  summary: string;
+  /** True when the gates ran just now; false when a recorded result was reused. */
+  ran: boolean;
 }
 
 const MAX_TOOL_TURNS = 16;
@@ -875,8 +947,39 @@ export class RuntimeExecutor {
 
     if (this.startOrShortCircuitCancel(attempt, fenceToken)) return;
 
-    const { messages } = this.buildMessages('saath_kar', request.conversationId, context.taskInput, context.retryGuidance, attemptId, context.repositoryContext?.prompt, context, tools);
+    const { messages, allocation } = this.buildMessages('saath_kar', request.conversationId, context.taskInput, context.retryGuidance, attemptId, context.repositoryContext?.prompt, context, tools);
     if (!this.applyAttachments(attemptId, messages, context, fenceToken)) return;
+    // M-benchmark P5: a request that cannot fit the model's window is
+    // reported, never sent truncated. The eligible context was already
+    // reduced (the repository evidence has no floor); what remains is the
+    // objective and the tool surface, which are not compressible.
+    const fit = assessContextFit({
+      allocation,
+      reducibleChars: 0,
+      authorizedAlternativeWindows: this.authorizedLocalWindows(context),
+    });
+    if (fit.action === 'report_limitation') {
+      this.mutate(() => recordRuntimeEvent(this.db, {
+        domain: 'attempt', entityId: attemptId, eventType: 'context_window_exceeded', actor: CORE_ACTOR,
+        metadata: {
+          attemptId,
+          model: context.selectedModel,
+          windowTokens: allocation.window.contextTokens,
+          outputReserveTokens: allocation.outputReserveTokens,
+          reasoningReserveTokens: allocation.reasoningReserveTokens,
+          reason: fit.reason,
+        },
+        resultingRevision: null,
+      }));
+      this.mutate(() => failAttempt(this.db, attemptId, {
+        failureReason: `the request does not fit the model's context window: ${fit.reason}. `
+          + 'The compressible context was already reduced. Run the task with a model that has a larger context window, '
+          + 'or ask for a smaller scope.',
+        fenceToken,
+        actor: CORE_ACTOR,
+      }));
+      return;
+    }
     this.mutate(() => recordRuntimeEvent(this.db, {
       domain: 'attempt', entityId: attemptId, eventType: 'mutation_policy_decided', actor: CORE_ACTOR,
       metadata: {
@@ -914,11 +1017,30 @@ export class RuntimeExecutor {
   }
 
   /**
+   * The context windows of the OTHER models this attempt is already
+   * authorized to use — the local escalation candidates only.
+   *
+   * A cloud model is never in this list: an attempt whose frozen routing
+   * policy is `local-only` must not quietly move to a cloud provider
+   * because its local model ran out of window. A cloud fallback is a
+   * separate, explicit decision.
+   */
+  private authorizedLocalWindows(context: AttemptContextRecord): number[] {
+    const selection = context.modelSelection;
+    if (!selection) return [];
+    const windows = new Set<number>();
+    for (const candidate of selection.escalationCandidates ?? []) {
+      const evidence = (selection.candidates ?? []).find((entry) => entry.provider === candidate.provider && entry.model === candidate.model);
+      if (evidence?.contextWindowTokens) windows.add(evidence.contextWindowTokens);
+    }
+    return [...windows];
+  }
+
+  /**
    * M53: the loop's starting evidence. Files the host pack delivered IN FULL (marked `complete`, and small enough that the
    * fixed-context clamp cannot have cut them) are recorded as already read, so the model is not sent to read what it
    * already holds; they and the objective's explicit targets keep their read bodies through compaction.
-   */
-  private initialLoopProgress(context: AttemptContextRecord, cwd: string): LoopProgressState {
+   */  private initialLoopProgress(context: AttemptContextRecord, cwd: string): LoopProgressState {
     const state: LoopProgressState = { ...INITIAL_LOOP_PROGRESS };
     const pinned = new Set<string>(explicitMutationTargets(context.taskInput).map(normalizeReadPath));
     const pack = context.repositoryContext;
@@ -1130,6 +1252,20 @@ export class RuntimeExecutor {
       const formatted = this.formatGovernedResult(dispatch);
       resultText = formatted.text;
       resultCategory = formatted.category;
+      // M-benchmark P4: the mutation landed, so the recorded intent is now a
+      // completed fact. A later replay of the same edit recognises it and
+      // does not write again.
+      if (approvedExecuted) {
+        const evidence = (dispatch.outcome === 'executed' ? dispatch.toolInvocation.evidence : {}) as Record<string, unknown>;
+        if (evidence.resultCategory === 'mutation_already_applied') {
+          this.mutate(() => recordRuntimeEvent(this.db, {
+            domain: 'attempt', entityId: attemptId, eventType: 'mutation_already_applied', actor: CORE_ACTOR,
+            metadata: { attemptId, path: String(pendingCall.arguments.path ?? '') },
+            resultingRevision: null,
+          }));
+        }
+        this.completeMutationLedger(attemptId, pendingCall, cwd);
+      }
       // The approved mutation has now actually executed; the validation the
       // user was promised runs inside this same approved operation.
       validationText = await this.validateAfterApprovedMutation({ attemptId, cwd, signal, call: pendingCall, dispatch });
@@ -1232,6 +1368,14 @@ export class RuntimeExecutor {
     ) as Array<{ command: string | null }>).map((row) => String(row.command ?? '')).filter((command) => command && isFileChangingShellCommand(command));
     const hasExecutedMutatingCommand = () => executedFileChangingCommands().length > 0;
     const hasMutationProposal = () => hasProposeToolMutation() || hasExecutedMutatingCommand();
+    // M-benchmark P4: a mutation whose content was ALREADY applied counts as
+    // delivered for this attempt. The file the objective names already has
+    // the change, so the task IS satisfied — it must not be failed for
+    // "no change was made" when the change is right there.
+    const alreadyAppliedPaths = (): string[] => (this.db.all(
+      "SELECT json_extract(metadata, '$.path') AS p FROM runtime_events WHERE entityId = ? AND eventType = 'mutation_already_applied'",
+      [attemptId],
+    ) as Array<{ p: string | null }>).map((row) => String(row.p ?? '')).filter((value) => value !== '');
     // M55: a final answer to a change request is accepted only on VERIFIED mutation: an approved propose_* invocation that
     // succeeded, or an executed file-changing command. A proposal that exists but never executed (approved then not run,
     // cancelled, or still pending) is not a completed change.
@@ -1240,10 +1384,10 @@ export class RuntimeExecutor {
        WHERE (a.attemptId = ? OR json_extract(a.summary, '$.scopeIdentity') = ?)
        AND json_extract(a.summary, '$.toolName') IN ('propose_file_change', 'propose_text_edit') AND t.status = 'succeeded' LIMIT 1`,
       [attemptId, attemptId],
-    )) || hasExecutedMutatingCommand();
-    const correctionEvent = (eventType: string, reason: string) => this.mutate(() => recordRuntimeEvent(this.db, {
+    )) || hasExecutedMutatingCommand() || alreadyAppliedPaths().length > 0;
+    const correctionEvent = (eventType: string, reason: string, extra: Record<string, unknown> = {}) => this.mutate(() => recordRuntimeEvent(this.db, {
       domain: 'attempt', entityId: attemptId, eventType, actor: CORE_ACTOR,
-      metadata: { attemptId, reason }, resultingRevision: null,
+      metadata: { attemptId, reason, ...extra }, resultingRevision: null,
     }));
     let correctionUsed = Boolean(this.db.get(
       "SELECT id FROM runtime_events WHERE entityId = ? AND eventType = 'mutation_proposal_correction_started' LIMIT 1",
@@ -1260,6 +1404,14 @@ export class RuntimeExecutor {
     ));
     let emptyFinalRetried = Boolean(this.db.get(
       "SELECT id FROM runtime_events WHERE entityId = ? AND eventType = 'empty_final_response_retry' LIMIT 1",
+      [attemptId],
+    ));
+    // M-benchmark P2: one bounded repair turn when the FULL validation tier
+    // fails at completion. The cheap gates already ran after every edit; the
+    // expensive one runs here, and its failure is fed back to the model
+    // instead of being swallowed.
+    let finalValidationRepairUsed = Boolean(this.db.get(
+      "SELECT id FROM runtime_events WHERE entityId = ? AND eventType = 'final_validation_repair_started' LIMIT 1",
       [attemptId],
     ));
     // Reasoning-off recovery: one bounded retry of the IDENTICAL request with Ollama `think:false`, durable via the journal.
@@ -1784,7 +1936,7 @@ export class RuntimeExecutor {
           // longer has it): a file that merely already existed next to an unrelated `mkdir` is not delivered.
           const governedObjective = expectsMutation || conditional !== null;
           const commandDelivered = governedObjective ? commandDeliveredTargets(cwd, context.taskInput, executedFileChangingCommands()) : [];
-          const appliedPaths = [...toolAppliedPaths, ...commandDelivered];
+          const appliedPaths = [...toolAppliedPaths, ...alreadyAppliedPaths(), ...commandDelivered];
           const objectiveFiles = governedObjective ? evaluateObjectiveFiles(context.taskInput, appliedPaths) : { outstanding: [], violations: [] };
           const outstandingTargets = objectiveFiles.outstanding;
           if (objectiveFiles.violations.length > 0) {
@@ -1893,6 +2045,49 @@ export class RuntimeExecutor {
               correctionEvent('completion_guard_correction_started', why);
               messages.push({ role: 'assistant', content: result.content });
               messages.push({ role: 'system', content: `The request is not finished: ${why}. Use propose_file_change now to deliver the required file with exact contents. Do not declare the task complete until the file is created and verified.` });
+              saveLoopContinuation(this.db, attemptId, {
+                state: 'running', provider, model, turnIndex: turn, baseMessageSeq,
+                payload: { deltaMessages: continuationSuffix(messages, baseMessageCount), priorOperations: [...priorOperations], loopProgress: { ...loopProgress }, ...compactionPayload(compaction), pendingCall: null, remainingCalls: [] },
+                frozenContextHash: context.contextHash,
+              });
+              continue;
+            }
+          }
+          // M-benchmark P2: the FULL validation tier runs HERE, at
+          // completion, against the FINAL workspace state — the expensive
+          // gate is what actually proves the task, so it does not belong
+          // after every intermediate edit. It is evidence about ONE
+          // revision: a result recorded before the last edit is stale, so
+          // the tier runs again against the state the task ends on, and a
+          // recorded result that already covers this revision is reused
+          // rather than re-run without a code change.
+          //
+          // A failure is fed back to the model as ONE bounded repair turn
+          // instead of being swallowed by a "Completed" answer. If the tier
+          // still fails after that repair, the task is NOT complete: the
+          // attempt fails rather than reporting success on a stale result.
+          if (expectsMutation) {
+            const finalValidation = await this.runFinalFullValidation({ attemptId, cwd, signal });
+            if (finalValidation && !finalValidation.passed) {
+              if (finalValidationRepairUsed) {
+                const why = 'the full validation tier still fails against the final workspace state';
+                correctionEvent('final_validation_repair_exhausted', why);
+                closeLoopContinuation(this.db, attemptId);
+                this.appendAssistant(request.conversationId, `This task is NOT complete: ${why}.\n${finalValidation.summary}`.trim(), invocation.id, attemptId);
+                this.mutate(() => failAttempt(this.db, attemptId, { failureReason: `final validation failed: ${why}`, fenceToken, actor: CORE_ACTOR }));
+                return;
+              }
+              finalValidationRepairUsed = true;
+              correctionEvent('final_validation_repair_started', 'The full validation tier failed at completion.', {
+                gatesRanNow: finalValidation.ran,
+                summary: finalValidation.summary,
+              });
+              messages.push({ role: 'assistant', content: result.content });
+              messages.push({
+                role: 'system',
+                content: `The full validation suite failed after your changes, so the work is NOT complete:\n${finalValidation.summary}\n`
+                  + 'Fix the failing check with another edit (the output above is the evidence) and do not summarise until it passes.',
+              });
               saveLoopContinuation(this.db, attemptId, {
                 state: 'running', provider, model, turnIndex: turn, baseMessageSeq,
                 payload: { deltaMessages: continuationSuffix(messages, baseMessageCount), priorOperations: [...priorOperations], loopProgress: { ...loopProgress }, ...compactionPayload(compaction), pendingCall: null, remainingCalls: [] },
@@ -2071,6 +2266,30 @@ export class RuntimeExecutor {
         });
         continue;
       }
+      // M-benchmark P3: an identical failure that has already happened too
+      // many times is refused BEFORE it costs another side effect. The
+      // duplicate-call policy above cannot see this case, because the model
+      // rewords the failing call instead of repeating it verbatim.
+      const failurePeek = peekIdenticalFailure(loopProgress.identicalFailures, {
+        toolName: call.name,
+        arguments: normalizedCallArguments,
+      });
+      if (failurePeek.exhausted && failurePeek.message) {
+        turn.nonProgress += 1;
+        this.recordQuality(attemptId, 'identical_failure_refused', {
+          operation: call.name,
+          category: failurePeek.category ?? null,
+          count: failurePeek.count,
+          normalizedArguments: projectEventArguments(normalizedCallArguments),
+        }, `identical-failure:${call.name}:${failurePeek.category}:${failurePeek.count}`);
+        messages.push({ role: 'tool', content: `[${call.name}] ${failurePeek.message}` });
+        saveLoopContinuation(this.db, attemptId, {
+          state: 'running', provider, model, turnIndex, baseMessageSeq,
+          payload: { deltaMessages: continuationSuffix(messages, baseMessageCount), priorOperations: [...priorOperations], loopProgress: { ...loopProgress }, ...compactionPayload(compaction), pendingCall: input.calls[i + 1] ?? null, remainingCalls: input.calls.slice(i + 2) },
+          frozenContextHash,
+        });
+        continue;
+      }
       // Completion pressure and evidence reuse (completionGate.ts): deterministic, no model involved. Exploration that
       // repeats evidence the host already supplied or the loop already read, or that follows an applied change with no
       // failing validation, is refused with a normal tool result instead of spending another model turn on it.
@@ -2195,6 +2414,12 @@ export class RuntimeExecutor {
 
       const governed = this.governedCapabilities?.classify(call.name);
       if (governed) {
+        // M-benchmark P4: the INTENTION of this mutation is recorded durably
+        // BEFORE it is dispatched, so a crash between here and the write
+        // leaves a record of exactly what was intended. The write itself is
+        // idempotent (the tool runner recognises a proposal whose result is
+        // already in the file) and an UNCERTAIN outcome is never replayed.
+        this.recordMutationIntentForCall(attemptId, call, cwd);
         const dispatch = await dispatchConnectorAction(this.db, this.governedCapabilities!, this.connectorRegistry, {
           correlationId: conversationId ?? attemptId,
           scopeIdentity: attemptId,
@@ -2260,6 +2485,30 @@ export class RuntimeExecutor {
           }));
         }
         const formatted = this.formatGovernedResult(dispatch);
+        // M-benchmark P3: record the failure so an identical retry is refused
+        // instead of being paid for again.
+        const governedFailed = dispatch.outcome !== 'executed' || dispatch.toolInvocation.status !== 'succeeded';
+        if (governedFailed) {
+          const recorded = noteIdenticalFailure(loopProgress.identicalFailures, {
+            toolName: call.name,
+            resultCategory: formatted.category,
+            arguments: normalizedCallArguments,
+          });
+          loopProgress.identicalFailures = recorded.state;
+          if (recorded.verdict.exhausted && recorded.verdict.message) {
+            this.recordQuality(attemptId, 'identical_failure_repeated', {
+              operation: call.name,
+              category: recorded.verdict.category ?? null,
+              count: recorded.verdict.count,
+            }, `identical-failure:${call.name}:${recorded.verdict.category}:${recorded.verdict.count}`);
+            messages.push({ role: 'tool', content: `[${call.name}] ${recorded.verdict.message}` });
+          }
+        } else {
+          loopProgress.identicalFailures = clearIdenticalFailure(loopProgress.identicalFailures, {
+            toolName: call.name,
+            arguments: normalizedCallArguments,
+          });
+        }
         const governedReadOk = callKind === 'read' && dispatch.outcome === 'executed' && dispatch.toolInvocation.status === 'succeeded';
         if (governedReadOk) {
           if (readGuard?.effective.range) {
@@ -2280,6 +2529,23 @@ export class RuntimeExecutor {
         if (!mutating) compaction.toolMessageKeys.set(messages.length - 1 - baseMessageCount, operationKey);
         const validation = await this.validateAfterApprovedMutation({ attemptId, cwd, signal, call, dispatch });
         if (validation) messages.push({ role: 'tool', content: `[validation] ${validation}` });
+        // M-benchmark P4: the mutation landed, so the recorded intent is now a
+        // completed fact. A later replay of the same edit recognises it and
+        // does not write again.
+        if (dispatch.outcome === 'executed' && dispatch.toolInvocation.status === 'succeeded') {
+          const evidence = dispatch.toolInvocation.evidence as Record<string, unknown>;
+          if (evidence.resultCategory === 'mutation_already_applied') {
+            // The requested content was already in the file: the objective IS
+            // delivered, and the attempt records that fact so the completion
+            // guard does not read "no change" into a satisfied task.
+            this.mutate(() => recordRuntimeEvent(this.db, {
+              domain: 'attempt', entityId: attemptId, eventType: 'mutation_already_applied', actor: CORE_ACTOR,
+              metadata: { attemptId, path: String(call.arguments.path ?? '') },
+              resultingRevision: null,
+            }));
+          }
+          this.completeMutationLedger(attemptId, call, cwd);
+        }
         const signature = createLoopSignature({ operation: call.name, normalizedArguments: call.arguments, resultCategory: formatted.category, relevantEvidence: { text: formatted.text } });
         if (dispatch.outcome === 'executed' && dispatch.toolInvocation.status === 'succeeded' && REVISION_BUMPING_TOOLS.has(call.name)) {
           Object.assign(loopProgress, noteRevisionBump(loopProgress));
@@ -2295,6 +2561,29 @@ export class RuntimeExecutor {
         const toolResult = await this.runTool(attemptId, call, cwd, signal);
         const normalizedArguments = toolResult.normalizedArguments ?? call.arguments;
         const resultCategory = toolResult.resultCategory ?? `${call.name}_${toolResult.status}`;
+        // M-benchmark P3: record the failure so an identical retry is refused
+        // instead of being paid for again.
+        if (toolResult.status !== 'succeeded') {
+          const recorded = noteIdenticalFailure(loopProgress.identicalFailures, {
+            toolName: call.name,
+            resultCategory,
+            arguments: normalizedArguments,
+          });
+          loopProgress.identicalFailures = recorded.state;
+          if (recorded.verdict.exhausted && recorded.verdict.message) {
+            this.recordQuality(attemptId, 'identical_failure_repeated', {
+              operation: call.name,
+              category: recorded.verdict.category ?? null,
+              count: recorded.verdict.count,
+            }, `identical-failure:${call.name}:${recorded.verdict.category}:${recorded.verdict.count}`);
+            messages.push({ role: 'tool', content: `[${call.name}] ${recorded.verdict.message}` });
+          }
+        } else {
+          loopProgress.identicalFailures = clearIdenticalFailure(loopProgress.identicalFailures, {
+            toolName: call.name,
+            arguments: normalizedArguments,
+          });
+        }
         const relevantEvidence = toolResult.pathRecovery ?? { exitCode: toolResult.exitCode, output: toolResult.output };
         const signature = createLoopSignature({ operation: call.name, normalizedArguments, resultCategory, relevantEvidence });
         if (toolResult.status === 'succeeded' && REVISION_BUMPING_TOOLS.has(call.name)) {
@@ -2486,11 +2775,107 @@ export class RuntimeExecutor {
     if (!built || !('error' in built)) return undefined;
     this.mutate(() => recordRuntimeEvent(this.db, {
       domain: 'attempt', entityId: attemptId, eventType: 'text_edit_anchor_refused', actor: CORE_ACTOR,
-      metadata: { attemptId, path: requestedPath, reason: built.error },
+      metadata: { attemptId, path: requestedPath, reason: built.error, code: built.code ?? null },
       resultingRevision: null,
     }));
+    // The bounded, verbatim context of the current file is part of the
+    // refusal: a model cannot copy an anchor it was never shown, so the next
+    // attempt has to see the region it was aiming at.
+    const context = 'context' in built && built.context ? `\n${built.context}` : '';
     return `NOT SUBMITTED: no approval was created and nothing was changed. propose_text_edit could not be applied to '${requestedPath}': ${built.error}. `
-      + 'Copy find exactly from the current file content (it must occur exactly once), or send propose_file_change with the COMPLETE updated file.';
+      + `Copy find exactly from the current file content (it must occur exactly once), or send propose_file_change with the COMPLETE updated file.${context}`;
+  }
+
+  /**
+   * The identity of one workspace mutation, and what a repeat of it means.
+   *
+   * M-benchmark P4: the workspace is the truth about whether a write landed.
+   * The ledger records the intent (pre-image + intended result) before the
+   * write, so a replay after a restart can be told apart from a first
+   * attempt — and an edit whose outcome is UNCERTAIN is never repeated.
+   */
+  /**
+   * Records the INTENTION of a workspace mutation in the durable ledger,
+   * before the mutation is dispatched.
+   *
+   * M-benchmark P4: the ledger is what makes a RESTART safe. It holds the
+   * exact pre-image the edit was computed against and the exact content it
+   * produces, so a replay after an interruption can be recognised instead of
+   * guessed at — and an edit whose outcome is UNKNOWN is never repeated.
+   */
+  private recordMutationIntentForCall(
+    attemptId: string,
+    call: { name: string; arguments: Record<string, unknown> },
+    cwd: string,
+  ): void {
+    if (call.name !== 'propose_file_change' && call.name !== 'propose_text_edit') return;
+    const requestedPath = String(call.arguments.path ?? '');
+    if (!requestedPath) return;
+    let resultContent: string | undefined;
+    let baselineSha256: string;
+    let selectedPath = requestedPath;
+    if (call.name === 'propose_file_change') {
+      resultContent = String(call.arguments.content ?? '');
+      const baseline = readBaselineIdentity(path.resolve(cwd, requestedPath));
+      if ('error' in baseline) return;
+      baselineSha256 = baseline.baseline.kind === 'absent' ? ABSENT_FILE_SHA256 : baseline.baseline.sha256;
+    } else {
+      const built = buildTextEditProposal({
+        workspaceRoot: cwd, requestedPath,
+        find: String(call.arguments.find ?? ''),
+        replace: String(call.arguments.replace ?? ''),
+      });
+      if (!built || 'error' in built) return;
+      resultContent = built.content;
+      selectedPath = built.selectedPath;
+      baselineSha256 = built.expectedBaseline.kind === 'absent' ? ABSENT_FILE_SHA256 : built.expectedBaseline.sha256;
+    }
+    const resultSha256 = crypto.createHash('sha256').update(resultContent, 'utf8').digest('hex');
+    this.mutate(() => recordMutationIntent(this.db, {
+      attemptId,
+      toolName: call.name,
+      path: selectedPath,
+      baselineSha256,
+      resultSha256,
+    }));
+  }
+
+  /** The current identity of a file, or null when it cannot be read. */
+  private currentFileSha256(absolutePath: string): string | null {
+    try {
+      const stats = fs.statSync(absolutePath);
+      if (!stats.isFile()) return ABSENT_FILE_SHA256;
+      return crypto.createHash('sha256').update(fs.readFileSync(absolutePath)).digest('hex');
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === 'ENOENT') return ABSENT_FILE_SHA256;
+      return null;
+    }
+  }
+
+  /**
+   * Marks a recorded mutation as applied, once its write actually landed.
+   *
+   * The row is found by the CONTENT the file now has, not by path: a file
+   * can be the target of several proposals, and only the one that produced
+   * the bytes now on disk is the one that was applied.
+   */
+  private completeMutationLedger(attemptId: string, call: { name: string; arguments: Record<string, unknown> }, cwd: string): void {
+    if (call.name !== 'propose_file_change' && call.name !== 'propose_text_edit') return;
+    const requestedPath = String(call.arguments.path ?? '');
+    let selectedPath = requestedPath;
+    if (call.name === 'propose_text_edit') {
+      const built = buildTextEditProposal({
+        workspaceRoot: cwd, requestedPath,
+        find: String(call.arguments.find ?? ''),
+        replace: String(call.arguments.replace ?? ''),
+      });
+      if (built && !('error' in built)) selectedPath = built.selectedPath;
+    }
+    const current = this.currentFileSha256(path.resolve(cwd, selectedPath));
+    if (current === null) return;
+    const row = findMutationByResult(this.db, call.name, [selectedPath, requestedPath], current);
+    if (!row) return;
+    this.mutate(() => markMutationApplied(this.db, row.fingerprint));
   }
 
   /**
@@ -2554,7 +2939,7 @@ export class RuntimeExecutor {
   private captureWriteProposal(
     call: ModelToolCall,
     cwd: string,
-  ): { expectedBaseline: WriteFileProposal['expectedBaseline']; presentation: WriteFileProposal['presentation'] } | undefined {
+  ): { expectedBaseline: WriteFileProposal['expectedBaseline']; expectedResultSha256?: string; presentation: WriteFileProposal['presentation'] } | undefined {
     if (call.name === 'propose_file_change') {
       const proposal = buildWriteFileProposal({
         workspaceRoot: cwd,
@@ -2562,7 +2947,11 @@ export class RuntimeExecutor {
         content: String(call.arguments.content ?? ''),
       });
       if (!proposal) return undefined;
-      return { expectedBaseline: proposal.expectedBaseline, presentation: proposal.presentation };
+      return {
+        expectedBaseline: proposal.expectedBaseline,
+        expectedResultSha256: proposal.resultSha256,
+        presentation: proposal.presentation,
+      };
     }
     if (call.name === 'propose_text_edit') {
       const built = buildTextEditProposal({
@@ -2572,7 +2961,11 @@ export class RuntimeExecutor {
         replace: String(call.arguments.replace ?? ''),
       });
       if (!built || 'error' in built) return undefined;
-      return { expectedBaseline: built.expectedBaseline, presentation: built.presentation };
+      return {
+        expectedBaseline: built.expectedBaseline,
+        expectedResultSha256: built.resultSha256,
+        presentation: built.presentation,
+      };
     }
     return undefined;
   }
@@ -2585,6 +2978,13 @@ export class RuntimeExecutor {
    * from the repository's declared gates — see
    * `core/runtime/workspaceValidation.ts`. Returns the model/human-visible
    * summary, or `undefined` when this call was not an executed mutation.
+   *
+   * TIER (M-benchmark P2): after an edit, only the LIGHTWEIGHT gates run
+   * (parse / compile / typecheck). The full test suite is expensive, so it
+   * runs once per attempt — at completion — not after every edit. A
+   * workspace that declares no cheap gate at all still gets validated, but
+   * only the first time; the later edits report that the full gate already
+   * ran.
    */
   private async validateAfterApprovedMutation(input: {
     attemptId: string;
@@ -2627,27 +3027,46 @@ export class RuntimeExecutor {
       return 'No mechanical validation gate is configured in this workspace, so none was run after the change.';
     }
 
-    const allGates = [...syntaxGates, ...gates.slice(0, 1)];
+    // The lightweight tier after every edit; the full tier only once.
+    const fullAlreadyRan = this.hasRunFullValidation(attemptId);
+    const lightweightAvailable = gates.some((gate) => validationGateTier(gate.category) === 'lightweight');
+    const tier: ValidationGateTier = (!lightweightAvailable && !fullAlreadyRan) ? 'full' : 'lightweight';
+    const allGates = tier === 'full'
+      ? [...syntaxGates, ...gates.slice(0, MAX_FULL_VALIDATION_GATES)]
+      : [...syntaxGates, ...gates.filter((gate) => validationGateTier(gate.category) === 'lightweight').slice(0, 1)];
+    // The revision this validation speaks about: the mutation that triggered
+    // it has already landed, so the workspace is already at this revision.
+    const revision = this.workspaceRevision(attemptId);
     const started = this.mutate(() => startToolInvocation(this.db, {
       attemptId,
       toolName: 'workspace_validation',
-      argsSummary: { path: String(call.arguments.path ?? ''), gates: allGates.map((gate) => gate.command) },
+      argsSummary: { path: String(call.arguments.path ?? ''), tier, gates: allGates.map((gate) => gate.command) },
       actor: CORE_ACTOR,
     }));
     try {
-      const outcome = await runWorkspaceValidation({ cwd, signal, gates, syntaxGates, runner: this.validationCommandRunner });
+      const outcome = await runWorkspaceValidation({ cwd, signal, gates, syntaxGates, runner: this.validationCommandRunner, tier });
+      // What RAN is what the record says — a substituted lightweight request
+      // that ended up running the full tier is a full-tier result, and the
+      // completion decision has to be able to find it.
+      const ranTier = effectiveValidationTier(outcome.results.map((result) => result.gate.category));
       this.mutate(() => completeToolInvocation(this.db, started.id, {
         status: outcome.passed ? 'succeeded' : 'failed',
         exitCode: outcome.results[0]?.exitCode ?? null,
         evidence: {
           output: outcome.summary,
           resultCategory: outcome.passed ? 'validation_passed' : 'validation_failed',
+          tier: ranTier,
+          requestedTier: tier,
+          tierSubstituted: outcome.tierSubstituted,
+          revision,
+          gates: outcome.results.map((result) => result.gate.command),
           normalizedArguments: { gates: outcome.results.map((result) => result.gate.command) },
         },
         actor: CORE_ACTOR,
       }));
       if (!outcome.passed) {
         this.recordQuality(attemptId, 'validation_failed', {
+          tier,
           gates: outcome.results.map((result) => ({
             command: result.gate.command,
             category: result.gate.category,
@@ -2661,17 +3080,159 @@ export class RuntimeExecutor {
         // a passed validation (which is what unlocks completion): report exactly what ran and what did not.
         return `Syntax check passed (${outcome.results.map((result) => result.gate.command).join(', ')}). No mechanical validation gate is configured in this workspace, so no test or build was run after the change.`;
       }
-      return outcome.summary;
+      // The failure is fed back to the model BEFORE it makes another edit:
+      // the model is told exactly which command failed and what to do about
+      // it, so the next edit is informed rather than blind.
+      const directive = outcome.passed
+        ? ''
+        : `\nThe change did not pass validation. Fix the cause before proposing another edit: the failing command's output above is the evidence.`;
+      return `${outcome.summary}${directive}`;
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       this.mutate(() => completeToolInvocation(this.db, started.id, {
         status: 'failed',
         exitCode: null,
-        evidence: { output: message, resultCategory: 'validation_error', normalizedArguments: { gates: allGates.map((gate) => gate.command) } },
+        evidence: { output: message, resultCategory: 'validation_error', tier, normalizedArguments: { gates: allGates.map((gate) => gate.command) } },
         actor: CORE_ACTOR,
       }));
       return `Validation could not be run after the change: ${message}`;
     }
+  }
+
+  /** True when this attempt already ran the full validation tier. */
+  private hasRunFullValidation(attemptId: string): boolean {
+    const row = this.db.get<{ id: string }>(
+      "SELECT id FROM tool_invocations WHERE attemptId = ? AND toolName = 'workspace_validation' AND json_extract(evidence, '$.tier') = 'full' LIMIT 1",
+      [attemptId],
+    );
+    return Boolean(row);
+  }
+
+  /**
+   * The workspace revision this attempt is at: how many workspace-CHANGING
+   * invocations succeeded on it.
+   *
+   * Derived from the recorded invocations rather than from an in-memory
+   * counter, so it is the same number before and after a restart and it
+   * cannot drift from what actually happened to the files.
+   */
+  private workspaceRevision(attemptId: string): number {
+    const rows = this.db.all<{ toolName: string; status: string; argsSummary: string; evidence: string }>(
+      `SELECT toolName, status, argsSummary, evidence FROM tool_invocations
+       WHERE status = 'succeeded' AND (attemptId = ? OR id IN (
+         SELECT entityId FROM runtime_events WHERE eventType = 'capability_tool_invocation_completed' AND json_extract(metadata, '$.attemptId') = ?))`,
+      [attemptId, attemptId],
+    );
+    const invocations: RecordedInvocation[] = rows.map((row) => ({
+      toolName: row.toolName,
+      status: row.status,
+      command: recordedCommand(row.argsSummary),
+      resultCategory: recordedResultCategory(row.evidence),
+    }));
+    return workspaceRevision(invocations);
+  }
+
+  /**
+   * The recorded FULL-tier validation for this attempt, with the workspace
+   * revision and the gates it covered.
+   *
+   * The latest record wins: a later run of the same tier supersedes an
+   * earlier one, and only the latest can describe the current state.
+   */
+  private recordedFullValidation(attemptId: string): RecordedFullValidation | undefined {
+    const row = this.db.get<{ status: string; evidence: string }>(
+      `SELECT status, evidence FROM tool_invocations
+       WHERE attemptId = ? AND toolName = 'workspace_validation' AND json_extract(evidence, '$.tier') = 'full'
+       ORDER BY startedAt DESC, rowid DESC LIMIT 1`,
+      [attemptId],
+    );
+    if (!row) return undefined;
+    let evidence: { revision?: unknown; output?: unknown; gates?: unknown } = {};
+    try {
+      evidence = JSON.parse(row.evidence) as { revision?: unknown; output?: unknown; gates?: unknown };
+    } catch {
+      return undefined;
+    }
+    if (typeof evidence.revision !== 'number') return undefined;
+    const gates = Array.isArray(evidence.gates) ? evidence.gates.map((gate) => String(gate)) : [];
+    return {
+      revision: evidence.revision,
+      passed: row.status === 'succeeded',
+      summary: typeof evidence.output === 'string' ? evidence.output : '',
+      gates,
+    };
+  }
+
+  /**
+   * The FULL validation tier, run against the FINAL workspace state.
+   *
+   * The expensive gate (the whole test suite) is what actually proves the
+   * task, so it runs when the model is about to declare the work done — not
+   * after every intermediate edit.
+   *
+   * It is evidence about ONE revision of the workspace. When an edit lands
+   * after it ran, that result is STALE: it describes different bytes, so the
+   * tier runs again here against the state the task actually ends on. A
+   * recorded result is reused only when it covers the current revision AND
+   * ran the whole full gate set — the suite is never re-run without a code
+   * change to justify it.
+   *
+   * Its failure is fed back to the model as a bounded repair turn instead of
+   * being reported as a silent failure.
+   */
+  private async runFinalFullValidation(input: {
+    attemptId: string;
+    cwd: string;
+    signal: AbortSignal;
+  }): Promise<FinalFullValidation | undefined> {
+    const { attemptId, cwd, signal } = input;
+    if (signal.aborted) return undefined;
+    const gates = discoverValidationGates(cwd);
+    const fullGates = gates.filter((gate) => validationGateTier(gate.category) === 'full');
+    if (fullGates.length === 0) return undefined;
+    const expectedGates = fullGates.slice(0, MAX_FULL_VALIDATION_GATES).map((gate) => gate.command);
+    const revision = this.workspaceRevision(attemptId);
+    const recorded = this.recordedFullValidation(attemptId);
+    if (recorded && fullValidationCovers(recorded, revision) && coversFullGateSet(recorded, expectedGates)) {
+      // The recorded full-tier result already describes the workspace as it
+      // is now, gate for gate. Re-running it without a code change would only
+      // repeat the same answer.
+      return { passed: recorded.passed, summary: recorded.summary, ran: false };
+    }
+    const started = this.mutate(() => startToolInvocation(this.db, {
+      attemptId,
+      toolName: 'workspace_validation',
+      argsSummary: { tier: 'full', gates: expectedGates },
+      actor: CORE_ACTOR,
+    }));
+    const outcome = await runWorkspaceValidation({
+      cwd, signal, gates, runner: this.validationCommandRunner, tier: 'full',
+    });
+    this.mutate(() => completeToolInvocation(this.db, started.id, {
+      status: outcome.passed ? 'succeeded' : 'failed',
+      exitCode: outcome.results[0]?.exitCode ?? null,
+      evidence: {
+        output: outcome.summary,
+        resultCategory: outcome.passed ? 'validation_passed' : 'validation_failed',
+        tier: 'full',
+        revision,
+        gates: outcome.results.map((result) => result.gate.command),
+        normalizedArguments: { gates: outcome.results.map((result) => result.gate.command) },
+      },
+      actor: CORE_ACTOR,
+    }));
+    if (!outcome.passed) {
+      this.recordQuality(attemptId, 'validation_failed', {
+        tier: 'full',
+        gates: outcome.results.map((result) => ({
+          command: result.gate.command,
+          category: result.gate.category,
+          exitCode: result.exitCode,
+          status: result.status,
+        })),
+      }, `validation:${started.id}`);
+    }
+    return { passed: outcome.passed, summary: outcome.summary, ran: true };
   }
 
   /** Formats one governed-capability dispatch outcome as the exact
@@ -3153,12 +3714,17 @@ export class RuntimeExecutor {
       // different tokenizer, a larger tool surface). Clamp what is SENT so the fixed context never alone exceeds the
       // window; the frozen record is untouched, so resume rebuilds the identical clamp. Keeps >= ~65% of the usable
       // window for history and the tool loop.
+      //
+      // M-benchmark P5: the clamp has NO floor. The repository evidence is
+      // compressible context — the objective and the tool surface are not —
+      // so when the window is too small for it, it is dropped rather than
+      // allowed to push the fixed parts past the limit.
       const framed = `${REPOSITORY_CONTEXT_FRAMING[mode]}\n\n`;
       const usableChars = usableInputTokens(window) * CONTEXT_CHARS_PER_TOKEN;
       const room = Math.floor(usableChars * 0.35) - measurePromptChars(messages, tools) - 200 - framed.length;
-      const allowed = Math.max(1_200, room);
+      const allowed = Math.max(0, room);
       const bounded = repositoryContext.length > allowed
-        ? `${repositoryContext.slice(0, allowed)}\n…[repository evidence truncated to fit the model's context window]`
+        ? `${repositoryContext.slice(0, allowed)}${allowed > 0 ? '\n…[repository evidence truncated to fit the model\'s context window]' : '\n…[repository evidence omitted: the model\'s context window has no room for it]'}`
         : repositoryContext;
       messages.push({ role: 'system', content: `${framed}${bounded}` });
     }
