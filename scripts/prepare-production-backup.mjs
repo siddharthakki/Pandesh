@@ -53,10 +53,10 @@ async function main() {
   const installSrc = 'E:\\Pandesh';
   const dataSrc = path.join(process.env.LOCALAPPDATA, 'KarkeDikha', 'desktop');
 
-  const backupDirE = path.join('E:\\Pandesh-Backups', `backup-before-b157-${timestamp}`);
-  const installBackupDst = path.join(backupDirE, 'install-b156');
+  const backupDirE = path.join('E:\\Pandesh-Backups', `backup-before-b158-${timestamp}`);
+  const installBackupDst = path.join(backupDirE, 'install-b157');
   const dataBackupDstE = path.join(backupDirE, 'desktop-userdata');
-  const dataBackupDstLocal = path.join(process.env.LOCALAPPDATA, 'KarkeDikha', `desktop-backup-before-build157-${timestamp}`);
+  const dataBackupDstLocal = path.join(process.env.LOCALAPPDATA, 'KarkeDikha', `desktop-backup-before-build158-${timestamp}`);
 
   console.log('1. Verifying source paths exist...');
   if (!fs.existsSync(installSrc)) throw new Error(`Install dir missing: ${installSrc}`);
