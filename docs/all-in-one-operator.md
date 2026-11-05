@@ -65,6 +65,7 @@ writes its evidence under `.acceptance-evidence/`.
 | `scripts/acceptance/run-artifact-restart-acceptance.mjs` | an artifact is still retrievable and renderable after a real Core restart, and an unauthenticated caller is refused |
 | `scripts/acceptance/run-comfyui-direct-acceptance.mjs` | Pandesh drives ComfyUI itself: checkpoints, prompt id, render, retrieval, and the RECOVERY of a render that finished while the Core was down |
 | `scripts/acceptance/run-aw1-ocr-summary-acceptance.mjs` | scanned invoices are read by OCR, the numbers and totals come out right, the summary file is written through the gate, and a refused write leaves no file |
+| `scripts/acceptance/run-aw2-companion-delivery-acceptance.mjs` | a real 1024x1024 ComfyUI render survives a restart, is queued for the paired phone, pulled back over pinned TLS and acknowledged exactly once. No JUGAAD APK exists here, so the Android UI itself is the recorded limit. |
 | `scripts/acceptance/run-aw3-research-price-acceptance.mjs` | research -> the vendor's own page in the browser -> the note with the price the browser saw -> the calendar attempted for real |
 | `scripts/acceptance/run-wish-sandbox-journey-acceptance.mjs` | one complete sandboxed Wish-to-Reality journey, with the honest ladder (prepared / demonstrated / approved / delivered / paid) |
 | `scripts/acceptance/run-all-in-one-capability-matrix.mjs` | the capability matrix, generated from the live inventory of this PC |
