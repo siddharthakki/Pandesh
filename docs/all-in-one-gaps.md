@@ -63,3 +63,14 @@ the code that exists today. Each row names the evidence, not an intention.
 | Reading the source page in the managed browser | **1 - working** | `browser_open_site` + `browser_read`; the AW3 acceptance confirmed the price on the vendor's page |
 | Carrying a research result into a document | **1 - working** | The AW3 acceptance wrote the browser's own price into the note and verified it byte for byte |
 | An issue found in research becoming a tracked GitHub issue | **2 - implementable** | Both halves exist (`governed_research` and the GitHub capability); the missing piece is the handoff, which is the same typed-handoff work as the plan's steps |
+
+## Chat exposure
+
+The governed registry and the chat surface are different questions. These
+capabilities work, but are not in the bounded chat allowlist; the desktop and
+the governed dispatch route still reach them.
+
+| Capability | Class | Why it is not in chat |
+| --- | --- | --- |
+| Port management, system management, intelligence-scout, computer-use, Hermes, weather, pc-organizer, media-production, network drives, GitHub | **1 - working, not chat-exposed** | Measured: the 20-capability allowlist sent 149 tools / ~29k prompt tokens and the local model returned one token with no call. The 10-capability list sends 113 tools / ~24k and the same model calls the tool. Add these back only with lazy tool selection, not by growing the eager list. |
+| Mid-run steering of a delegated engine | **2 - implementable** | Same as the engine row above: the safe current behaviour is stop-and-continue, not live steering |

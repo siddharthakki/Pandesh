@@ -52,35 +52,23 @@ export interface PiCapabilityBridge {
  * what is not.
  */
 export const CHAT_CAPABILITY_IDS = [
-  'port-management',
-  'system-management',
-  'intelligence-scout',
-  'browser',
-  'computer-use',
-  'hermes',
-  'weather',
-  'capability-inventory',
-  'pc-organizer',
-  'household',
-  'media-production',
-  // Image and video generation, the scoped filesystem, and local document
-  // reading (OCR). These three were registered, healthy and unreachable
-  // from a conversation: the desktop reached the image studio through a
-  // regex on the user's words, and the model was never asked.
+  // The bounded operator set. This is deliberately NOT every capability the
+  // registry owns: a live turn with the previous 20-capability list produced
+  // 149 tools and ~29k prompt tokens, and the local model answered with one
+  // token and no tool call. The same model answered a plain greeting, so the
+  // limit is the tool surface, not the model call. These ten cover the
+  // acceptance workflows (documents, ComfyUI, phone, plan, wish, browser,
+  // research) plus honest capability reporting.
   'image-studio',
   'filesystem',
   'document-tools',
-  'ollama-management',
+  'household',
   'plan',
   'wish',
-  // The brief is proven now (the acceptance runs show a local model choosing
-  // between the exposed tools and reporting what is unavailable), so the
-  // remaining genuinely working capabilities can join them. A capability the
-  // registry does not own simply contributes no tools, so listing one that
-  // this build does not have is harmless.
+  'browser',
   'research',
-  'network-drives',
-  'github',
+  'capability-inventory',
+  'ollama-management',
 ] as const;
 
 

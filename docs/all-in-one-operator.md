@@ -39,6 +39,24 @@ It is built from the registry's live health, so it is current, and it is
 short on purpose: a local 27B model is measurably worse at choosing between
 a large undirected tool list.
 
+## Why the chat surface is bounded
+
+The chat bridge deliberately exposes ten capabilities, not every tool the
+registry owns. This was measured, not guessed:
+
+| Chat allowlist | Tools sent | Prompt tokens | Live result with `gemma4:26b-a4b-it-qat` |
+| --- | --- | --- | --- |
+| 20 capabilities | 149 | ~29,000 | one output token, no tool call, empty reply |
+| 10 capabilities | 113 | ~24,000 | `comfyui_status` called, 7 checkpoints named, 23 s |
+
+The ten are the ones the acceptance workflows need: image-studio, filesystem,
+document-tools, household, plan, wish, browser, research, capability-inventory
+and ollama-management. The rest still work through the governed dispatch
+route and the desktop panels. They can return to chat when a lazy
+tool-selection step exists; adding them all at once reproduces the 149-tool
+failure. `scripts/acceptance/run-chat-capability-live-acceptance.mjs` fails if
+the surface grows past 130 tools.
+
 ## The three testing layers
 
 | Command | What it is | Typical time |
@@ -68,6 +86,7 @@ writes its evidence under `.acceptance-evidence/`.
 | `scripts/acceptance/run-aw2-companion-delivery-acceptance.mjs` | a real 1024x1024 ComfyUI render survives a restart, is queued for the paired phone, pulled back over pinned TLS and acknowledged exactly once. No JUGAAD APK exists here, so the Android UI itself is the recorded limit. |
 | `scripts/acceptance/run-aw3-research-price-acceptance.mjs` | research -> the vendor's own page in the browser -> the note with the price the browser saw -> the calendar attempted for real |
 | `scripts/acceptance/run-wish-sandbox-journey-acceptance.mjs` | one complete sandboxed Wish-to-Reality journey, with the honest ladder (prepared / demonstrated / approved / delivered / paid) |
+| `scripts/acceptance/run-chat-capability-live-acceptance.mjs` | a real local model, a real chat turn, reads the brief, chooses `comfyui_status`, calls it, and names the checkpoints the tool returned |
 | `scripts/acceptance/run-all-in-one-capability-matrix.mjs` | the capability matrix, generated from the live inventory of this PC |
 
 ## What is deliberately not done
