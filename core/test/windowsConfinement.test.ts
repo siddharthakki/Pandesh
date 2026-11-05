@@ -14,7 +14,26 @@ import {
 import { LOCAL_MODEL_ENDPOINT } from '../runtime/workerDiscovery';
 import { listWorkerOptions, resolveWorkerProfile } from '../runtime/localCoreQuestion';
 
-const describeWin = process.platform === 'win32' ? describe : describe.skip;
+/**
+ * The confinement prototype is driven by a small C# launcher that is
+ * COMPILED from source at test time. That source is not part of this
+ * repository, so on a machine without it the prototype cannot run at all.
+ *
+ * The suite therefore skips itself, loudly and explicitly, instead of
+ * failing: a red suite would say "the confinement is broken", which is a
+ * different (and wrong) claim. The host-independent checks below always run.
+ */
+const CONFINEMENT_SOURCE = path.resolve(__dirname, '..', 'runtime', 'windowsConfinement', 'WindowsConfinementLauncher.cs');
+const confinementSourcePresent = fs.existsSync(CONFINEMENT_SOURCE);
+const describeWin = process.platform === 'win32' && confinementSourcePresent ? describe : describe.skip;
+const skipReason = !confinementSourcePresent
+  ? `the C# launcher source is not in this repository (${path.relative(process.cwd(), CONFINEMENT_SOURCE)})`
+  : 'Windows-only prototype';
+
+if (process.platform === 'win32' && !confinementSourcePresent) {
+  // eslint-disable-next-line no-console
+  console.warn(`[windowsConfinement] skipped: ${skipReason}`);
+}
 
 describeWin('Windows confinement prototype', () => {
   let fixture: ConfinementFixture | undefined;

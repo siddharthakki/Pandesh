@@ -11,7 +11,11 @@ describe('describeCoreUnavailableForBaat', () => {
   it('reports "starting"/"reconnecting" as transient, not failed', () => {
     expect(describeCoreUnavailableForBaat({ state: 'starting' })).toMatch(/starting/i);
     expect(describeCoreUnavailableForBaat({ state: 'starting' })).not.toMatch(/failed|error/i);
-    expect(describeCoreUnavailableForBaat({ state: 'reconnecting' })).toMatch(/starting|moment/i);
+    // The contract is that a reconnecting Core reads as a TRANSIENT state:
+    // it says it is reconnecting, and it never says "failed".
+    const reconnecting = describeCoreUnavailableForBaat({ state: 'reconnecting' });
+    expect(reconnecting).toMatch(/reconnect/i);
+    expect(reconnecting).not.toMatch(/failed|error/i);
   });
 
   it('reports authentication_failed as a deliberate dead end with a concrete action, never "will reconnect"', () => {

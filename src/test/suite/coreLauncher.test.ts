@@ -116,7 +116,12 @@ describe('CoreLauncher (real spawned Core)', () => {
     const firstHash = connected.state === 'connected' ? connected.info.bundleHash : '';
     expect(firstHash).toBeTruthy();
 
-    const second = new CoreLauncher({ corePath: rebuilt, token: 'test-token', bundledCoreVersion: '0.1.0', dataDir });
+    // The second launcher offers the SAME version but a DIFFERENT bundle.
+    // It has to be the running Core's own version: the launcher refuses to
+    // downgrade a newer running Core, so a made-up older version would test
+    // the downgrade guard instead of the hash-replacement path.
+    const runningVersion = connected.state === 'connected' ? connected.info.coreVersion : '0.1.0';
+    const second = new CoreLauncher({ corePath: rebuilt, token: 'test-token', bundledCoreVersion: runningVersion, dataDir });
     const replaced = await second.ensureCoreRunning();
     expect(replaced.state).toBe('connected');
     if (replaced.state === 'connected') {
