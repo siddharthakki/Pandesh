@@ -3158,6 +3158,8 @@ ${String(args.objective ?? '').slice(0, 600)}`,
       });
     }
 
+    const availableToolNames = new Set<string>(tools.map((t) => t.name));
+
     let mobileCompanionState = 'Mobile Companion State: no phone has been paired.';
     const pairedPhones = pairedPhoneCount(ctx.dataDir);
     if (pairedPhones > 0) {
@@ -3264,20 +3266,88 @@ ${String(args.objective ?? '').slice(0, 600)}`,
     }
 
     function isWeatherRequest(text: string): boolean {
-      return /\b(?:weather|forecast|temperature)\b/i.test(text);
+      if (/\b(?:weather|forecast|temperature|rain|snow|sunny|umbrella)\b/i.test(text)) return true;
+      if (conversationId && /\b(?:tomorrow|evening|morning|tonight|this afternoon|weekend)\b/i.test(text)) {
+        try {
+          const dbMsgs = listMessages(db, conversationId);
+          for (let i = dbMsgs.length - 1; i >= 0; i--) {
+            const m = dbMsgs[i];
+            if (m.role === 'user' && /\b(?:weather|forecast|temperature)\b/i.test(String(m.content || ''))) {
+              return true;
+            }
+          }
+        } catch {}
+      }
+      return false;
     }
 
     function extractWeatherLocation(text: string): string | null {
       const match = text.match(/\b(?:weather|forecast|temperature)(?:\s+(?:in|for|at))?\s+([A-Za-z\s,.-]+?)(?:\?|$|\.|\!)/i)
         ?? text.match(/\b(?:in|for|at)\s+([A-Za-z\s,.-]+?)(?:\s+(?:weather|forecast))/i);
       if (match && match[1]) {
-        const loc = match[1].trim().replace(/\b(?:today|tomorrow|now|currently|this week|right now)\b/gi, '').trim();
+        const loc = match[1].trim().replace(/\b(?:today|tomorrow|now|currently|this week|right now|evening|morning|tonight)\b/gi, '').trim();
         if (loc.length >= 2 && loc.length <= 100) return loc;
       }
       return null;
     }
 
+    function resolveWeatherLocation(text: string): string | null {
+      const direct = extractWeatherLocation(text);
+      if (direct) return direct;
+      if (conversationId && /\b(?:tomorrow|evening|morning|afternoon|tonight|weekend|later|next|how about|what about|and\b)/i.test(text)) {
+        try {
+          const dbMsgs = listMessages(db, conversationId);
+          for (let i = dbMsgs.length - 1; i >= 0; i--) {
+            const m = dbMsgs[i];
+            const content = String(m.content || '');
+            const loc = extractWeatherLocation(content);
+            if (loc) return loc;
+          }
+        } catch {}
+      }
+      return null;
+    }
+
     const apiBase = (process.env.KARKEDIKHA_OLLAMA_URL || 'http://127.0.0.1:11434').replace(/\/$/, '');
+    const modelToolName = availableToolNames.has('ollama_list_models')
+      ? 'ollama_list_models'
+      : availableToolNames.has('system_list_models')
+        ? 'system_list_models'
+        : null;
+
+    const printingPromptSection = availableToolNames.has('list_printers') || availableToolNames.has('print_test_page') ? `PRINTING (STRICT RULES):
+- To see installed printers call 'list_printers'. To print a Windows test page call 'print_test_page' (it needs the operator's approval). Never use 'run_checks' or any shell command to print, and never create a file to print a test page.
+- Report the print outcome exactly as the tool states it: accepted, completed, failed or unknown. Never claim paper came out.
+` : '';
+
+    const modelPromptSection = `LOCAL MODEL RUNTIME & PROVIDER (STRICT RULES):
+- Active Model: ${selectedModel}
+- Local Model Provider: Ollama (${apiBase})
+- When asked which model is running, what model is active, or what runtime is powering you, report that you are running on '${selectedModel}' via the configured local Ollama provider at ${apiBase}.
+${modelToolName ? `- When asked what models are available, installed, or running in Ollama, call '${modelToolName}' to query the local provider. Never guess or tell the user to run 'ollama list' themselves — query the provider with '${modelToolName}' and report the verified result.` : ''}
+`;
+
+    const weatherPromptSection = availableToolNames.has('get_weather') ? `WEATHER & ENVIRONMENT (STRICT RULES):
+- For weather conditions or forecasts, call 'get_weather' with the location name (e.g. 'Paris', 'Tokyo', 'London'). It is read-only and queries current forecast data. Never guess or fabricate weather without calling 'get_weather'.
+` : '';
+
+    const systemAnalysisPromptSection = availableToolNames.has('system_hardware_telemetry') || availableToolNames.has('run_system_diagnostics') ? `SYSTEM & DISK ANALYSIS (STRICT RULES):
+${availableToolNames.has('system_hardware_telemetry') ? `- For disk, storage, or hardware queries, use fast, bounded telemetry ('system_hardware_telemetry').\n` : ''}${availableToolNames.has('run_system_diagnostics') ? `- For comprehensive system diagnostics ("run diagnostics on this PC", "diagnose my computer", "what is my system health"), call 'run_system_diagnostics'.\n` : ''}- NEVER run expensive recursive directory scans across drive roots or repeated PowerShell search loops.
+- NEVER perform automatic cleanup, file deletion, file movement, hibernation modifications, or system changes without explicit user approval.
+` : '';
+
+    const setupHealthPromptSection = availableToolNames.has('run_system_diagnostics') || availableToolNames.has('port_check_setup') ? `SETUP & HEALTH (STRICT RULES):
+- When the user says "check my setup", "diagnose my setup", or asks for service/model/GPU/tool/connection health, call ${['run_system_diagnostics', 'port_check_setup'].filter((t) => availableToolNames.has(t)).map((t) => `'${t}'`).join(', ')}, then summarize results truthfully.
+- Report any service as not connected or not configured rather than guessing.
+` : '';
+
+    const specialistPromptSection = ['desktop_screenshot', 'desktop_windows_list', 'inspect_page', 'scout_add_watch', 'hermes_list_skills'].some((t) => availableToolNames.has(t)) ? `COMPUTER, BROWSER, WATCHES AND SPECIALIST SKILLS (STRICT RULES):
+${availableToolNames.has('desktop_screenshot') ? `- 'desktop_screenshot' captures the real Windows desktop and returns the file path, size and SHA-256. 'desktop_windows_list' lists the visible top-level windows. Both are read-only.\n` : ''}${availableToolNames.has('inspect_page') ? `- 'inspect_page' opens a real page in the managed browser: a workspace-relative HTML path, or a live URL on this machine (http://127.0.0.1:<port>/...). It acts on a running page, so it needs the operator's approval. Quote only what the tool returned; never describe a page you did not open.\n` : ''}${availableToolNames.has('scout_add_watch') ? `- 'scout_add_watch' creates a durable watch that Core then checks on its own schedule; 'scout_list_watches', 'scout_run_watch' and 'scout_run_all' read and check them. Only add a watch when the user asked for one, and never claim a watch is running without a tool result.\n` : ''}${availableToolNames.has('hermes_list_skills') ? `- 'hermes_list_skills' lists the skills installed in the local Hermes agent; 'hermes_invoke_skill' runs one of them and returns Hermes' own result. Never invent a skill name — list the skills first, then invoke one of the names that were listed.\n` : ''}- When a tool result says NOT DONE, NOT AVAILABLE or that it was declined, say so plainly. Never present a tool's failure as a success, and never invent a file path, a number or a quote.
+` : '';
+
+    const pcOrgPromptSection = ['pc_capability_inventory', 'pc_organize_scan', 'routine_create', 'household_scan_obligations'].some((t) => availableToolNames.has(t)) ? `PC ORGANIZATION, ROUTINES, HOUSEHOLD & JUGAAD (STRICT RULES):
+${availableToolNames.has('pc_capability_inventory') ? `- "What tools/software/models does this PC have?" → 'pc_capability_inventory'. If a task needs something missing, name the utility it recommends and offer 'pc_install_utility' (the user approves the exact package); never refuse just because a tool is missing.\n` : ''}${availableToolNames.has('pc_organize_scan') ? `- "Analyze/organize my PC, Downloads, Documents, tax files…" → 'pc_organize_scan' with the folders the user named (never a whole drive). Present its plan as it is: hierarchy, exact moves, what stays, project/model folders kept whole, duplicates, temporary files, space and risks. Nothing moves until the user approves 'pc_organize_apply'; offer saveRules when they want it kept organized. 'pc_organize_undo' reverses a plan. Pandesh never deletes files.\n` : ''}${availableToolNames.has('routine_create') ? `- "Every week…/every morning…/monitor…" → 'routine_create' (folder_cleanup, obligations_check or expiry_watch) with the time, weekdays and folders the user asked for; 'routine_list' shows schedule, authority and history; 'routine_control' pauses, resumes, edits, runs now or cancels.\n` : ''}${availableToolNames.has('household_scan_obligations') ? `- Bills, invoices, subscriptions, renewals, contracts, warranties → 'household_scan_obligations' (sources ["gmail"] and/or folders), then 'household_obligations' to list (withinDays 31 for "next month"). An invoice email does NOT prove a bill is unpaid: report payment status exactly as the tool gives it (requested, due soon, possibly overdue, confirmed, unknown). Only the user confirms a record ('household_obligation_update'); a confirmed record becomes a JUGAAD Important Date.\n` : ''}` : '';
+
     const simpleSystemPrompt = `You are Pandesh, the personal AI assistant for KarkeDikha (KKD). Assistant Name: Pandesh. Active model: ${selectedModel} via local Ollama provider (${apiBase}). Running on ${process.platform}. Current local time: ${new Date().toLocaleString('en-GB', { timeZone: localTimeZone, weekday: 'long', year: 'numeric', month: 'long', day: 'numeric', hour: '2-digit', minute: '2-digit' })} in time zone ${localTimeZone}. Answer only the user's most recent message; never repeat or re-deliver an earlier answer unless asked. Answer simple conversational questions directly and concisely. When asked what model you are running or what model is active, state that you are running on '${selectedModel}' via local Ollama. If the user asks you to perform an action, search emails or files, or access tools, offer to do so directly. Never expose secrets or perform destructive actions.`;
 
     let systemPrompt = simpleInteractive ? simpleSystemPrompt : `You are Pandesh, the personal AI assistant for KarkeDikha (KKD).
@@ -3301,52 +3371,12 @@ When the user asks to continue, resume, or check progress/updates, resume this w
 ${LATEST_REQUEST_AUTHORITATIVE}
 
 ${projectEvidence ? formatProjectEvidenceForModel(projectEvidence) : ''}
-PRINTING (STRICT RULES):
-- To see installed printers call 'list_printers'. To print a Windows test page call 'print_test_page' (it needs the operator's approval). Never use 'run_checks' or any shell command to print, and never create a file to print a test page.
-- Report the print outcome exactly as the tool states it: accepted, completed, failed or unknown. Never claim paper came out.
-
 NAVIGATION & WORKFLOW (STRICT RULES):
 - There is NO "Artifacts tab" in the interface. Never instruct the user to check an "Artifacts tab".
 - Approvals, artifacts, and execution progress appear directly inside "Conversations" or in "Tasks & Missions".
 - When an approval is required, inform the user to approve or deny the action directly from the prompt approval card or in Tasks & Missions.
 
-LOCAL MODEL RUNTIME & PROVIDER (STRICT RULES):
-- Active Model: ${selectedModel}
-- Local Model Provider: Ollama (${apiBase})
-- When asked which model is running, what model is active, or what runtime is powering you, report that you are running on '${selectedModel}' via the configured local Ollama provider at ${apiBase}.
-- When asked what models are available, installed, or running in Ollama, call 'system_list_models' to query the local provider. Never guess or tell the user to run 'ollama list' themselves — query the provider with 'system_list_models' and report the verified result.
-
-WEATHER & ENVIRONMENT (STRICT RULES):
-- For weather conditions or forecasts, call 'get_weather' with the location name (e.g. 'Paris', 'Tokyo', 'London'). It is read-only and queries current forecast data. Never guess or fabricate weather without calling 'get_weather'.
-
-SYSTEM & DISK ANALYSIS (STRICT RULES):
-- For disk, storage, or hardware queries, use fast, bounded telemetry ('system_hardware_telemetry').
-- For comprehensive system diagnostics ("run diagnostics on this PC", "diagnose my computer", "what is my system health"), call 'run_system_diagnostics'.
-- NEVER run expensive recursive directory scans across drive roots or repeated PowerShell search loops.
-- NEVER perform automatic cleanup, file deletion, file movement, hibernation modifications, or system changes without explicit user approval.
-
-SETUP & HEALTH (STRICT RULES):
-- When the user says "check my setup", "diagnose my setup", or asks for service/model/GPU/tool/connection health, call 'run_system_diagnostics', 'port_check_setup', and the connector status tools, then summarize results truthfully.
-- Report any service as not connected or not configured rather than guessing.
-
-COMPUTER, BROWSER, WATCHES AND SPECIALIST SKILLS (STRICT RULES):
-- 'desktop_screenshot' captures the real Windows desktop and returns the file path, size and SHA-256. 'desktop_windows_list' lists the visible top-level windows. Both are read-only.
-- 'inspect_page' opens a real page in the managed browser: a workspace-relative HTML path, or a live URL on this machine (http://127.0.0.1:<port>/...). It acts on a running page, so it needs the operator's approval. Quote only what the tool returned; never describe a page you did not open.
-- 'scout_add_watch' creates a durable watch that Core then checks on its own schedule; 'scout_list_watches', 'scout_run_watch' and 'scout_run_all' read and check them. Only add a watch when the user asked for one, and never claim a watch is running without a tool result.
-- 'hermes_list_skills' lists the skills installed in the local Hermes agent; 'hermes_invoke_skill' runs one of them and returns Hermes' own result. Never invent a skill name — list the skills first, then invoke one of the names that were listed.
-- When a tool result says NOT DONE, NOT AVAILABLE or that it was declined, say so plainly. Never present a tool's failure as a success, and never invent a file path, a number or a quote.
-
-PC ORGANIZATION, ROUTINES, HOUSEHOLD & JUGAAD (STRICT RULES):
-- "What tools/software/models does this PC have?" → 'pc_capability_inventory'. If a task needs something missing, name the utility it recommends and offer 'pc_install_utility' (the user approves the exact package); never refuse just because a tool is missing.
-- "Analyze/organize my PC, Downloads, Documents, tax files…" → 'pc_organize_scan' with the folders the user named (never a whole drive). Present its plan as it is: hierarchy, exact moves, what stays, project/model folders kept whole, duplicates, temporary files, space and risks. Nothing moves until the user approves 'pc_organize_apply'; offer saveRules when they want it kept organized. 'pc_organize_undo' reverses a plan. Pandesh never deletes files.
-- "Every week…/every morning…/monitor…" → 'routine_create' (folder_cleanup, obligations_check or expiry_watch) with the time, weekdays and folders the user asked for; 'routine_list' shows schedule, authority and history; 'routine_control' pauses, resumes, edits, runs now or cancels.
-- Bills, invoices, subscriptions, renewals, contracts, warranties → 'household_scan_obligations' (sources ["gmail"] and/or folders), then 'household_obligations' to list (withinDays 31 for "next month"). An invoice email does NOT prove a bill is unpaid: report payment status exactly as the tool gives it (requested, due soon, possibly overdue, confirmed, unknown). Only the user confirms a record ('household_obligation_update'); a confirmed record becomes a JUGAAD Important Date.
-- Scans read names, sizes, dates and file types only. Reading the TEXT inside documents is a separate decision of the user's: only when the user asks for their documents to be read (or you ask and they say yes) use 'household_allow_document_reading' for those exact folders. Never request it on your own as part of another task; when a scan says document text was not read, say so and offer it.
-- WhatsApp: there is no permitted way to read personal WhatsApp chats; say so instead of trying.
-- JUGAAD phone: 'jugaad_status' shows pairing and sync; 'jugaad_send' sends a briefing, a confirmed obligation or a short result summary. Files and credentials never go to the phone. Pairing is done by the user in the Pandesh app (Home → Household).
-- "Make a promo video from these pictures" → 'media_create_video'. Report the tools that ran, the output path and its verification exactly as returned.
-- "Find something profitable I can make with my tools" → 'wish_production_options', then the Wish-to-Reality tools. Never contact customers, publish, charge or buy without the user's explicit authorization.
-- Never pay, cancel a subscription, reply to mail or send a message on your own.
+${printingPromptSection}${modelPromptSection}${weatherPromptSection}${systemAnalysisPromptSection}${setupHealthPromptSection}${specialistPromptSection}${pcOrgPromptSection}
 
 WORKSPACE & CONTEXT INTEGRITY (STRICT RULES):
 - Application Installation Directory: ${appInstallDir} (internal process location only, NOT the user's workspace)
@@ -3764,7 +3794,7 @@ TRUTHFULNESS & BEHAVIORAL PROTOCOL:
         const msg = messages[i];
         if (msg.role !== 'assistant') continue;
         const text = (msg.content || []).filter((c: any) => c.type === 'text').map((c: any) => c.text).join('\n').trim();
-        if (text) return text;
+        if (text && text.length > 1 && !/^I[.?!]?$/i.test(text)) return text;
       }
       return '';
     };
@@ -3808,13 +3838,15 @@ TRUTHFULNESS & BEHAVIORAL PROTOCOL:
       try {
         const bridge = ctx.capabilities;
         if (bridge) {
-          const hasModelTool = bridge.definitions.some((d) => d.name === 'system_list_models');
-          if (hasModelTool) {
-            const outcome = await bridge.dispatch('system_list_models', {});
+          const hasOllamaTool = bridge.definitions.some((d) => d.name === 'ollama_list_models');
+          const hasSystemTool = bridge.definitions.some((d) => d.name === 'system_list_models');
+          const toolToUse = hasOllamaTool ? 'ollama_list_models' : hasSystemTool ? 'system_list_models' : null;
+          if (toolToUse) {
+            const outcome = await bridge.dispatch(toolToUse, {});
             if (outcome.outcome === 'executed') {
               const evidence = outcome.toolInvocation.evidence as Record<string, unknown>;
               const output = typeof evidence.output === 'string' ? evidence.output : JSON.stringify(evidence);
-              toolCallsRecorded.push({ tool: 'system_list_models', status: 'completed', result: output });
+              toolCallsRecorded.push({ tool: toolToUse, status: 'completed', result: output });
               if (outcome.toolInvocation.status === 'succeeded') {
                 finalReply = `${output}\n\nActive model in this session: ${selectedModel}`;
               } else {
@@ -3831,7 +3863,7 @@ TRUTHFULNESS & BEHAVIORAL PROTOCOL:
     }
 
     if (toolCallsRecorded.length === 0 && isWeatherRequest(ctx.currentMessage ?? prompt) && !signal?.aborted) {
-      const loc = extractWeatherLocation(ctx.currentMessage ?? prompt);
+      const loc = resolveWeatherLocation(ctx.currentMessage ?? prompt);
       if (loc) {
         safeRecordRuntimeEvent(db, broadcaster, attemptId, 'weather_fallback_invoked', { location: loc }, actor);
         try {
@@ -3854,6 +3886,45 @@ TRUTHFULNESS & BEHAVIORAL PROTOCOL:
           }
         } catch (err: any) {
           safeRecordRuntimeEvent(db, broadcaster, attemptId, 'weather_fallback_failed', { error: err?.message ?? String(err) }, actor);
+        }
+      }
+    }
+
+    if (toolCallsRecorded.length === 0 && !signal?.aborted) {
+      const userText = ctx.currentMessage ?? prompt;
+      if (/\b(?:remember\s+(?:this|that|about me)|keep\s+(?:track|in mind)|don't forget\s+that|save\s+(?:this|my\s+preference))\b/i.test(userText)) {
+        safeRecordRuntimeEvent(db, broadcaster, attemptId, 'memory_fallback_invoked', { type: 'remember' }, actor);
+        try {
+          const fact = userText.replace(/^.*?\b(?:remember\s+(?:this|that|about me(?:\s+that)?)|keep\s+in\s+mind(?:\s+that)?|don't forget\s+that|save\s+(?:this|my\s+preference(?:\s+that)?))(?:\s*[:,\-]\s*|\s+)/i, '').trim();
+          if (fact) {
+            const memResult = await runMemoryTool('memory_remember', {
+              fact,
+              memoryType: 'preference',
+              scopeType: 'user',
+              scopeId: 'user_profile',
+              subject: 'user_fact',
+              predicate: 'preference_or_fact',
+              sensitivity: 'internal',
+            });
+            const textOut = memResult.content?.[0]?.text ?? '';
+            toolCallsRecorded.push({ tool: 'memory_remember', status: memResult.isError ? 'failed' : 'completed', result: textOut });
+            finalReply = textOut || `I have recorded that to memory: "${fact}"`;
+          }
+        } catch (err: any) {
+          safeRecordRuntimeEvent(db, broadcaster, attemptId, 'memory_fallback_failed', { error: err?.message ?? String(err) }, actor);
+        }
+      } else if (/\b(?:what\s+(?:is\s+my|do\s+you\s+remember|did\s+I\s+tell\s+you)|recall\s+(?:my|what)|do\s+you\s+know\s+my)\b/i.test(userText)) {
+        safeRecordRuntimeEvent(db, broadcaster, attemptId, 'memory_fallback_invoked', { type: 'recall' }, actor);
+        try {
+          const memResult = await runMemoryTool('memory_recall', {
+            query: userText,
+            scopeType: 'user',
+          });
+          const textOut = memResult.content?.[0]?.text ?? '';
+          toolCallsRecorded.push({ tool: 'memory_recall', status: memResult.isError ? 'failed' : 'completed', result: textOut });
+          finalReply = textOut || 'I checked my memory but found no matching records.';
+        } catch (err: any) {
+          safeRecordRuntimeEvent(db, broadcaster, attemptId, 'memory_fallback_failed', { error: err?.message ?? String(err) }, actor);
         }
       }
     }
@@ -3925,9 +3996,20 @@ TRUTHFULNESS & BEHAVIORAL PROTOCOL:
       }
     }
 
-    if (!finalReply) {
-      finalReply = describeUnansweredTurn(toolCallsRecorded, Boolean(signal?.aborted));
+    let isUnanswered = false;
+    const isStubReply = !finalReply || finalReply.trim().length <= 1 || /^I[.?!]?$/i.test(finalReply.trim());
+    if (isStubReply) {
+      const successfulTools = toolCallsRecorded.filter((t) => t.status === 'completed' && t.result);
+      if (successfulTools.length > 0) {
+        finalReply = successfulTools.map((t) => t.result).join('\n\n');
+      } else {
+        finalReply = describeUnansweredTurn(toolCallsRecorded, Boolean(signal?.aborted));
+        isUnanswered = true;
+      }
     }
+
+    // Unescape markdown link colons (e.g. "https\://" -> "https://")
+    finalReply = finalReply.replace(/https?\\:\/\//g, (m) => m.replace('\\:', ':'));
 
     // Phone delivery is verified, not narrated: the link to the real shared file is attached by Core, and a claim of
     // phone delivery with no successful send_to_phone this turn is corrected rather than left standing.
@@ -3970,6 +4052,9 @@ TRUTHFULNESS & BEHAVIORAL PROTOCOL:
     // the model's own sentence. A turn that said "done" without a tool
     // behind it is not a completed task.
     let turnOutcome = evaluateTurnOutcome(toolCallsRecorded);
+    if (isUnanswered && turnOutcome.verdict === 'conversational') {
+      turnOutcome = { verdict: 'unverified', reason: 'The model completed the turn without generating a reply', performed: [], refused: [], failed: ['reply_generation'] };
+    }
     if (projectEvidence && turnOutcome.verdict === 'conversational') {
       // The model producing text is execution completion. The question counts as answered and verified only because
       // Core read the project's files and the reply is grounded in them.
@@ -4028,7 +4113,7 @@ TRUTHFULNESS & BEHAVIORAL PROTOCOL:
       try {
         mutateWithBroadcast(db, broadcaster, () => {
           completeModelInvocation(db, modelInvocationRecord.id, {
-            status: 'succeeded',
+            status: isUnanswered ? 'failed' : 'succeeded',
             actualProvider: 'ollama',
             actualModel: selectedModel,
             usageMetadata: diagnostics as Record<string, unknown>,
@@ -4059,8 +4144,8 @@ TRUTHFULNESS & BEHAVIORAL PROTOCOL:
           eventType: 'final_verification_recorded',
           actor,
           metadata: {
-            // The truth: a turn whose requested work was refused did not pass.
-            passed: turnOutcome.verdict !== 'unverified',
+            // The truth: a turn whose requested work was refused or unanswered did not pass.
+            passed: turnOutcome.verdict !== 'unverified' && !isUnanswered,
             verdict: turnOutcome.verdict,
             reason: turnOutcome.reason,
             performed: turnOutcome.performed,

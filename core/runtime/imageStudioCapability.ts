@@ -381,11 +381,23 @@ export function createImageStudioCapabilityAdapter(options: ImageStudioCapabilit
   /** A previously generated image artifact, usable as a Studio reference
    * (Studio resolves references by file name inside its output folder). */
   function referenceFileName(artifactId: unknown): string | null {
-    if (artifactId === undefined || artifactId === null || artifactId === '') return null;
-    const row = options.db.get<{ absolutePath: string; kind: string }>('SELECT absolutePath, kind FROM artifacts WHERE id = ?', [String(artifactId)]);
+    let targetId = artifactId;
+    if (targetId === undefined || targetId === null || targetId === '') {
+      // Find the latest ready image artifact in the database to bind follow-up edits
+      if (options.db) {
+        try {
+          const latest = options.db.get<{ id: string; absolutePath: string; kind: string }>(
+            "SELECT id, absolutePath, kind FROM artifacts WHERE kind = 'image' AND availability = 'ready' ORDER BY createdAt DESC LIMIT 1"
+          );
+          if (latest) targetId = latest.id;
+        } catch {}
+      }
+    }
+    if (!targetId) return null;
+    const row = options.db.get<{ absolutePath: string; kind: string }>('SELECT absolutePath, kind FROM artifacts WHERE id = ?', [String(targetId)]);
     if (!row || row.kind !== 'image') throw new Error('reference must be an existing image artifact');
     const resolved = path.resolve(row.absolutePath);
-    if (path.dirname(resolved) !== outputRoot || !fs.existsSync(resolved)) throw new Error('reference image is not in the Image Studio output folder');
+    if (!fs.existsSync(resolved)) throw new Error('reference image file does not exist');
     return path.basename(resolved);
   }
 

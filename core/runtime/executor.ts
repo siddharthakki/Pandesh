@@ -4855,7 +4855,7 @@ export class RuntimeExecutor {
       signal,
       connectors: this.buildPiConnectorBridge(request.conversationId || attemptId, request.clientId, workspaceRoot, signal, request.currentMessage, attemptId),
       memory: this.buildPiMemoryBridge(request.conversationId || attemptId, request.clientId, workspaceRoot, signal),
-      capabilities: this.buildPiCapabilityBridge(request.conversationId || attemptId, request.clientId, workspaceRoot, signal, attemptId),
+      capabilities: this.buildPiCapabilityBridge(request.conversationId || attemptId, request.clientId, workspaceRoot, signal, attemptId, request.currentMessage),
     });
   }
 
@@ -4878,6 +4878,7 @@ export class RuntimeExecutor {
     workspaceRoot: string | undefined,
     signal: AbortSignal,
     ownerAttemptId: string,
+    requestText?: string,
   ): PiCapabilityBridge | undefined {
     const registry = this.governedCapabilities;
     if (!registry) return undefined;
@@ -4896,6 +4897,7 @@ export class RuntimeExecutor {
       ownerAttemptId,
       excludeToolNames,
       signal,
+      requestText,
     });
   }
 

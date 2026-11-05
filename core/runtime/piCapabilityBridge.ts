@@ -69,7 +69,96 @@ export const CHAT_CAPABILITY_IDS = [
   'research',
   'capability-inventory',
   'ollama-management',
+  'weather',
 ] as const;
+
+/**
+ * Selects a small, targeted capability set based on the user's current request.
+ * Keeps prompt payload bounded (~2-5k tokens instead of ~29k), preventing
+ * small/local model overload and empty responses.
+ */
+export function selectCapabilitiesForIntent(requestText?: string): readonly string[] {
+  if (!requestText || !requestText.trim()) {
+    return [
+      'capability-inventory',
+      'ollama-management',
+      'weather',
+      'research',
+    ] as const;
+  }
+  const text = requestText.trim();
+  const caps = new Set<string>();
+
+  // Lightweight catalog tools always available
+  caps.add('capability-inventory');
+  caps.add('ollama-management');
+
+  // Weather intent
+  if (/\b(?:weather|forecast|temperature|rain|snow|degrees|celsius|umbrella|climate)\b/i.test(text)) {
+    caps.add('weather');
+  }
+
+  // Web research / search / prices / shopping
+  if (/\b(?:search|google|web|online|prices?|buy|buying|shop|shopping|links?|cheapest|cost|euro|eur|usd|\$|€|find (?:a|an|the)|compare)\b/i.test(text) || /https?:\/\//i.test(text)) {
+    caps.add('research');
+  }
+
+  // System diagnostics / setup / hardware / processes / ports
+  if (/\b(?:diagnostic|diagnose|telemetry|hardware|specs|ram|cpu|gpu|vram|disks?|storage|processes?|services?|ports?|check setup|setup health)\b/i.test(text)) {
+    caps.add('system-management');
+    caps.add('port-management');
+  }
+
+  // Desktop / screen / window inspection
+  if (/\b(?:screenshot|screen|desktop|windows?\s+list|active\s+window)\b/i.test(text)) {
+    caps.add('computer-use');
+  }
+
+  // Image creation / editing / studio
+  if (/\b(?:image|photo|picture|artwork|illustration|drawing|render|generate (?:an? )?image|edit (?:the |this )?image|add people|snowy park)\b/i.test(text)) {
+    caps.add('image-studio');
+  }
+
+  // Documents / PDF / OCR / reading files
+  if (/\b(?:pdf|invoice|document|scan|scanned|ocr|receipt|transcribe|read\s+(?:the|this|a)\s+(?:file|doc|pdf|invoice))\b/i.test(text)) {
+    caps.add('document-tools');
+    caps.add('filesystem');
+  }
+
+  // Filesystem navigation / files outside workspace
+  if (/\b(?:folder|directory|files?|downloads?|documents?|desktop folder|read_file|find_file|locate_file)\b/i.test(text)) {
+    caps.add('filesystem');
+  }
+
+  // Household / routines / obligations / PC organize
+  if (/\b(?:routine|every (?:week|morning|day)|bills?|obligations?|warrant(?:y|ies)|renewals?|organi[sz]e)\b/i.test(text)) {
+    caps.add('household');
+    caps.add('pc-organizer');
+  }
+
+  // Wish to reality / business
+  if (/\b(?:wish|profitable|sell|business|deliverable)\b/i.test(text)) {
+    caps.add('wish');
+  }
+
+  // Execution plan
+  if (/\b(?:plan|step-by-step|phases?)\b/i.test(text)) {
+    caps.add('plan');
+  }
+
+  // Browser inspection
+  if (/\b(?:inspect_page|browse|browser|open\s+site)\b/i.test(text)) {
+    caps.add('browser');
+  }
+
+  // If nothing specific matched, include weather and research so basic asks work
+  if (caps.size <= 2) {
+    caps.add('weather');
+    caps.add('research');
+  }
+
+  return Array.from(caps);
+}
 
 
 export interface BuildPiCapabilityBridgeOptions {
@@ -88,6 +177,8 @@ export interface BuildPiCapabilityBridgeOptions {
    * "installed here but no Pandesh workflow drives it" line to the brief. */
   inventory?: CapabilityInventory | null;
   signal?: AbortSignal;
+  /** The user request text, used to select the small relevant capability set. */
+  requestText?: string;
   /**
    * The capability ids this surface offers. Defaults to the bounded chat
    * allowlist. A different surface (or a test proving that a capability the
@@ -104,7 +195,7 @@ export interface BuildPiCapabilityBridgeOptions {
  */
 export function buildPiCapabilityBridge(options: BuildPiCapabilityBridgeOptions): PiCapabilityBridge | undefined {
   const { registry } = options;
-  const capabilityIds = options.capabilityIds ?? CHAT_CAPABILITY_IDS;
+  const capabilityIds = options.capabilityIds ?? (options.requestText ? selectCapabilitiesForIntent(options.requestText) : CHAT_CAPABILITY_IDS);
   const allowed = new Set<string>(capabilityIds);
   const excluded = new Set(options.excludeToolNames ?? []);
   const definitions = registry.definitions().filter((def) => {

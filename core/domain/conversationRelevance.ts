@@ -101,6 +101,8 @@ export const MAX_RELEVANT_TURNS = 10;
 export const MAX_NEW_TOPIC_TURNS = 4;
 export const MAX_TURN_CHARS = 1_500;
 
+export const ANAPHORIC_FOLLOW_UP_RE = /\b(it|that|this|the same|tomorrow|evening|tonight|yesterday|cheapest|links?|prices?|another|second|other|next|more|add|remove|also|too|instead)\b/i;
+
 /**
  * Bounds the prior turns offered to the model. Relevant requests (resume, or sharing subject
  * words with recent history) keep up to MAX_RELEVANT_TURNS; a new topic keeps only the last
@@ -110,7 +112,7 @@ export const MAX_TURN_CHARS = 1_500;
 export function boundConversationContext<T extends ContextTurn>(turns: readonly T[], requestText: string): BoundedContext<T> {
   const request = contentWords(requestText);
   const recent = turns.slice(-MAX_RELEVANT_TURNS);
-  const related = isExplicitResumeRequest(requestText) || recent.some((t) => {
+  const related = isExplicitResumeRequest(requestText) || ANAPHORIC_FOLLOW_UP_RE.test(requestText) || recent.some((t) => {
     if (t.role !== 'user') return false;
     const words = contentWords(t.content);
     for (const w of request) if (words.has(w)) return true;

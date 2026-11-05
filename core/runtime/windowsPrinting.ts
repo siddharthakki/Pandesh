@@ -98,9 +98,28 @@ export function resolvePrinter(printers: readonly InstalledPrinter[], requestTex
     return { error: `No installed printer is named "${explicitName}".`, candidates: names };
   }
   const text = requestText.toLowerCase();
+  const exactMention = printers.filter((p) => text.includes(p.name.toLowerCase()));
+  if (exactMention.length === 1) return { printer: exactMention[0] };
+  if (exactMention.length > 1) {
+    exactMention.sort((a, b) => b.name.length - a.name.length);
+    if (exactMention[0].name.length > exactMention[1].name.length) {
+      return { printer: exactMention[0] };
+    }
+  }
+
   const mentioned = printers.filter((p) => p.name.toLowerCase().split(/[^a-z0-9]+/).some((tok) => tok.length >= 3 && !GENERIC_NAME_TOKENS.has(tok) && new RegExp(String.raw`\b${tok}\b`).test(text)));
   if (mentioned.length === 1) return { printer: mentioned[0] };
-  if (mentioned.length > 1) return { error: 'More than one installed printer matches the request.', candidates: mentioned.map((p) => p.name) };
+  if (mentioned.length > 1) {
+    const scored = mentioned.map((p) => {
+      const toks = p.name.toLowerCase().split(/[^a-z0-9]+/).filter((tok) => tok.length >= 3 && !GENERIC_NAME_TOKENS.has(tok));
+      const score = toks.filter((tok) => new RegExp(String.raw`\b${tok}\b`).test(text)).length;
+      return { printer: p, score, nameLen: p.name.length };
+    }).sort((a, b) => b.score - a.score || b.nameLen - a.nameLen);
+    if (scored[0].score > scored[1].score) {
+      return { printer: scored[0].printer };
+    }
+    return { error: 'More than one installed printer matches the request.', candidates: mentioned.map((p) => p.name) };
+  }
   if (printers.length === 1) return { printer: printers[0] };
   return { error: 'The request does not identify which installed printer to use.', candidates: names };
 }
