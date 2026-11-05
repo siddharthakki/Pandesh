@@ -4017,14 +4017,21 @@ ${filesPromptSection}${webResearchPromptSection}${wishesPromptSection}${emailCal
 
     if (toolCallsRecorded.length === 0 && !signal?.aborted) {
       const userText = ctx.currentMessage ?? prompt;
-      if (/\b(?:remembers+(?:this|that|about me)|keeps+(?:track|in mind)|don't forgets+that|saves+(?:this|mys+preference))\b/i.test(userText)) {
+      const isRememberIntent = !/^(?:what|do\s+you|can\s+you|did\s+you|have\s+you|will\s+you|tell\s+me)\s+.*?\bremember\b/i.test(userText)
+        && !/\bremember\s+to\b/i.test(userText)
+        && /\b(?:remember(?:\s+(?:that|this|about\s+me))?|keep\s+in\s+mind|don't\s+forget|save\s+(?:this|that|my\s+preference)?\s*(?:to\s+memory)?)\b/i.test(userText);
+      const isRecallIntent = /\b(?:memory[_\s]+recall|recall(?:\s+memories|\s+memory|\s+what|\s+my|\s+the|\s+about)?|what\s+(?:is|was|are|were|do\s+you\s+remember|did\s+I\s+(?:tell|say|mention))|do\s+you\s+(?:remember|know|have\s+anything\s+in\s+memory)|stored\s+in\s+(?:your\s+)?memory)\b/i.test(userText);
+
+      if (isRememberIntent) {
         safeRecordRuntimeEvent(db, broadcaster, attemptId, 'memory_fallback_invoked', { type: 'remember' }, actor);
         try {
-          const fact = userText.replace(/^.*?\b(?:remember\s+(?:this|that|about me(?:\s+that)?)|keeps+in\s+mind(?:\s+that)?|don't forget\s+that|save\s+(?:this|my\s+preference(?:\s+that)?))(?:\s*[:,-]\s*|\s+)/i, '').trim();
+          const fact = userText
+            .replace(/^.*?\b(?:remember(?:\s+(?:that|this|about\s+me(?:\s+that)?))?|keep\s+in\s+mind(?:\s+that)?|don't\s+forget(?:\s+that)?|save\s+(?:this|that|my\s+preference)?\s*(?:to\s+memory)?)\s*[:,\-]?\s*/i, '')
+            .trim();
           if (fact) {
             const memResult = await runMemoryTool('memory_remember', {
-              fact,
-              memoryType: 'preference',
+              value: fact,
+              memoryType: 'user',
               scopeType: 'user',
               scopeId: 'user_profile',
               subject: 'user_fact',
@@ -4045,11 +4052,19 @@ ${filesPromptSection}${webResearchPromptSection}${wishesPromptSection}${emailCal
         } catch (err: any) {
           safeRecordRuntimeEvent(db, broadcaster, attemptId, 'memory_fallback_failed', { error: err?.message ?? String(err) }, actor);
         }
-      } else if (/\b(?:whats+(?:iss+my|dos+yous+remember|dids+Is+tells+you)|recalls+(?:my|what)|dos+yous+knows+my)\b/i.test(userText)) {
+      } else if (isRecallIntent) {
         safeRecordRuntimeEvent(db, broadcaster, attemptId, 'memory_fallback_invoked', { type: 'recall' }, actor);
         try {
+          const isGenericRecall = /^(?:what\s+do\s+you\s+remember\??|recall(?:\s+memories|\s+memory)?\??|memory[_\s]+recall|what(?:\s+is|\s+was)?\s+stored\s+in\s+(?:your\s+)?memory\??)$/i.test(userText.trim());
+          let recallQuery = '';
+          if (!isGenericRecall) {
+            recallQuery = userText
+              .replace(/^.*?\b(?:what\s+do\s+you\s+remember\s+about|do\s+you\s+remember\s+(?:what|about)?|what\s+did\s+I\s+(?:tell|say|mention)(?:\s+(?:to\s+)?you)?\s+about|recall(?:\s+my|\s+the|\s*:)?|what\s+(?:is|was)\s+(?:the\s+name\s+of\s+)?(?:my\s+)?|do\s+you\s+know\s+(?:what\s+)?(?:my\s+)?|in\s+memory\s+about)\s*/i, '')
+              .replace(/[?.,!]+$/, '')
+              .trim();
+          }
           const memResult = await runMemoryTool('memory_recall', {
-            query: userText,
+            ...(recallQuery ? { query: recallQuery } : {}),
             scopeType: 'user',
           });
           const textOut = memResult.content?.[0]?.text ?? '';

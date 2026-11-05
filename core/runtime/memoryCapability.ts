@@ -264,10 +264,13 @@ export function createMemoryCapabilityAdapter(options: MemoryCapabilityOptions):
           const rawValue = asString(args.value || args.fact || args.text || args.content || '');
           const rawSubject = asString(args.subject || 'user');
           const rawPredicate = asString(args.predicate || 'preference_or_fact');
-          const rawScopeType = (asString(args.scopeType) || 'user') as never;
+          const requestedScopeType = asString(args.scopeType);
+          const rawScopeType = ((MEMORY_SCOPE_TYPES as readonly string[]).includes(requestedScopeType) ? requestedScopeType : 'user') as never;
           const rawScopeId = asString(args.scopeId || 'user_profile');
-          const rawMemoryType = (asString(args.memoryType) || 'preference') as never;
-          const rawSensitivity = (asString(args.sensitivity) || 'internal') as never;
+          const requestedMemoryType = asString(args.memoryType);
+          const rawMemoryType = ((MEMORY_TYPES as readonly string[]).includes(requestedMemoryType) ? requestedMemoryType : 'user') as never;
+          const requestedSensitivity = asString(args.sensitivity);
+          const rawSensitivity = ((MEMORY_SENSITIVITIES as readonly string[]).includes(requestedSensitivity) ? requestedSensitivity : 'internal') as never;
           const result = rememberMemory(db, {
             memoryType: rawMemoryType,
             scopeType: rawScopeType,
