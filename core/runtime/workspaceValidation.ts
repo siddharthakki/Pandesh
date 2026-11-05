@@ -47,6 +47,18 @@ export function validationGateTier(category: ValidationGateCategory): Validation
   return category === 'unit_test' || category === 'lint' ? 'full' : 'lightweight';
 }
 
+/**
+ * The tier the gates that ACTUALLY ran belong to.
+ *
+ * The requested tier can be substituted: a workspace that declares no cheap
+ * gate runs the full tier instead. A record of that run must say what ran,
+ * not what was asked for — otherwise a full-tier result is filed as a
+ * lightweight one and the completion decision cannot find it.
+ */
+export function effectiveValidationTier(categories: readonly ValidationGateCategory[]): ValidationGateTier {
+  return categories.some((category) => validationGateTier(category) === 'full') ? 'full' : 'lightweight';
+}
+
 export interface ValidationGate {
   id: string;
   category: ValidationGateCategory;

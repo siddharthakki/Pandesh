@@ -63,17 +63,59 @@ that has nothing to do with the next edit.
 | tier | gates | when |
 | --- | --- | --- |
 | `lightweight` | syntax, compile, typecheck | after every approved mutation |
-| `full` | unit test, lint | once, at completion |
+| `full` | unit test, lint | at completion, against the FINAL workspace state |
 
 The full tier runs at completion (`runFinalFullValidation` in the executor),
 and a failure there is fed back to the model as ONE bounded repair turn
 instead of being swallowed by a "Completed" answer. A workspace with no
-cheap gate still gets validated — the full tier runs, but only the first
-time; the later edits say so.
+cheap gate still gets validated — the full tier is SUBSTITUTED for the
+missing cheap one after an edit, and the completion run still covers the
+whole full gate set.
 
 The lightweight tier's failure is fed back with an explicit directive
 ("the failing command's output above is the evidence"), so the next edit is
 informed rather than blind.
+
+### 2a. The full tier must describe the workspace the task ENDS on
+
+**The problem.** The full tier is evidence about ONE revision of the
+workspace. The first version of the gate asked a different question: "has a
+full-tier validation EVER run on this attempt?" That is not the same
+question, and the difference is the whole point:
+
+* a full tier that ran BEFORE the last edit describes different bytes, so
+  it cannot report the state the task ends on;
+* a full tier that FAILED and was then repaired was still counted as "the
+  full tier ran", so the repair edit was never validated against the
+  expensive gate, and the task was reported as done on a result that no
+  longer described the workspace.
+
+**The fix.** The workspace has a REVISION
+(`core/runtime/validationFreshness.ts`): the number of workspace-CHANGING
+invocations that succeeded on the attempt — an approved `propose_*` write
+that landed, or a shell command that demonstrably changes files. A read, a
+refused write, a validation-only command and a write that was already
+applied change nothing and do not move it. The revision is derived from the
+recorded invocations, so it is the same number before and after a restart.
+
+Every validation records the revision it ran against. At completion:
+
+* a recorded full tier from an EARLIER revision is STALE — the tier runs
+  again against the state the task ends on;
+* a recorded full tier from the CURRENT revision is reused — the suite is
+  never re-run without a code change to justify it, and a repair turn that
+  changes nothing does not pay for the suite twice;
+* a full tier that still fails after the bounded repair turn FAILS the
+  attempt. "Completed" is never reported on a stale or failing result.
+
+A workspace that declares no cheap gate substitutes the full tier after an
+edit, and that substitute runs a SINGLE gate: it is evidence about the
+current revision, but not the whole full tier, so it cannot stand in for
+the completion run — which covers every full gate the workspace declares.
+
+The recorded tier is the tier that RAN, not the tier that was requested, so
+a substituted lightweight request that ended up running the full tier is
+found by the completion decision instead of being filed as cheap evidence.
 
 ---
 
@@ -120,10 +162,12 @@ baseline), so the check survives a restart.
 
 **Uncertain outcomes are never replayed.** When the file matches neither the
 pre-image nor the result, the outcome of the earlier attempt is unknown.
-The write is refused with that explanation and the result category
-`mutation_outcome_uncertain`. The Extension Host's existing
-`mutationOutcomeUncertain` behaviour (`src/agent/TaskRecovery.ts`) is
-untouched.
+The write is refused with that explanation — the refusal states that the
+earlier outcome is unknown, that it was therefore NOT repeated, and that
+nothing was written — and it carries the `write_stale_baseline` result
+category, the one Core uses for a proposal that no longer matches the bytes
+it was approved against. The Extension Host's existing `mutationOutcomeUncertain`
+behaviour (`src/agent/TaskRecovery.ts`) is untouched.
 
 **The approval flow is unchanged.** A proposal that is already satisfied
 still gets its approval card; the human still decides. Only the WRITE is a
@@ -166,14 +210,18 @@ default) Auto may pick another LOCAL model or nothing at all.
 | `core/test/processTreeTermination.test.ts` | the tree decision logic, without touching the OS |
 | `core/test/platform/ownedProcessTreeStop.platform.test.ts` | the REAL Windows tree: `cmd.exe`, the tool it started and that tool's child all die; an unrelated process survives |
 | `core/test/platform/windowsProcessTreeCancellation.platform.test.ts` | the Core path's real tree (repaired: it needed a real grant and an in-workspace fixture) |
-| `core/test/benchmarkImprovements.test.ts` | the bounded anchor context, the safe escape repair, the identical-failure tracker, the validation tiers, the context budget |
+| `core/test/platform/quotedCommandPath.platform.test.ts` | the REAL Windows quoting: a path with a SPACE runs through BOTH command paths, and the authorized command stays ONE shell program |
+| `core/test/benchmarkImprovements.test.ts` | the bounded anchor context, the safe escape repair, the identical-failure tracker, the validation tiers, the validation freshness rules, the context budget |
 | `core/test/benchmarkRealExecution.test.ts` | the REAL Core executor: edit-and-repair with the bounded context, and a change written once when it is proposed again |
+| `core/test/benchmarkValidationFreshness.test.ts` | the REAL Core executor: the full tier re-runs after a repair edit, a failing full tier is NOT a success, and the suite is not re-run without a code change |
+| `core/test/mutationReplayUncertainty.test.ts` | the REAL tool runner: a stale pre-image is refused, an uncertain outcome is refused and never replayed, an already-applied write is a no-op |
 
 Run them with:
 
 ```
 npm run test:platform:win32          # the real process trees
 npx vitest run core/test/benchmarkImprovements.test.ts core/test/benchmarkRealExecution.test.ts core/test/processTreeTermination.test.ts
+npx vitest run core/test/benchmarkValidationFreshness.test.ts core/test/mutationReplayUncertainty.test.ts
 ```
 
 ### Verification status at the time of writing
@@ -203,4 +251,32 @@ The pre-existing failures, unchanged by this work and confirmed on `main`:
   `src/test/suite/coreUnavailableMessaging.test.ts`,
   `src/test/suite/m34PandaIdentity.test.ts` — missing packaged assets and
   bundle-dependent behaviour.
+
+### Verification of the final correction (validation freshness)
+
+The table above is the state of the suites when this work was written. The
+final correction (section 2a) was verified with TARGETED checks only — the
+5,000+ existing tests were not re-run, because the correction touches the
+completion gate and nothing else:
+
+| check | result |
+| --- | --- |
+| `core/test/benchmarkImprovements.test.ts` | 32 passed (6 of them the freshness rules) |
+| `core/test/benchmarkRealExecution.test.ts` | 2 passed |
+| `core/test/benchmarkValidationFreshness.test.ts` | 3 passed (2 of them FAIL against the pre-correction executor) |
+| `core/test/saathProposalIntegrity.test.ts` | 23 passed |
+| `core/test/validationInvariantAndReplacementGuard.test.ts` | 20 passed |
+| `core/test/textEditProposal.test.ts` | 12 passed |
+| `core/test/jsSyntaxFloorAndClaims.test.ts` | 11 passed |
+| `core/test/processTreeTermination.test.ts` | 13 passed |
+| `core/test/mutationReplayUncertainty.test.ts` | 3 passed |
+| `core/test/executionEpochContinuation.test.ts`, `core/test/governedRuntimeInvariants.test.ts`, `core/test/m45LoopProgress.test.ts`, `core/test/m53ReadEvidence.test.ts`, `core/test/taskToolSurface.test.ts` | 72 passed |
+| `core/test/platform` | 6 passed (3 files) |
+| `tsc -p tsconfig.core.json --noEmit` | clean |
+| `tsc -p ./ --noEmit` | clean |
+
+The two failures that appear when the pre-correction executor is put back
+are the point of the correction: the full tier ran ONCE and its stale result
+was reused after the repair edit, and a failing full tier was reported as a
+completed task.
 

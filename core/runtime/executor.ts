@@ -60,12 +60,19 @@ import { reconcileExecutionClaims, withholdUnexecutedChangeClaims } from './exec
 import {
   discoverSyntaxGates,
   discoverValidationGates,
+  effectiveValidationTier,
   runWorkspaceValidation,
   validationGateTier,
   type ValidationCommandRunner,
   type ValidationGateTier,
-  type WorkspaceValidationOutcome,
 } from './workspaceValidation';
+import {
+  coversFullGateSet,
+  fullValidationCovers,
+  workspaceRevision,
+  type RecordedFullValidation,
+  type RecordedInvocation,
+} from './validationFreshness';
 import { isStaticHtmlPath, summarizeStaticHtmlCheck, validateStaticHtml } from './staticHtmlValidation';
 import { NARROW_READ_LINES, decideRead, isPinnedReadKey, normalizeReadPath, recordRead, refusedReadMessage, seedFromPack, splitLines, type ReadGuardResult } from './readEvidence';
 import type { GovernedCapabilityRegistry } from './governedCapability';
@@ -300,6 +307,32 @@ const REPOSITORY_CONTEXT_FRAMING: Readonly<Record<'baat_kar' | 'saath_kar', stri
  * real local models that explore with run_command before proposing. */
 
 /**
+ * The shell command a recorded invocation ran, when it ran one.
+ *
+ * A recorded invocation stores its arguments as JSON; an unreadable summary
+ * simply carries no command, which is the safe reading (nothing is assumed
+ * to have changed the workspace).
+ */
+function recordedCommand(argsSummary: string): string | undefined {
+  try {
+    const parsed = JSON.parse(argsSummary) as { command?: unknown };
+    return typeof parsed.command === 'string' ? parsed.command : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/** The result category a recorded invocation ended with, when it recorded one. */
+function recordedResultCategory(evidence: string): string | undefined {
+  try {
+    const parsed = JSON.parse(evidence) as { resultCategory?: unknown };
+    return typeof parsed.resultCategory === 'string' ? parsed.resultCategory : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
  * M55: whether the accepted objective is a change request. Routing only marks file modification as required for the
  * autonomous modes, so a Saath Kar "make a copy and refactor" request reached the loop with every mutation-completion
  * guard switched off and "Let me continue reading." was accepted as a final answer. The objective's own wording
@@ -312,6 +345,23 @@ function taskExpectsMutation(context: AttemptContextRecord, mutationPolicy: 'all
   if (conditionalMutationDirective(context.taskInput)) return false;
   return context.modelSelection?.requiredCapabilities.fileModification === true
     || hasAffirmativeMutationIntent(context.taskInput);
+}
+
+/**
+ * The FULL validation tier's verdict for the CURRENT workspace state.
+ *
+ * The tier is evidence about one revision of the workspace: when an edit
+ * lands after it ran, the result is stale and the tier runs again against
+ * the new state. `ran` says whether the gates were executed just now or a
+ * recorded result for this exact revision was reused.
+ */
+interface FinalFullValidation {
+  /** Whether the full gate set passed against the current workspace revision. */
+  passed: boolean;
+  /** The model/human-readable summary of what ran. */
+  summary: string;
+  /** True when the gates ran just now; false when a recorded result was reused. */
+  ran: boolean;
 }
 
 const MAX_TOOL_TURNS = 16;
@@ -1335,9 +1385,9 @@ export class RuntimeExecutor {
        AND json_extract(a.summary, '$.toolName') IN ('propose_file_change', 'propose_text_edit') AND t.status = 'succeeded' LIMIT 1`,
       [attemptId, attemptId],
     )) || hasExecutedMutatingCommand() || alreadyAppliedPaths().length > 0;
-    const correctionEvent = (eventType: string, reason: string) => this.mutate(() => recordRuntimeEvent(this.db, {
+    const correctionEvent = (eventType: string, reason: string, extra: Record<string, unknown> = {}) => this.mutate(() => recordRuntimeEvent(this.db, {
       domain: 'attempt', entityId: attemptId, eventType, actor: CORE_ACTOR,
-      metadata: { attemptId, reason }, resultingRevision: null,
+      metadata: { attemptId, reason, ...extra }, resultingRevision: null,
     }));
     let correctionUsed = Boolean(this.db.get(
       "SELECT id FROM runtime_events WHERE entityId = ? AND eventType = 'mutation_proposal_correction_started' LIMIT 1",
@@ -2003,16 +2053,35 @@ export class RuntimeExecutor {
               continue;
             }
           }
-          // M-benchmark P2: the FULL validation tier runs once, here, at
-          // completion — the expensive gate is what actually proves the task,
-          // so it does not belong after every intermediate edit. A failure is
-          // fed back to the model as one bounded repair turn instead of being
-          // swallowed by a "Completed" answer.
-          if (expectsMutation && !finalValidationRepairUsed) {
+          // M-benchmark P2: the FULL validation tier runs HERE, at
+          // completion, against the FINAL workspace state — the expensive
+          // gate is what actually proves the task, so it does not belong
+          // after every intermediate edit. It is evidence about ONE
+          // revision: a result recorded before the last edit is stale, so
+          // the tier runs again against the state the task ends on, and a
+          // recorded result that already covers this revision is reused
+          // rather than re-run without a code change.
+          //
+          // A failure is fed back to the model as ONE bounded repair turn
+          // instead of being swallowed by a "Completed" answer. If the tier
+          // still fails after that repair, the task is NOT complete: the
+          // attempt fails rather than reporting success on a stale result.
+          if (expectsMutation) {
             const finalValidation = await this.runFinalFullValidation({ attemptId, cwd, signal });
             if (finalValidation && !finalValidation.passed) {
+              if (finalValidationRepairUsed) {
+                const why = 'the full validation tier still fails against the final workspace state';
+                correctionEvent('final_validation_repair_exhausted', why);
+                closeLoopContinuation(this.db, attemptId);
+                this.appendAssistant(request.conversationId, `This task is NOT complete: ${why}.\n${finalValidation.summary}`.trim(), invocation.id, attemptId);
+                this.mutate(() => failAttempt(this.db, attemptId, { failureReason: `final validation failed: ${why}`, fenceToken, actor: CORE_ACTOR }));
+                return;
+              }
               finalValidationRepairUsed = true;
-              correctionEvent('final_validation_repair_started', 'The full validation tier failed at completion.');
+              correctionEvent('final_validation_repair_started', 'The full validation tier failed at completion.', {
+                gatesRanNow: finalValidation.ran,
+                summary: finalValidation.summary,
+              });
               messages.push({ role: 'assistant', content: result.content });
               messages.push({
                 role: 'system',
@@ -2965,6 +3034,9 @@ export class RuntimeExecutor {
     const allGates = tier === 'full'
       ? [...syntaxGates, ...gates.slice(0, MAX_FULL_VALIDATION_GATES)]
       : [...syntaxGates, ...gates.filter((gate) => validationGateTier(gate.category) === 'lightweight').slice(0, 1)];
+    // The revision this validation speaks about: the mutation that triggered
+    // it has already landed, so the workspace is already at this revision.
+    const revision = this.workspaceRevision(attemptId);
     const started = this.mutate(() => startToolInvocation(this.db, {
       attemptId,
       toolName: 'workspace_validation',
@@ -2973,13 +3045,21 @@ export class RuntimeExecutor {
     }));
     try {
       const outcome = await runWorkspaceValidation({ cwd, signal, gates, syntaxGates, runner: this.validationCommandRunner, tier });
+      // What RAN is what the record says — a substituted lightweight request
+      // that ended up running the full tier is a full-tier result, and the
+      // completion decision has to be able to find it.
+      const ranTier = effectiveValidationTier(outcome.results.map((result) => result.gate.category));
       this.mutate(() => completeToolInvocation(this.db, started.id, {
         status: outcome.passed ? 'succeeded' : 'failed',
         exitCode: outcome.results[0]?.exitCode ?? null,
         evidence: {
           output: outcome.summary,
           resultCategory: outcome.passed ? 'validation_passed' : 'validation_failed',
-          tier,
+          tier: ranTier,
+          requestedTier: tier,
+          tierSubstituted: outcome.tierSubstituted,
+          revision,
+          gates: outcome.results.map((result) => result.gate.command),
           normalizedArguments: { gates: outcome.results.map((result) => result.gate.command) },
         },
         actor: CORE_ACTOR,
@@ -3029,28 +3109,100 @@ export class RuntimeExecutor {
   }
 
   /**
-   * The FULL validation tier, run once at completion.
+   * The workspace revision this attempt is at: how many workspace-CHANGING
+   * invocations succeeded on it.
+   *
+   * Derived from the recorded invocations rather than from an in-memory
+   * counter, so it is the same number before and after a restart and it
+   * cannot drift from what actually happened to the files.
+   */
+  private workspaceRevision(attemptId: string): number {
+    const rows = this.db.all<{ toolName: string; status: string; argsSummary: string; evidence: string }>(
+      `SELECT toolName, status, argsSummary, evidence FROM tool_invocations
+       WHERE status = 'succeeded' AND (attemptId = ? OR id IN (
+         SELECT entityId FROM runtime_events WHERE eventType = 'capability_tool_invocation_completed' AND json_extract(metadata, '$.attemptId') = ?))`,
+      [attemptId, attemptId],
+    );
+    const invocations: RecordedInvocation[] = rows.map((row) => ({
+      toolName: row.toolName,
+      status: row.status,
+      command: recordedCommand(row.argsSummary),
+      resultCategory: recordedResultCategory(row.evidence),
+    }));
+    return workspaceRevision(invocations);
+  }
+
+  /**
+   * The recorded FULL-tier validation for this attempt, with the workspace
+   * revision and the gates it covered.
+   *
+   * The latest record wins: a later run of the same tier supersedes an
+   * earlier one, and only the latest can describe the current state.
+   */
+  private recordedFullValidation(attemptId: string): RecordedFullValidation | undefined {
+    const row = this.db.get<{ status: string; evidence: string }>(
+      `SELECT status, evidence FROM tool_invocations
+       WHERE attemptId = ? AND toolName = 'workspace_validation' AND json_extract(evidence, '$.tier') = 'full'
+       ORDER BY startedAt DESC, rowid DESC LIMIT 1`,
+      [attemptId],
+    );
+    if (!row) return undefined;
+    let evidence: { revision?: unknown; output?: unknown; gates?: unknown } = {};
+    try {
+      evidence = JSON.parse(row.evidence) as { revision?: unknown; output?: unknown; gates?: unknown };
+    } catch {
+      return undefined;
+    }
+    if (typeof evidence.revision !== 'number') return undefined;
+    const gates = Array.isArray(evidence.gates) ? evidence.gates.map((gate) => String(gate)) : [];
+    return {
+      revision: evidence.revision,
+      passed: row.status === 'succeeded',
+      summary: typeof evidence.output === 'string' ? evidence.output : '',
+      gates,
+    };
+  }
+
+  /**
+   * The FULL validation tier, run against the FINAL workspace state.
    *
    * The expensive gate (the whole test suite) is what actually proves the
    * task, so it runs when the model is about to declare the work done — not
-   * after every intermediate edit. Its failure is fed back to the model as a
-   * repair turn instead of being reported as a silent failure.
+   * after every intermediate edit.
+   *
+   * It is evidence about ONE revision of the workspace. When an edit lands
+   * after it ran, that result is STALE: it describes different bytes, so the
+   * tier runs again here against the state the task actually ends on. A
+   * recorded result is reused only when it covers the current revision AND
+   * ran the whole full gate set — the suite is never re-run without a code
+   * change to justify it.
+   *
+   * Its failure is fed back to the model as a bounded repair turn instead of
+   * being reported as a silent failure.
    */
   private async runFinalFullValidation(input: {
     attemptId: string;
     cwd: string;
     signal: AbortSignal;
-  }): Promise<WorkspaceValidationOutcome | undefined> {
+  }): Promise<FinalFullValidation | undefined> {
     const { attemptId, cwd, signal } = input;
     if (signal.aborted) return undefined;
     const gates = discoverValidationGates(cwd);
     const fullGates = gates.filter((gate) => validationGateTier(gate.category) === 'full');
     if (fullGates.length === 0) return undefined;
-    if (this.hasRunFullValidation(attemptId)) return undefined;
+    const expectedGates = fullGates.slice(0, MAX_FULL_VALIDATION_GATES).map((gate) => gate.command);
+    const revision = this.workspaceRevision(attemptId);
+    const recorded = this.recordedFullValidation(attemptId);
+    if (recorded && fullValidationCovers(recorded, revision) && coversFullGateSet(recorded, expectedGates)) {
+      // The recorded full-tier result already describes the workspace as it
+      // is now, gate for gate. Re-running it without a code change would only
+      // repeat the same answer.
+      return { passed: recorded.passed, summary: recorded.summary, ran: false };
+    }
     const started = this.mutate(() => startToolInvocation(this.db, {
       attemptId,
       toolName: 'workspace_validation',
-      argsSummary: { tier: 'full', gates: fullGates.slice(0, MAX_FULL_VALIDATION_GATES).map((gate) => gate.command) },
+      argsSummary: { tier: 'full', gates: expectedGates },
       actor: CORE_ACTOR,
     }));
     const outcome = await runWorkspaceValidation({
@@ -3063,6 +3215,8 @@ export class RuntimeExecutor {
         output: outcome.summary,
         resultCategory: outcome.passed ? 'validation_passed' : 'validation_failed',
         tier: 'full',
+        revision,
+        gates: outcome.results.map((result) => result.gate.command),
         normalizedArguments: { gates: outcome.results.map((result) => result.gate.command) },
       },
       actor: CORE_ACTOR,
@@ -3078,7 +3232,7 @@ export class RuntimeExecutor {
         })),
       }, `validation:${started.id}`);
     }
-    return outcome;
+    return { passed: outcome.passed, summary: outcome.summary, ran: true };
   }
 
   /** Formats one governed-capability dispatch outcome as the exact

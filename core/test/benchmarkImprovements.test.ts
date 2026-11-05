@@ -20,7 +20,12 @@ import {
   usableInputTokens,
   type ContextWindow,
 } from '../shared/contextBudget';
-import { validationGateTier, selectValidationGates, type ValidationGate } from '../runtime/workspaceValidation';
+import { validationGateTier, selectValidationGates, effectiveValidationTier, type ValidationGate } from '../runtime/workspaceValidation';
+import {
+  coversFullGateSet,
+  fullValidationCovers,
+  workspaceRevision,
+} from '../runtime/validationFreshness';
 
 describe('bounded anchor context (P3)', () => {
   const file = [
@@ -203,6 +208,50 @@ describe('validation tiers (P2)', () => {
     const selected = selectValidationGates(onlyExpensive, 'lightweight', 1);
     expect(selected.substituted).toBe(true);
     expect(selected.gates.map((gate) => gate.id)).toEqual(['test']);
+  });
+});
+
+describe('validation freshness (P2)', () => {
+  it('counts a landed write as a new workspace revision, and nothing else', () => {
+    const revision = workspaceRevision([
+      { toolName: 'read_file', status: 'succeeded' },
+      { toolName: 'propose_file_change', status: 'succeeded' },
+      { toolName: 'run_command', status: 'succeeded', command: 'npm test' },
+      { toolName: 'propose_text_edit', status: 'failed' },
+      { toolName: 'propose_text_edit', status: 'succeeded' },
+    ]);
+    // Only the two landed writes moved the workspace. A read, a validation-only
+    // command and a refused write changed nothing.
+    expect(revision).toBe(2);
+  });
+
+  it('counts a write that demonstrably changes files', () => {
+    expect(workspaceRevision([{ toolName: 'run_command', status: 'succeeded', command: 'del build.zip' }])).toBe(1);
+  });
+
+  it('does not move the revision for a write that was already applied', () => {
+    expect(workspaceRevision([
+      { toolName: 'propose_file_change', status: 'succeeded', resultCategory: 'mutation_already_applied' },
+    ])).toBe(0);
+  });
+
+  it('does not let a validation result from an earlier revision cover the current one', () => {
+    const recorded = { revision: 1, passed: true, summary: 'ok', gates: ['npm test'] };
+    expect(fullValidationCovers(recorded, 1)).toBe(true);
+    expect(fullValidationCovers(recorded, 2)).toBe(false);
+    expect(fullValidationCovers(undefined, 1)).toBe(false);
+  });
+
+  it('does not let a substituted single-gate run stand in for the whole full tier', () => {
+    const substitute = { revision: 3, passed: true, summary: 'ok', gates: ['npm test'] };
+    expect(coversFullGateSet(substitute, ['npm test'])).toBe(true);
+    expect(coversFullGateSet(substitute, ['npm test', 'npm run lint'])).toBe(false);
+    expect(coversFullGateSet(undefined, ['npm test'])).toBe(false);
+  });
+
+  it('reports the tier the gates that ran belong to', () => {
+    expect(effectiveValidationTier(['syntax', 'compile'])).toBe('lightweight');
+    expect(effectiveValidationTier(['syntax', 'unit_test'])).toBe('full');
   });
 });
 
