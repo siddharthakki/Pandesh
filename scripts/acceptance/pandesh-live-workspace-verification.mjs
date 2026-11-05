@@ -258,7 +258,7 @@ async function runTurn(app, label, prompt, { decide = () => 'approved', onTick, 
     if (card?.approvalId && !seen.has(card.approvalId)) {
       seen.add(card.approvalId);
       const resolution = decide(card);
-      cards.push({ toolName: card.toolName, detail: String(card.detail ?? '').slice(0, 300), resolution, panelApprovalNotice: panel.approvalNotice });
+      cards.push({ toolName: card.toolName ?? card.request?.toolName, detail: String(card.detail ?? '').slice(0, 300), resolution, panelApprovalNotice: panel.approvalNotice });
       console.log(`[verify] ${resolution} ${card.toolName}: ${String(card.detail).slice(0, 160).replace(/\n/g, ' ')}`);
       await app.evaluate(`window.karkedikhaDesktop.resolveApproval(${JSON.stringify(card.approvalId)}, ${JSON.stringify(resolution)})`);
     }
@@ -395,7 +395,7 @@ try {
     const panel = await app.evaluate(PANEL);
     await screenshot(app, 'image-final');
     const image = turn.activities.find((a) => a.kind === 'image');
-    record('image_approval_required_first', turn.cards.some((c) => c.toolName === 'image_generate') ? 'PASS' : 'FAIL', turn.cards);
+    record('image_approval_required_first', turn.cards.some((c) => (c.toolName ?? c.request?.toolName) === 'image_generate') ? 'PASS' : 'FAIL', turn.cards);
     record('image_progress_shown', turn.timeline.some((s) => s.kind === 'Image' && s.state === 'Running') ? 'PASS' : 'NOT_OBSERVED', turn.timeline.slice(0, 6));
     record('image_generated_artifact_in_panel', image?.state === 'completed' && image.preview?.artifactIds?.length && panel.image?.dataUrl && panel.image.naturalWidth > 0 ? 'PASS' : 'FAIL', { state: image?.state, detail: image?.detail, artifactIds: image?.preview?.artifactIds, panelImage: panel.image });
     summary.image = image?.preview?.artifactIds ?? [];
@@ -422,7 +422,7 @@ try {
       return result;
     })()`);
     await screenshot(app, 'video-final');
-    record('video_approval_required_first', turn.cards.some((c) => c.toolName === 'video_generate') ? 'PASS' : 'FAIL', turn.cards);
+    record('video_approval_required_first', turn.cards.some((c) => (c.toolName ?? c.request?.toolName) === 'video_generate') ? 'PASS' : 'FAIL', turn.cards);
     record('video_generation_status_shown', turn.timeline.some((s) => s.kind === 'Video' && s.state === 'Running') ? 'PASS' : 'NOT_OBSERVED', turn.timeline.slice(0, 6));
     record('video_generated_for_real', video?.state === 'completed' && video.preview?.artifactIds?.length ? 'PASS' : 'FAIL', { state: video?.state, detail: video?.detail });
     record('video_plays_in_panel', playback?.advanced && playback.duration > 0 ? 'PASS' : 'FAIL', playback);
@@ -457,10 +457,16 @@ try {
     const restored = (afterRestart?.workspaceActivities ?? []).filter((a) => a.conversationId === conversationId);
     record('restart_activities_persisted', restored.length === countBefore && countBefore > 0 ? 'PASS' : 'FAIL', { before: countBefore, after: restored.length });
     await app.evaluate("(() => { const p = document.getElementById('workspace-context'); if (p && p.hidden) document.getElementById('btn-open-workspace')?.click(); return true; })()");
-    await sleep(3000);
+    // The preview is fetched from the Core and may need a moment after a
+    // restart; wait for it honestly instead of guessing a fixed delay.
     panel = await app.evaluate(PANEL);
+    const previewDeadline = Date.now() + 30_000;
+    while (Date.now() < previewDeadline && !(panel.video?.fileUrl || panel.image?.dataUrl)) {
+      await sleep(1000);
+      panel = await app.evaluate(PANEL);
+    }
     await screenshot(app, 'restart-restored');
-    record('restart_artifacts_still_accessible', (panel.video?.fileUrl || panel.image?.dataUrl) ? 'PASS' : 'FAIL', { kind: panel.kind, image: panel.image, video: panel.video });
+    record('restart_artifacts_still_accessible', (panel.video?.fileUrl || panel.image?.dataUrl) ? 'PASS' : 'FAIL', { kind: panel.kind, image: panel.image, video: panel.video, details: panel.details });
 
     // Stop a running task.
     await newConversation(app);
