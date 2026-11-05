@@ -64,7 +64,39 @@ function registry(scout = createIntelligenceScout({ dataDir })): GovernedCapabil
 }
 
 describe('the chat model can actually reach the governed capabilities', () => {
-  it('offers the diagnostics, scout, computer and hermes tools, and nothing already owned', () => {
+  /**
+   * The diagnostic/scout/computer/Hermes capabilities are deliberately outside
+   * the bounded chat allowlist: a live turn with the previous 20-capability
+   * surface sent 149 tools / ~29k prompt tokens and the local model returned
+   * one token with no call. They must remain registered and executable through
+   * the governed fabric, and they must come back intact when a surface selects
+   * them explicitly.
+   */
+  const DIAGNOSTIC_CAPABILITY_IDS = [
+    'port-management',
+    'system-management',
+    'weather',
+    'intelligence-scout',
+    'computer-use',
+    'hermes',
+  ] as const;
+
+  it('keeps the default chat surface bounded, and offers the diagnostics, scout, computer and hermes tools when selected', () => {
+    const bounded = buildPiCapabilityBridge({
+      db,
+      registry: registry(),
+      correlationId: 'conv-1',
+      clientId: 'test-client',
+      cwd: dir,
+      actor: 'test',
+    });
+    const boundedNames = (bounded?.definitions ?? []).map((def) => def.name);
+    // The browser is in the bounded chat set; the diagnostics are not.
+    expect(boundedNames).toContain('inspect_page');
+    expect(boundedNames).not.toContain('port_check_setup');
+    expect(boundedNames).not.toContain('run_system_diagnostics');
+    expect(boundedNames).not.toContain('hermes_list_skills');
+
     const bridge = buildPiCapabilityBridge({
       db,
       registry: registry(),
@@ -72,6 +104,7 @@ describe('the chat model can actually reach the governed capabilities', () => {
       clientId: 'test-client',
       cwd: dir,
       actor: 'test',
+      capabilityIds: DIAGNOSTIC_CAPABILITY_IDS,
     });
     const names = (bridge?.definitions ?? []).map((def) => def.name);
     expect(names).toContain('port_check_setup');
@@ -80,7 +113,6 @@ describe('the chat model can actually reach the governed capabilities', () => {
     expect(names).toContain('system_list_models');
     expect(names).toContain('get_weather');
     expect(names).toContain('scout_add_watch');
-    expect(names).toContain('inspect_page');
     expect(names).toContain('desktop_screenshot');
     expect(names).toContain('hermes_list_skills');
     expect(names).toContain('hermes_invoke_skill');
@@ -91,7 +123,13 @@ describe('the chat model can actually reach the governed capabilities', () => {
 
   it('marks the read-only diagnostics read-only and the rest consequential', () => {
     const bridge = buildPiCapabilityBridge({
-      db, registry: registry(), correlationId: 'c', clientId: 't', cwd: dir, actor: 'test',
+      db,
+      registry: registry(),
+      correlationId: 'c',
+      clientId: 't',
+      cwd: dir,
+      actor: 'test',
+      capabilityIds: DIAGNOSTIC_CAPABILITY_IDS,
     });
     const byName = new Map((bridge?.definitions ?? []).map((def) => [def.name, def.consequential]));
     expect(byName.get('port_check_setup')).toBe(false);
@@ -105,6 +143,8 @@ describe('the chat model can actually reach the governed capabilities', () => {
   });
 
   it('dispatches a read-only diagnostic through the governed fabric and records the evidence', async () => {
+    // Deliberately the bounded chat bridge: omitting a capability from the
+    // eager tool list must not remove it from the governed dispatch path.
     const bridge = buildPiCapabilityBridge({
       db, registry: registry(), correlationId: 'conv-diag', clientId: 'test-client', cwd: dir, actor: 'test',
     });

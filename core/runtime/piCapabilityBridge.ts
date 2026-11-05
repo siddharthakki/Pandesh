@@ -88,6 +88,14 @@ export interface BuildPiCapabilityBridgeOptions {
    * "installed here but no Pandesh workflow drives it" line to the brief. */
   inventory?: CapabilityInventory | null;
   signal?: AbortSignal;
+  /**
+   * The capability ids this surface offers. Defaults to the bounded chat
+   * allowlist. A different surface (or a test proving that a capability the
+   * chat list omits is still executable) can name a different set; the brief
+   * follows the same set, so what the model is told and what it can call never
+   * diverge.
+   */
+  capabilityIds?: readonly string[];
 }
 
 /**
@@ -96,7 +104,8 @@ export interface BuildPiCapabilityBridgeOptions {
  */
 export function buildPiCapabilityBridge(options: BuildPiCapabilityBridgeOptions): PiCapabilityBridge | undefined {
   const { registry } = options;
-  const allowed = new Set<string>(CHAT_CAPABILITY_IDS);
+  const capabilityIds = options.capabilityIds ?? CHAT_CAPABILITY_IDS;
+  const allowed = new Set<string>(capabilityIds);
   const excluded = new Set(options.excludeToolNames ?? []);
   const definitions = registry.definitions().filter((def) => {
     if (excluded.has(def.name)) return false;
@@ -106,7 +115,7 @@ export function buildPiCapabilityBridge(options: BuildPiCapabilityBridgeOptions)
   if (definitions.length === 0) return undefined;
   const brief = buildCapabilityBrief({
     registry,
-    exposedCapabilityIds: CHAT_CAPABILITY_IDS,
+    exposedCapabilityIds: capabilityIds,
     inventory: options.inventory ?? null,
   });
   return {
