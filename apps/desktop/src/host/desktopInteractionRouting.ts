@@ -167,12 +167,18 @@ export function extractImageGenerationPrompt(text: string): string {
  * `get_weather` capability, never left to the model's own tool-calling. */
 const WEATHER_NOUN = /\b(weather|temperature|forecast|rain(?:ing|y)?|snow(?:ing|y)?|humidity)\b/i;
 const WEATHER_LOCATION_PHRASE =
-  /\b(?:weather|temperature|forecast)\b(?:\s+\w+)*?\s+(?:in|for|at)\s+([a-z][a-z\s.'-]*?)(?=\s+(?:right now|today|tonight|tomorrow|currently|now|this (?:week|morning|afternoon|evening|weekend)|for (?:today|tonight|tomorrow|now|this)|please)\b|[?.!,]|$)/i;
+  /\b(?:weather|temperature|forecast)\b(?:\s+\w+)*?\s+(?:in|for|at)\s+([a-z][a-z\s.',-]*?)(?=\s+(?:right now|today|tonight|tomorrow|currently|now|this (?:week|morning|afternoon|evening|weekend)|for (?:today|tonight|tomorrow|now|this)|please)\b|[?.!]|$)/i;
 
-export function detectWeatherIntent(text: string): boolean {
+export function detectWeatherIntent(text: string, lastLocation?: string | null): boolean {
   const trimmed = text.trim();
   if (!trimmed) return false;
-  return WEATHER_NOUN.test(trimmed);
+  if (detectImageGenerationIntent(trimmed)) return false;
+  if (WEATHER_NOUN.test(trimmed)) return true;
+  // If a weather location is already established in context, relative time follow-ups are weather queries
+  if (lastLocation && /\b(?:tomorrow|evening|morning|tonight|this afternoon|weekend)\b/i.test(trimmed)) {
+    return true;
+  }
+  return false;
 }
 
 /** Extracts the place name from a weather question ("what's the weather in
@@ -180,8 +186,12 @@ export function detectWeatherIntent(text: string): boolean {
  * caller must ask the user rather than guess a location. */
 export function extractWeatherLocation(text: string): string | null {
   const match = WEATHER_LOCATION_PHRASE.exec(text.trim());
-  const location = match?.[1]?.trim();
-  return location && location.length <= 200 ? location : null;
+  let location = match?.[1]?.trim();
+  if (location) {
+    location = location.replace(/,\s*$/, '').trim();
+    return location.length <= 200 ? location : null;
+  }
+  return null;
 }
 
 /**

@@ -9,8 +9,18 @@ export interface WeatherCapabilityOptions {
   fetchImpl?: typeof fetch;
 }
 
+interface GeocodePlace {
+  id?: number;
+  name: string;
+  country?: string;
+  country_code?: string;
+  admin1?: string;
+  latitude: number;
+  longitude: number;
+}
+
 interface GeocodeResult {
-  results?: Array<{ name: string; country?: string; admin1?: string; latitude: number; longitude: number }>;
+  results?: GeocodePlace[];
 }
 
 interface ForecastResult {
@@ -21,6 +31,18 @@ interface ForecastResult {
     weather_code?: number;
   };
   current_units?: { temperature_2m?: string; wind_speed_10m?: string };
+  hourly?: {
+    time?: string[];
+    temperature_2m?: number[];
+    relative_humidity_2m?: number[];
+    weather_code?: number[];
+  };
+  daily?: {
+    time?: string[];
+    weather_code?: number[];
+    temperature_2m_max?: number[];
+    temperature_2m_min?: number[];
+  };
 }
 
 // WMO weather interpretation codes (subset covering Open-Meteo's `weather_code`).
@@ -38,6 +60,20 @@ const WEATHER_CODE_LABELS: Record<number, string> = {
 
 function failure(output: string, category: string): ToolExecutionResult {
   return { status: 'failed', exitCode: null, output, resultCategory: category };
+}
+
+function matchesCountry(result: GeocodePlace, exp: string): boolean {
+  const normExp = exp.toLowerCase().trim();
+  const cName = (result.country ?? '').toLowerCase().trim();
+  const cCode = (result.country_code ?? '').toLowerCase().trim();
+  if (cName === normExp || cCode === normExp) return true;
+  if (normExp === 'germany' && (cCode === 'de' || cName === 'deutschland')) return true;
+  if (normExp === 'spain' && (cCode === 'es' || cName === 'españa' || cName === 'espana')) return true;
+  if ((normExp === 'usa' || normExp === 'united states' || normExp === 'us') && (cCode === 'us' || cName.includes('united states'))) return true;
+  if ((normExp === 'uk' || normExp === 'united kingdom') && (cCode === 'gb' || cName.includes('united kingdom'))) return true;
+  if (normExp === 'france' && (cCode === 'fr' || cName === 'france')) return true;
+  if (normExp === 'india' && (cCode === 'in' || cName === 'bharat')) return true;
+  return cName.includes(normExp) || normExp.includes(cName);
 }
 
 /** Governed weather lookup via Open-Meteo (no API key). Consequential
@@ -59,16 +95,67 @@ export function createWeatherCapabilityAdapter(options: WeatherCapabilityOptions
     if (!location || location.length > MAX_LOCATION_CHARS) {
       return failure('location must be 1-200 characters', 'invalid_arguments');
     }
+
+    let cityName = location;
+    let expectedCountry: string | null = typeof call.arguments.country === 'string' ? call.arguments.country.trim() : null;
+    const commaMatch = location.match(/^(.+?),\s*([A-Za-z\s]+)$/);
+    const inMatch = location.match(/^(.+?)\s+in\s+([A-Za-z\s]+)$/i);
+    if (!expectedCountry) {
+      if (commaMatch) {
+        cityName = commaMatch[1].trim();
+        expectedCountry = commaMatch[2].trim();
+      } else if (inMatch) {
+        cityName = inMatch[1].trim();
+        expectedCountry = inMatch[2].trim();
+      }
+    }
+
     try {
-      const geocode = await json(
-        `https://geocoding-api.open-meteo.com/v1/search?count=1&name=${encodeURIComponent(location)}`,
+      let geocode = await json(
+        `https://geocoding-api.open-meteo.com/v1/search?count=10&name=${encodeURIComponent(location)}`,
       ) as GeocodeResult;
-      const place = geocode.results?.[0];
-      if (!place) return failure(`No location found matching "${location}"`, 'weather_location_not_found');
+      let candidates = geocode.results ?? [];
+
+      if (expectedCountry && (!candidates.some((c) => matchesCountry(c, expectedCountry!)))) {
+        const cityGeocode = await json(
+          `https://geocoding-api.open-meteo.com/v1/search?count=10&name=${encodeURIComponent(cityName)}`,
+        ) as GeocodeResult;
+        if (cityGeocode.results?.length) {
+          candidates = cityGeocode.results;
+        }
+      }
+
+      const matchedCandidates = expectedCountry
+        ? candidates.filter((c) => matchesCountry(c, expectedCountry!))
+        : candidates;
+
+      if (matchedCandidates.length === 0) {
+        return failure(`No location found matching "${cityName}"${expectedCountry ? ` in ${expectedCountry}` : ''}. Please verify the city and country name.`, 'weather_location_not_found');
+      }
+
+      // Check for exact match on city name (case-insensitive)
+      const normCity = cityName.trim().toLowerCase();
+      const exactMatch = matchedCandidates.find((c) => c.name.trim().toLowerCase() === normCity);
+
+      let place: GeocodePlace;
+      if (exactMatch) {
+        place = exactMatch;
+      } else {
+        // No exact match. The name is ambiguous or an approximate spelling (e.g. "Ull" matching "Ulla").
+        // DO NOT silently pick the first fuzzy candidate (e.g. Ulla) and do NOT silently assume Ulm!
+        // Ask for clarification with the top candidates.
+        const suggestions = matchedCandidates.slice(0, 3).map((c) => [c.name, c.admin1, c.country].filter(Boolean).join(', '));
+        return failure(
+          `The location "${cityName}"${expectedCountry ? ` in ${expectedCountry}` : ''} is ambiguous or an approximate spelling. Did you mean ${suggestions.join(' or ')}? Please clarify the location.`,
+          'weather_location_ambiguous',
+        );
+      }
 
       const forecast = await json(
         `https://api.open-meteo.com/v1/forecast?latitude=${place.latitude}&longitude=${place.longitude}`
-        + '&current=temperature_2m,relative_humidity_2m,wind_speed_10m,weather_code',
+        + '&current=temperature_2m,relative_humidity_2m,wind_speed_10m,weather_code'
+        + '&hourly=temperature_2m,relative_humidity_2m,weather_code'
+        + '&daily=weather_code,temperature_2m_max,temperature_2m_min&timezone=auto',
       ) as ForecastResult;
       const current = forecast.current;
       if (!current || current.temperature_2m == null) {
@@ -78,11 +165,30 @@ export function createWeatherCapabilityAdapter(options: WeatherCapabilityOptions
       const placeName = [place.name, place.admin1, place.country].filter(Boolean).join(', ');
       const tempUnit = forecast.current_units?.temperature_2m ?? '°C';
       const windUnit = forecast.current_units?.wind_speed_10m ?? 'km/h';
-      const summary = [
+      const summaryParts = [
         `${placeName}: ${label}, ${current.temperature_2m}${tempUnit}`,
         current.relative_humidity_2m != null ? `humidity ${current.relative_humidity_2m}%` : null,
         current.wind_speed_10m != null ? `wind ${current.wind_speed_10m} ${windUnit}` : null,
-      ].filter(Boolean).join(', ');
+      ];
+
+      // Format tomorrow/evening forecast if available
+      if (forecast.hourly?.time?.length && forecast.hourly?.temperature_2m?.length) {
+        const now = new Date();
+        const tomorrowIso = new Date(now.getTime() + 24 * 3600 * 1000).toISOString().slice(0, 10);
+        const eveningIdx = forecast.hourly.time.findIndex((t) => t.startsWith(`${tomorrowIso}T18:`) || t.startsWith(`${tomorrowIso}T20:`));
+        if (eveningIdx !== -1) {
+          const tEve = forecast.hourly.temperature_2m[eveningIdx];
+          const cEve = forecast.hourly.weather_code?.[eveningIdx];
+          const lEve = cEve != null ? WEATHER_CODE_LABELS[cEve] ?? 'clear' : 'clear';
+          summaryParts.push(`tomorrow evening: ${lEve}, ${tEve}${tempUnit}`);
+        } else if (forecast.daily?.temperature_2m_max?.[1] != null) {
+          const dMax = forecast.daily.temperature_2m_max[1];
+          const dMin = forecast.daily.temperature_2m_min?.[1];
+          summaryParts.push(`tomorrow: max ${dMax}${tempUnit}, min ${dMin ?? dMax}${tempUnit}`);
+        }
+      }
+
+      const summary = summaryParts.filter(Boolean).join(', ');
       return {
         status: 'succeeded',
         exitCode: 0,

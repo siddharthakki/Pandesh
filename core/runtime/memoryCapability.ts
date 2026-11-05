@@ -261,14 +261,21 @@ export function createMemoryCapabilityAdapter(options: MemoryCapabilityOptions):
       switch (call.name) {
         case 'memory_remember': {
           const source = resolveSource(db, args, ctx);
+          const rawValue = asString(args.value || args.fact || args.text || args.content || '');
+          const rawSubject = asString(args.subject || 'user');
+          const rawPredicate = asString(args.predicate || 'preference_or_fact');
+          const rawScopeType = (asString(args.scopeType) || 'user') as never;
+          const rawScopeId = asString(args.scopeId || 'user_profile');
+          const rawMemoryType = (asString(args.memoryType) || 'preference') as never;
+          const rawSensitivity = (asString(args.sensitivity) || 'internal') as never;
           const result = rememberMemory(db, {
-            memoryType: asString(args.memoryType) as never,
-            scopeType: asString(args.scopeType) as never,
-            scopeId: asString(args.scopeId),
-            subject: asString(args.subject),
-            predicate: asString(args.predicate),
-            value: asString(args.value),
-            sensitivity: asString(args.sensitivity) as never,
+            memoryType: rawMemoryType,
+            scopeType: rawScopeType,
+            scopeId: rawScopeId,
+            subject: rawSubject,
+            predicate: rawPredicate,
+            value: rawValue,
+            sensitivity: rawSensitivity,
             sourceConversationId: source.conversationId,
             sourceMessageId: source.messageId,
             expiresAt: args.expiresAt === undefined ? null : asString(args.expiresAt) || null,

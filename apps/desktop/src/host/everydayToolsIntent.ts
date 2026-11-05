@@ -116,10 +116,12 @@ export function parseEverydayIntent(text: string, nowMs: number = Date.now()): E
 
   const remember = trimmed.match(/^(?:please\s+)?remember(?:\s+(?:that|this))?\s+(.+)$/i);
   if (remember?.[1]) {
-    // A fact about the person (where they live, what they prefer, a correction) is durable memory, not a loose note:
-    // it goes to the assistant's governed memory so it is recalled in later conversations. Only a plain "remember to ..."
-    // style jotting stays a note.
-    if (isPersonalFact(remember[1])) return null;
+    // Only a plain "remember to ..." style jotting (action item/reminder) stays an everyday note.
+    // Explicit durable facts, preferences, project names/decisions ("remember that ...", "remember this ...",
+    // "remember my project is ...") must route to Core chat and the governed durable memory capability.
+    if (!/^to\s+/i.test(remember[1].trim())) {
+      return null;
+    }
     return { kind: 'remember_note', body: remember[1].trim() };
   }
 

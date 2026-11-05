@@ -679,7 +679,14 @@ export function recallMemories(db: CoreDatabase, input: RecallMemoriesInput = {}
   const recalledAt = nowIso();
   const clauses: string[] = [];
   const params: unknown[] = [];
-  if (input.scopeType) { clauses.push('scopeType = ?'); params.push(requireEnum(input.scopeType, MEMORY_SCOPE_TYPES, 'scopeType')); }
+  if (input.scopeType) {
+    if (input.scopeType === 'user' || input.scopeType === 'global') {
+      clauses.push("scopeType IN ('user', 'global')");
+    } else {
+      clauses.push("(scopeType = ? OR scopeType IN ('user', 'global'))");
+      params.push(requireEnum(input.scopeType, MEMORY_SCOPE_TYPES, 'scopeType'));
+    }
+  }
   if (input.scopeId) { clauses.push('scopeId = ?'); params.push(String(input.scopeId)); }
   if (input.subject) { clauses.push('subject = ?'); params.push(normalizeMemoryText(input.subject)); }
   if (input.predicate) { clauses.push('predicate = ?'); params.push(normalizeMemoryText(input.predicate)); }
@@ -687,10 +694,10 @@ export function recallMemories(db: CoreDatabase, input: RecallMemoriesInput = {}
   // "coffee preference"), so free words match anywhere in the fact.
   const words = normalizeMemoryText(input.query ?? '').split(/\s+/).filter((word) => word.length >= 3).slice(0, 8);
   if (words.length) {
-    clauses.push(`(${words.map(() => "(subject LIKE ? ESCAPE '\\' OR predicate LIKE ? ESCAPE '\\' OR normalizedValue LIKE ? ESCAPE '\\')").join(' OR ')})`);
+    clauses.push(`(${words.map(() => "(subject LIKE ? ESCAPE '\\' OR predicate LIKE ? ESCAPE '\\' OR normalizedValue LIKE ? ESCAPE '\\' OR displayValue LIKE ? ESCAPE '\\')").join(' OR ')})`);
     for (const word of words) {
       const like = `%${word.replace(/[\\%_]/g, (c) => `\\${c}`)}%`;
-      params.push(like, like, like);
+      params.push(like, like, like, like);
     }
   }
   if (!input.includeHistorical) clauses.push("state IN ('active')");

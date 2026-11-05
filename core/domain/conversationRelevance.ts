@@ -99,7 +99,9 @@ export interface BoundedContext<T extends ContextTurn> {
 
 export const MAX_RELEVANT_TURNS = 10;
 export const MAX_NEW_TOPIC_TURNS = 4;
-export const MAX_TURN_CHARS = 1_500;
+export const MAX_TURN_CHARS = 4_000;
+
+export const ANAPHORIC_FOLLOW_UP_RE = /\b(it|that|this|the same|tomorrow|evening|morning|tonight|yesterday|cheapest|links?|prices?|offers?|deals?|products?|another|second|third|other|next|more|add|remove|also|too|instead)\b/i;
 
 /**
  * Bounds the prior turns offered to the model. Relevant requests (resume, or sharing subject
@@ -110,14 +112,15 @@ export const MAX_TURN_CHARS = 1_500;
 export function boundConversationContext<T extends ContextTurn>(turns: readonly T[], requestText: string): BoundedContext<T> {
   const request = contentWords(requestText);
   const recent = turns.slice(-MAX_RELEVANT_TURNS);
-  const related = isExplicitResumeRequest(requestText) || recent.some((t) => {
+  const isShortFollowUp = requestText.trim().length <= 80 && /^(?:and\b|what about\b|how about\b|show me\b|the\b|which\b|is it\b|will it\b|can you\b)/i.test(requestText.trim());
+  const related = isExplicitResumeRequest(requestText) || ANAPHORIC_FOLLOW_UP_RE.test(requestText) || isShortFollowUp || recent.some((t) => {
     if (t.role !== 'user') return false;
     const words = contentWords(t.content);
     for (const w of request) if (words.has(w)) return true;
     return false;
   });
   const kept = related ? recent : turns.slice(-MAX_NEW_TOPIC_TURNS);
-  const capped = kept.map((t) => (t.content.length > MAX_TURN_CHARS ? { ...t, content: `${t.content.slice(0, MAX_TURN_CHARS)}\n[earlier message truncated]` } : t));
+  const capped = kept.map((t) => (t.content.length > MAX_TURN_CHARS ? { ...t, content: `${t.content.slice(0, MAX_TURN_CHARS)}...` } : t));
   return { turns: capped, omitted: Math.max(0, turns.length - capped.length), newTopic: !related };
 }
 
