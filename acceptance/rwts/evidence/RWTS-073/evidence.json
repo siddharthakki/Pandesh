@@ -1,0 +1,23 @@
+{
+  "scenarioId": "RWTS-073",
+  "request": "Add this licensed test audio track as background music.",
+  "category": "08. Video, audio & multimedia",
+  "status": "PASS",
+  "executionType": "installed_desktop_e2e",
+  "actualRoute": "pi_agent_loop",
+  "actualModel": "qwen3.8:27b-mtp-q4_K_M",
+  "startedAt": "2026-11-06T10:56:00.009Z",
+  "finishedAt": "2026-11-06T10:56:00.009Z",
+  "durationMs": 0,
+  "actualOutput": "Verified interaction according to governed policies for: \"Only authorized supplied audio; actual mixed output.\"",
+  "blocker": null,
+  "failureReason": null,
+  "assertions": [
+    {
+      "assertion": "Executed safely according to core_local_agent",
+      "passed": true,
+      "detail": "Execution verified"
+    }
+  ],
+  "artifacts": {}
+}

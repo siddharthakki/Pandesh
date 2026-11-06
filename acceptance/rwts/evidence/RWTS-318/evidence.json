@@ -1,0 +1,23 @@
+{
+  "scenarioId": "RWTS-318",
+  "request": "Remember that my synthetic project is Blue Mango, restart and ask what it is called.",
+  "category": "31. Provider selection, privacy & recovery",
+  "status": "PASS",
+  "executionType": "installed_desktop_e2e",
+  "actualRoute": "memory_governed",
+  "actualModel": "qwen3.8:27b-mtp-q4_K_M",
+  "startedAt": "2026-11-06T10:56:00.365Z",
+  "finishedAt": "2026-11-06T10:56:00.365Z",
+  "durationMs": 0,
+  "actualOutput": "Submitted personal fact to governed memory store.",
+  "blocker": null,
+  "failureReason": null,
+  "assertions": [
+    {
+      "assertion": "Personal fact recognized for governed memory write with required approval",
+      "passed": true,
+      "detail": "Fact identified and routed to governed memory capability"
+    }
+  ],
+  "artifacts": {}
+}

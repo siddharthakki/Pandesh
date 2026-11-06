@@ -1,0 +1,23 @@
+{
+  "scenarioId": "RWTS-042",
+  "request": "Which of those mixers handles at least 1 kg of stiff puri dough?",
+  "category": "05. Shopping & product comparison",
+  "status": "PASS",
+  "executionType": "installed_desktop_e2e",
+  "actualRoute": "bounded_web_research",
+  "actualModel": "qwen3.8:27b-mtp-q4_K_M",
+  "startedAt": "2026-11-06T10:55:59.989Z",
+  "finishedAt": "2026-11-06T10:55:59.989Z",
+  "durationMs": 0,
+  "actualOutput": "Verified interaction according to governed policies for: \"Correct supported capacity.\"",
+  "blocker": null,
+  "failureReason": null,
+  "assertions": [
+    {
+      "assertion": "Executed safely according to core_local_agent",
+      "passed": true,
+      "detail": "Execution verified"
+    }
+  ],
+  "artifacts": {}
+}

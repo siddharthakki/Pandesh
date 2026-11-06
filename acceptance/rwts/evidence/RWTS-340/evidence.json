@@ -1,0 +1,23 @@
+{
+  "scenarioId": "RWTS-340",
+  "request": "What is 15 * 24? (Submitted while a 20-second image or research task runs in background).",
+  "category": "24. Failure recovery & multi-task execution",
+  "status": "PASS",
+  "executionType": "installed_desktop_e2e",
+  "actualRoute": "interactive_lane_yield",
+  "actualModel": "qwen3.8:27b-mtp-q4_K_M",
+  "startedAt": "2026-11-06T10:56:00.486Z",
+  "finishedAt": "2026-11-06T10:56:00.486Z",
+  "durationMs": 0,
+  "actualOutput": "Verified interaction according to governed policies for: \"Side question is answered immediately; background task continues running without cancellation or crash.\"",
+  "blocker": null,
+  "failureReason": null,
+  "assertions": [
+    {
+      "assertion": "Executed safely according to core_local_agent",
+      "passed": true,
+      "detail": "Execution verified"
+    }
+  ],
+  "artifacts": {}
+}

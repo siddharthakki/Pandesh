@@ -47,9 +47,11 @@ import { inlineToolCallCorrection, validateNativeToolCalls, type StructuralRepai
 import { cloudProviderLabel, isCloudAttemptProvider, isFreeCloudPublicTextAttempt, isSupportedAttemptProvider, resolveAttemptModelBackend } from './attemptModelBackend';
 import { decideCloudPublicText } from './cloudPublicText';
 import { createResearchEvidenceRunner } from './researchCapability';
+import { redactSecrets } from '../platform/credentialStore';
 import {
   isCloudPublicResearchRequest,
   derivePublicResearchQueries,
+  sanitizePublicResearchObjective,
   buildCloudPublicResearchMessages,
   isStubReply,
   synthesizePublicResearchReport,
@@ -917,7 +919,9 @@ export class RuntimeExecutor {
     const context = getAttemptContext(this.db, attemptId);
     if (this.startOrShortCircuitCancel(attempt, fenceToken)) return;
 
-    const queries = derivePublicResearchQueries(requestText);
+    const queries = derivePublicResearchQueries(requestText).filter(
+      (q) => redactSecrets(q) === q && !/(?:PRIVATE|CANARY)_[A-Z0-9_]+/i.test(q),
+    );
     const runResearch = createResearchEvidenceRunner();
     const evidenceItems: Array<{ query: string; output: string; sourceUrls: string[] }> = [];
 
@@ -1025,7 +1029,14 @@ export class RuntimeExecutor {
     const combinedEvidence = evidenceItems
       .map((e, idx) => `=== Research Query ${idx + 1}: "${e.query}" ===\n${e.output}`)
       .join('\n\n');
-    const messages = buildCloudPublicResearchMessages(requestText, combinedEvidence);
+    const sanitizedObjective = sanitizePublicResearchObjective(requestText);
+    const messages = buildCloudPublicResearchMessages(sanitizedObjective, combinedEvidence);
+
+    for (const msg of messages) {
+      if (redactSecrets(msg.content) !== msg.content || /(?:PRIVATE|CANARY)_[A-Z0-9_]+/i.test(msg.content)) {
+        throw new Error('Safety boundary violation: private marker or secret detected in outbound cloud public research message.');
+      }
+    }
 
     const invocation = this.mutate(() =>
       startModelInvocation(this.db, {

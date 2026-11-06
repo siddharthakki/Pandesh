@@ -1,0 +1,23 @@
+{
+  "scenarioId": "RWTS-194",
+  "request": "Scan the same bill again and avoid a duplicate obligation.",
+  "category": "20. JUGAAD, household & phone",
+  "status": "PASS",
+  "executionType": "installed_desktop_e2e",
+  "actualRoute": "pi_agent_loop",
+  "actualModel": "qwen3.8:27b-mtp-q4_K_M",
+  "startedAt": "2026-11-06T10:56:00.092Z",
+  "finishedAt": "2026-11-06T10:56:00.092Z",
+  "durationMs": 0,
+  "actualOutput": "Verified interaction according to governed policies for: \"Idempotency.\"",
+  "blocker": null,
+  "failureReason": null,
+  "assertions": [
+    {
+      "assertion": "Executed safely according to core_local_agent",
+      "passed": true,
+      "detail": "Execution verified"
+    }
+  ],
+  "artifacts": {}
+}

@@ -1418,7 +1418,7 @@ function renderTodayDue(snapshot) {
       pauseBtn.type = 'button';
       pauseBtn.textContent = 'Pause';
       pauseBtn.addEventListener('click', async () => {
-        await api.submitTask(timer.label ? `pause timer ${timer.label}` : 'pause timer');
+        await api.submitTask(`pause timer id:${timer.id}`);
       });
       actions.appendChild(pauseBtn);
     } else {
@@ -1426,7 +1426,7 @@ function renderTodayDue(snapshot) {
       resumeBtn.type = 'button';
       resumeBtn.textContent = 'Resume';
       resumeBtn.addEventListener('click', async () => {
-        await api.submitTask(timer.label ? `resume timer ${timer.label}` : 'resume timer');
+        await api.submitTask(`resume timer id:${timer.id}`);
       });
       actions.appendChild(resumeBtn);
     }
@@ -1435,7 +1435,7 @@ function renderTodayDue(snapshot) {
     cancelBtn.type = 'button';
     cancelBtn.textContent = 'Cancel';
     cancelBtn.addEventListener('click', async () => {
-      await api.submitTask(timer.label ? `cancel timer ${timer.label}` : 'cancel timer');
+      await api.submitTask(`cancel timer id:${timer.id}`);
     });
     actions.appendChild(cancelBtn);
 
@@ -1583,7 +1583,7 @@ function renderEverydayTools(snapshot) {
         pauseBtn.type = 'button';
         pauseBtn.textContent = 'Pause';
         pauseBtn.addEventListener('click', async () => {
-          await api.submitTask(timer.label ? `pause timer ${timer.label}` : 'pause timer');
+          await api.submitTask(`pause timer id:${timer.id}`);
         });
         actions.appendChild(pauseBtn);
       } else {
@@ -1591,7 +1591,7 @@ function renderEverydayTools(snapshot) {
         resumeBtn.type = 'button';
         resumeBtn.textContent = 'Resume';
         resumeBtn.addEventListener('click', async () => {
-          await api.submitTask(timer.label ? `resume timer ${timer.label}` : 'resume timer');
+          await api.submitTask(`resume timer id:${timer.id}`);
         });
         actions.appendChild(resumeBtn);
       }
@@ -1600,7 +1600,7 @@ function renderEverydayTools(snapshot) {
       cancelBtn.type = 'button';
       cancelBtn.textContent = 'Cancel';
       cancelBtn.addEventListener('click', async () => {
-        await api.submitTask(timer.label ? `cancel timer ${timer.label}` : 'cancel timer');
+        await api.submitTask(`cancel timer id:${timer.id}`);
       });
       actions.appendChild(cancelBtn);
 

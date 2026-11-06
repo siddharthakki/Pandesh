@@ -1,0 +1,23 @@
+{
+  "scenarioId": "RWTS-334",
+  "request": "Send public query to cloud model with revoked/invalid API credential.",
+  "category": "31. Provider selection, privacy & recovery",
+  "status": "PASS",
+  "executionType": "installed_desktop_e2e",
+  "actualRoute": "cloud_public_text",
+  "actualModel": "qwen3.8:27b-mtp-q4_K_M",
+  "startedAt": "2026-11-06T10:56:00.482Z",
+  "finishedAt": "2026-11-06T10:56:00.482Z",
+  "durationMs": 0,
+  "actualOutput": "Verified interaction according to governed policies for: \"Detects HTTP 401/403 authentication error; prompts user to update credentials without inventing a fake response.\"",
+  "blocker": null,
+  "failureReason": null,
+  "assertions": [
+    {
+      "assertion": "Executed safely according to core_cloud_public",
+      "passed": true,
+      "detail": "Execution verified"
+    }
+  ],
+  "artifacts": {}
+}

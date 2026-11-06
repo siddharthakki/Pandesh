@@ -4261,27 +4261,41 @@ export class DesktopSession {
     conversationId?: string | null,
   ): string {
     if (intent.kind === 'start_timer') {
+      const durationMs = 'durationMs' in intent && typeof intent.durationMs === 'number'
+        ? intent.durationMs
+        : (intent as any).durationSeconds
+        ? (intent as any).durationSeconds * 1000
+        : 0;
       const res = this.timerManager.startTimer(
-        intent.durationSeconds * 1000,
+        durationMs,
         intent.label || '',
         conversationId,
       );
+      if ('secondary' in intent && intent.secondary) {
+        const secRes = this.timerManager.startTimer(
+          intent.secondary.durationMs,
+          intent.secondary.label,
+          conversationId,
+        );
+        return `${res.message} ${secRes.message}`;
+      }
       return res.message;
     }
+    const target = 'target' in intent ? intent.target : (intent as any).query;
     if (intent.kind === 'stop_timer') {
-      const res = this.timerManager.stopTimer(intent.query);
+      const res = this.timerManager.stopTimer(target);
       return res.message;
     }
     if (intent.kind === 'pause_timer') {
-      const res = this.timerManager.pauseTimer(intent.query);
+      const res = this.timerManager.pauseTimer(target);
       return res.message;
     }
     if (intent.kind === 'resume_timer') {
-      const res = this.timerManager.resumeTimer(intent.query);
+      const res = this.timerManager.resumeTimer(target);
       return res.message;
     }
     if (intent.kind === 'query_timer') {
-      const res = this.timerManager.queryTimer(intent.query);
+      const res = this.timerManager.queryTimer(target);
       return res.message;
     }
     return 'Timer command not recognized.';

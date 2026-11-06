@@ -12,7 +12,7 @@ export type EverydayIntent =
   | { kind: 'cancel_reminder'; query: string }
   | { kind: 'queue_add'; instruction: string }
   | { kind: 'daily_brief' }
-  | { kind: 'start_timer'; durationMs: number; label: string; originalUnit: string }
+  | { kind: 'start_timer'; durationMs: number; label: string; originalUnit: string; secondary?: { durationMs: number; label: string } }
   | { kind: 'stop_timer'; target?: string }
   | { kind: 'pause_timer'; target?: string }
   | { kind: 'resume_timer'; target?: string }
@@ -132,30 +132,102 @@ export function parseTimerIntent(text: string): EverydayIntent | null {
     /^(?:show\s+(?:me\s+)?(?:the\s+)?remaining\s+time|remaining\s+time|how\s+much\s+time\s+(?:is\s+)?left|timer\s+status|timer\s+remaining)\b/i.test(cleaned) ||
     /^(?:what(?:'s| is)\s+(?:the\s+)?remaining\s+time|how\s+long\s+(?:is\s+)?left\s+on\s+(?:the\s+|my\s+)?timer)\b/i.test(cleaned)
   ) {
-    return { kind: 'query_timer' };
+    const targetMatch = cleaned.match(/(?:for|on)\s+(.+)$/i);
+    return { kind: 'query_timer', target: targetMatch ? targetMatch[1].trim() : undefined };
   }
 
   // 2. Pause timer
-  if (/^(?:pause|freeze)\s+(?:the\s+|my\s+)?timer\b/i.test(cleaned)) {
-    return { kind: 'pause_timer' };
+  const pauseMatch = cleaned.match(/^(?:pause|freeze)\s+(?:the\s+|my\s+)?(?:timer\s*(?:for\s+|id:)?|countdown\s*(?:for\s+|id:)?)(.*)$/i);
+  if (pauseMatch) {
+    const target = pauseMatch[1]?.trim() || undefined;
+    return { kind: 'pause_timer', target };
+  }
+  if (/^(?:pause|freeze)\s+(?:the\s+|my\s+)?(short|long|first|second)\s+timer\b/i.test(cleaned)) {
+    const m = cleaned.match(/^(?:pause|freeze)\s+(?:the\s+|my\s+)?(short|long|first|second)\s+timer\b/i);
+    return { kind: 'pause_timer', target: m ? m[1].trim() : undefined };
   }
 
   // 3. Resume timer
-  if (/^(?:resume|unpause|continue)\s+(?:the\s+|my\s+)?timer\b/i.test(cleaned)) {
-    return { kind: 'resume_timer' };
+  const resumeMatch = cleaned.match(/^(?:resume|unpause|continue)\s+(?:the\s+|my\s+)?(?:timer\s*(?:for\s+|id:)?|countdown\s*(?:for\s+|id:)?)(.*)$/i);
+  if (resumeMatch) {
+    const target = resumeMatch[1]?.trim() || undefined;
+    return { kind: 'resume_timer', target };
+  }
+  if (/^(?:resume|unpause|continue)\s+(?:the\s+|my\s+)?(short|long|first|second)\s+timer\b/i.test(cleaned)) {
+    const m = cleaned.match(/^(?:resume|unpause|continue)\s+(?:the\s+|my\s+)?(short|long|first|second)\s+timer\b/i);
+    return { kind: 'resume_timer', target: m ? m[1].trim() : undefined };
   }
 
   // 4. Stop / cancel timer
-  if (/^(?:stop|cancel|dismiss|abort)\s+(?:the\s+|my\s+)?timer\b/i.test(cleaned)) {
-    return { kind: 'stop_timer' };
+  const stopMatch = cleaned.match(/^(?:stop|cancel|dismiss|abort)\s+(?:the\s+|my\s+)?(?:timer\s*(?:for\s+|id:)?|countdown\s*(?:for\s+|id:)?)(.*)$/i);
+  if (stopMatch) {
+    const target = stopMatch[1]?.trim() || undefined;
+    return { kind: 'stop_timer', target };
+  }
+  if (/^(?:stop|cancel|dismiss|abort)\s+(?:the\s+|my\s+)?(short|long|first|second)\s+timer\b/i.test(cleaned)) {
+    const m = cleaned.match(/^(?:stop|cancel|dismiss|abort)\s+(?:the\s+|my\s+)?(short|long|first|second)\s+timer\b/i);
+    return { kind: 'stop_timer', target: m ? m[1].trim() : undefined };
   }
 
-  // 5. Start timer: e.g. "start a timer for five minutes and show the countdown in the main chat"
+  // 5. Multi-timer / compound timers (RWTS-322):
+  // e.g. "start a 3-minute tea timer and a 10-minute pasta timer"
+  const multiTimerMatch = cleaned.match(/(?:start|set)\s+(?:a\s+|an\s+)?(\w+)-(second|sec|minute|min|hour|hr)\s+([a-zA-Z]+)?\s*timer\s+and\s+(?:a\s+|an\s+)?(\w+)-(second|sec|minute|min|hour|hr)\s+([a-zA-Z]+)?\s*timer/i);
+  if (multiTimerMatch) {
+    const c1 = parseCount(multiTimerMatch[1]);
+    const u1 = multiTimerMatch[2].toLowerCase();
+    const l1 = multiTimerMatch[3] ? `${c1}m ${multiTimerMatch[3]} timer` : `${c1} ${u1}s`;
+    let ms1 = 0;
+    if (u1.startsWith('sec')) ms1 = (c1 || 1) * 1000;
+    else if (u1.startsWith('min')) ms1 = (c1 || 1) * 60000;
+    else if (u1.startsWith('hour') || u1.startsWith('hr')) ms1 = (c1 || 1) * 3600000;
+
+    const c2 = parseCount(multiTimerMatch[4]);
+    const u2 = multiTimerMatch[5].toLowerCase();
+    const l2 = multiTimerMatch[6] ? `${c2}m ${multiTimerMatch[6]} timer` : `${c2} ${u2}s`;
+    let ms2 = 0;
+    if (u2.startsWith('sec')) ms2 = (c2 || 1) * 1000;
+    else if (u2.startsWith('min')) ms2 = (c2 || 1) * 60000;
+    else if (u2.startsWith('hour') || u2.startsWith('hr')) ms2 = (c2 || 1) * 3600000;
+
+    return {
+      kind: 'start_timer',
+      durationMs: ms1,
+      label: l1,
+      originalUnit: u1,
+      secondary: {
+        durationMs: ms2,
+        label: l2,
+      },
+    };
+  }
+
+  // 6. When timer finishes (RWTS-283)
+  const whenTimerFinishes = cleaned.match(/^(?:when|after)\s+(?:my\s+|the\s+)?(\w+)-(second|sec|minute|min|hour|hr)\s+timer\s+(?:finishes|ends|expires|completes)\b/i);
+  if (whenTimerFinishes) {
+    const count = parseCount(whenTimerFinishes[1]);
+    const unit = whenTimerFinishes[2].toLowerCase();
+    if (count != null && count > 0) {
+      let ms = 0;
+      if (unit.startsWith('sec')) ms = count * 1_000;
+      else if (unit.startsWith('min')) ms = count * 60_000;
+      else if (unit.startsWith('hour') || unit.startsWith('hr')) ms = count * 3_600_000;
+      if (ms > 0) {
+        return {
+          kind: 'start_timer',
+          durationMs: ms,
+          label: `${count} ${unit}s`,
+          originalUnit: unit,
+        };
+      }
+    }
+  }
+
+  // 7. Start timer: e.g. "start a timer for five minutes and show the countdown in the main chat"
   // "start a 30-second timer and leave the chat open"
   // "start a timer for funf Minuten"
   // "set a timer for 10 seconds"
-  // "timer for 5 minutes", "5 minute timer"
-  const hyphenatedTimer = cleaned.match(/^(?:start\s+(?:a\s+|an\s+)?|set\s+(?:a\s+|an\s+)?|create\s+(?:a\s+|an\s+)?)?(\w+)-(second|sec|minute|min|hour|hr)\s+timer\b/i);
+  // "timer for 5 minutes", "5 minute timer", "start a timer; switch conversations"
+  const hyphenatedTimer = cleaned.match(/(?:^|then\s+|;\s*)\s*(?:start\s+(?:a\s+|an\s+)?|set\s+(?:a\s+|an\s+)?|create\s+(?:a\s+|an\s+)?)?(\w+)-(second|sec|minute|min|hour|hr)\s+timer\b/i);
   if (hyphenatedTimer) {
     const count = parseCount(hyphenatedTimer[1]);
     const unit = hyphenatedTimer[2].toLowerCase();
@@ -175,18 +247,27 @@ export function parseTimerIntent(text: string): EverydayIntent | null {
     }
   }
 
-  const startTimerFor = cleaned.match(/^(?:start\s+(?:a\s+|an\s+)?timer|set\s+(?:a\s+|an\s+)?timer|timer)\s+(?:for\s+|für\s+|fuer\s+|on\s+)?(.+?)(?:\s+(?:and\s+show|and\s+leave|in\s+the\s+main|and\s+keep|please)|[.;!]|$)/i);
+  const startTimerFor = cleaned.match(/(?:^|then\s+|;\s*)\s*(?:start\s+(?:a\s+|an\s+)?timer|set\s+(?:a\s+|an\s+)?timer|timer)(?:\s+(?:for\s+|für\s+|fuer\s+|on\s+)?(.+?))?(?:\s+(?:and\s+show|and\s+leave|in\s+the\s+main|and\s+keep|while|switch|please)|[.;!]|$)/i);
   if (startTimerFor) {
-    const rawDur = startTimerFor[1].trim();
-    const parsed = parseRelativeDuration(rawDur);
-    if (parsed && parsed.ms > 0) {
-      return {
-        kind: 'start_timer',
-        durationMs: parsed.ms,
-        label: parsed.label,
-        originalUnit: rawDur,
-      };
+    const rawDur = startTimerFor[1]?.trim();
+    if (rawDur) {
+      const parsed = parseRelativeDuration(rawDur);
+      if (parsed && parsed.ms > 0) {
+        return {
+          kind: 'start_timer',
+          durationMs: parsed.ms,
+          label: parsed.label,
+          originalUnit: rawDur,
+        };
+      }
     }
+    // If no duration provided (e.g. "Start a timer; switch conversations"), default to 5 minutes
+    return {
+      kind: 'start_timer',
+      durationMs: 300_000,
+      label: '5 minutes',
+      originalUnit: '5 minutes',
+    };
   }
 
   return null;

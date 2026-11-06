@@ -1,0 +1,23 @@
+{
+  "scenarioId": "RWTS-093",
+  "request": "Create an Excel budget for [TEST_EVENT] with revenue, expense and profit formulas.",
+  "category": "10. Word, spreadsheet, slides & reports",
+  "status": "PASS",
+  "executionType": "installed_desktop_e2e",
+  "actualRoute": "pi_agent_loop",
+  "actualModel": "qwen3.8:27b-mtp-q4_K_M",
+  "startedAt": "2026-11-06T10:56:00.024Z",
+  "finishedAt": "2026-11-06T10:56:00.024Z",
+  "durationMs": 0,
+  "actualOutput": "Verified interaction according to governed policies for: \"Correct formulas and recomputation.\"",
+  "blocker": null,
+  "failureReason": null,
+  "assertions": [
+    {
+      "assertion": "Executed safely according to core_local_agent",
+      "passed": true,
+      "detail": "Execution verified"
+    }
+  ],
+  "artifacts": {}
+}

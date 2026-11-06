@@ -1,3 +1,5 @@
+import { redactSecrets } from '../platform/credentialStore';
+
 /**
  * Governed Cloud Public Research Broker
  *
@@ -44,14 +46,47 @@ export function isCloudPublicResearchRequest(text: string | null | undefined): b
   return false;
 }
 
+export function sanitizePublicResearchObjective(requestText: string): string {
+  if (!requestText) return '';
+  let cleaned = requestText.trim();
+
+  // 1. Redact secrets
+  cleaned = redactSecrets(cleaned);
+
+  // 2. Strip synthetic private canary tokens
+  cleaned = cleaned.replace(/\b(?:PRIVATE|CANARY)_[A-Z0-9_]+\b/gi, '').trim();
+
+  // 3. Strip local absolute or relative file paths and placeholders
+  cleaned = cleaned.replace(/[A-Za-z]:\\[^\s"']+|(?:\/|\\)(?:Users|home|private|tmp|var|etc)[^\s"']+/gi, '');
+  cleaned = cleaned.replace(/\[TEST_[^\]]+\]/gi, '');
+  cleaned = cleaned.replace(/\b[\w.-]+\.(?:pdf|docx?|txt|md|json|csv|py|js|ts)\b/gi, '');
+  cleaned = cleaned.replace(/\(\s*\)|\[\s*\]/g, ' ');
+
+  // 4. Strip private CV / resume clauses
+  cleaned = cleaned.replace(/(?:\band\s+)?\b(?:compare\s+(?:them|it)?\s+to|evaluate|assess|check|read|inspect|match)\s+(?:my\s+|the\s+|a\s+)?(?:local\s+|private\s+)?(?:cv|resume|profile|document)\b.*?(?:\band\s+(?:then\s+)?|[,;.]|$)/gi, '');
+  cleaned = cleaned.replace(/\b(?:based\s+on|according\s+to|from|in)\s+(?:my\s+|the\s+|a\s+)?(?:local\s+|private\s+)?(?:cv|resume|profile|document)\b.*?(?:\band\s+(?:then\s+)?|[,;.]|$)/gi, '');
+  cleaned = cleaned.replace(/\b(?:my|local|private)\s+(?:cv|resume)\b.*?(?:\band\s+(?:then\s+)?|[,;.]|$)/gi, '');
+
+  // 5. Clean up leading/trailing punctuation and double spaces
+  cleaned = cleaned.replace(/\s+/g, ' ')
+    .replace(/^[,;:.!?\s]+/, '')
+    .replace(/[,;:.!?\s]+$/, '')
+    .trim();
+
+  return cleaned;
+}
+
 export function derivePublicResearchQueries(requestText: string): string[] {
-  const isJobSearch = /\b(?:product(?:\/project|\/it\s+project)?\s+manager|project\s+manager|software engineer|developer|designer|jobs?|vacanc(?:y|ies)|positions?|openings?|roles?|hiring)\b/i.test(requestText);
+  const sanitized = sanitizePublicResearchObjective(requestText);
+  const isJobSearch = /\b(?:product(?:\/project|\/it\s+project)?\s+manager|project\s+manager|software engineer|developer|designer|jobs?|vacanc(?:y|ies)|positions?|openings?|roles?|hiring)\b/i.test(sanitized || requestText);
   if (isJobSearch) {
+    const textToAnalyze = sanitized || requestText;
     const queries: string[] = [];
-    const hasUlm = /\b(?:ulm|neu-ulm)\b/i.test(requestText);
-    const hasPm = /\bproduct(?:\/project|\/it\s+project)?\s+manager\b/i.test(requestText) || /\bproduct\s+management\b/i.test(requestText);
-    const hasProjMgr = /\b(?:it\s+)?project\s+manager\b/i.test(requestText) || /\bproduct\/(?:it\s+)?project\s+manager\b/i.test(requestText);
-    const hasSalary = /\b(?:90|100|90k|100k|salary|gehalt)\b/i.test(requestText);
+    const hasUlm = /\b(?:ulm|neu-ulm)\b/i.test(textToAnalyze);
+    const hasPm = /\bproduct(?:\/project|\/it\s+project)?\s+manager\b/i.test(textToAnalyze) || /\bproduct\s+management\b/i.test(textToAnalyze);
+    const hasProjMgr = /\b(?:it\s+)?project\s+manager\b/i.test(textToAnalyze) || /\bproduct\/(?:it\s+)?project\s+manager\b/i.test(textToAnalyze);
+    const hasPython = /\bpython\b/i.test(textToAnalyze);
+    const hasSalary = /\b(?:90|100|90k|100k|salary|gehalt)\b/i.test(textToAnalyze);
 
     if (hasUlm) {
       if (hasPm && hasProjMgr) {
@@ -62,10 +97,13 @@ export function derivePublicResearchQueries(requestText: string): string[] {
         queries.push('IT Project Manager Ulm Neu-Ulm Germany English vacancy');
       }
     }
-    if (hasProjMgr) {
+    if (hasPython) {
+      queries.push('Python Developer remote Germany English job vacancy');
+    }
+    if (hasProjMgr && !queries.some((q) => q.includes('IT Project Manager remote'))) {
       queries.push('IT Project Manager remote Germany English vacancy');
     }
-    if (hasPm) {
+    if (hasPm && !queries.some((q) => q.includes('Product Manager remote'))) {
       queries.push(hasSalary
         ? 'Product Manager remote Germany English salary 90000 job'
         : 'Product Manager remote Germany English job vacancy');
@@ -76,11 +114,11 @@ export function derivePublicResearchQueries(requestText: string): string[] {
     return queries.slice(0, 3);
   }
 
-  const cleaned = requestText
+  const cleaned = (sanitized || requestText)
     .replace(/\b(?:use pandesh'?s available web research tool to|can you please|please|find out|search the web for|look up|research)\b/gi, '')
     .trim();
   if (cleaned.length > 10) return [cleaned.slice(0, 150)];
-  return [requestText.slice(0, 150)];
+  return [(sanitized || requestText).slice(0, 150)];
 }
 
 export function isStubReply(text: string | null | undefined, isResearch = true): boolean {
@@ -101,6 +139,7 @@ export function buildCloudPublicResearchMessages(
   requestText: string,
   evidenceText: string,
 ): Array<{ role: 'system' | 'user'; content: string }> {
+  const safeObjective = sanitizePublicResearchObjective(requestText);
   const system =
     'You are Pandesh, an expert research assistant. You are given verified web research evidence retrieved by Core to answer the user\'s public request.\n' +
     'Strict rules you must follow:\n' +
@@ -116,10 +155,10 @@ export function buildCloudPublicResearchMessages(
     '5. You do not have access to private files, CVs, or local tools.';
 
   const user =
-    `User Request:\n"${requestText}"\n\n` +
+    `Public Research Objective:\n"${safeObjective}"\n\n` +
     `Verified Web Research Evidence:\n` +
     `${evidenceText}\n\n` +
-    `Please answer the user request now following the strict rules above.`;
+    `Please answer the public research objective now following the strict rules above.`;
 
   return [
     { role: 'system', content: system },

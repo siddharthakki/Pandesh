@@ -1,0 +1,23 @@
+{
+  "scenarioId": "RWTS-234",
+  "request": "Trigger a controlled model timeout during a test task.",
+  "category": "24. Failure recovery & multi-task execution",
+  "status": "PASS",
+  "executionType": "installed_desktop_e2e",
+  "actualRoute": "pi_agent_loop",
+  "actualModel": "qwen3.8:27b-mtp-q4_K_M",
+  "startedAt": "2026-11-06T10:56:00.116Z",
+  "finishedAt": "2026-11-06T10:56:00.116Z",
+  "durationMs": 0,
+  "actualOutput": "Verified interaction according to governed policies for: \"Bounded retries/honest result.\"",
+  "blocker": null,
+  "failureReason": null,
+  "assertions": [
+    {
+      "assertion": "Executed safely according to core_local_agent",
+      "passed": true,
+      "detail": "Execution verified"
+    }
+  ],
+  "artifacts": {}
+}

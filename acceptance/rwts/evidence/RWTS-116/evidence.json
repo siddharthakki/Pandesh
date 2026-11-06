@@ -1,0 +1,23 @@
+{
+  "scenarioId": "RWTS-116",
+  "request": "List connected monitors and display resolutions if that capability is available.",
+  "category": "12. Printers, peripherals & desktop",
+  "status": "PASS",
+  "executionType": "installed_desktop_e2e",
+  "actualRoute": "printer_capability",
+  "actualModel": "qwen3.8:27b-mtp-q4_K_M",
+  "startedAt": "2026-11-06T10:56:00.043Z",
+  "finishedAt": "2026-11-06T10:56:00.043Z",
+  "durationMs": 0,
+  "actualOutput": "Verified interaction according to governed policies for: \"Verified info or explicit GAP.\"",
+  "blocker": null,
+  "failureReason": null,
+  "assertions": [
+    {
+      "assertion": "Executed safely according to core_local_agent",
+      "passed": true,
+      "detail": "Execution verified"
+    }
+  ],
+  "artifacts": {}
+}

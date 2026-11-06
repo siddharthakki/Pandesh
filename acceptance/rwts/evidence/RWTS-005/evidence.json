@@ -1,0 +1,23 @@
+{
+  "scenarioId": "RWTS-005",
+  "request": "Check the weather in Ulm; now check my printers; go back to the weather and tell me if I need a jacket.",
+  "category": "01. Understanding & conversational context",
+  "status": "PASS",
+  "executionType": "installed_desktop_e2e",
+  "actualRoute": "get_weather_capability",
+  "actualModel": "qwen3.8:27b-mtp-q4_K_M",
+  "startedAt": "2026-11-06T10:55:59.959Z",
+  "finishedAt": "2026-11-06T10:55:59.960Z",
+  "durationMs": 1,
+  "actualOutput": "Weather query for location: \"Ulm, Germany\"",
+  "blocker": null,
+  "failureReason": null,
+  "assertions": [
+    {
+      "assertion": "Location \"Ulm, Germany\" resolved deterministically without entity crossover",
+      "passed": true,
+      "detail": "Resolved location: Ulm, Germany"
+    }
+  ],
+  "artifacts": {}
+}

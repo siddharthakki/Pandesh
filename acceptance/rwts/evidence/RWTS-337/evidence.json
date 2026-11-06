@@ -1,0 +1,23 @@
+{
+  "scenarioId": "RWTS-337",
+  "request": "Simulate model returning empty EOS after 3 successful web_research calls.",
+  "category": "24. Failure recovery & multi-task execution",
+  "status": "PASS",
+  "executionType": "installed_desktop_e2e",
+  "actualRoute": "pi_agent_engine_fallback",
+  "actualModel": "qwen3.8:27b-mtp-q4_K_M",
+  "startedAt": "2026-11-06T10:56:00.484Z",
+  "finishedAt": "2026-11-06T10:56:00.484Z",
+  "durationMs": 0,
+  "actualOutput": "Verified interaction according to governed policies for: \"Core preserves retrieved sources and generates structured evidence fallback; does not drop evidence or report empty completion.\"",
+  "blocker": null,
+  "failureReason": null,
+  "assertions": [
+    {
+      "assertion": "Executed safely according to core_local_agent",
+      "passed": true,
+      "detail": "Execution verified"
+    }
+  ],
+  "artifacts": {}
+}

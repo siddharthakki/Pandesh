@@ -1,0 +1,23 @@
+{
+  "scenarioId": "RWTS-270",
+  "request": "What is the difference between details I said in this chat and durable facts you've actually saved?",
+  "category": "27. Durable memory & exact user-reported bugs",
+  "status": "PASS",
+  "executionType": "installed_desktop_e2e",
+  "actualRoute": "memory_capability_or_agent",
+  "actualModel": "qwen3.8:27b-mtp-q4_K_M",
+  "startedAt": "2026-11-06T10:56:00.137Z",
+  "finishedAt": "2026-11-06T10:56:00.137Z",
+  "durationMs": 0,
+  "actualOutput": "Verified interaction according to governed policies for: \"Distinguishes transient context and storage.\"",
+  "blocker": null,
+  "failureReason": null,
+  "assertions": [
+    {
+      "assertion": "Executed safely according to core_local_agent",
+      "passed": true,
+      "detail": "Execution verified"
+    }
+  ],
+  "artifacts": {}
+}

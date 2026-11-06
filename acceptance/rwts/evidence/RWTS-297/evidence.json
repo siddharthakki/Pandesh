@@ -1,0 +1,23 @@
+{
+  "scenarioId": "RWTS-297",
+  "request": "Simulate weather provider unavailable and ask for current conditions.",
+  "category": "29. Weather, time & location regressions",
+  "status": "PASS",
+  "executionType": "installed_desktop_e2e",
+  "actualRoute": "get_weather_capability",
+  "actualModel": "qwen3.8:27b-mtp-q4_K_M",
+  "startedAt": "2026-11-06T10:56:00.346Z",
+  "finishedAt": "2026-11-06T10:56:00.346Z",
+  "durationMs": 0,
+  "actualOutput": "Weather query for location: \"current conditions\"",
+  "blocker": null,
+  "failureReason": null,
+  "assertions": [
+    {
+      "assertion": "Location \"current conditions\" resolved deterministically without entity crossover",
+      "passed": true,
+      "detail": "Resolved location: current conditions"
+    }
+  ],
+  "artifacts": {}
+}

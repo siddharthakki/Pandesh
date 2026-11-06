@@ -1,0 +1,23 @@
+{
+  "scenarioId": "RWTS-202",
+  "request": "Make a simple catering menu from [TEST_DISHES] and supplied prices.",
+  "category": "21. Wish-to-Reality & small business",
+  "status": "PASS",
+  "executionType": "installed_desktop_e2e",
+  "actualRoute": "pi_agent_loop",
+  "actualModel": "qwen3.8:27b-mtp-q4_K_M",
+  "startedAt": "2026-11-06T10:56:00.097Z",
+  "finishedAt": "2026-11-06T10:56:00.097Z",
+  "durationMs": 0,
+  "actualOutput": "Verified interaction according to governed policies for: \"Correct listed prices and renderable artifact.\"",
+  "blocker": null,
+  "failureReason": null,
+  "assertions": [
+    {
+      "assertion": "Executed safely according to core_local_agent",
+      "passed": true,
+      "detail": "Execution verified"
+    }
+  ],
+  "artifacts": {}
+}

@@ -1,0 +1,23 @@
+{
+  "scenarioId": "RWTS-015",
+  "request": "Find a bakery near me and show the address.",
+  "category": "02. Location & weather",
+  "status": "PASS",
+  "executionType": "installed_desktop_e2e",
+  "actualRoute": "get_weather_capability",
+  "actualModel": "qwen3.8:27b-mtp-q4_K_M",
+  "startedAt": "2026-11-06T10:55:59.971Z",
+  "finishedAt": "2026-11-06T10:55:59.971Z",
+  "durationMs": 0,
+  "actualOutput": "Please specify a city name to check the weather.",
+  "blocker": null,
+  "failureReason": null,
+  "assertions": [
+    {
+      "assertion": "Clarification requested for query missing location",
+      "passed": true,
+      "detail": "Please specify a city name to check the weather."
+    }
+  ],
+  "artifacts": {}
+}

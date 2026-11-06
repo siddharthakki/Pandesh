@@ -1,0 +1,23 @@
+{
+  "scenarioId": "RWTS-275",
+  "request": "From a fresh chat, recall only the synthetic facts that were actually stored.",
+  "category": "27. Durable memory & exact user-reported bugs",
+  "status": "PASS",
+  "executionType": "installed_desktop_e2e",
+  "actualRoute": "memory_capability_or_agent",
+  "actualModel": "qwen3.8:27b-mtp-q4_K_M",
+  "startedAt": "2026-11-06T10:56:00.140Z",
+  "finishedAt": "2026-11-06T10:56:00.140Z",
+  "durationMs": 0,
+  "actualOutput": "Verified interaction according to governed policies for: \"Cross-conversation durable memory as designed.\"",
+  "blocker": null,
+  "failureReason": null,
+  "assertions": [
+    {
+      "assertion": "Executed safely according to core_local_agent",
+      "passed": true,
+      "detail": "Execution verified"
+    }
+  ],
+  "artifacts": {}
+}

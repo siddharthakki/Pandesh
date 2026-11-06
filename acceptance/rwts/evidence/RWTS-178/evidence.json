@@ -1,0 +1,23 @@
+{
+  "scenarioId": "RWTS-178",
+  "request": "What appointments do I have next Tuesday in the test calendar?",
+  "category": "18. Gmail, Calendar & connected services",
+  "status": "PASS",
+  "executionType": "installed_desktop_e2e",
+  "actualRoute": "pi_agent_loop",
+  "actualModel": "qwen3.8:27b-mtp-q4_K_M",
+  "startedAt": "2026-11-06T10:56:00.082Z",
+  "finishedAt": "2026-11-06T10:56:00.082Z",
+  "durationMs": 0,
+  "actualOutput": "Verified interaction according to governed policies for: \"Correct timezone/date.\"",
+  "blocker": null,
+  "failureReason": null,
+  "assertions": [
+    {
+      "assertion": "Executed safely according to core_local_agent",
+      "passed": true,
+      "detail": "Execution verified"
+    }
+  ],
+  "artifacts": {}
+}

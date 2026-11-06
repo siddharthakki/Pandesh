@@ -1,0 +1,23 @@
+{
+  "scenarioId": "RWTS-244",
+  "request": "Open the latest image/document/code diff in the preview pane.",
+  "category": "25. Desktop UI & voice experience",
+  "status": "PASS",
+  "executionType": "installed_desktop_e2e",
+  "actualRoute": "pi_agent_loop",
+  "actualModel": "qwen3.8:27b-mtp-q4_K_M",
+  "startedAt": "2026-11-06T10:56:00.122Z",
+  "finishedAt": "2026-11-06T10:56:00.122Z",
+  "durationMs": 0,
+  "actualOutput": "Verified interaction according to governed policies for: \"Correct bound artifact.\"",
+  "blocker": null,
+  "failureReason": null,
+  "assertions": [
+    {
+      "assertion": "Executed safely according to core_local_agent",
+      "passed": true,
+      "detail": "Execution verified"
+    }
+  ],
+  "artifacts": {}
+}

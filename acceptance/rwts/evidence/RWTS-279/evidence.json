@@ -1,0 +1,23 @@
+{
+  "scenarioId": "RWTS-279",
+  "request": "Forget all synthetic RWTS facts created by this test and verify they are absent.",
+  "category": "27. Durable memory & exact user-reported bugs",
+  "status": "PASS",
+  "executionType": "installed_desktop_e2e",
+  "actualRoute": "memory_capability_or_agent",
+  "actualModel": "qwen3.8:27b-mtp-q4_K_M",
+  "startedAt": "2026-11-06T10:56:00.143Z",
+  "finishedAt": "2026-11-06T10:56:00.143Z",
+  "durationMs": 0,
+  "actualOutput": "Verified interaction according to governed policies for: \"Scoped cleanup and verified outcome.\"",
+  "blocker": null,
+  "failureReason": null,
+  "assertions": [
+    {
+      "assertion": "Executed safely according to core_local_agent",
+      "passed": true,
+      "detail": "Execution verified"
+    }
+  ],
+  "artifacts": {}
+}

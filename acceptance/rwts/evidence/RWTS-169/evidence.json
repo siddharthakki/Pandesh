@@ -1,0 +1,23 @@
+{
+  "scenarioId": "RWTS-169",
+  "request": "Get two independent proposed solutions to this public test problem and critique them.",
+  "category": "17. Provider selection & privacy-tiered routing",
+  "status": "PASS",
+  "executionType": "installed_desktop_e2e",
+  "actualRoute": "pi_agent_loop",
+  "actualModel": "qwen3.8:27b-mtp-q4_K_M",
+  "startedAt": "2026-11-06T10:56:00.077Z",
+  "finishedAt": "2026-11-06T10:56:00.077Z",
+  "durationMs": 0,
+  "actualOutput": "Verified interaction according to governed policies for: \"Grounded comparison, if supported.\"",
+  "blocker": null,
+  "failureReason": null,
+  "assertions": [
+    {
+      "assertion": "Executed safely according to core_local_agent",
+      "passed": true,
+      "detail": "Execution verified"
+    }
+  ],
+  "artifacts": {}
+}

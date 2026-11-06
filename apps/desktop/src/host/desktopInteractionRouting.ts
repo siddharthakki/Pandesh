@@ -167,7 +167,7 @@ export function extractImageGenerationPrompt(text: string): string {
  * `get_weather` capability, never left to the model's own tool-calling. */
 const WEATHER_NOUN = /\b(weather|temperature|forecast|rain(?:ing|y)?|snow(?:ing|y)?|humidity)\b/i;
 const WEATHER_LOCATION_PHRASE =
-  /\b(?:weather|temperature|forecast|rain(?:ing|y)?|snow(?:ing|y)?)\b(?:\s+\w+)*?\s+(?:in|for|at)\s+([a-z][a-z\s.',-]*?)(?=\s+(?:right now|today|tonight|tomorrow|currently|now|this (?:week|morning|afternoon|evening|weekend)|for (?:today|tonight|tomorrow|now|this)|please)\b|[?.!]|$)/i;
+  /\b(?:weather|temperature|forecast|rain(?:ing|y)?|snow(?:ing|y)?)\b(?:\s+\w+)*?\s+(?:in|for|at)\s+([a-z\u00C0-\u024F][a-z\u00C0-\u024F\s.',-]*?)(?=\s+(?:right now|today|tonight|tomorrow|currently|now|this (?:week|morning|afternoon|evening|weekend)|for (?:today|tonight|tomorrow|now|this)|please)\b|[?.!]|$)/i;
 
 export function detectWeatherIntent(text: string, lastLocation?: string | null): boolean {
   const trimmed = text.trim();
@@ -195,8 +195,8 @@ export function extractWeatherLocation(text: string): string | null {
 }
 
 export function extractWeatherComparison(text: string): { locationA: string; locationB: string } | null {
-  const match = text.match(/\bcompare\s+(?:the\s+)?(?:today'?s\s+)?weather\s+(?:between|in|for)?\s+([A-Za-z\s.,-]+?)\s+(?:and|vs\.?|versus)\s+([A-Za-z\s.,-]+?)(?=[.?!\n]|$)/i)
-    || text.match(/\bweather\s+in\s+([A-Za-z\s.,-]+?)\s+(?:and|vs\.?|versus)\s+(?:in\s+)?([A-Za-z\s.,-]+?)(?=[.?!\n]|$)/i);
+  const match = text.match(/\bcompare\s+(?:the\s+)?(?:today'?s\s+)?weather\s+(?:between|in|for)?\s+([A-Za-z\u00C0-\u024F\s.,-]+?)\s+(?:and|vs\.?|versus)\s+([A-Za-z\u00C0-\u024F\s.,-]+?)(?=[.?!\n]|$)/i)
+    || text.match(/\bweather\s+in\s+([A-Za-z\u00C0-\u024F\s.,-]+?)\s+(?:and|vs\.?|versus)\s+(?:in\s+)?([A-Za-z\u00C0-\u024F\s.,-]+?)(?=[.?!\n]|$)/i);
   if (match) {
     const a = match[1].trim().replace(/,\s*$/, '');
     const b = match[2].trim().replace(/,\s*$/, '');

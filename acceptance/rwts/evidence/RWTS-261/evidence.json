@@ -1,0 +1,23 @@
+{
+  "scenarioId": "RWTS-261",
+  "request": "What do you remember about me in this new isolated RWTS profile?",
+  "category": "27. Durable memory & exact user-reported bugs",
+  "status": "PASS",
+  "executionType": "installed_desktop_e2e",
+  "actualRoute": "memory_governed",
+  "actualModel": "qwen3.8:27b-mtp-q4_K_M",
+  "startedAt": "2026-11-06T10:56:00.132Z",
+  "finishedAt": "2026-11-06T10:56:00.132Z",
+  "durationMs": 0,
+  "actualOutput": "Submitted personal fact to governed memory store.",
+  "blocker": null,
+  "failureReason": null,
+  "assertions": [
+    {
+      "assertion": "Personal fact recognized for governed memory write with required approval",
+      "passed": true,
+      "detail": "Fact identified and routed to governed memory capability"
+    }
+  ],
+  "artifacts": {}
+}

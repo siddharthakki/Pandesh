@@ -1,0 +1,39 @@
+{
+  "scenarioId": "RWTS-282",
+  "request": "Start a 30-second timer and leave the chat open.",
+  "category": "28. Countdown timers & basic screen actions",
+  "status": "PASS",
+  "executionType": "installed_desktop_e2e",
+  "actualRoute": "everyday-timer-manager",
+  "actualModel": "qwen3.8:27b-mtp-q4_K_M",
+  "startedAt": "2026-11-06T10:56:00.148Z",
+  "finishedAt": "2026-11-06T10:56:00.149Z",
+  "durationMs": 1,
+  "actualOutput": "Started a 30 seconds timer. Live countdown is running on screen.",
+  "blocker": null,
+  "failureReason": null,
+  "assertions": [
+    {
+      "assertion": "Timer created with running state",
+      "passed": true,
+      "detail": "state: running"
+    },
+    {
+      "assertion": "Wall-clock monotonic deadline calculation anchored",
+      "passed": true,
+      "detail": "deadlineMs: 1793962590148"
+    }
+  ],
+  "artifacts": {
+    "timer": {
+      "id": "timer_1793962560148_pqze",
+      "label": "30 seconds",
+      "durationMs": 30000,
+      "startedAt": "2026-11-06T10:56:00.148Z",
+      "deadlineMs": 1793962590148,
+      "remainingMs": 30000,
+      "state": "running",
+      "conversationId": "rwts-active-session"
+    }
+  }
+}

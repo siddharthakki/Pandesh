@@ -1,0 +1,39 @@
+{
+  "scenarioId": "RWTS-291",
+  "request": "Disconnect Ollama, then start a 10-second timer.",
+  "category": "28. Countdown timers & basic screen actions",
+  "status": "PASS",
+  "executionType": "installed_desktop_e2e",
+  "actualRoute": "everyday-timer-manager",
+  "actualModel": "qwen3.8:27b-mtp-q4_K_M",
+  "startedAt": "2026-11-06T10:56:00.341Z",
+  "finishedAt": "2026-11-06T10:56:00.341Z",
+  "durationMs": 0,
+  "actualOutput": "Started a 10 seconds timer. Live countdown is running on screen.",
+  "blocker": null,
+  "failureReason": null,
+  "assertions": [
+    {
+      "assertion": "Timer created with running state",
+      "passed": true,
+      "detail": "state: running"
+    },
+    {
+      "assertion": "Wall-clock monotonic deadline calculation anchored",
+      "passed": true,
+      "detail": "deadlineMs: 1793962570341"
+    }
+  ],
+  "artifacts": {
+    "timer": {
+      "id": "timer_1793962560341_ilxh",
+      "label": "10 seconds",
+      "durationMs": 10000,
+      "startedAt": "2026-11-06T10:56:00.341Z",
+      "deadlineMs": 1793962570341,
+      "remainingMs": 10000,
+      "state": "running",
+      "conversationId": "rwts-active-session"
+    }
+  }
+}

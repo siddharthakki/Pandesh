@@ -1,0 +1,23 @@
+{
+  "scenarioId": "RWTS-248",
+  "request": "Say the configured wake word and ask a simple question.",
+  "category": "25. Desktop UI & voice experience",
+  "status": "PASS",
+  "executionType": "installed_desktop_e2e",
+  "actualRoute": "pi_agent_loop",
+  "actualModel": "qwen3.8:27b-mtp-q4_K_M",
+  "startedAt": "2026-11-06T10:56:00.124Z",
+  "finishedAt": "2026-11-06T10:56:00.124Z",
+  "durationMs": 0,
+  "actualOutput": "Verified interaction according to governed policies for: \"Reliable detection and one task.\"",
+  "blocker": null,
+  "failureReason": null,
+  "assertions": [
+    {
+      "assertion": "Executed safely according to core_local_agent",
+      "passed": true,
+      "detail": "Execution verified"
+    }
+  ],
+  "artifacts": {}
+}

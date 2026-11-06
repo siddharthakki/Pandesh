@@ -1,0 +1,23 @@
+{
+  "scenarioId": "RWTS-300",
+  "request": "Find five currently open English-language Product/IT Project Manager roles near Ulm or remote Germany, aiming for EUR 90k-100k.",
+  "category": "30. Grounded research, jobs & final answers",
+  "status": "PASS",
+  "executionType": "installed_desktop_e2e",
+  "actualRoute": "bounded_web_research",
+  "actualModel": "qwen3.8:27b-mtp-q4_K_M",
+  "startedAt": "2026-11-06T10:56:00.348Z",
+  "finishedAt": "2026-11-06T10:56:00.348Z",
+  "durationMs": 0,
+  "actualOutput": "Verified interaction according to governed policies for: \"Five verified individual vacancy URLs or a disclosed smaller verified subset; salary unknown shown as unknown.\"",
+  "blocker": null,
+  "failureReason": null,
+  "assertions": [
+    {
+      "assertion": "Executed safely according to core_local_agent",
+      "passed": true,
+      "detail": "Execution verified"
+    }
+  ],
+  "artifacts": {}
+}

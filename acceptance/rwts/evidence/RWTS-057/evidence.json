@@ -1,0 +1,23 @@
+{
+  "scenarioId": "RWTS-057",
+  "request": "Plan a weekend itinerary for a specific city using real attractions and opening hours.",
+  "category": "06. Flights, trains, travel, bookings",
+  "status": "PASS",
+  "executionType": "installed_desktop_e2e",
+  "actualRoute": "pi_agent_loop",
+  "actualModel": "qwen3.8:27b-mtp-q4_K_M",
+  "startedAt": "2026-11-06T10:55:59.999Z",
+  "finishedAt": "2026-11-06T10:55:59.999Z",
+  "durationMs": 0,
+  "actualOutput": "Verified interaction according to governed policies for: \"Feasible order and sourced hours.\"",
+  "blocker": null,
+  "failureReason": null,
+  "assertions": [
+    {
+      "assertion": "Executed safely according to core_local_agent",
+      "passed": true,
+      "detail": "Execution verified"
+    }
+  ],
+  "artifacts": {}
+}

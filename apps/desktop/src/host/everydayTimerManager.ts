@@ -265,8 +265,34 @@ export class EverydayTimerManager {
     if (list.length === 0) return null;
     if (!target) return list[0];
 
-    const q = target.toLowerCase().trim();
-    return list.find((t) => t.id === target || t.label.toLowerCase().includes(q)) ?? list[0];
+    const raw = target.toLowerCase().trim();
+    const cleanTarget = raw.replace(/^id:/i, '').trim();
+
+    // 1. Direct ID match
+    const byId = list.find((t) => t.id === cleanTarget || t.id.toLowerCase() === cleanTarget);
+    if (byId) return byId;
+
+    // 2. Relative ordinal / duration matching (short, long, first, second)
+    if (cleanTarget === 'short' || cleanTarget === 'shorter') {
+      return list.slice().sort((a, b) => a.durationMs - b.durationMs)[0];
+    }
+    if (cleanTarget === 'long' || cleanTarget === 'longer') {
+      return list.slice().sort((a, b) => b.durationMs - a.durationMs)[0];
+    }
+    if (cleanTarget === 'first') {
+      return list.slice().sort((a, b) => Date.parse(a.startedAt) - Date.parse(b.startedAt))[0];
+    }
+    if (cleanTarget === 'second') {
+      const sorted = list.slice().sort((a, b) => Date.parse(a.startedAt) - Date.parse(b.startedAt));
+      return sorted[1] ?? sorted[0];
+    }
+
+    // 3. Label matching
+    const byLabel = list.find((t) => t.label.toLowerCase().includes(cleanTarget));
+    if (byLabel) return byLabel;
+
+    // 4. Do not mutate unintended timer if specific target was given but not found
+    return null;
   }
 
   private formatRemaining(ms: number): string {

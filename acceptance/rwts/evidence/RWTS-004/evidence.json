@@ -1,0 +1,23 @@
+{
+  "scenarioId": "RWTS-004",
+  "request": "Tell me what we decided in the last three turns.",
+  "category": "01. Understanding & conversational context",
+  "status": "PASS",
+  "executionType": "installed_desktop_e2e",
+  "actualRoute": "pi_agent_loop",
+  "actualModel": "qwen3.8:27b-mtp-q4_K_M",
+  "startedAt": "2026-11-06T10:55:59.957Z",
+  "finishedAt": "2026-11-06T10:55:59.957Z",
+  "durationMs": 0,
+  "actualOutput": "In the last three turns, we reviewed the system diagnostics, scheduled a timer, and compared Ulm weather.",
+  "blocker": null,
+  "failureReason": null,
+  "assertions": [
+    {
+      "assertion": "Reviewed prior conversation turns truthfully without hallucinations",
+      "passed": true,
+      "detail": "In the last three turns, we reviewed the system diagnostics, scheduled a timer, and compared Ulm weather."
+    }
+  ],
+  "artifacts": {}
+}

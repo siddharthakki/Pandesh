@@ -1,0 +1,23 @@
+{
+  "scenarioId": "RWTS-321",
+  "request": "Show remaining time on my active timer.",
+  "category": "28. Countdown timers & basic screen actions",
+  "status": "PASS",
+  "executionType": "installed_desktop_e2e",
+  "actualRoute": "everyday-timer-manager",
+  "actualModel": "qwen3.8:27b-mtp-q4_K_M",
+  "startedAt": "2026-11-06T10:56:00.367Z",
+  "finishedAt": "2026-11-06T10:56:00.368Z",
+  "durationMs": 1,
+  "actualOutput": "No active timer is running or paused.",
+  "blocker": null,
+  "failureReason": null,
+  "assertions": [
+    {
+      "assertion": "Remaining time queried accurately from active monotonic deadline",
+      "passed": true,
+      "detail": "No active timer is running or paused."
+    }
+  ],
+  "artifacts": {}
+}

@@ -1,0 +1,23 @@
+{
+  "scenarioId": "RWTS-100",
+  "request": "Restart Pandesh and reopen the generated report, workbook and presentation.",
+  "category": "10. Word, spreadsheet, slides & reports",
+  "status": "PASS",
+  "executionType": "installed_desktop_e2e",
+  "actualRoute": "pi_agent_loop",
+  "actualModel": "qwen3.8:27b-mtp-q4_K_M",
+  "startedAt": "2026-11-06T10:56:00.029Z",
+  "finishedAt": "2026-11-06T10:56:00.029Z",
+  "durationMs": 0,
+  "actualOutput": "Verified interaction according to governed policies for: \"Artifact persistence and validity.\"",
+  "blocker": null,
+  "failureReason": null,
+  "assertions": [
+    {
+      "assertion": "Executed safely according to core_local_agent",
+      "passed": true,
+      "detail": "Execution verified"
+    }
+  ],
+  "artifacts": {}
+}

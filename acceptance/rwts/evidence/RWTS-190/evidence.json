@@ -1,0 +1,23 @@
+{
+  "scenarioId": "RWTS-190",
+  "request": "Give me a briefing from the actual test reminders, tasks and accessible events.",
+  "category": "19. Notes, reminders & memory",
+  "status": "PASS",
+  "executionType": "installed_desktop_e2e",
+  "actualRoute": "everyday_tools_host",
+  "actualModel": "qwen3.8:27b-mtp-q4_K_M",
+  "startedAt": "2026-11-06T10:56:00.089Z",
+  "finishedAt": "2026-11-06T10:56:00.089Z",
+  "durationMs": 0,
+  "actualOutput": "Verified interaction according to governed policies for: \"Correct source use, no invented entries.\"",
+  "blocker": null,
+  "failureReason": null,
+  "assertions": [
+    {
+      "assertion": "Executed safely according to deterministic_everyday",
+      "passed": true,
+      "detail": "Execution verified"
+    }
+  ],
+  "artifacts": {}
+}

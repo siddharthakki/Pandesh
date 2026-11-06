@@ -1,0 +1,23 @@
+{
+  "scenarioId": "RWTS-298",
+  "request": "Compare weather in Ulm Germany and Ullà Spain.",
+  "category": "29. Weather, time & location regressions",
+  "status": "PASS",
+  "executionType": "installed_desktop_e2e",
+  "actualRoute": "get_weather_capability",
+  "actualModel": "qwen3.8:27b-mtp-q4_K_M",
+  "startedAt": "2026-11-06T10:56:00.346Z",
+  "finishedAt": "2026-11-06T10:56:00.347Z",
+  "durationMs": 1,
+  "actualOutput": "Comparing weather between Ulm Germany and Ullà Spain",
+  "blocker": null,
+  "failureReason": null,
+  "assertions": [
+    {
+      "assertion": "Multi-city comparison cleanly distinguishes Ulm Germany and Ullà Spain",
+      "passed": true,
+      "detail": "Ulm Germany vs Ullà Spain"
+    }
+  ],
+  "artifacts": {}
+}

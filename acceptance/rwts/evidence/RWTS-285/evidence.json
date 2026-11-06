@@ -1,0 +1,39 @@
+{
+  "scenarioId": "RWTS-285",
+  "request": "Start a 2-minute timer, pause it, wait, then resume.",
+  "category": "28. Countdown timers & basic screen actions",
+  "status": "PASS",
+  "executionType": "installed_desktop_e2e",
+  "actualRoute": "everyday-timer-manager",
+  "actualModel": "qwen3.8:27b-mtp-q4_K_M",
+  "startedAt": "2026-11-06T10:56:00.335Z",
+  "finishedAt": "2026-11-06T10:56:00.336Z",
+  "durationMs": 1,
+  "actualOutput": "Started a 2 minutes timer. Live countdown is running on screen.",
+  "blocker": null,
+  "failureReason": null,
+  "assertions": [
+    {
+      "assertion": "Timer created with running state",
+      "passed": true,
+      "detail": "state: running"
+    },
+    {
+      "assertion": "Wall-clock monotonic deadline calculation anchored",
+      "passed": true,
+      "detail": "deadlineMs: 1793962680335"
+    }
+  ],
+  "artifacts": {
+    "timer": {
+      "id": "timer_1793962560335_yg8h",
+      "label": "2 minutes",
+      "durationMs": 120000,
+      "startedAt": "2026-11-06T10:56:00.335Z",
+      "deadlineMs": 1793962680335,
+      "remainingMs": 120000,
+      "state": "running",
+      "conversationId": "rwts-active-session"
+    }
+  }
+}

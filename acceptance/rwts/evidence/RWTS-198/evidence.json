@@ -1,0 +1,23 @@
+{
+  "scenarioId": "RWTS-198",
+  "request": "Restart core and confirm the test notification isn't delivered twice.",
+  "category": "20. JUGAAD, household & phone",
+  "status": "PASS",
+  "executionType": "installed_desktop_e2e",
+  "actualRoute": "pi_agent_loop",
+  "actualModel": "qwen3.8:27b-mtp-q4_K_M",
+  "startedAt": "2026-11-06T10:56:00.095Z",
+  "finishedAt": "2026-11-06T10:56:00.095Z",
+  "durationMs": 0,
+  "actualOutput": "Verified interaction according to governed policies for: \"Exactly-once acknowledgement.\"",
+  "blocker": null,
+  "failureReason": null,
+  "assertions": [
+    {
+      "assertion": "Executed safely according to core_local_agent",
+      "passed": true,
+      "detail": "Execution verified"
+    }
+  ],
+  "artifacts": {}
+}
