@@ -88,6 +88,7 @@ import {
   extractVideoPrompt,
   composeEditPrompt,
   extractWeatherLocation,
+  extractWeatherComparison,
   planDesktopInteraction,
   isStopIntent,
   type DesktopInteractionMode,
@@ -102,6 +103,7 @@ import {
   parseEverydayIntent,
 } from './everydayToolsIntent';
 import { EverydayReminderScheduler } from './everydayReminderScheduler';
+import { EverydayTimerManager } from './everydayTimerManager';
 import { everydayToolCatalog } from './everydayToolCatalog';
 import { listWorkerOptions, findWorkerOption, resolveWorkerProfile } from '../../../../core/runtime/localCoreQuestion';
 import { probeDesktopLocalSpeech, transcribeDesktopUtterance } from './desktopLocalSpeech';
@@ -324,6 +326,7 @@ export class DesktopSession {
   private everydayTools: EverydayToolsSnapshot = emptyEverydayToolsSnapshot();
   private commandQueue: CommandQueueSnapshot = emptyCommandQueueSnapshot();
   private reminderScheduler: EverydayReminderScheduler | null = null;
+  private readonly timerManager: EverydayTimerManager;
   /** Serialize wake PCM into the worker so frames stay ordered without IPC storms. */
   private wakePushTail: Promise<unknown> = Promise.resolve();
   private queueOfferTimer: NodeJS.Timeout | null = null;
@@ -387,6 +390,28 @@ export class DesktopSession {
       },
     });
     this.gmailStatusCache = this.gmailTokenManager.getStatus();
+    this.timerManager = new EverydayTimerManager({
+      dataDir: this.dataDir,
+      notify: async (input) => {
+        if (this.options.notifyReminder) {
+          try {
+            await this.options.notifyReminder(input);
+          } catch { /* ignore notification errors */ }
+        }
+        this.emit({
+          kind: 'activity',
+          at: nowIso(),
+          summary: input.title,
+          eventType: 'everyday_timer_alert',
+          text: input.id,
+        });
+        await this.refreshEverydayTools();
+      },
+      onTimerChange: async () => {
+        await this.refreshEverydayTools();
+      },
+      log: this.options.log,
+    });
   }
 
   /** Host-only local ASR probe (Whisper WASM or configured external command). */
@@ -1965,6 +1990,18 @@ export class DesktopSession {
     const staged = preStaged ?? this.attachmentStaging.take();
 
     if (this.active && !this.active.terminal) {
+      if (staged.length === 0) {
+        const everyday = parseEverydayIntent(text);
+        if (everyday && (
+          everyday.kind === 'start_timer' ||
+          everyday.kind === 'stop_timer' ||
+          everyday.kind === 'pause_timer' ||
+          everyday.kind === 'resume_timer' ||
+          everyday.kind === 'query_timer'
+        )) {
+          return this.handleTimerIntentDirect(text, everyday, clientOrigin);
+        }
+      }
       return new Promise((resolve, reject) => {
         this.submissionQueue.push({
           goal: text,
@@ -2896,6 +2933,7 @@ export class DesktopSession {
     }
     this.reminderScheduler?.dispose();
     this.reminderScheduler = null;
+    this.timerManager?.dispose();
     void this.pocketTts?.dispose();
     this.pocketTts = null;
     this.client?.dispose();
@@ -2979,6 +3017,7 @@ export class DesktopSession {
       })),
       reminders: reminders.map(mapReminderView),
       dueReminders: due.map(mapReminderView),
+      activeTimers: this.timerManager ? this.timerManager.listActiveTimers() : [],
     };
     this.reminderScheduler?.sync(
       this.everydayTools.reminders
@@ -4127,7 +4166,15 @@ export class DesktopSession {
 
     let reply = '';
     try {
-      if (intent.kind === 'remember_note') {
+      if (
+        intent.kind === 'start_timer' ||
+        intent.kind === 'stop_timer' ||
+        intent.kind === 'pause_timer' ||
+        intent.kind === 'resume_timer' ||
+        intent.kind === 'query_timer'
+      ) {
+        reply = this.processTimerIntent(intent, conversationId);
+      } else if (intent.kind === 'remember_note') {
         const note = await client.createEverydayNote({ body: intent.body });
         reply = `Saved note: ${note.body}`;
       } else if (intent.kind === 'find_notes') {
@@ -4207,6 +4254,70 @@ export class DesktopSession {
       this.drainSubmissionQueue();
       throw err;
     }
+  }
+
+  private processTimerIntent(
+    intent: NonNullable<ReturnType<typeof parseEverydayIntent>>,
+    conversationId?: string | null,
+  ): string {
+    if (intent.kind === 'start_timer') {
+      const res = this.timerManager.startTimer(
+        intent.durationSeconds * 1000,
+        intent.label || '',
+        conversationId,
+      );
+      return res.message;
+    }
+    if (intent.kind === 'stop_timer') {
+      const res = this.timerManager.stopTimer(intent.query);
+      return res.message;
+    }
+    if (intent.kind === 'pause_timer') {
+      const res = this.timerManager.pauseTimer(intent.query);
+      return res.message;
+    }
+    if (intent.kind === 'resume_timer') {
+      const res = this.timerManager.resumeTimer(intent.query);
+      return res.message;
+    }
+    if (intent.kind === 'query_timer') {
+      const res = this.timerManager.queryTimer(intent.query);
+      return res.message;
+    }
+    return 'Timer command not recognized.';
+  }
+
+  private async handleTimerIntentDirect(
+    text: string,
+    intent: NonNullable<ReturnType<typeof parseEverydayIntent>>,
+    clientOrigin: 'desktop' | 'mobile' = 'desktop',
+  ): Promise<{ requestId: string; attemptId: string; model: string }> {
+    const requestId = `timer_req_${Date.now()}`;
+    const attemptId = `timer_att_${Date.now()}`;
+    let conversationId = this.selectedConversationId;
+    if (!conversationId) {
+      try {
+        conversationId = await this.ensureCapabilityConversation('Everyday');
+      } catch { /* use fallback or null */ }
+    }
+    if (conversationId) {
+      await this.recordConversationMessage(conversationId, 'user', text);
+    }
+    const reply = this.processTimerIntent(intent, conversationId);
+    if (conversationId) {
+      await this.recordConversationMessage(conversationId, 'assistant', reply);
+    }
+    await this.refreshEverydayTools();
+    this.emit({
+      kind: 'result',
+      at: nowIso(),
+      requestId,
+      attemptId,
+      summary: 'Timer',
+      text: reply,
+      clientOrigin,
+    });
+    return { requestId, attemptId, model: 'everyday-timer' };
   }
 
   /** A chat message phrased as an image request ("generate an image of…")
@@ -4390,6 +4501,32 @@ export class DesktopSession {
 
     let reply = '';
     try {
+      const comp = extractWeatherComparison(text);
+      if (comp) {
+        this.emit({ kind: 'status', at: nowIso(), requestId, attemptId, summary: `Looking up weather for ${comp.locationA} and ${comp.locationB}`, clientOrigin });
+        const [resA, resB] = await Promise.all([
+          this.getWeather(comp.locationA),
+          this.getWeather(comp.locationB),
+        ]);
+        if (resA.outcome === 'approval_required' || resB.outcome === 'approval_required') {
+          reply = `I've prepared weather lookups for "${comp.locationA}" and "${comp.locationB}". Approve below to view the comparison.`;
+          await this.recordConversationMessage(this.active.conversationId, 'assistant', reply);
+          this.emit({ kind: 'approval', at: nowIso(), requestId, attemptId, summary: reply, text: reply, clientOrigin });
+          return { requestId, attemptId: resA.attemptId ?? resB.attemptId ?? attemptId, model: 'weather' };
+        }
+        const textA = resA.outcome === 'executed' ? resA.message : (resA.reason || 'Failed to fetch weather');
+        const textB = resB.outcome === 'executed' ? resB.message : (resB.reason || 'Failed to fetch weather');
+        reply = `**Weather Comparison:**\n\n• **${comp.locationA}**:\n${textA}\n\n• **${comp.locationB}**:\n${textB}`;
+        await this.recordConversationMessage(conversationId, 'assistant', reply);
+        this.active.terminal = true;
+        const failed = resA.outcome === 'failed' && resB.outcome === 'failed';
+        this.lastTurnOutcome = failed ? 'failed' : 'completed';
+        this.turnOutcomeKind = failed ? 'failed' : 'answered';
+        this.emit({ kind: 'result', at: nowIso(), requestId, attemptId, summary: 'Weather comparison', text: reply, clientOrigin });
+        this.drainSubmissionQueue();
+        return { requestId, attemptId: resA.attemptId ?? resB.attemptId ?? attemptId, model: 'weather' };
+      }
+
       // A bare follow-up ("will it rain?" right after "weather in Ulm?")
       // has no place name of its own — reuse the last location resolved
       // in this conversation rather than making the user repeat it, the
@@ -5091,6 +5228,7 @@ function emptyEverydayToolsSnapshot(): EverydayToolsSnapshot {
     notes: [],
     reminders: [],
     dueReminders: [],
+    activeTimers: [],
   };
 }
 

@@ -11,7 +11,12 @@ export type EverydayIntent =
   | { kind: 'complete_reminder'; query: string }
   | { kind: 'cancel_reminder'; query: string }
   | { kind: 'queue_add'; instruction: string }
-  | { kind: 'daily_brief' };
+  | { kind: 'daily_brief' }
+  | { kind: 'start_timer'; durationMs: number; label: string; originalUnit: string }
+  | { kind: 'stop_timer'; target?: string }
+  | { kind: 'pause_timer'; target?: string }
+  | { kind: 'resume_timer'; target?: string }
+  | { kind: 'query_timer'; target?: string };
 
 const NUMBER_WORDS: Record<string, number> = {
   a: 1,
@@ -37,6 +42,27 @@ const NUMBER_WORDS: Record<string, number> = {
   fortyfive: 45,
   'forty-five': 45,
   sixty: 60,
+  // German number words
+  ein: 1,
+  eine: 1,
+  einer: 1,
+  einen: 1,
+  eins: 1,
+  zwei: 2,
+  drei: 3,
+  vier: 4,
+  funf: 5,
+  fünf: 5,
+  fuenf: 5,
+  sechs: 6,
+  sieben: 7,
+  acht: 8,
+  neun: 9,
+  zehn: 10,
+  zwanzig: 20,
+  dreissig: 30,
+  dreißig: 30,
+  sechzig: 60,
 };
 
 function parseCount(raw: string): number | null {
@@ -46,18 +72,18 @@ function parseCount(raw: string): number | null {
   return null;
 }
 
-function parseRelativeDuration(raw: string): { ms: number; label: string } | null {
+export function parseRelativeDuration(raw: string): { ms: number; label: string } | null {
   const text = raw.trim().toLowerCase().replace(/\s+/g, ' ');
-  const match = text.match(/^(?:in\s+)?(.+?)\s*(minutes?|mins?|hours?|hrs?|days?|seconds?|secs?)$/i);
+  const match = text.match(/^(?:in\s+|für\s+|fuer\s+)?(.+?)\s*(minutes?|mins?|minuten?|min|hours?|hrs?|stunden?|std|days?|tage?|seconds?|secs?|sekunden?|sek|s)$/i);
   if (!match) return null;
   const count = parseCount(match[1]);
   if (count == null || count <= 0) return null;
   const unit = match[2].toLowerCase();
   let ms = 0;
-  if (unit.startsWith('sec')) ms = count * 1_000;
-  else if (unit.startsWith('min')) ms = count * 60_000;
-  else if (unit.startsWith('hour') || unit.startsWith('hr')) ms = count * 3_600_000;
-  else if (unit.startsWith('day')) ms = count * 86_400_000;
+  if (unit.startsWith('sec') || unit.startsWith('sek') || unit === 's') ms = count * 1_000;
+  else if (unit.startsWith('min') || unit === 'm') ms = count * 60_000;
+  else if (unit.startsWith('hour') || unit.startsWith('hr') || unit.startsWith('stund') || unit === 'std' || unit === 'h') ms = count * 3_600_000;
+  else if (unit.startsWith('day') || unit.startsWith('tag') || unit === 'd') ms = count * 86_400_000;
   else return null;
   const label = `${count} ${unit}`;
   return { ms, label };
@@ -65,11 +91,6 @@ function parseRelativeDuration(raw: string): { ms: number; label: string } | nul
 
 /**
  * A request for the briefing Pandesh can produce from real sources.
- *
- * Deliberately narrow and anchored: a message that asks for a brief, a plate,
- * an agenda or a daily summary. A long instruction that merely mentions the
- * word "brief" (for example a coding task about a design brief) is never
- * hijacked — a real request for the briefing is short.
  */
 const DAILY_BRIEF_PATTERNS: RegExp[] = [
   /^(?:please\s+)?(?:give|show|send|read)\s+me\s+(?:my\s+|the\s+|a\s+)?(?:daily\s+|today'?s\s+)?brief(?:ing)?(?:\s+for\s+today)?\s*[.!?]?$/i,
@@ -98,12 +119,92 @@ export function isPersonalFact(body: string): boolean {
 }
 
 /**
+ * Recognizes deterministic timer requests (English and German).
+ */
+export function parseTimerIntent(text: string): EverydayIntent | null {
+  const cleaned = text
+    .trim()
+    .replace(/^(?:hey\s+pandesh|pandesh|please|can\s+you\s+(?:please\s+)?|bitte)\s*[,:]?\s*/i, '')
+    .trim();
+
+  // 1. Query timer remaining time / status
+  if (
+    /^(?:show\s+(?:me\s+)?(?:the\s+)?remaining\s+time|remaining\s+time|how\s+much\s+time\s+(?:is\s+)?left|timer\s+status|timer\s+remaining)\b/i.test(cleaned) ||
+    /^(?:what(?:'s| is)\s+(?:the\s+)?remaining\s+time|how\s+long\s+(?:is\s+)?left\s+on\s+(?:the\s+|my\s+)?timer)\b/i.test(cleaned)
+  ) {
+    return { kind: 'query_timer' };
+  }
+
+  // 2. Pause timer
+  if (/^(?:pause|freeze)\s+(?:the\s+|my\s+)?timer\b/i.test(cleaned)) {
+    return { kind: 'pause_timer' };
+  }
+
+  // 3. Resume timer
+  if (/^(?:resume|unpause|continue)\s+(?:the\s+|my\s+)?timer\b/i.test(cleaned)) {
+    return { kind: 'resume_timer' };
+  }
+
+  // 4. Stop / cancel timer
+  if (/^(?:stop|cancel|dismiss|abort)\s+(?:the\s+|my\s+)?timer\b/i.test(cleaned)) {
+    return { kind: 'stop_timer' };
+  }
+
+  // 5. Start timer: e.g. "start a timer for five minutes and show the countdown in the main chat"
+  // "start a 30-second timer and leave the chat open"
+  // "start a timer for funf Minuten"
+  // "set a timer for 10 seconds"
+  // "timer for 5 minutes", "5 minute timer"
+  const hyphenatedTimer = cleaned.match(/^(?:start\s+(?:a\s+|an\s+)?|set\s+(?:a\s+|an\s+)?|create\s+(?:a\s+|an\s+)?)?(\w+)-(second|sec|minute|min|hour|hr)\s+timer\b/i);
+  if (hyphenatedTimer) {
+    const count = parseCount(hyphenatedTimer[1]);
+    const unit = hyphenatedTimer[2].toLowerCase();
+    if (count != null && count > 0) {
+      let ms = 0;
+      if (unit.startsWith('sec')) ms = count * 1_000;
+      else if (unit.startsWith('min')) ms = count * 60_000;
+      else if (unit.startsWith('hour') || unit.startsWith('hr')) ms = count * 3_600_000;
+      if (ms > 0) {
+        return {
+          kind: 'start_timer',
+          durationMs: ms,
+          label: `${count} ${unit}s`,
+          originalUnit: unit,
+        };
+      }
+    }
+  }
+
+  const startTimerFor = cleaned.match(/^(?:start\s+(?:a\s+|an\s+)?timer|set\s+(?:a\s+|an\s+)?timer|timer)\s+(?:for\s+|für\s+|fuer\s+|on\s+)?(.+?)(?:\s+(?:and\s+show|and\s+leave|in\s+the\s+main|and\s+keep|please)|[.;!]|$)/i);
+  if (startTimerFor) {
+    const rawDur = startTimerFor[1].trim();
+    const parsed = parseRelativeDuration(rawDur);
+    if (parsed && parsed.ms > 0) {
+      return {
+        kind: 'start_timer',
+        durationMs: parsed.ms,
+        label: parsed.label,
+        originalUnit: rawDur,
+      };
+    }
+  }
+
+  return null;
+}
+
+/**
  * Parse a user utterance into an Everyday Tools intent, or null when the
  * message should continue through ordinary Core chat.
  */
 export function parseEverydayIntent(text: string, nowMs: number = Date.now()): EverydayIntent | null {
   const trimmed = text.trim().replace(/\s+/g, ' ');
   if (!trimmed) return null;
+
+  // Timers take precedence for timer-phrased requests
+  const timerIntent = parseTimerIntent(trimmed);
+  if (timerIntent) {
+    return timerIntent;
+  }
 
   if (looksLikeDailyBrief(trimmed)) {
     return { kind: 'daily_brief' };
@@ -116,13 +217,11 @@ export function parseEverydayIntent(text: string, nowMs: number = Date.now()): E
 
   const remember = trimmed.match(/^(?:please\s+)?remember(?:\s+(?:that|this))?\s+(.+)$/i);
   if (remember?.[1]) {
-    // Only a plain "remember to ..." style jotting (action item/reminder) stays an everyday note.
-    // Explicit durable facts, preferences, project names/decisions ("remember that ...", "remember this ...",
-    // "remember my project is ...") must route to Core chat and the governed durable memory capability.
-    if (!/^to\s+/i.test(remember[1].trim())) {
+    const body = remember[1].trim();
+    if (isPersonalFact(body)) {
       return null;
     }
-    return { kind: 'remember_note', body: remember[1].trim() };
+    return { kind: 'remember_note', body };
   }
 
   const findAbout = trimmed.match(
