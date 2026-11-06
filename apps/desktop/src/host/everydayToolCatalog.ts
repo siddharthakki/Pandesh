@@ -59,6 +59,12 @@ export function everydayToolCatalog(connectorStatuses?: ConnectorStatus[]): Ever
         : 'Set KARKEDIKHA_SEARXNG_URL for the Core service to enable governed web research.',
     },
     {
+      id: 'timers',
+      label: 'Countdown Timers',
+      availability: 'available',
+      detail: 'Live on-screen countdowns with wall-clock deadline tracking, pause, resume, cancel, and desktop completion alerts.',
+    },
+    {
       id: 'pc-health',
       label: 'PC Health',
       availability: 'available',
@@ -68,7 +74,7 @@ export function everydayToolCatalog(connectorStatuses?: ConnectorStatus[]): Ever
     live.get('gmail') ?? { id: 'gmail', label: 'Gmail', availability: 'not_connected', detail: 'Integration follows this tools slice.' },
     live.get('whatsapp') ?? { id: 'whatsapp', label: 'WhatsApp', availability: 'not_connected', detail: 'Integration follows this tools slice.' },
     live.get('printer') ?? { id: 'printer', label: 'Printer', availability: 'not_connected', detail: 'Integration follows this tools slice.' },
-    { id: 'weather', label: 'Weather', availability: 'not_connected', detail: 'Planned integration; not connected.' },
+    { id: 'weather', label: 'Weather', availability: 'available', detail: 'Governed weather forecast and current conditions via Open-Meteo.' },
     { id: 'news', label: 'News', availability: 'not_connected', detail: 'Planned integration; not connected.' },
     {
       id: 'image-generation-studio',

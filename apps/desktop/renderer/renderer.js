@@ -514,6 +514,17 @@ function formatClock(ms) {
   return `${minutes}:${seconds}`;
 }
 
+function formatCountdown(ms) {
+  const total = Math.max(0, Math.floor(ms / 1000));
+  const hours = Math.floor(total / 3600);
+  const minutes = Math.floor((total % 3600) / 60);
+  const seconds = String(total % 60).padStart(2, '0');
+  if (hours > 0) {
+    return `${hours}:${String(minutes).padStart(2, '0')}:${seconds}`;
+  }
+  return `${minutes}:${seconds}`;
+}
+
 function setText(id, value) {
   const node = document.getElementById(id);
   if (node) node.textContent = value;
@@ -1372,8 +1383,66 @@ function renderTodayDue(snapshot) {
   if (!todayDueList || !todayDueEmpty) return;
   todayDueList.replaceChildren();
   const due = snapshot.everydayTools?.dueReminders ?? [];
-  todayDueEmpty.hidden = due.length > 0;
-  todayDueEmpty.textContent = due.length === 0 ? 'No due reminders.' : '';
+  const timers = (snapshot.everydayTools?.activeTimers ?? []).filter((t) => t.state === 'running' || t.state === 'paused');
+  todayDueEmpty.hidden = due.length > 0 || timers.length > 0;
+  todayDueEmpty.textContent = (due.length === 0 && timers.length === 0) ? 'No due reminders or active timers.' : '';
+
+  for (const timer of timers) {
+    const li = document.createElement('li');
+    li.className = 'tools-item tools-item-timer';
+    li.setAttribute('data-timer-id', timer.id);
+    li.setAttribute('data-deadline-ms', String(timer.deadlineMs));
+    li.setAttribute('data-remaining-ms', String(timer.remainingMs));
+    li.setAttribute('data-state', timer.state);
+
+    const body = document.createElement('div');
+    body.className = 'tools-item-body selectable-text';
+    const labelSpan = document.createElement('strong');
+    labelSpan.textContent = `⏱ ${timer.label || 'Timer'}: `;
+    const countSpan = document.createElement('span');
+    countSpan.className = 'timer-countdown-text';
+    const rem = timer.state === 'paused'
+      ? timer.remainingMs
+      : Math.max(0, timer.deadlineMs - Date.now());
+    countSpan.textContent = timer.state === 'paused'
+      ? `${formatCountdown(rem)} (paused)`
+      : formatCountdown(rem);
+
+    body.append(labelSpan, countSpan);
+
+    const actions = document.createElement('div');
+    actions.className = 'row tools-item-actions';
+
+    if (timer.state === 'running') {
+      const pauseBtn = document.createElement('button');
+      pauseBtn.type = 'button';
+      pauseBtn.textContent = 'Pause';
+      pauseBtn.addEventListener('click', async () => {
+        await api.submitTask(timer.label ? `pause timer ${timer.label}` : 'pause timer');
+      });
+      actions.appendChild(pauseBtn);
+    } else {
+      const resumeBtn = document.createElement('button');
+      resumeBtn.type = 'button';
+      resumeBtn.textContent = 'Resume';
+      resumeBtn.addEventListener('click', async () => {
+        await api.submitTask(timer.label ? `resume timer ${timer.label}` : 'resume timer');
+      });
+      actions.appendChild(resumeBtn);
+    }
+
+    const cancelBtn = document.createElement('button');
+    cancelBtn.type = 'button';
+    cancelBtn.textContent = 'Cancel';
+    cancelBtn.addEventListener('click', async () => {
+      await api.submitTask(timer.label ? `cancel timer ${timer.label}` : 'cancel timer');
+    });
+    actions.appendChild(cancelBtn);
+
+    li.append(body, actions);
+    todayDueList.appendChild(li);
+  }
+
   for (const item of due) {
     const li = document.createElement('li');
     const when = formatDueLocal(item.dueAt, item.timezone);
@@ -1480,8 +1549,64 @@ function renderEverydayTools(snapshot) {
   }
   if (remindersList && remindersEmpty) {
     remindersList.replaceChildren();
+    const timers = (tools.activeTimers || []).filter((t) => t.state === 'running' || t.state === 'paused');
     const reminders = tools.reminders || [];
-    remindersEmpty.hidden = reminders.length > 0;
+    remindersEmpty.hidden = reminders.length > 0 || timers.length > 0;
+    for (const timer of timers) {
+      const li = document.createElement('li');
+      li.className = 'tools-item tools-item-timer';
+      li.setAttribute('data-timer-id', timer.id);
+      li.setAttribute('data-deadline-ms', String(timer.deadlineMs));
+      li.setAttribute('data-remaining-ms', String(timer.remainingMs));
+      li.setAttribute('data-state', timer.state);
+
+      const body = document.createElement('div');
+      body.className = 'tools-item-body selectable-text';
+      const labelSpan = document.createElement('strong');
+      labelSpan.textContent = `⏱ ${timer.label || 'Timer'}: `;
+      const countSpan = document.createElement('span');
+      countSpan.className = 'timer-countdown-text';
+      const rem = timer.state === 'paused'
+        ? timer.remainingMs
+        : Math.max(0, timer.deadlineMs - Date.now());
+      countSpan.textContent = timer.state === 'paused'
+        ? `${formatCountdown(rem)} (paused)`
+        : formatCountdown(rem);
+
+      body.append(labelSpan, countSpan);
+
+      const actions = document.createElement('div');
+      actions.className = 'row tools-item-actions';
+
+      if (timer.state === 'running') {
+        const pauseBtn = document.createElement('button');
+        pauseBtn.type = 'button';
+        pauseBtn.textContent = 'Pause';
+        pauseBtn.addEventListener('click', async () => {
+          await api.submitTask(timer.label ? `pause timer ${timer.label}` : 'pause timer');
+        });
+        actions.appendChild(pauseBtn);
+      } else {
+        const resumeBtn = document.createElement('button');
+        resumeBtn.type = 'button';
+        resumeBtn.textContent = 'Resume';
+        resumeBtn.addEventListener('click', async () => {
+          await api.submitTask(timer.label ? `resume timer ${timer.label}` : 'resume timer');
+        });
+        actions.appendChild(resumeBtn);
+      }
+
+      const cancelBtn = document.createElement('button');
+      cancelBtn.type = 'button';
+      cancelBtn.textContent = 'Cancel';
+      cancelBtn.addEventListener('click', async () => {
+        await api.submitTask(timer.label ? `cancel timer ${timer.label}` : 'cancel timer');
+      });
+      actions.appendChild(cancelBtn);
+
+      li.append(body, actions);
+      remindersList.appendChild(li);
+    }
     for (const rem of reminders) {
       const li = document.createElement('li');
       li.className = 'tools-item';
@@ -6328,8 +6453,26 @@ api.onVoiceEvent?.((event) => {
   }
 });
 
+function updateTimerCountdowns() {
+  const timerEls = document.querySelectorAll('[data-timer-id]');
+  for (const el of timerEls) {
+    const state = el.getAttribute('data-state');
+    const countSpan = el.querySelector('.timer-countdown-text');
+    if (!countSpan) continue;
+    if (state === 'paused') {
+      const remainingMs = Number(el.getAttribute('data-remaining-ms') || 0);
+      countSpan.textContent = `${formatCountdown(remainingMs)} (paused)`;
+    } else if (state === 'running') {
+      const deadlineMs = Number(el.getAttribute('data-deadline-ms') || 0);
+      const rem = Math.max(0, deadlineMs - Date.now());
+      countSpan.textContent = rem > 0 ? formatCountdown(rem) : 'Done!';
+    }
+  }
+}
+
 setInterval(() => {
   if (lastSnapshot?.running) renderClocks(lastSnapshot);
+  updateTimerCountdowns();
 }, 1000);
 
 async function refreshHostTelemetry() {

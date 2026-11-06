@@ -1,6 +1,6 @@
 import type { GovernedCapabilityAdapter } from './governedCapability';
 import type { ModelToolCall } from './modelBackend';
-import type { ToolExecutionContext, ToolExecutionResult } from './toolRunner';
+import type { ToolExecutionResult } from './toolRunner';
 
 const MAX_LOCATION_CHARS = 200;
 const FETCH_TIMEOUT_MS = 8_000;
@@ -90,7 +90,7 @@ export function createWeatherCapabilityAdapter(options: WeatherCapabilityOptions
     return response.json();
   }
 
-  async function run(call: ModelToolCall): Promise<ToolExecutionResult> {
+  async function runSingleLocation(call: ModelToolCall): Promise<ToolExecutionResult> {
     const location = typeof call.arguments.location === 'string' ? call.arguments.location.trim() : '';
     if (!location || location.length > MAX_LOCATION_CHARS) {
       return failure('location must be 1-200 characters', 'invalid_arguments');
@@ -112,7 +112,7 @@ export function createWeatherCapabilityAdapter(options: WeatherCapabilityOptions
 
     try {
       let geocode = await json(
-        `https://geocoding-api.open-meteo.com/v1/search?count=10&name=${encodeURIComponent(location)}`,
+        `https://geocoding-api.open-meteo.com/v1/search?count=10&name=${encodeURIComponent(cityName)}`,
       ) as GeocodeResult;
       let candidates = geocode.results ?? [];
 
@@ -142,8 +142,7 @@ export function createWeatherCapabilityAdapter(options: WeatherCapabilityOptions
         place = exactMatch;
       } else {
         // No exact match. The name is ambiguous or an approximate spelling (e.g. "Ull" matching "Ulla").
-        // DO NOT silently pick the first fuzzy candidate (e.g. Ulla) and do NOT silently assume Ulm!
-        // Ask for clarification with the top candidates.
+        // DO NOT silently pick the first fuzzy candidate and do NOT silently assume an unrelated place.
         const suggestions = matchedCandidates.slice(0, 3).map((c) => [c.name, c.admin1, c.country].filter(Boolean).join(', '));
         return failure(
           `The location "${cityName}"${expectedCountry ? ` in ${expectedCountry}` : ''} is ambiguous or an approximate spelling. Did you mean ${suggestions.join(' or ')}? Please clarify the location.`,
@@ -171,20 +170,24 @@ export function createWeatherCapabilityAdapter(options: WeatherCapabilityOptions
         current.wind_speed_10m != null ? `wind ${current.wind_speed_10m} ${windUnit}` : null,
       ];
 
-      // Format tomorrow/evening forecast if available
+      // Format tomorrow/evening forecast based on local forecast date, not UTC
       if (forecast.hourly?.time?.length && forecast.hourly?.temperature_2m?.length) {
-        const now = new Date();
-        const tomorrowIso = new Date(now.getTime() + 24 * 3600 * 1000).toISOString().slice(0, 10);
+        const firstTime = forecast.hourly.time[0]; // e.g. "2026-11-06T00:00"
+        const localDateStr = firstTime.slice(0, 10);
+        const [y, m, d] = localDateStr.split('-').map(Number);
+        const tomorrowDate = new Date(Date.UTC(y, m - 1, d + 1));
+        const tomorrowIso = tomorrowDate.toISOString().slice(0, 10);
+
         const eveningIdx = forecast.hourly.time.findIndex((t) => t.startsWith(`${tomorrowIso}T18:`) || t.startsWith(`${tomorrowIso}T20:`));
         if (eveningIdx !== -1) {
           const tEve = forecast.hourly.temperature_2m[eveningIdx];
           const cEve = forecast.hourly.weather_code?.[eveningIdx];
           const lEve = cEve != null ? WEATHER_CODE_LABELS[cEve] ?? 'clear' : 'clear';
-          summaryParts.push(`tomorrow evening: ${lEve}, ${tEve}${tempUnit}`);
+          summaryParts.push(`tomorrow evening (${tomorrowIso} 18:00 local): ${lEve}, ${tEve}${tempUnit}`);
         } else if (forecast.daily?.temperature_2m_max?.[1] != null) {
           const dMax = forecast.daily.temperature_2m_max[1];
           const dMin = forecast.daily.temperature_2m_min?.[1];
-          summaryParts.push(`tomorrow: max ${dMax}${tempUnit}, min ${dMin ?? dMax}${tempUnit}`);
+          summaryParts.push(`tomorrow (${tomorrowIso}): max ${dMax}${tempUnit}, min ${dMin ?? dMax}${tempUnit}`);
         }
       }
 
@@ -199,6 +202,31 @@ export function createWeatherCapabilityAdapter(options: WeatherCapabilityOptions
     } catch (error) {
       return failure(error instanceof Error ? error.message : String(error), 'weather_provider_error');
     }
+  }
+
+  async function run(call: ModelToolCall): Promise<ToolExecutionResult> {
+    const rawLoc = typeof call.arguments.location === 'string' ? call.arguments.location.trim() : '';
+    // Check for comparison: "Ulm Germany and Ullà Spain" or "Ulm and Munich"
+    const compareMatch = rawLoc.split(/\s+(?:and|vs\.?|versus)\s+/i);
+    if (compareMatch.length === 2 && compareMatch[0].trim() && compareMatch[1].trim()) {
+      const callA: ModelToolCall = { ...call, arguments: { ...call.arguments, location: compareMatch[0].trim() } };
+      const callB: ModelToolCall = { ...call, arguments: { ...call.arguments, location: compareMatch[1].trim() } };
+      const [resA, resB] = await Promise.all([runSingleLocation(callA), runSingleLocation(callB)]);
+      if (resA.status === 'succeeded' && resB.status === 'succeeded') {
+        return {
+          status: 'succeeded',
+          exitCode: 0,
+          output: `Weather comparison:\n• ${resA.output}\n• ${resB.output}`,
+          resultCategory: 'weather_fetched',
+          normalizedArguments: { location: rawLoc },
+        };
+      }
+      if (resA.status === 'succeeded') return resA;
+      if (resB.status === 'succeeded') return resB;
+      return failure(`Comparison failed: ${resA.output}; ${resB.output}`, 'weather_comparison_failed');
+    }
+
+    return runSingleLocation(call);
   }
 
   return {

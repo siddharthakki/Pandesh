@@ -968,6 +968,17 @@ export interface EverydayReminderView {
   overdueExplanation: string | null;
 }
 
+export interface ActiveTimerView {
+  id: string;
+  label: string;
+  durationMs: number;
+  startedAt: string;
+  deadlineMs: number;
+  remainingMs: number;
+  state: 'running' | 'paused' | 'completed' | 'cancelled';
+  conversationId?: string | null;
+}
+
 export interface EverydayToolsSnapshot {
   timezone: string;
   /** Always false until a verified closed-app mechanism exists. */
@@ -977,6 +988,7 @@ export interface EverydayToolsSnapshot {
   notes: EverydayNoteView[];
   reminders: EverydayReminderView[];
   dueReminders: EverydayReminderView[];
+  activeTimers?: ActiveTimerView[];
 }
 
 export type DesktopActivityKind =
