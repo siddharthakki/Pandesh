@@ -407,6 +407,24 @@ export function extractToolResultText(result: unknown): string {
 }
 
 /**
+ * Audit D10: file arguments of capability tools that are relative resolve against the selected workspace (the folder the
+ * person chose), not against the process's working directory, which is the install folder. With no workspace they are
+ * left relative, and the tool refuses them instead of guessing.
+ */
+const WORKSPACE_PATH_ARGS = ['path', 'source', 'output'] as const;
+export function resolveWorkspaceRelativeArgs(args: Record<string, unknown>, workspaceRoot: string | null): Record<string, unknown> {
+  if (!workspaceRoot) return args;
+  let next: Record<string, unknown> | null = null;
+  for (const key of WORKSPACE_PATH_ARGS) {
+    const value = args[key];
+    if (typeof value !== 'string' || !value.trim() || path.isAbsolute(value.trim()) || /^[a-z][a-z0-9+.-]*:\/\//i.test(value.trim())) continue;
+    next = next ?? { ...args };
+    next[key] = path.resolve(workspaceRoot, value.trim());
+  }
+  return next ?? args;
+}
+
+/**
  * The user explicitly asked Pandesh to remember something (audit D3). Ordinary words are not a memory request: "Save it
  * in the same workspace" (a file), "I remember the old office" (a statement) and "remember to call mum" (a reminder) must
  * never write durable memory. "save" counts only with an explicit memory target.
@@ -3380,9 +3398,11 @@ ${String(args.objective ?? '').slice(0, 600)}`,
     // conversation could not actually reach them. They are dispatched through
     // the same governed fabric as the connectors and memory: read-only calls
     // run immediately, consequential calls wait for the operator's decision.
-    async function runCapabilityTool(toolName: string, args: Record<string, unknown>) {
+    async function runCapabilityTool(toolName: string, rawArgs: Record<string, unknown>) {
       const bridge = ctx.capabilities;
       if (!bridge) return connectorText('That capability is not available in this build.', true);
+      // Audit D10: a relative file path means "in the folder the person selected", never the install folder.
+      const args = resolveWorkspaceRelativeArgs(rawArgs, selectedWorkspace || null);
       let outcome;
       try {
         outcome = await bridge.dispatch(toolName, args);
@@ -3871,6 +3891,10 @@ ${filesPromptSection}${webResearchPromptSection}${wishesPromptSection}${emailCal
     // list safe for a local model.
     if (ctx.capabilities?.brief) {
       systemPrompt += `\n\n${ctx.capabilities.brief}`;
+    }
+    // Audit D5: a PDF is made with the built-in exporter, not by installing or shelling out to a converter.
+    if (availableToolNames.has('export_document_pdf')) {
+      systemPrompt += '\n\nPDF FILES: when the user wants a PDF, write the content (or a .md file) and call export_document_pdf; it prints a real, verified PDF locally. Do not use pandoc, LibreOffice or run_checks for this, and do not install a converter. Report the PDF only after export_document_pdf succeeds, using the path it returns.';
     }
     // Earlier tasks' real outcomes (cancelled / failed / interrupted), so the model never presents them as pending (D4).
     const taskHistorySection = renderTaskHistorySection(priorTurns);
