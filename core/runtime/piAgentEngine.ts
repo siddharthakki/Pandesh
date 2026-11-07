@@ -2,6 +2,7 @@ import { withholdUnsupportedActionClaims } from './actionClaims';
 import { answerTaskStatusQuestion, isTaskStatusQuestion, listPriorTurns, renderTaskHistorySection } from '../domain/conversationTaskHistory';
 import { checkPublicQuery, derivePublicQuery, explicitlyRequestsWebSearch, referencesLocalContent } from './publicQueryGuard';
 import { checkStatedTotals, evaluateExpression } from './arithmeticCheck';
+import { renderDelegationReport, untrackedPaths, verifyDelegation } from './delegationVerification';
 import { FolderReadLedger, requestedOutputFiles, requiresSourceEvidence, requiresWholeFolder, unreadFilesNotice } from './folderCompleteness';
 import * as cp from 'node:child_process';
 import { holdAwaitedApproval } from './cancellationRecovery';
@@ -943,6 +944,8 @@ export class PiAgentEngine implements EngineAdapter {
     const toolCallsRecorded: Array<{ tool: string; args?: unknown; status: string; result?: unknown }> = [];
     // Audit C1: which files this turn listed, read and wrote, for questions about a folder's files as a set.
     const folderLedger = new FolderReadLedger(requestText);
+    /** Audit D12: Core-verified reports of this turn's coding delegations, appended to the final reply. */
+    const delegationReports: string[] = [];
     const wholeFolderRequest = requiresWholeFolder(requestText);
     /**
      * Core runs the real read_file tool (same authorization, credential refusal and redaction) on documents the model
@@ -3091,6 +3094,8 @@ ${String(args.objective ?? '').slice(0, 600)}`,
             args: { ...args, targetDir },
           }, actor);
 
+          // Audit D12: what was untracked before, so cleanup afterwards only touches what this delegation created.
+          const untrackedBefore = untrackedPaths(targetDir);
           const result = await OpenCodeEngine.executeCodingObjective({
             db,
             broadcaster,
@@ -3105,8 +3110,16 @@ ${String(args.objective ?? '').slice(0, 600)}`,
             manageAttemptLifecycle: false,
           });
 
+          // Audit D12: Core verifies the delegation itself — git status/diff, OpenCode's leftovers, a real test run.
+          const verification = await verifyDelegation(targetDir, untrackedBefore, runShellCommand, signal);
+          const report = redactCredentialShapes(renderDelegationReport(verification));
+          delegationReports.push(report);
+          safeRecordRuntimeEvent(db, broadcaster, attemptId, 'delegation_verified', {
+            changedFiles: verification.changedFiles, newUntracked: verification.newUntracked, removed: verification.removed,
+            testFilesChanged: verification.testFilesChanged, test: verification.test ? { command: verification.test.command, code: verification.test.code, timedOut: verification.test.timedOut } : null,
+          }, actor);
           return {
-            content: [{ type: 'text', text: result.reply }],
+            content: [{ type: 'text', text: `${result.reply}\n\n${report}\n\nReport these verified results; do not claim tests passed unless the re-run above passed.` }],
             // What OpenCode really changed: the working-tree diff, read after it finished.
             details: { ...result, activity: { kind: 'code', title: `OpenCode: ${String(args.objective).slice(0, 120)}`, diff: redactCredentialShapes(workingTreeDiff(targetDir)), excerpt: String(result.reply ?? '').slice(0, 1_200) } },
             isError: !result.success,
@@ -4868,6 +4881,10 @@ ${filesPromptSection}${webResearchPromptSection}${wishesPromptSection}${emailCal
         const base = path.basename(clean).toLowerCase();
         return toolCallsRecorded.some((t) => t.status === 'completed' && `${JSON.stringify(t.args ?? '')} ${extractToolResultText(t.result)}`.toLowerCase().includes(base));
       };
+      // Audit D12: the delegation's verified diff and test run are part of the answer, whatever the model wrote.
+      if (delegationReports.length && !signal?.aborted) {
+        finalReply = `${finalReply.trimEnd()}\n\n${delegationReports.join('\n\n')}`;
+      }
       // Audit D11: a stated total that does not match its listed amounts is corrected by Core's own exact sum.
       const totals = checkStatedTotals(finalReply);
       if (totals.corrections.length) {
