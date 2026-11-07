@@ -3114,6 +3114,18 @@ ${String(args.objective ?? '').slice(0, 600)}`,
           const verification = await verifyDelegation(targetDir, untrackedBefore, runShellCommand, signal);
           const report = redactCredentialShapes(renderDelegationReport(verification));
           delegationReports.push(report);
+          // Core's own post-fix test run is the authoritative check of this turn: the last run_checks outcome, so a
+          // diagnostic run that failed BEFORE the fix does not decide the verdict (M8 was "attempted_failed" although
+          // the re-run after the fix passed). A failing re-run keeps the turn failed.
+          if (verification.test) {
+            const passed = verification.test.code === 0 && !verification.test.timedOut;
+            toolCallsRecorded.push({
+              tool: 'run_checks',
+              args: { command: verification.test.command, workspacePath: targetDir, initiatedBy: 'core_delegation_verification' },
+              status: passed ? 'completed' : 'failed',
+              result: { content: [{ type: 'text', text: `${verification.test.command} → ${passed ? 'PASSED' : `FAILED (exit ${verification.test.code ?? 'none'})`}\n${verification.test.tail}` }], isError: !passed },
+            });
+          }
           safeRecordRuntimeEvent(db, broadcaster, attemptId, 'delegation_verified', {
             changedFiles: verification.changedFiles, newUntracked: verification.newUntracked, removed: verification.removed,
             testFilesChanged: verification.testFilesChanged, test: verification.test ? { command: verification.test.command, code: verification.test.code, timedOut: verification.test.timedOut } : null,
