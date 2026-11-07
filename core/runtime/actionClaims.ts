@@ -80,10 +80,12 @@ const CATEGORIES: ActionClaimCategory[] = [
   {
     kind: 'file',
     // Only concrete artefacts: a reply that "created a summary below" is prose, not a file claim.
-    object: /[\w.-]+\.(?:pdf|docx?|xlsx?|pptx?|md|txt|csv|html?|json|png|jpe?g|zip)\b|\b(?:files?|folders?|pdfs?)\b/i,
-    verbs: 'saved|created|written|wrote|exported|generated|converted|moved|renamed|copied|deleted|removed|downloaded|printed|organi[sz]ed',
-    // Tools that produce or change files; read-only tools (read_file, document_read, list_directory) never support it.
-    tools: /write|propose_|edit|create_note|export|build_|image_generate|comfyui_generate|media_|download|print|organize_apply|pdf|file_change|delegate_to_opencode/i,
+    // "I have prepared a test document" (printer re-run P1, no tool ran) is a concrete artefact claim too.
+    object: /[\w.-]+\.(?:pdf|docx?|xlsx?|pptx?|md|txt|csv|html?|json|png|jpe?g|zip)\b|\b(?:files?|folders?|pdfs?)\b|\btest\s+(?:documents?|pages?)\b/i,
+    verbs: 'saved|created|written|wrote|exported|generated|converted|moved|renamed|copied|deleted|removed|downloaded|printed|organi[sz]ed|prepared',
+    // Tools that produce or change files; read-only tools (read_file, document_read, list_directory, list_printers)
+    // never support it.
+    tools: /write|propose_|edit|create_note|export|build_|image_generate|comfyui_generate|media_|download|print_|organize_apply|pdf|file_change|delegate_to_opencode/i,
     label: 'file change',
   },
   {

@@ -60,6 +60,15 @@ describe('withholdUnsupportedActionClaims (audit D1: no tool result, no claim)',
     expect(result.text).toMatch(/catering_report\.pdf does not exist/);
   });
 
+  // Printer re-run P1: only list_printers ran; nothing was prepared and the folder stayed empty.
+  it('withholds "prepared a test document" when only a read-only printer listing ran', () => {
+    const reply = 'I have prepared a test document for you. Would you like me to proceed with printing the test page?';
+    const result = withholdUnsupportedActionClaims(reply, ['list_printers']);
+    expect(result.withheld.map((w) => w.kind)).toEqual(['file']);
+    expect(result.text).toContain('Would you like me to proceed');
+    expect(withholdUnsupportedActionClaims('I have printed the test page.', ['print_test_page']).withheld).toEqual([]);
+  });
+
   it('a named output file that exists is left alone', () => {
     const reply = 'I created the note.\n\n**File:** `rice_order.txt`';
     expect(withholdUnsupportedActionClaims(reply, ['write_file'], { fileExists: () => true }).withheld).toEqual([]);
