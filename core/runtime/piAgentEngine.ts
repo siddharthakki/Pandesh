@@ -405,6 +405,36 @@ export function extractToolResultText(result: unknown): string {
   return '';
 }
 
+/**
+ * The user explicitly asked Pandesh to remember something (audit D3). Ordinary words are not a memory request: "Save it
+ * in the same workspace" (a file), "I remember the old office" (a statement) and "remember to call mum" (a reminder) must
+ * never write durable memory. "save" counts only with an explicit memory target.
+ */
+const MEMORY_SAVE_LEAD = /(?:^|[.!?]\s+|\n)\s*(?:(?:hey\s+)?pandesh[,:]?\s+)?(?:please\s+)?(?:(?:remember|note)(?:\s+(?:that|this|about\s+me(?:\s+that)?))?|keep\s+in\s+mind(?:\s+that)?|don'?t\s+forget(?:\s+that)?)\s*[:,\-]?\s+/i;
+const MEMORY_SAVE_EXPLICIT = /\b(?:save|store|add|put|write|keep|record)\s+(?:this|that|it|the\s+fact|my\s+preference)?\s*(?:to|in|into)\s+(?:your\s+|my\s+|durable\s+|long[-\s]term\s+)*memory\b|\bsave\s+my\s+preference\b|\bfor\s+future\s+(?:conversations|reference)\b.*\bremember\b/i;
+
+export function isMemorySaveIntent(userText: string): boolean {
+  const text = userText.trim();
+  if (!text) return false;
+  if (/^(?:what|do\s+you|can\s+you|did\s+you|have\s+you|will\s+you|tell\s+me|how)\b[^.!?]*\bremember\b/i.test(text)) return false;
+  if (/\b(?:remember|don'?t\s+forget)\s+to\b/i.test(text)) return false;
+  return MEMORY_SAVE_LEAD.test(text) || MEMORY_SAVE_EXPLICIT.test(text);
+}
+
+/** The fact to store: the text after the explicit memory phrase. */
+export function extractMemoryFact(userText: string): string {
+  const text = userText.trim();
+  const explicit = MEMORY_SAVE_EXPLICIT.exec(text);
+  if (explicit && !MEMORY_SAVE_LEAD.test(text)) {
+    // "Save to memory that I prefer tea" / "My favourite tea is Darjeeling, save that to memory".
+    const after = text.slice(explicit.index + explicit[0].length).replace(/^\s*(?:that|:|,|-)\s*/i, '').replace(/[.!]+$/, '').trim();
+    const before = text.slice(0, explicit.index).replace(/[,;:.\-\s]+$/, '').trim();
+    return (after || before).replace(/[.!]+$/, '').trim();
+  }
+  const lead = MEMORY_SAVE_LEAD.exec(text);
+  return lead ? text.slice(lead.index + lead[0].length).trim() : '';
+}
+
 export function isMemoryRecallIntent(userText: string): boolean {
   return /\b(?:memory[_\s]+recall|recall(?:\s+memories|\s+memory|\s+what|\s+my|\s+the|\s+about)?|do\s+you\s+(?:remember|know|have\s+anything\s+in\s+memory)|stored\s+in\s+(?:your\s+)?memory)\b/i.test(userText)
     || /\bwhat\s+(?:do\s+you\s+remember|did\s+I\s+(?:tell|say|mention|ask\s+you\s+to\s+remember))\b/i.test(userText)
@@ -4365,17 +4395,14 @@ ${filesPromptSection}${webResearchPromptSection}${wishesPromptSection}${emailCal
 
     if (toolCallsRecorded.length === 0 && !signal?.aborted) {
       const userText = ctx.currentMessage ?? prompt;
-      const isRememberIntent = !/^(?:what|do\s+you|can\s+you|did\s+you|have\s+you|will\s+you|tell\s+me)\s+.*?\bremember\b/i.test(userText)
-        && !/\bremember\s+to\b/i.test(userText)
-        && /\b(?:remember(?:\s+(?:that|this|about\s+me))?|keep\s+in\s+mind|don't\s+forget|save\s+(?:this|that|my\s+preference)?\s*(?:to\s+memory)?)\b/i.test(userText);
+      // Only an explicit memory request (audit D3: "Save it in the same workspace…" stored junk memory).
+      const isRememberIntent = isMemorySaveIntent(userText);
       const isRecallIntent = isMemoryRecallIntent(userText);
 
       if (isRememberIntent) {
         safeRecordRuntimeEvent(db, broadcaster, attemptId, 'memory_fallback_invoked', { type: 'remember' }, actor);
         try {
-          const fact = userText
-            .replace(/^.*?\b(?:remember(?:\s+(?:that|this|about\s+me(?:\s+that)?))?|keep\s+in\s+mind(?:\s+that)?|don't\s+forget(?:\s+that)?|save\s+(?:this|that|my\s+preference)?\s*(?:to\s+memory)?)\s*[:,\-]?\s*/i, '')
-            .trim();
+          const fact = extractMemoryFact(userText);
           if (fact) {
             const memResult = await runMemoryTool('memory_remember', {
               value: fact,
