@@ -1,6 +1,6 @@
 import * as path from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { FolderReadLedger, MAX_DOCUMENTS_PER_FOLDER, requestedOutputFiles, requestedOutputStems, requiresWholeFolder } from '../runtime/folderCompleteness';
+import { FolderReadLedger, MAX_DOCUMENTS_PER_FOLDER, requestedOutputFiles, requestedOutputStems, requiresSourceEvidence, requiresWholeFolder } from '../runtime/folderCompleteness';
 
 // Verbatim C1 prompt from the Build 159 independent audit.
 const C1 = "I've put my suppliers' price lists in this folder. Which one is cheapest for basmati rice if I need 20 kg? Write me a short note called rice_order.txt saying who to order from and what it will cost in total.";
@@ -25,6 +25,21 @@ describe('requiresWholeFolder', () => {
     expect(requiresWholeFolder('Write a note called todo.txt in this folder')).toBe(false);
     expect(requiresWholeFolder('Read ulm_asia_markt.txt and tell me the rice price')).toBe(false);
     expect(requiresWholeFolder('Which is the capital of France?')).toBe(false);
+  });
+});
+
+describe('requiresSourceEvidence (M4 fresh re-run: invented figures in a "verified" PDF)', () => {
+  it('applies when the output is built from a local document the request refers to', () => {
+    expect(requiresSourceEvidence('Now turn that catering estimate into a professional one-page PDF report with the revenue, costs and profit. Save it in the same workspace and show me where I can open it.')).toBe(true);
+    expect(requiresSourceEvidence('Summarise my price lists into a table')).toBe(true);
+  });
+
+  it('does not apply to requests that do not depend on a local document', () => {
+    expect(requiresSourceEvidence('Write a short poem about rain')).toBe(false);
+    expect(requiresSourceEvidence('Create a reminder for Tuesday at 14:00')).toBe(false);
+    expect(requiresSourceEvidence('What is the capital of Australia?')).toBe(false);
+    // The document named is the output, not a source.
+    expect(requiresSourceEvidence('Write the data file')).toBe(false);
   });
 });
 

@@ -1,7 +1,7 @@
 import { withholdUnsupportedActionClaims } from './actionClaims';
 import { answerTaskStatusQuestion, isTaskStatusQuestion, listPriorTurns, renderTaskHistorySection } from '../domain/conversationTaskHistory';
 import { checkPublicQuery, derivePublicQuery, explicitlyRequestsWebSearch, referencesLocalContent } from './publicQueryGuard';
-import { FolderReadLedger, requestedOutputFiles, requiresWholeFolder, unreadFilesNotice } from './folderCompleteness';
+import { FolderReadLedger, requestedOutputFiles, requiresSourceEvidence, requiresWholeFolder, unreadFilesNotice } from './folderCompleteness';
 import * as cp from 'node:child_process';
 import { holdAwaitedApproval } from './cancellationRecovery';
 import * as path from 'node:path';
@@ -967,6 +967,28 @@ export class PiAgentEngine implements EngineAdapter {
       for (const file of files) reads.push({ file, ...(await coreRunTool('read_file', { filePath: file })) });
       safeRecordRuntimeEvent(db, broadcaster, attemptId, 'folder_evidence_read_by_core', { read: reads.filter((r) => r.ok).map((r) => path.basename(r.file)), failed: reads.filter((r) => !r.ok).map((r) => path.basename(r.file)) }, actor);
       return reads;
+    }
+    // M4 (fresh conversation): a report built from "that catering estimate" was written with invented figures because
+    // the source was never read. Such a request may write only after its source documents were read this turn.
+    const sourceEvidenceRequest = !wholeFolderRequest && requiresSourceEvidence(requestText);
+    /**
+     * Holds back a write while its evidence is missing, after Core itself has read that evidence; returns the text the
+     * write is refused with (carrying the real contents), or null when the write may proceed.
+     */
+    async function evidenceGate(target: string | null, toolName: string): Promise<string | null> {
+      let missing: string[] = [];
+      if (wholeFolderRequest) {
+        missing = folderLedger.unread(target ?? undefined);
+      } else if (sourceEvidenceRequest && folderLedger.readCount() === 0 && selectedWorkspace) {
+        if (!folderLedger.hasListed(selectedWorkspace)) await coreRunTool('list_directory', { dirPath: selectedWorkspace });
+        missing = folderLedger.unread(target ?? undefined);
+      }
+      if (!missing.length) return null;
+      safeRecordRuntimeEvent(db, broadcaster, attemptId, 'write_held_for_source_evidence', { tool: toolName, unread: missing.map((f) => path.basename(f)) }, actor);
+      const reads = await coreReadDocuments(missing);
+      const gathered = reads.filter((r) => r.ok).map((r) => r.text).join('\n\n');
+      const failedReads = reads.filter((r) => !r.ok).map((r) => `${path.basename(r.file)}: ${r.text.slice(0, 160)}`);
+      return `NOT WRITTEN YET: the content must come from the user's documents, and you had not read ${unreadFilesNotice(missing)}. Pandesh has now read them; their real contents are below. Use ONLY these figures and facts (do not invent any), then call ${toolName} again with the corrected content.${failedReads.length ? ` Could not be read: ${failedReads.join('; ')} — say so in your answer.` : ''}\n\n${gathered}`;
     }
     const invocationMap = new Map<string, string>();
     /** Markdown links for files this turn really shared to the paired phone (see send_to_phone). */
@@ -2886,15 +2908,8 @@ export class PiAgentEngine implements EngineAdapter {
           if (typeof args.content !== 'string') return refuse('Error: write_file needs the full text content to write. Nothing was written.', 'no text content');
           // Audit C1: a note that answers a question about the folder's files may only be written once every listed
           // document has been read; otherwise it is built on part of the evidence.
-          if (wholeFolderRequest) {
-            const unread = folderLedger.unread(full);
-            if (unread.length) {
-              const reads = await coreReadDocuments(unread);
-              const gathered = reads.filter((r) => r.ok).map((r) => r.text).join('\n\n');
-              const failedReads = reads.filter((r) => !r.ok).map((r) => `${path.basename(r.file)}: ${r.text.slice(0, 160)}`);
-              return refuse(`NOT WRITTEN YET: the user asked about the documents in this folder and you had not read ${unreadFilesNotice(unread)}. Pandesh has now read them; their contents are below. Re-check your answer against EVERY document, then call write_file again with the corrected content.${failedReads.length ? ` Could not be read: ${failedReads.join('; ')} — say so in your answer.` : ''}\n\n${gathered}`, 'folder files unread');
-            }
-          }
+          const held = await evidenceGate(full, 'write_file');
+          if (held) return refuse(held, 'source evidence unread');
 
           const grant = await authorizeFileWrite(full, args.content);
           if (!grant.ok) return refuse(grant.text, grant.reason);
@@ -3457,6 +3472,11 @@ ${String(args.objective ?? '').slice(0, 600)}`,
       if (!bridge) return connectorText('That capability is not available in this build.', true);
       // Audit D10: a relative file path means "in the folder the person selected", never the install folder.
       const args = resolveWorkspaceRelativeArgs(rawArgs, selectedWorkspace || null);
+      // A PDF written from inline text is a write like any other: its source evidence must have been read (M4).
+      if (toolName === 'export_document_pdf' && typeof args.markdown === 'string') {
+        const held = await evidenceGate(typeof args.output === 'string' ? args.output : null, 'export_document_pdf');
+        if (held) return connectorText(held, true);
+      }
       const noteDocumentRead = (result: { isError?: boolean }) => {
         if (!result.isError && (toolName === 'document_read' || toolName === 'document_ocr') && typeof args.path === 'string') folderLedger.noteRead(args.path);
         return result;

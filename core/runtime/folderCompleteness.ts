@@ -23,7 +23,21 @@ export function requiresWholeFolder(requestText: string): boolean {
   return FOLDER_SCOPE.test(requestText) && ACROSS_FILES.test(requestText);
 }
 
-const DOCUMENT_EXTENSIONS = new Set(['.md', '.markdown', '.txt', '.csv', '.tsv', '.json', '.pdf', '.doc', '.docx', '.odt', '.rtf', '.xls', '.xlsx', '.ods', '.html', '.htm']);
+/**
+ * The request builds its output from a local document it refers to ("turn that catering estimate into a PDF report",
+ * "summarise my price lists", a named file). In a fresh conversation (M4, 2026-11-07) gemma4:12b wrote a polished,
+ * "verified" PDF with invented figures (€1,400 / €950 / €450 instead of €730 / €420 / €310) without reading the CSV.
+ */
+// The document must be the SOURCE ("turn that estimate into…", "summarise my price lists", "from the invoice"), not the
+// output ("write the data file").
+const SOURCE_DOCUMENT = /\b(?:turn|convert|transform|summari[sz]e|based\s+on|from|using|use|out\s+of|according\s+to)\s+(?:that|this|the|my|our|these|those)\s+(?:[\w-]+\s+){0,2}(?:estimates?|quotes?|offers?|invoices?|receipts?|price\s*lists?|lists?|documents?|files?|spreadsheets?|tables?|data|figures|numbers|statements?|notes?|reports?|cv|resume|budget|calculations?|orders?)\b(?!\s+(?:called|named))/i;
+const PRODUCES_OUTPUT = /\b(?:turn|convert|make|create|write|save|export|generate|produce|prepare|build|draft|summari[sz]e|print)\b/i;
+
+export function requiresSourceEvidence(requestText: string): boolean {
+  return PRODUCES_OUTPUT.test(requestText) && SOURCE_DOCUMENT.test(requestText);
+}
+
+const DOCUMENT_EXTENSIONS =new Set(['.md', '.markdown', '.txt', '.csv', '.tsv', '.json', '.pdf', '.doc', '.docx', '.odt', '.rtf', '.xls', '.xlsx', '.ods', '.html', '.htm']);
 export const MAX_DOCUMENTS_PER_FOLDER = 12;
 export const MAX_DOCUMENT_BYTES = 1024 * 1024;
 /** A file the request asks to PRODUCE: "a note called rice_order.txt", "save it as summary.md". Input files are not matched. */
@@ -75,6 +89,9 @@ export class FolderReadLedger {
   noteRead(file: string): void { this.read.add(key(file)); }
 
   hasListed(directory: string): boolean { return this.listed.has(key(directory)); }
+
+  /** Documents actually read this turn (by the model or by Core). */
+  readCount(): number { return this.read.size; }
 
   noteWritten(file: string): void { this.written.add(key(file)); this.writtenPaths.set(key(file), path.resolve(file)); }
 
