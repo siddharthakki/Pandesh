@@ -64,7 +64,7 @@ The harness `new` step silently failed right after an app launch (the window res
 ### Printer mission P1 — real print (approved by the user in chat, one page)
 
 1. Build ab5a212: approved card → `PrintTestPage` returned 5 → reported FAILED honestly; queue empty, no PrintService event → nothing printed.
-2. Build 4d0d732 (Out-Printer, Core test document shown on the card): approved card → submitted; job left the queue before the first check → reported UNKNOWN. Independent check: Brother queue counter `TotalJobsPrinted` = 2, `JobErrors` = 0 (no baseline captured, so attribution is likely but not proven). **Physical output not confirmed by a person.**
+2. Build 4d0d732 (Out-Printer, Core test document shown on the card): approved card → submitted; job left the queue before the first check → reported UNKNOWN. Independent check: Brother queue counter `TotalJobsPrinted` = 2, `JobErrors` = 0 (no baseline captured, so attribution is likely but not proven). **Physical output confirmed by the user (2026-11-07: the PANDESH PRINTER TEST page printed on the Brother).** Mission P1: PASS, with the gap that Pandesh itself reported the outcome as UNKNOWN (fixed for next time by b3b6cfe, not yet exercised).
 3. b3b6cfe makes the counters part of the verification; not yet exercised by a real print (no further print approved).
 Fresh turn 1 at 4d0d732 (`remediation-fresh/P1`, reject): real inventory, default Brother, card raised and declined, nothing printed.
 
