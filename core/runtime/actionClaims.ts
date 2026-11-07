@@ -70,6 +70,14 @@ const CATEGORIES: ActionClaimCategory[] = [
     label: 'memory change',
   },
   {
+    // "Since pandoc was not available, I installed the utility" while every install attempt failed (re-run of audit M4).
+    kind: 'install',
+    object: /\b(?:utility|utilities|tools?|apps?|application|program|software|package|driver|pandoc|libreoffice|converter)\b/i,
+    verbs: 'installed|set up|downloaded|added|enabled',
+    tools: /install|setup|download/i,
+    label: 'installation',
+  },
+  {
     kind: 'file',
     // Only concrete artefacts: a reply that "created a summary below" is prose, not a file claim.
     object: /[\w.-]+\.(?:pdf|docx?|xlsx?|pptx?|md|txt|csv|html?|json|png|jpe?g|zip)\b|\b(?:files?|folders?|pdfs?)\b/i,
@@ -124,7 +132,26 @@ export function unsupportedActionClaim(sentence: string, succeededTools: readonl
  * Replaces each sentence that claims a completed action no succeeded tool supports. `succeededTools` must be the
  * names of tool invocations recorded as succeeded for this attempt (never model text).
  */
-export function withholdUnsupportedActionClaims(message: string, succeededTools: readonly string[]): ActionClaimResult {
+export interface ActionClaimOptions {
+  /**
+   * Resolves an output file the reply names (a bare name, relative or absolute path) and says whether it exists now.
+   * When given, a reply that presents a file as created/saved/available is withheld if the file does not exist,
+   * whatever tools ran: a successful write of report.md is not evidence for report.pdf.
+   */
+  fileExists?: (reference: string) => boolean;
+}
+
+const OUTPUT_FILE = /(?:[A-Za-z]:[\\/][^\s`*"'<>|]+|[\w.\\/-]+)\.(?:pdf|docx?|xlsx?|pptx?|md|txt|csv|html?|json|png|jpe?g|zip|odt|rtf)\b/gi;
+const OUTPUT_CONTEXT = /\b(?:created|generated|saved|exported|written|wrote|converted|produced|built|stored|ready)\b|\b(?:file\s*path|file|location|saved\s+(?:to|as|at)|output)\s*:|\b(?:you\s+can\s+)?open\s+(?:it|this|the\s+file)\b/i;
+const NEGATED = /\b(?:not|never|unable|failed|cannot)\b|n't\b|\bno\s+longer\b/i;
+
+/** Output files a line presents as existing ("File Path: …report.pdf", "I saved it as notes.txt"). */
+export function claimedOutputFiles(line: string): string[] {
+  if (!OUTPUT_CONTEXT.test(line) || NEGATED.test(line)) return [];
+  return [...new Set([...line.matchAll(OUTPUT_FILE)].map((m) => m[0].replace(/^[`*"'(]+|[`*"').,:;]+$/g, '')))];
+}
+
+export function withholdUnsupportedActionClaims(message: string, succeededTools: readonly string[], options: ActionClaimOptions = {}): ActionClaimResult {
   const withheld: ActionClaimResult['withheld'] = [];
   const out: string[] = [];
   let inFence = false;
@@ -134,6 +161,14 @@ export function withholdUnsupportedActionClaims(message: string, succeededTools:
     const sentences = line.split(/(?<=[.!?])\s+/);
     let changed = false;
     const kept = sentences.map((sentence) => {
+      if (options.fileExists) {
+        const missing = claimedOutputFiles(sentence).filter((file) => !options.fileExists!(file));
+        if (missing.length > 0) {
+          changed = true;
+          withheld.push({ kind: 'missing_file', claim: echo(sentence) });
+          return `[Not done: ${missing.join(', ')} does not exist — it was not created.]`;
+        }
+      }
       const category = unsupportedActionClaim(sentence, succeededTools);
       if (!category) return sentence;
       changed = true;

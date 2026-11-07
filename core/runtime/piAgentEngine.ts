@@ -4660,7 +4660,17 @@ ${filesPromptSection}${webResearchPromptSection}${wishesPromptSection}${emailCal
     // second fabricated "I have now executed the commands" is withheld too.
     {
       const succeeded = toolCallsRecorded.filter((t) => t.status === 'completed').map((t) => t.tool);
-      const guarded = withholdUnsupportedActionClaims(finalReply, succeeded);
+      // A named output file must exist on disk (re-run of M4: ".md written, .pdf claimed, no .pdf").
+      const fileExists = (reference: string): boolean => {
+        const clean = reference.replace(/[\\/]+$/, '');
+        if (path.isAbsolute(clean)) return fs.existsSync(clean);
+        if (!ctx.workspaceRoot) return true; // nothing to resolve against: do not guess
+        if (fs.existsSync(path.resolve(ctx.workspaceRoot, clean)) || fs.existsSync(path.join(ctx.workspaceRoot, path.basename(clean)))) return true;
+        // Saved somewhere else (Desktop, Documents): a succeeded tool that names the file is the evidence.
+        const base = path.basename(clean).toLowerCase();
+        return toolCallsRecorded.some((t) => t.status === 'completed' && `${JSON.stringify(t.args ?? '')} ${extractToolResultText(t.result)}`.toLowerCase().includes(base));
+      };
+      const guarded = withholdUnsupportedActionClaims(finalReply, succeeded, { fileExists });
       if (guarded.withheld.length > 0) {
         finalReply = guarded.text;
         safeRecordRuntimeEvent(db, broadcaster, attemptId, 'unsupported_action_claims_withheld', { withheld: guarded.withheld }, actor);
