@@ -1,4 +1,5 @@
 import { withholdUnsupportedActionClaims } from './actionClaims';
+import { answerTaskStatusQuestion, isTaskStatusQuestion, listPriorTurns, renderTaskHistorySection } from '../domain/conversationTaskHistory';
 import { checkPublicQuery, derivePublicQuery, explicitlyRequestsWebSearch, referencesLocalContent } from './publicQueryGuard';
 import * as cp from 'node:child_process';
 import { holdAwaitedApproval } from './cancellationRecovery';
@@ -3508,6 +3509,24 @@ ${String(args.objective ?? '').slice(0, 600)}`,
       safeRecordRuntimeEvent(db, broadcaster, attemptId, 'step_finish', { step: 1, engine: 'pi', durationMs: Date.now() - startTime, outcome: 'unverified', reason: 'project_unavailable' }, actor);
       return { success: false, reply };
     }
+    // "What happened to my previous task?" is answered from Core's attempt records, not from the model's reading of the
+    // chat: a cancelled turn has no reply in the transcript, so the model took it for a pending request (audit D4, M12).
+    const priorTurns = conversationId ? listPriorTurns(db, conversationId, { excludeRequestId: requestId }) : [];
+    const taskStatusAnswer = !projectInspection && isTaskStatusQuestion(requestText) ? answerTaskStatusQuestion(priorTurns) : null;
+    if (taskStatusAnswer) {
+      let replyRecord: any = null;
+      try { mutateWithBroadcast(db, broadcaster, () => { replyRecord = appendMessage(db, conversationId, { role: 'assistant', content: taskStatusAnswer, actor }); }); } catch {}
+      safeRecordRuntimeEvent(db, broadcaster, attemptId, 'task_history_answered', { status: priorTurns[0]?.status, requestId: priorTurns[0]?.requestId }, actor);
+      try {
+        mutateWithBroadcast(db, broadcaster, () => {
+          ensureTaskOutcome(db, { attemptId, conversationId: conversationId || null, requestId, objective: objectiveFromRequest(requestText) });
+          finalizeTaskOutcome(db, attemptId, { verdict: 'conversational', reason: 'Answered from the recorded attempt history; no action was taken', performed: [], refused: [], failed: [] }, { answerMessageId: replyRecord?.id ?? null });
+        });
+      } catch {}
+      try { mutateWithBroadcast(db, broadcaster, () => { transitionAttempt(db, attemptId, { toStatus: 'completed', fenceToken, actor }); }); } catch {}
+      safeRecordRuntimeEvent(db, broadcaster, attemptId, 'step_finish', { step: 1, engine: 'pi', durationMs: Date.now() - startTime, outcome: 'completed' }, actor);
+      return { success: true, reply: taskStatusAnswer };
+    }
     // Questions about Pandesh itself (notifications, Gmail progress, running tasks, reminders) are answered from the
     // recorded state, with no model and no workspace: a model's prose is exactly where invented progress came from.
     const statusTopics = classifyStatusRequest(requestText, hasRecentGmailWork(db, Date.now()));
@@ -3853,6 +3872,9 @@ ${filesPromptSection}${webResearchPromptSection}${wishesPromptSection}${emailCal
     if (ctx.capabilities?.brief) {
       systemPrompt += `\n\n${ctx.capabilities.brief}`;
     }
+    // Earlier tasks' real outcomes (cancelled / failed / interrupted), so the model never presents them as pending (D4).
+    const taskHistorySection = renderTaskHistorySection(priorTurns);
+    if (taskHistorySection) systemPrompt += `\n\n${taskHistorySection}`;
 
     if (conversationId) {
       try {
