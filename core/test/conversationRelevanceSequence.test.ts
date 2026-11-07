@@ -102,7 +102,7 @@ describe('P0 conversation relevance and real-action reliability (isolated sequen
     if (script.includes('Win32_Printer | Where-Object')) {
       return { code: 0, timedOut: false, stderr: '', stdout: JSON.stringify([{ Name: 'Brother HL-L2350DW series', Driver: 'Brother HL-L2350DW', Port: 'WSD-1', Status: 3, WorkOffline: false, Default: true }, { Name: 'Microsoft Print to PDF', Driver: 'PDF', Port: 'PORTPROMPT:', Status: 3, WorkOffline: false, Default: false }]) };
     }
-    if (script.includes('PrintTestPage')) { submits += 1; return { code: 0, timedOut: false, stderr: '', stdout: 'RETURN=0' }; }
+    if (script.includes('Out-Printer')) { submits += 1; return { code: 0, timedOut: false, stderr: '', stdout: 'SUBMITTED' }; }
     if (script.includes('Get-PrintJob')) {
       const jobs = submits > 0 && jobsPolled++ === 0 ? [{ Id: 7, Status: 'Printing' }] : [];
       return { code: 0, timedOut: false, stderr: '', stdout: JSON.stringify({ Jobs: jobs, PrinterStatus: 3, Offline: false }) };

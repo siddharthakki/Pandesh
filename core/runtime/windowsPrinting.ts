@@ -1,11 +1,13 @@
 /**
- * Narrow, governed Windows printing: enumerate installed printers and submit the Windows test page.
+ * Narrow, governed Windows printing: enumerate installed printers and print a one-page Pandesh test document.
  *
  * (Process spawning lives in the host-reviewed runner passed in; this module imports no child_process.)
  *
  * No shell command from the model is involved. Fixed PowerShell scripts run with the printer name passed through an
- * environment variable (never interpolated), so a printer name cannot inject a command. No file is generated: the
- * test page is Windows' own (Win32_Printer.PrintTestPage).
+ * environment variable (never interpolated), so a printer name cannot inject a command. The test document is plain
+ * text built by Core (buildTestDocument), passed the same way, and sent through the normal spooler with Out-Printer.
+ * (Win32_Printer.PrintTestPage was used before; on Windows 11 it returned 5 = access denied for a normal user, so an
+ * approved print never reached the queue — printer mission P1, 2026-11-07.)
  *
  * Outcomes are kept honest. Windows can prove the spooler accepted a job and later that the job left the queue
  * without an error; it cannot prove paper came out. So:
@@ -50,7 +52,28 @@ export const VERIFY_MAX_POLLS = 6;
 
 const LIST_SCRIPT = `$ErrorActionPreference='Stop'; $d=(Get-CimInstance Win32_Printer | Where-Object { $_.Name -ne $null }); @($d | ForEach-Object { [pscustomobject]@{ Name=$_.Name; Driver=$_.DriverName; Port=$_.PortName; Status=[string]$_.PrinterStatus; WorkOffline=$_.WorkOffline; Default=$_.Default } }) | ConvertTo-Json -Compress`;
 
-const SUBMIT_SCRIPT = `$ErrorActionPreference='Stop'; $n=$env:PANDESH_PRINTER; $p=Get-CimInstance Win32_Printer -Filter ("Name='" + $n.Replace("'","''") + "'"); if(-not $p){ Write-Output 'NOT_FOUND'; exit 3 }; $r=Invoke-CimMethod -InputObject $p -MethodName PrintTestPage; Write-Output ('RETURN=' + $r.ReturnValue); if($r.ReturnValue -ne 0){ exit 4 }`;
+const SUBMIT_SCRIPT = `$ErrorActionPreference='Stop'; $n=$env:PANDESH_PRINTER; $p=Get-CimInstance Win32_Printer -Filter ("Name='" + $n.Replace("'","''") + "'"); if(-not $p){ Write-Output 'NOT_FOUND'; exit 3 }; $env:PANDESH_PAGE | Out-Printer -Name $n; Write-Output 'SUBMITTED'`;
+
+/** The one-page test document Core prepares: shown on the approval card, then printed. Fits one page on any driver. */
+export function buildTestDocument(printer: string, now: Date = new Date()): string {
+  return [
+    'PANDESH PRINTER TEST',
+    '====================',
+    '',
+    `Printer : ${printer}`,
+    `Sent at : ${now.toISOString().replace('T', ' ').slice(0, 19)} UTC`,
+    'Sent by : Pandesh, through the Windows print spooler',
+    '',
+    'If you can read this page, the printer received and printed the job.',
+    '',
+    'Alignment check:',
+    '0123456789 ABCDEFGHIJKLMNOPQRSTUVWXYZ abcdefghijklmnopqrstuvwxyz',
+    '----------+----------+----------+----------+----------+----------',
+    '',
+    'Windows can confirm that the job reached and left the print queue;',
+    'only a person at the printer can confirm that paper came out.',
+  ].join('\r\n');
+}
 
 const JOBS_SCRIPT = `$ErrorActionPreference='Stop'; $n=$env:PANDESH_PRINTER; $j=@(Get-PrintJob -PrinterName $n -ErrorAction Stop | ForEach-Object { [pscustomobject]@{ Id=$_.Id; Status=[string]$_.JobStatus } }); $s=(Get-CimInstance Win32_Printer -Filter ("Name='" + $n.Replace("'","''") + "'")); [pscustomobject]@{ Jobs=$j; PrinterStatus=[string]$s.PrinterStatus; Offline=[bool]$s.WorkOffline } | ConvertTo-Json -Compress -Depth 4`;
 
@@ -150,19 +173,18 @@ async function readQueue(printer: string, run: PowerShellRunner, signal?: AbortS
 export async function submitTestPage(
   printer: string,
   run: PowerShellRunner,
-  opts: { signal?: AbortSignal; sleep?: (ms: number) => Promise<void> } = {},
+  opts: { signal?: AbortSignal; sleep?: (ms: number) => Promise<void>; document?: string } = {},
 ): Promise<PrintTestPageResult> {
   const sleep = opts.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
   const before = await readQueue(printer, run, opts.signal);
   const baseline = new Set(before?.ids ?? []);
 
-  const sub = await run(SUBMIT_SCRIPT, { PANDESH_PRINTER: printer }, SUBMIT_TIMEOUT_MS, opts.signal);
+  const sub = await run(SUBMIT_SCRIPT, { PANDESH_PRINTER: printer, PANDESH_PAGE: opts.document ?? buildTestDocument(printer) }, SUBMIT_TIMEOUT_MS, opts.signal);
   if (opts.signal?.aborted) return { outcome: 'unknown', printer, detail: 'Cancelled while submitting; the test page may or may not have been queued.', jobIds: [] };
   if (sub.timedOut) return { outcome: 'unknown', printer, detail: `Submission timed out after ${SUBMIT_TIMEOUT_MS / 1000}s; the test page may or may not have been queued.`, jobIds: [] };
   if (/NOT_FOUND/.test(sub.stdout)) return { outcome: 'failed', printer, detail: `Windows no longer lists a printer named "${printer}". Nothing was printed.`, jobIds: [] };
   if (sub.code !== 0) {
-    const ret = /RETURN=(\d+)/.exec(sub.stdout)?.[1];
-    return { outcome: 'failed', printer, detail: `Windows rejected the test page${ret ? ` (PrintTestPage returned ${ret})` : ''}: ${(sub.stderr || sub.stdout).trim().slice(0, 300) || `exit ${sub.code}`}`, jobIds: [] };
+    return { outcome: 'failed', printer, detail: `Windows rejected the print job: ${(sub.stderr || sub.stdout).trim().slice(0, 300) || `exit ${sub.code}`}. Nothing was printed.`, jobIds: [] };
   }
 
   let seen: number[] = [];
