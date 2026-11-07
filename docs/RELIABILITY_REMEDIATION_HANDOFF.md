@@ -22,6 +22,8 @@ Re-run evidence: `acceptance/claude-independent-audit/evidence/remediation-01a4d
 | b3b6cfe | printing | Job cleared before the first poll → "unknown". Queue read now includes the spooler's own `TotalJobsPrinted`/`JobErrors` counters; a rise with no error = "completed" (still not proof of paper) |
 | 938f5ae | M4 (fresh re-run) | A request that builds output from a local document it names as the source, with nothing read this turn: `write_file` / `export_document_pdf` (inline text) are held until Core has listed the folder and read the documents; refusal carries the real contents |
 | 4c0d612, 2dd36b6 | D11 | `calculate` tool (exact BigInt rationals, read-only in every mode) + prompt rule; `checkStatedTotals` re-adds a list of single amounts before a "total/sum/gesamt" line and corrects a wrong stated total ("Corrected by Pandesh"), never touching profit/net/margin/average lines, mixed currencies, tables, code. Evidence prompt no longer yields "previous check" artefacts |
+| 8c15bef | Windows Firewall prompt per test build (user report) | Phone server listens on the LAN only for the real install profile (`%LOCALAPPDATA%KarkeDikhadesktop`); smoke mode / any other profile → 127.0.0.1 (no firewall prompt, not on the LAN); loopback instances do not advertise a LAN pairing URL. Harness also sets `KARKEDIKHA_MOBILE_HOST=127.0.0.1`, port 3131. Verified: test build listens on 127.0.0.1:3131, no new firewall rule |
+| 6a9f972, ee06c90, 70717b3 | D12 | After every OpenCode delegation Core itself reads git status/diff (hardened git), removes `.opencode/` only if this delegation created it, flags changed test files, re-runs the project test command; verified report goes to the model and is appended to the reply; Core's re-run is the turn's last `run_checks` outcome. OpenCode engine no longer writes its own message or completes/fails the attempt when delegated |
 
 Tests: full default suite 651 files / 6,326 tests pass (before 904322e); core suite 222 files / 2,323 tests pass after it.
 Known flakes (fail occasionally under full-suite load, pass alone): `core/test/householdHardening.test.ts` (TLS listener timing), `core/test/executionSurvival.test.ts` (3/3 alone).
@@ -74,6 +76,14 @@ Fresh turn 1 at 4d0d732 (`remediation-fresh/P1`, reject): real inventory, defaul
 - **M2** (unchanged audit prompt) **PASS**: 5 invoices/receipts, total **3,770.45 EUR** via `calculate` (audit had 3,763.45); the 3 unrelated files read by Core and named irrelevant; no file moved (8 files). Cosmetic "comparison to previous check" paragraph → fixed in 2dd36b6 (not re-run).
 - **C1 PASS** again, all figures via `calculate`: Grosshandel `2*34+6` = €74, Ulm `20*3.20` = €64, Spice Route `4*17.50` = €70. Gap: reply shows only the note, not the comparison.
 
+### D12 re-run (fresh conversation, build 70717b3)
+
+- **M8** (unchanged audit prompt) **PASS** against the frozen criteria: OpenCode invoked (one `edit`), only `src/cart.js` changed, `.opencode/` removed by Core, auditor `npm test` 3/3 pass, ONE assistant message containing Core's report (`npm test` → PASSED) and a diff identical to `git diff`; verdict `verified`. Leftover: OpenCode engine still records its own `final_verification_recorded` before the chat engine's (harmless duplicate). Evidence `remediation-d12b/M8`; earlier `remediation-d12/M8` showed the double message + wrong verdict fixed in 70717b3.
+
+**New-conversation defect, root cause found:** at launch the host restores `selectedConversationId` from `selected-conversation.json`, while the renderer shows an empty "New conversation" pane without a New button. The next message silently continues the restored conversation with its history. Harness works around it by calling the same `newConversation()` IPC the button uses. Fix pending (next).
+
+Firewall clean-up (user action, not done by Pandesh): 122 per-path Allow rules point at deleted test builds; 46 more at test builds still on disk.
+
 Note: a governed call appears twice in `tool_invocations` (capability anchor attempt + turn attempt); it is one execution.
 
 Not re-run: M1–M3, M6–M8, M10, M11, C2, C3, F1–F4, AUTO. No new 19-mission verdict is claimed.
@@ -83,7 +93,7 @@ Not re-run: M1–M3, M6–M8, M10, M11, C2, C3, F1–F4, AUTO. No new 19-mission
 1. ~~M4 re-run, D5, D10~~ done (2d65b9c).
 2. ~~C1 completeness~~ done (06d1a87). Real print of P1 awaiting user approval.
    (old note: model stopped after 2 of 3 files — fixed)
-3. ~~D11~~ done (4c0d612). **D12** OpenCode verify/diff/report; **D6** orphan `running` anchor attempts.
+3. ~~D11~~ done (4c0d612). ~~D12~~ done (70717b3); **D6** orphan `running` anchor attempts.
 4. **D7/D8** Core must use the configured `ollama-agent.apiBase`; connection-loss must not be reported as "completed without a reply"; header must leave "Connected". **D15** retry in a long conversation.
 5. **D9** Auto model selection (uninstalled chain models, wrong model shown); **D13/D14** wording and image-prompt contamination.
 6. Re-run the full frozen 19-mission set on one clean build and write a new verdict.
