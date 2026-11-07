@@ -15,6 +15,7 @@ Re-run evidence: `acceptance/claude-independent-audit/evidence/remediation-01a4d
 | 420a699 | D4 | `core/domain/conversationTaskHistory.ts`; status questions answered from attempt records; history in every prompt |
 | 01a4d57 | P0-5 | `src/test/setup/isolatedProfile.ts` redirects LOCALAPPDATA/APPDATA/KARKEDIKHA_DATA_DIR for every vitest config; timer manager creates its folder before saving |
 | 904322e | D1 (found in re-run) | `install` claim category; an output file the reply names must exist (or be named by a succeeded tool) |
+| 2d65b9c | D5, D10 | `export_document_pdf` (`core/runtime/documentExport.ts`): Markdown/text → escaped self-contained HTML → headless Edge print → verified PDF (header + text layer + page count). Approval first, no silent overwrite. Relative `path/source/output` args of capability tools resolve against the selected workspace; adapter refuses still-relative paths. PdfCraft checked first: `batch --steps convert` accepts only `.txt` |
 
 Tests: full default suite 651 files / 6,326 tests pass (before 904322e); core suite 222 files / 2,323 tests pass after it.
 Known flake: `core/test/householdHardening.test.ts` (TLS listener timing) fails occasionally under full-suite load; passes alone.
@@ -29,11 +30,20 @@ Known flake: `core/test/householdHardening.test.ts` (TLS listener timing) fails 
 | M4 retry ("Save it…") | FAIL | **D3 PASS / task FAIL** | No memory written. Exposed a new false success (claimed install + PDF; both failed) → fixed in 904322e, **not yet re-run on a build** |
 | M12 cancel/restart | FAIL | **PASS** | No tools after cancel, not resumed, truthful status answer. Cosmetic: timestamp shown as UTC ISO |
 
+Later M4 re-runs (same prompt, same `m3_catering` folder, leftover files moved into the evidence folder first; harness policy `--approval=approve-except-install` approves writes and rejects `pc_install_utility`):
+
+| Build | Result | Evidence |
+|---|---|---|
+| 8cd05ae (904322e guard) | Truthful: `.md` written, PDF honestly not made, no install/PDF claim. Task not done (no exporter) | `evidence/remediation-8cd05ae/M4/retry1.json` (all rejected), `retry2.json` |
+| 2d65b9c (D5/D10) | **PASS**: one `export_document_pdf` approval, `catering_report.pdf` 52 KB, 1 page, figures match the CSV (730/420/310, margin 42.5%), path shown; no pandoc, no install | `evidence/remediation-2d65b9c/M4/` (incl. `catering_report-page1.png`) |
+
+Note: a governed call appears twice in `tool_invocations` (capability anchor attempt + turn attempt); it is one execution.
+
 Not re-run: M1–M3, M6–M8, M10, M11, C2, C3, F1–F4, AUTO. No new 19-mission verdict is claimed.
 
 ## Open (priority order)
 
-1. **Re-run M4 on a build that includes 904322e**; then implement **D5** PDF export (PdfCraft CLI or a bundled converter — verify `pdfcraft-cli convert` first) and **D10** workspace-relative `document_read`.
+1. ~~M4 re-run, D5, D10~~ done (2d65b9c).
 2. **C1 completeness**: the model stops after 2 of 3 files. Candidate: when a request says "price lists in this folder", require every listed matching file to be read before the final answer (evidence ledger check, like the claim guard).
 3. **D11** deterministic arithmetic; **D12** OpenCode verify/diff/report; **D6** orphan `running` anchor attempts.
 4. **D7/D8** Core must use the configured `ollama-agent.apiBase`; connection-loss must not be reported as "completed without a reply"; header must leave "Connected". **D15** retry in a long conversation.
@@ -43,7 +53,8 @@ Not re-run: M1–M3, M6–M8, M10, M11, C2, C3, F1–F4, AUTO. No new 19-mission
 ## Operational notes
 
 - Build a test build without touching `dist/` or `E:\Pandesh`:
-  `KARKEDIKHA_ALLOW_DIRTY_BUILD=1 KARKEDIKHA_DESKTOP_PORTABLE_OUT=.tmp/remediation-build node apps/desktop/scripts/package-portable.mjs`
+  `KARKEDIKHA_ALLOW_DIRTY_BUILD=1 KARKEDIKHA_DESKTOP_PORTABLE_OUT=.tmp/remediation-build-<sha> node apps/desktop/scripts/package-portable.mjs`
+  (use a fresh folder per build: deleting `.tmp/remediation-build` failed with EPERM although no process held it).
   (dirty only because of the untracked `scripts/acceptance/*gate2*` files; the fingerprint records them).
 - Harness: `acceptance/claude-independent-audit/harness/cli.mjs` with `AUDIT_PORTABLE_ROOT=<build>`; write to a **new** mission folder (e.g. `remediation-<sha>/M5`). CDP port 9471 was left held by an unidentified PID (27324) after a timed-out launch; use `AUDIT_CDP_PORT=9472`.
 - The harness auto-approves every card, including `pc_install_utility` (it tried to install pandoc on this PC during M4; both attempts failed). Use `--approval=reject` for missions where installs are not wanted.
