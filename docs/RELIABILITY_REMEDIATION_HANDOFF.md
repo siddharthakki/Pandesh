@@ -18,6 +18,9 @@ Re-run evidence: `acceptance/claude-independent-audit/evidence/remediation-01a4d
 | 2d65b9c | D5, D10 | `export_document_pdf` (`core/runtime/documentExport.ts`): Markdown/text → escaped self-contained HTML → headless Edge print → verified PDF (header + text layer + page count). Approval first, no silent overwrite. Relative `path/source/output` args of capability tools resolve against the selected workspace; adapter refuses still-relative paths. PdfCraft checked first: `batch --steps convert` accepts only `.txt` |
 | 06d1a87 | C1 | Task-aware evidence completeness (`core/runtime/folderCompleteness.ts`): ledger of documents listed/read/written; relevance = document types in folders the turn listed, minus the requested output and copies, >1 MB files, folders >12 docs (reported as a limit). Core itself runs `read_file` / `list_directory` (recorded invocations) for skipped evidence at the write gate and before the answer; requested output checked on disk; unreadable files stated. Verification no longer "verified" from 0 files read |
 | ab5a212 | routing (found by printer mission) | Printer/print-job/scanner/this-PC requests never routed to web research (was: "print-job" + "find" = job search, tools cut to `web_research`, model denied printer access, fixed "Product Manager remote Germany" query proposed). Fixed fallback query removed. Claim guard: "prepared a test document/page"; `list_printers` no longer evidence for file claims |
+| 4d0d732 | printing (P1 real print) | Approved print never queued: `Win32_Printer.PrintTestPage` returned 5 (access denied) on Windows 11. Now prints a Core-prepared one-page test document via `Out-Printer`; exact page shown on the approval card; text passed only via env |
+| b3b6cfe | printing | Job cleared before the first poll → "unknown". Queue read now includes the spooler's own `TotalJobsPrinted`/`JobErrors` counters; a rise with no error = "completed" (still not proof of paper) |
+| 938f5ae | M4 (fresh re-run) | A request that builds output from a local document it names as the source, with nothing read this turn: `write_file` / `export_document_pdf` (inline text) are held until Core has listed the folder and read the documents; refusal carries the real contents |
 
 Tests: full default suite 651 files / 6,326 tests pass (before 904322e); core suite 222 files / 2,323 tests pass after it.
 Known flake: `core/test/householdHardening.test.ts` (TLS listener timing) fails occasionally under full-suite load; passes alone.
@@ -37,7 +40,7 @@ Later M4 re-runs (same prompt, same `m3_catering` folder, leftover files moved i
 | Build | Result | Evidence |
 |---|---|---|
 | 8cd05ae (904322e guard) | Truthful: `.md` written, PDF honestly not made, no install/PDF claim. Task not done (no exporter) | `evidence/remediation-8cd05ae/M4/retry1.json` (all rejected), `retry2.json` |
-| 2d65b9c (D5/D10) | **PASS**: one `export_document_pdf` approval, `catering_report.pdf` 52 KB, 1 page, figures match the CSV (730/420/310, margin 42.5%), path shown; no pandoc, no install | `evidence/remediation-2d65b9c/M4/` (incl. `catering_report-page1.png`) |
+| 2d65b9c (D5/D10) | ~~PASS~~ **withdrawn** (conversation not fresh, see correction below): one `export_document_pdf` approval, `catering_report.pdf` 52 KB, 1 page, figures match the CSV (730/420/310, margin 42.5%), path shown; no pandoc, no install | `evidence/remediation-2d65b9c/M4/` (incl. `catering_report-page1.png`) |
 
 C1 re-runs (unchanged prompt, `c1_suppliers` reset to the 01a4d57 state):
 
@@ -49,6 +52,21 @@ C1 re-runs (unchanged prompt, `c1_suppliers` reset to the 01a4d57 state):
 | 06d1a87 (c1d) ×2 | **PASS** both: all 3 price lists examined (spice_route read by model or by Core), Ulm Asia Markt €64, `rice_order.txt` really written, no web research. Gap: run 2 reply only says "written the note", no comparison shown; Grosshandel shown as "€68 (+€6 if applicable)" instead of €74 (D11) | `remediation-c1d/C1/p1,p2` |
 
 Printer mission P1 (user-added prompt, `--approval=reject`, nothing printed): before ab5a212 FAIL (routing above). At ab5a212: `list_printers` real inventory, default **Brother MFC-L2710DN series** (matches `Get-Printer`), approval card for one Windows test page, rejected by harness, reply says spooler status ≠ physical output. Gaps: no Pandesh-prepared document (only the Windows test page); after a rejection the reply says "requires your approval" instead of "you declined"; inline "[Not done…]" wording is clumsy. **The approved real print has not been run** (needs the user). Evidence `remediation-ab5a212/P1`.
+
+### Evidence validity correction (2026-11-07 afternoon)
+
+The harness `new` step silently failed right after an app launch (the window restores the last conversation after the click), so several re-runs **continued an earlier conversation** instead of starting fresh: `remediation-c1`, `c1b`, `c1c`, `c1d/p1`, `2d65b9c/M4` (2 prior messages), `4d0d732/P1/p1`. Their tool behaviour is real, but the model had earlier turns in context. The harness now verifies `selectedConversationId` is empty after `new` and aborts otherwise.
+
+- **M4 at 2d65b9c is withdrawn as a PASS.** In a fresh conversation (`remediation-fresh/M4`, build 4d0d732) the model never read the CSV and produced a real, "verified" PDF with **invented figures** (€1,400 / €950 / €450; kept as `FABRICATED-*`). Fixed in 938f5ae; fresh re-runs `remediation-m4gate/M4/r2` (write_file held → CSV read → real figures, 1 page, profit €310) and `r3` (inline export held → CSV read → €730/€420) **PASS**. `r1` invalid (not fresh; also ended with no answer).
+- **C1**: fresh runs `remediation-c1d/C1/p2` and `remediation-fresh/C1/p1` both **PASS** (all 3 lists, €64, note written, no web research).
+- **Product defect (new):** clicking **New conversation** within the first seconds after launch shows an empty "New conversation" pane, but the host keeps the previous conversation selected, so the next message goes into the OLD conversation with its history. Reproduced twice (5 clicks, still selected). Needs a fix in the renderer/host restore order.
+
+### Printer mission P1 — real print (approved by the user in chat, one page)
+
+1. Build ab5a212: approved card → `PrintTestPage` returned 5 → reported FAILED honestly; queue empty, no PrintService event → nothing printed.
+2. Build 4d0d732 (Out-Printer, Core test document shown on the card): approved card → submitted; job left the queue before the first check → reported UNKNOWN. Independent check: Brother queue counter `TotalJobsPrinted` = 2, `JobErrors` = 0 (no baseline captured, so attribution is likely but not proven). **Physical output not confirmed by a person.**
+3. b3b6cfe makes the counters part of the verification; not yet exercised by a real print (no further print approved).
+Fresh turn 1 at 4d0d732 (`remediation-fresh/P1`, reject): real inventory, default Brother, card raised and declined, nothing printed.
 
 Note: a governed call appears twice in `tool_invocations` (capability anchor attempt + turn attempt); it is one execution.
 
