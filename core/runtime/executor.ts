@@ -68,6 +68,7 @@ import { buildWriteFileProposal, isSuspiciousWholeFileReplacement, readBaselineI
 import { buildTextEditProposal } from './textEditProposal';
 import { projectEventArguments } from '../domain/eventArguments';
 import { reconcileExecutionClaims, withholdUnexecutedChangeClaims } from './executionClaims';
+import { withholdUnsupportedActionClaims } from './actionClaims';
 import {
   discoverSyntaxGates,
   discoverValidationGates,
@@ -842,8 +843,10 @@ export class RuntimeExecutor {
       this.completeInvocationSucceeded(invocation.id, result);
       // No tools ran, so a claimed edit/validation is narration, not evidence: derive the text from what actually happened.
       const guarded = withholdUnexecutedChangeClaims(projected.text);
-      this.appendAssistant(request.conversationId, guarded.text, invocation.id, attemptId);
-      this.recordQuality(attemptId, 'final_verification_recorded', { kind: 'conversation_response', model: result.model, ...(guarded.withheld.length > 0 ? { withheldUnexecutedClaims: guarded.withheld } : {}) }, 'final-conversation');
+      // Nor can it have paused a timer, set a reminder or sent anything: no tool ran (audit D1).
+      const actionGuarded = withholdUnsupportedActionClaims(guarded.text, []);
+      this.appendAssistant(request.conversationId, actionGuarded.text, invocation.id, attemptId);
+      this.recordQuality(attemptId, 'final_verification_recorded', { kind: 'conversation_response', model: result.model, ...(guarded.withheld.length > 0 ? { withheldUnexecutedClaims: guarded.withheld } : {}), ...(actionGuarded.withheld.length > 0 ? { withheldActionClaims: actionGuarded.withheld } : {}) }, 'final-conversation');
       this.mutate(() => transitionAttempt(this.db, attemptId, { toStatus: 'completed', fenceToken, actor: CORE_ACTOR }));
     } catch (err) {
       this.recordChatFailure(attemptId, invocation.id, fenceToken, err);
@@ -2318,12 +2321,17 @@ export class RuntimeExecutor {
             .filter((message) => message.role === 'tool' && /^\[(validation|run_command|run_check)\]/.test(message.content))
             .map((message) => message.content));
           if (reconciled.withheld.length > 0) finalContent = reconciled.text;
+          // An action claim ("I've paused the tea timer") stands only if a matching tool succeeded in this attempt (audit D1).
+          // Governed calls (approved writes included) run on the capability anchor attempt and are linked by the relay event.
+          const succeededTools = this.succeededToolNames(attemptId);
+          const actionGuarded = withholdUnsupportedActionClaims(finalContent, succeededTools);
+          if (actionGuarded.withheld.length > 0) finalContent = actionGuarded.text;
           if (conditionalVerdictNote) finalContent = `${finalContent.trim()}\n\n${conditionalVerdictNote}`;
           closeLoopContinuation(this.db, attemptId);
           this.appendAssistant(request.conversationId, finalContent, invocation.id, attemptId);
           // Grounded only by a tool that actually executed: a denied/failed invocation is not evidence for the answer.
           const toolGrounded = Boolean(this.db.get("SELECT id FROM tool_invocations WHERE attemptId = ? AND status = 'succeeded' LIMIT 1", [attemptId]));
-          this.recordQuality(attemptId, 'final_verification_recorded', { kind: toolGrounded ? 'tool_grounded_response' : 'ungrounded_response', model, ...(reconciled.withheld.length > 0 ? { withheldExecutionClaims: reconciled.withheld } : {}) }, 'final-tool-grounded');
+          this.recordQuality(attemptId, 'final_verification_recorded', { kind: toolGrounded ? 'tool_grounded_response' : 'ungrounded_response', model, ...(reconciled.withheld.length > 0 ? { withheldExecutionClaims: reconciled.withheld } : {}), ...(actionGuarded.withheld.length > 0 ? { withheldActionClaims: actionGuarded.withheld } : {}) }, 'final-tool-grounded');
           this.mutate(() => transitionAttempt(this.db, attemptId, { toStatus: 'completed', fenceToken, actor: CORE_ACTOR }));
           return;
         }
@@ -3076,6 +3084,16 @@ export class RuntimeExecutor {
    * outcome count: a refused, denied, timed-out or never-executed call (no exit code) establishes nothing. A governed
    * call's invocation lives on its capability anchor attempt and is linked here by the relay event the loop records.
    */
+  /** Names of tools that actually succeeded for this attempt, including governed calls relayed from the anchor attempt. */
+  private succeededToolNames(attemptId: string): string[] {
+    return this.db.all<{ toolName: string }>(
+      `SELECT toolName FROM tool_invocations
+       WHERE status = 'succeeded' AND (attemptId = ? OR id IN (
+         SELECT entityId FROM runtime_events WHERE eventType = 'capability_tool_invocation_completed' AND json_extract(metadata, '$.attemptId') = ?))`,
+      [attemptId, attemptId],
+    ).map((row) => row.toolName);
+  }
+
   private conditionalEvidence(attemptId: string): ConditionalEvidenceStep[] {
     const rows = this.db.all<{ toolName: string; status: string; exitCode: number | null; argsSummary: string }>(
       `SELECT toolName, status, exitCode, argsSummary FROM tool_invocations
