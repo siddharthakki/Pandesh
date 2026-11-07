@@ -1,6 +1,7 @@
 import { withholdUnsupportedActionClaims } from './actionClaims';
 import { answerTaskStatusQuestion, isTaskStatusQuestion, listPriorTurns, renderTaskHistorySection } from '../domain/conversationTaskHistory';
 import { checkPublicQuery, derivePublicQuery, explicitlyRequestsWebSearch, referencesLocalContent } from './publicQueryGuard';
+import { checkStatedTotals, evaluateExpression } from './arithmeticCheck';
 import { FolderReadLedger, requestedOutputFiles, requiresSourceEvidence, requiresWholeFolder, unreadFilesNotice } from './folderCompleteness';
 import * as cp from 'node:child_process';
 import { holdAwaitedApproval } from './cancellationRecovery';
@@ -3203,6 +3204,23 @@ ${String(args.objective ?? '').slice(0, 600)}`,
       },
     ];
 
+    // Audit D11: exact arithmetic by Core, never "in the head" of the model.
+    tools.push({
+      name: 'calculate',
+      label: 'calculate',
+      description: 'Exact arithmetic: evaluate an expression with numbers, + - * / and parentheses (e.g. "1250 + 2040 + 23.45", "34 * 2 + 6", "310 / 730 * 100"). Use it for EVERY total, sum, difference, price for a quantity or percentage you report; never add numbers yourself. Read-only.',
+      parameters: { type: 'object', properties: { expression: { type: 'string', description: 'The arithmetic expression, numbers written with a dot as decimal separator.' } }, required: ['expression'] },
+      execute: async (_id: string, args: any) => {
+        try {
+          const expression = String(args?.expression ?? '');
+          const value = evaluateExpression(expression);
+          return { content: [{ type: 'text', text: `${expression} = ${value}` }], details: { expression, value } };
+        } catch (err: any) {
+          return { content: [{ type: 'text', text: `NOT CALCULATED: ${err?.message ?? String(err)}` }], isError: true };
+        }
+      },
+    });
+
     // Printing: installed-printer inventory and the Windows test page, governed and verified.
     const printNote = (eventType: string, metadata: Record<string, unknown>) => safeRecordRuntimeEvent(db, broadcaster, attemptId, eventType, { requestId, ...metadata }, actor);
     const printEventsFor = (): Array<{ eventType: string; printer: string }> => {
@@ -3977,6 +3995,10 @@ ${filesPromptSection}${webResearchPromptSection}${wishesPromptSection}${emailCal
     // Audit D5: a PDF is made with the built-in exporter, not by installing or shelling out to a converter.
     if (availableToolNames.has('export_document_pdf')) {
       systemPrompt += '\n\nPDF FILES: when the user wants a PDF, write the content (or a .md file) and call export_document_pdf; it prints a real, verified PDF locally. Do not use pandoc, LibreOffice or run_checks for this, and do not install a converter. Report the PDF only after export_document_pdf succeeds, using the path it returns.';
+    }
+    // Audit D11: totals are computed by the calculate tool, not by the model.
+    if (availableToolNames.has('calculate')) {
+      systemPrompt += '\n\nNUMBERS: for every total, sum, difference, price for a quantity (including delivery fees) or percentage, call calculate with the exact expression and report its result. Never add or multiply numbers yourself, and include every fee that applies instead of saying "if applicable".';
     }
     // Earlier tasks' real outcomes (cancelled / failed / interrupted), so the model never presents them as pending (D4).
     const taskHistorySection = renderTaskHistorySection(priorTurns);
@@ -4846,6 +4868,12 @@ ${filesPromptSection}${webResearchPromptSection}${wishesPromptSection}${emailCal
         const base = path.basename(clean).toLowerCase();
         return toolCallsRecorded.some((t) => t.status === 'completed' && `${JSON.stringify(t.args ?? '')} ${extractToolResultText(t.result)}`.toLowerCase().includes(base));
       };
+      // Audit D11: a stated total that does not match its listed amounts is corrected by Core's own exact sum.
+      const totals = checkStatedTotals(finalReply);
+      if (totals.corrections.length) {
+        safeRecordRuntimeEvent(db, broadcaster, attemptId, 'stated_total_corrected', { corrections: totals.corrections }, actor);
+        finalReply = totals.text;
+      }
       const guarded = withholdUnsupportedActionClaims(finalReply, succeeded, { fileExists });
       if (guarded.withheld.length > 0) {
         finalReply = guarded.text;
