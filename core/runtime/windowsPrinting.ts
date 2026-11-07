@@ -75,7 +75,7 @@ export function buildTestDocument(printer: string, now: Date = new Date()): stri
   ].join('\r\n');
 }
 
-const JOBS_SCRIPT = `$ErrorActionPreference='Stop'; $n=$env:PANDESH_PRINTER; $j=@(Get-PrintJob -PrinterName $n -ErrorAction Stop | ForEach-Object { [pscustomobject]@{ Id=$_.Id; Status=[string]$_.JobStatus } }); $s=(Get-CimInstance Win32_Printer -Filter ("Name='" + $n.Replace("'","''") + "'")); [pscustomobject]@{ Jobs=$j; PrinterStatus=[string]$s.PrinterStatus; Offline=[bool]$s.WorkOffline } | ConvertTo-Json -Compress -Depth 4`;
+const JOBS_SCRIPT = `$ErrorActionPreference='Stop'; $n=$env:PANDESH_PRINTER; $j=@(Get-PrintJob -PrinterName $n -ErrorAction Stop | ForEach-Object { [pscustomobject]@{ Id=$_.Id; Status=[string]$_.JobStatus } }); $s=(Get-CimInstance Win32_Printer -Filter ("Name='" + $n.Replace("'","''") + "'")); $c=$null; try { $c=Get-CimInstance Win32_PerfRawData_Spooler_PrintQueue -Filter ("Name='" + $n.Replace("'","''") + "'") -ErrorAction Stop } catch {}; [pscustomobject]@{ Jobs=$j; PrinterStatus=[string]$s.PrinterStatus; Offline=[bool]$s.WorkOffline; Printed=$(if($c){[int64]$c.TotalJobsPrinted}else{$null}); JobErrors=$(if($c){[int64]$c.JobErrors}else{$null}) } | ConvertTo-Json -Compress -Depth 4`;
 
 /** Win32_Printer.PrinterStatus: 1 other, 2 unknown, 3 idle, 4 printing, 5 warmup, 6 stopped printing, 7 offline. */
 const PRINTER_STATUS: Record<string, string> = { '1': 'other', '2': 'unknown', '3': 'idle', '4': 'printing', '5': 'warming up', '6': 'stopped printing', '7': 'offline' };
@@ -147,19 +147,24 @@ export function resolvePrinter(printers: readonly InstalledPrinter[], requestTex
   return { error: 'The request does not identify which installed printer to use.', candidates: names };
 }
 
-interface QueueSnapshot { ids: number[]; hasError: boolean; printerStatus: string; offline: boolean }
+/** `printed`/`jobErrors`: the spooler's own cumulative counters for this queue (null when Windows does not expose them). */
+interface QueueSnapshot { ids: number[]; hasError: boolean; printerStatus: string; offline: boolean; printed: number | null; jobErrors: number | null }
+
+const counter = (value: unknown): number | null => (typeof value === 'number' && Number.isFinite(value) ? value : null);
 
 async function readQueue(printer: string, run: PowerShellRunner, signal?: AbortSignal): Promise<QueueSnapshot | null> {
   const r = await run(JOBS_SCRIPT, { PANDESH_PRINTER: printer }, VERIFY_TIMEOUT_MS, signal);
   if (r.timedOut || r.code !== 0 || !r.stdout.trim()) return null;
   try {
-    const parsed = JSON.parse(r.stdout.trim()) as { Jobs?: unknown; PrinterStatus?: unknown; Offline?: unknown };
+    const parsed = JSON.parse(r.stdout.trim()) as { Jobs?: unknown; PrinterStatus?: unknown; Offline?: unknown; Printed?: unknown; JobErrors?: unknown };
     const jobs = asArray<{ Id: number; Status: string }>(parsed.Jobs);
     return {
       ids: jobs.map((j) => Number(j.Id)),
       hasError: jobs.some((j) => /error|offline|paper|userintervention|blocked/i.test(String(j.Status))),
       printerStatus: PRINTER_STATUS[String(parsed.PrinterStatus)] ?? String(parsed.PrinterStatus ?? 'unknown'),
       offline: parsed.Offline === true,
+      printed: counter(parsed.Printed),
+      jobErrors: counter(parsed.JobErrors),
     };
   } catch {
     return null;
@@ -197,6 +202,16 @@ export async function submitTestPage(
     const fresh = last.ids.filter((id) => !baseline.has(id));
     for (const id of fresh) if (!seen.includes(id)) seen = [...seen, id];
     if (last.hasError) return { outcome: 'failed', printer, detail: `The spooler job reported an error (printer ${last.printerStatus}).`, jobIds: seen };
+    // The spooler's own counters: a job that printed and cleared between two polls still moves them (printer mission
+    // P1: the job left the queue before the first check and the outcome was reported as unknown).
+    if (before && before.jobErrors !== null && last.jobErrors !== null && last.jobErrors > before.jobErrors) {
+      return { outcome: 'failed', printer, detail: `The spooler recorded a job error for this printer (errors ${before.jobErrors} → ${last.jobErrors}).`, jobIds: seen };
+    }
+    if (before && before.printed !== null && last.printed !== null && last.printed > before.printed && fresh.length === 0) {
+      return last.offline || last.printerStatus === 'stopped printing'
+        ? { outcome: 'failed', printer, detail: `The spooler counted the job as sent but the printer is ${last.offline ? 'offline' : last.printerStatus}.`, jobIds: seen }
+        : { outcome: 'completed', printer, detail: `The spooler sent the job to the printer: its jobs-printed counter for this printer rose from ${before.printed} to ${last.printed} with no job error. (Windows cannot confirm paper output.)`, jobIds: seen };
+    }
     if (seen.length > 0 && fresh.length === 0) {
       return last.offline || last.printerStatus === 'stopped printing'
         ? { outcome: 'failed', printer, detail: `The job left the queue but the printer is ${last.offline ? 'offline' : last.printerStatus}.`, jobIds: seen }

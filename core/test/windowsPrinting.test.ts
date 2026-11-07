@@ -84,6 +84,17 @@ describe('submitTestPage outcomes', () => {
   });
   // Printer mission P1: Win32_Printer.PrintTestPage returned 5 (access denied) on Windows 11, so the approved page never
   // reached the queue. The page is now Core's own document, printed with Out-Printer, its text passed only via env.
+  // Printer mission P1 (second attempt): the job printed and cleared before the first poll; the spooler counter shows it.
+  it('uses the spooler counters when the job cleared before the first check', async () => {
+    const at = (printed: number, errors = 0) => ({ Jobs: [], PrinterStatus: 3, Offline: false, Printed: printed, JobErrors: errors });
+    const done = await submitTestPage('B', queueRunner({ queues: [at(2), at(3)] }).run, { sleep: noSleep });
+    expect(done).toMatchObject({ outcome: 'completed' });
+    expect(done.detail).toMatch(/rose from 2 to 3/);
+    expect((await submitTestPage('B', queueRunner({ queues: [at(2), at(2, 1)] }).run, { sleep: noSleep })).outcome).toBe('failed');
+    // No counters exposed: unchanged, honest "unknown".
+    expect((await submitTestPage('B', queueRunner({ queues: [jobs([])] }).run, { sleep: noSleep })).outcome).toBe('unknown');
+  });
+
   it('prints the prepared one-page document through the spooler, never via PrintTestPage', async () => {
     const { run, seen } = queueRunner({ queues: [jobs([]), jobs([{ Id: 7, Status: 'Printing' }]), jobs([])] });
     const page = buildTestDocument('Brother', new Date('2026-11-07T13:30:00Z'));
