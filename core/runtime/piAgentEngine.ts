@@ -1,3 +1,5 @@
+import { withholdUnsupportedActionClaims } from './actionClaims';
+import { checkPublicQuery, derivePublicQuery, explicitlyRequestsWebSearch, referencesLocalContent } from './publicQueryGuard';
 import * as cp from 'node:child_process';
 import { holdAwaitedApproval } from './cancellationRecovery';
 import * as path from 'node:path';
@@ -381,11 +383,9 @@ export function deriveResearchQueries(requestText: string): string[] {
     return queries.slice(0, 3);
   }
 
-  const cleaned = requestText
-    .replace(/\b(?:use pandesh'?s available web research tool to|can you please|please|find out|search the web for|look up|research)\b/gi, '')
-    .trim();
-  if (cleaned.length > 10) return [cleaned.slice(0, 150)];
-  return [requestText.slice(0, 150)];
+  // Never the raw request: a short derived public query, or nothing (audit D2).
+  const derived = derivePublicQuery(requestText.replace(/\buse pandesh'?s available web research tool to\b/gi, ''));
+  return derived ? [derived] : [];
 }
 
 export function extractToolResultText(result: unknown): string {
@@ -2388,6 +2388,19 @@ export class PiAgentEngine implements EngineAdapter {
         execute: async (_id: string, args: any) => {
           const query = String(args.query || '').trim();
           if (!query) return { content: [{ type: 'text', text: 'web_research requires a query.' }], isError: true };
+          // Privacy boundary (audit D2): only a short public query may leave the machine — never the user's message,
+          // personal identifiers, local paths or text read from the user's files in this turn.
+          const privateTexts = toolCallsRecorded
+            .filter((t) => /read|document|ocr|list_directory|gmail_|memory_recall|household/i.test(t.tool) && t.status === 'completed')
+            .map((t) => extractToolResultText(t.result));
+          const queryCheck = checkPublicQuery(query, { userMessage: ctx.currentMessage ?? requestText, privateTexts });
+          if (!queryCheck.ok) {
+            safeRecordRuntimeEvent(db, broadcaster, attemptId, 'web_research_query_refused', { reason: queryCheck.reason, queryChars: query.length }, actor);
+            return {
+              content: [{ type: 'text', text: `NOT SEARCHED: ${queryCheck.reason}. Nothing was sent off this computer. If public research is needed, call web_research again with a short public query (topic, role, place; at most 120 characters) that contains no personal details and none of the user's private text.` }],
+              isError: true,
+            };
+          }
           const normQuery = query.toLowerCase().replace(/\s+/g, ' ');
           if (seenResearchQueries.has(normQuery)) {
             webResearchCount += 1;
@@ -3390,7 +3403,10 @@ ${String(args.objective ?? '').slice(0, 600)}`,
       });
     }
 
-    const isPublicResearch = isPublicResearchTask(requestText);
+    // A request about the user's own files (CV, price lists in this folder) is answered from those files first: research
+    // scoping would remove every local tool, so the private file is never read (audit D2, M9).
+    const requestReferencesLocalContent = referencesLocalContent(requestText);
+    const isPublicResearch = isPublicResearchTask(requestText) && !requestReferencesLocalContent;
     if (isPublicResearch) {
       // For public research (job/vacancy search, market prices, external news), expose ONLY relevant web research tools.
       // Do not expose filesystem, printer, phone, Gmail, calendar, memory, coding or unrelated tool schemas.
@@ -4408,12 +4424,18 @@ ${filesPromptSection}${webResearchPromptSection}${wishesPromptSection}${emailCal
       }
     }
 
-    if (isProductResearchRequest(ctx.currentMessage ?? prompt) && !signal?.aborted) {
+    // A request about the user's own files is not a shopping search unless the user explicitly asked for the web, and even
+    // then only a derived public query is sent — never the prompt itself (audit D2: M9 CV prompt, C1 price lists).
+    const fallbackMessage = ctx.currentMessage ?? prompt;
+    const fallbackIsLocal = referencesLocalContent(fallbackMessage);
+    const fallbackAllowed = !fallbackIsLocal || explicitlyRequestsWebSearch(fallbackMessage);
+    if (fallbackAllowed && isProductResearchRequest(fallbackMessage) && !signal?.aborted) {
       const hasWebResearch = toolCallsRecorded.some(t => t.tool === 'web_research' && t.status === 'completed');
-      if (!hasWebResearch) {
+      const derivedQuery = derivePublicQuery(fallbackIsLocal ? fallbackMessage : extractSearchQueryWithContext(fallbackMessage));
+      if (!hasWebResearch && derivedQuery) {
         const webTool = tools.find(t => t.name === 'web_research');
         if (webTool) {
-          const searchQuery = extractSearchQueryWithContext(ctx.currentMessage ?? prompt);
+          const searchQuery = derivedQuery;
           safeRecordRuntimeEvent(db, broadcaster, attemptId, 'web_research_fallback_invoked', { query: searchQuery }, actor);
           try {
             const searchResult = await webTool.execute('web_research_auto', { query: searchQuery });
@@ -4582,6 +4604,18 @@ ${filesPromptSection}${webResearchPromptSection}${wishesPromptSection}${emailCal
       finalReply = composeEvidenceAnswer(projectEvidence, requestText);
       projectReplyReplaced = true;
       safeRecordRuntimeEvent(db, broadcaster, attemptId, 'project_reply_replaced', { reason: 'reply not grounded in the active project', project: projectEvidence.name }, actor);
+    }
+
+    // No tool result, no claim (audit D1): a sentence saying a timer was paused, a reminder set, a message sent or a
+    // file saved stands only if a tool of that kind completed in this turn. Applied after every follow-up prompt, so a
+    // second fabricated "I have now executed the commands" is withheld too.
+    {
+      const succeeded = toolCallsRecorded.filter((t) => t.status === 'completed').map((t) => t.tool);
+      const guarded = withholdUnsupportedActionClaims(finalReply, succeeded);
+      if (guarded.withheld.length > 0) {
+        finalReply = guarded.text;
+        safeRecordRuntimeEvent(db, broadcaster, attemptId, 'unsupported_action_claims_withheld', { withheld: guarded.withheld }, actor);
+      }
     }
 
     // What actually happened, decided from the tool ledger rather than from
