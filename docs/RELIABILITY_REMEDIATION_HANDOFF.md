@@ -58,7 +58,7 @@ Not re-run: M1–M3, M6–M8, M10, M11, C2, C3, F1–F4, AUTO. No new 19-mission
 
 1. ~~M4 re-run, D5, D10~~ done (2d65b9c).
 2. ~~C1 completeness~~ done (06d1a87). Real print of P1 awaiting user approval.
-2b. **C1 (old text)**: the model stops after 2 of 3 files. Candidate: when a request says "price lists in this folder", require every listed matching file to be read before the final answer (evidence ledger check, like the claim guard).
+   (old note: model stopped after 2 of 3 files — fixed)
 3. **D11** deterministic arithmetic; **D12** OpenCode verify/diff/report; **D6** orphan `running` anchor attempts.
 4. **D7/D8** Core must use the configured `ollama-agent.apiBase`; connection-loss must not be reported as "completed without a reply"; header must leave "Connected". **D15** retry in a long conversation.
 5. **D9** Auto model selection (uninstalled chain models, wrong model shown); **D13/D14** wording and image-prompt contamination.
