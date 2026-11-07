@@ -1,6 +1,7 @@
 import { withholdUnsupportedActionClaims } from './actionClaims';
 import { answerTaskStatusQuestion, isTaskStatusQuestion, listPriorTurns, renderTaskHistorySection } from '../domain/conversationTaskHistory';
 import { checkPublicQuery, derivePublicQuery, explicitlyRequestsWebSearch, referencesLocalContent } from './publicQueryGuard';
+import { FolderReadLedger, requestedOutputFiles, requiresWholeFolder, unreadFilesNotice } from './folderCompleteness';
 import * as cp from 'node:child_process';
 import { holdAwaitedApproval } from './cancellationRecovery';
 import * as path from 'node:path';
@@ -931,6 +932,34 @@ export class PiAgentEngine implements EngineAdapter {
     models.setProvider(provider);
 
     const toolCallsRecorded: Array<{ tool: string; args?: unknown; status: string; result?: unknown }> = [];
+    // Audit C1: which files this turn listed, read and wrote, for questions about a folder's files as a set.
+    const folderLedger = new FolderReadLedger(requestText);
+    const wholeFolderRequest = requiresWholeFolder(requestText);
+    /**
+     * Core runs the real read_file tool (same authorization, credential refusal and redaction) on documents the model
+     * skipped, recorded as tool invocations, so the completeness check is tool execution, not a model saying it checked.
+     */
+    async function coreRunTool(toolName: 'read_file' | 'list_directory', args: Record<string, unknown>): Promise<{ ok: boolean; text: string }> {
+      const tool = tools.find((t) => t.name === toolName);
+      if (!tool || signal?.aborted) return { ok: false, text: `the ${toolName} tool is not available` };
+      let invId: string | undefined;
+      try { mutateWithBroadcast(db, broadcaster, () => { invId = startToolInvocation(db, { attemptId, toolName, argsSummary: args, actor })?.id; }); } catch {}
+      let result: any;
+      try { result = await tool.execute(`completeness_${toolName}_${Date.now()}`, args); } catch (err: any) { result = { content: [{ type: 'text', text: `Error: ${err?.message ?? String(err)}` }], isError: true }; }
+      const text = String(result?.content?.[0]?.text ?? '');
+      const ok = !result?.isError;
+      if (invId) {
+        try { mutateWithBroadcast(db, broadcaster, () => completeToolInvocation(db, invId!, { actor, status: ok ? 'succeeded' : 'failed', exitCode: ok ? 0 : 1, evidence: { output: text.slice(0, 500), initiatedBy: 'core_evidence_completeness' } })); } catch {}
+      }
+      toolCallsRecorded.push({ tool: toolName, args, result, status: ok ? 'completed' : 'failed' });
+      return { ok, text };
+    }
+    async function coreReadDocuments(files: string[]): Promise<Array<{ file: string; ok: boolean; text: string }>> {
+      const reads: Array<{ file: string; ok: boolean; text: string }> = [];
+      for (const file of files) reads.push({ file, ...(await coreRunTool('read_file', { filePath: file })) });
+      safeRecordRuntimeEvent(db, broadcaster, attemptId, 'folder_evidence_read_by_core', { read: reads.filter((r) => r.ok).map((r) => path.basename(r.file)), failed: reads.filter((r) => !r.ok).map((r) => path.basename(r.file)) }, actor);
+      return reads;
+    }
     const invocationMap = new Map<string, string>();
     /** Markdown links for files this turn really shared to the paired phone (see send_to_phone). */
     const phoneShares: string[] = [];
@@ -2602,6 +2631,7 @@ export class PiAgentEngine implements EngineAdapter {
               }
               if (items.length >= maxEntries) break;
             }
+            folderLedger.noteListed(targetDir, items);
 
             return {
               content: [{ type: 'text', text: JSON.stringify({ directory: targetDir, totalCount: entries.length, returnedCount: items.length, items }, null, 2) }],
@@ -2811,6 +2841,7 @@ export class PiAgentEngine implements EngineAdapter {
             const end = typeof args.endLine === 'number' && args.endLine >= start ? Math.min(args.endLine, lines.length) : Math.min(start + 400, lines.length);
 
             const slice = lines.slice(start - 1, end).map((line, idx) => `${start + idx}: ${line}`).join('\n');
+            folderLedger.noteRead(full);
             return {
               content: [{ type: 'text', text: redactCredentialShapes(`[${full} (lines ${start}-${end} of ${lines.length})]:\n${slice}`) }],
               details: {
@@ -2845,6 +2876,17 @@ export class PiAgentEngine implements EngineAdapter {
             return { content: [{ type: 'text', text }], isError: true };
           };
           if (typeof args.content !== 'string') return refuse('Error: write_file needs the full text content to write. Nothing was written.', 'no text content');
+          // Audit C1: a note that answers a question about the folder's files may only be written once every listed
+          // document has been read; otherwise it is built on part of the evidence.
+          if (wholeFolderRequest) {
+            const unread = folderLedger.unread(full);
+            if (unread.length) {
+              const reads = await coreReadDocuments(unread);
+              const gathered = reads.filter((r) => r.ok).map((r) => r.text).join('\n\n');
+              const failedReads = reads.filter((r) => !r.ok).map((r) => `${path.basename(r.file)}: ${r.text.slice(0, 160)}`);
+              return refuse(`NOT WRITTEN YET: the user asked about the documents in this folder and you had not read ${unreadFilesNotice(unread)}. Pandesh has now read them; their contents are below. Re-check your answer against EVERY document, then call write_file again with the corrected content.${failedReads.length ? ` Could not be read: ${failedReads.join('; ')} — say so in your answer.` : ''}\n\n${gathered}`, 'folder files unread');
+            }
+          }
 
           const grant = await authorizeFileWrite(full, args.content);
           if (!grant.ok) return refuse(grant.text, grant.reason);
@@ -2854,6 +2896,7 @@ export class PiAgentEngine implements EngineAdapter {
             try { before = fs.statSync(full).size <= 512 * 1024 ? fs.readFileSync(full, 'utf8') : ''; } catch { before = ''; }
             fs.mkdirSync(path.dirname(full), { recursive: true });
             fs.writeFileSync(full, args.content, 'utf8');
+            folderLedger.noteWritten(full);
             const changeView = fileActivity(full, { diff: redactCredentialShapes(unifiedDiff(before, String(args.content ?? ''), workspaceRelative(full) ?? path.basename(full))) });
             try {
               mutateWithBroadcast(db, broadcaster, () => {
@@ -3403,6 +3446,14 @@ ${String(args.objective ?? '').slice(0, 600)}`,
       if (!bridge) return connectorText('That capability is not available in this build.', true);
       // Audit D10: a relative file path means "in the folder the person selected", never the install folder.
       const args = resolveWorkspaceRelativeArgs(rawArgs, selectedWorkspace || null);
+      const noteDocumentRead = (result: { isError?: boolean }) => {
+        if (!result.isError && (toolName === 'document_read' || toolName === 'document_ocr') && typeof args.path === 'string') folderLedger.noteRead(args.path);
+        return result;
+      };
+      return noteDocumentRead(await dispatchCapabilityTool(bridge, toolName, args));
+    }
+
+    async function dispatchCapabilityTool(bridge: NonNullable<typeof ctx.capabilities>, toolName: string, args: Record<string, unknown>) {
       let outcome;
       try {
         outcome = await bridge.dispatch(toolName, args);
@@ -4068,7 +4119,8 @@ ${filesPromptSection}${webResearchPromptSection}${wishesPromptSection}${emailCal
 
         const toolStatus = afterCtx.result?.isError || output?.isError || output?.status === 'failed' ? 'failed' : 'completed';
         const toolArgs = afterCtx.toolCall?.arguments ?? afterCtx.toolCall?.args;
-        if (toolStatus === 'failed' && !signal?.aborted) {
+        // A write held back for missing evidence (C1) may be repeated unchanged once that evidence has been read.
+        if (toolStatus === 'failed' && !signal?.aborted && !String(output?.content?.[0]?.text ?? '').startsWith('NOT WRITTEN YET:')) {
           failedCalls.set(callSignature(toolName, afterCtx.args ?? toolArgs), String(output?.content?.[0]?.text ?? 'it failed'));
         }
         toolCallsRecorded.push({ tool: toolName, args: toolArgs, result: output, status: toolStatus });
@@ -4546,6 +4598,75 @@ ${filesPromptSection}${webResearchPromptSection}${wishesPromptSection}${emailCal
       }
     }
 
+    // Audit C1: an answer about a folder's documents must rest on every relevant one. The check does not ask the model
+    // whether it looked: Core itself runs read_file (same authorization, credential refusal and redaction, recorded as
+    // a tool invocation) on each relevant document the turn listed but never read, hands the model the real contents,
+    // and states plainly any document that still could not be read.
+    // A model that answered without even looking at the folder: Core lists the selected folder itself first, so the
+    // relevant documents are discovered by a real tool call rather than assumed.
+    if (wholeFolderRequest && selectedWorkspace && !signal?.aborted && !folderLedger.hasListed(selectedWorkspace)) {
+      safeRecordRuntimeEvent(db, broadcaster, attemptId, 'folder_not_examined_by_model', { folder: selectedWorkspace }, actor);
+      await coreRunTool('list_directory', { dirPath: selectedWorkspace });
+    }
+    const unreadAtAnswer = wholeFolderRequest && !signal?.aborted ? folderLedger.unread() : [];
+    const evidenceLimits: string[] = [];
+    if (unreadAtAnswer.length) {
+      safeRecordRuntimeEvent(db, broadcaster, attemptId, 'folder_evidence_incomplete', { unread: unreadAtAnswer.map((f) => path.basename(f)) }, actor);
+      const reads = await coreReadDocuments(unreadAtAnswer);
+      const gathered = reads.filter((r) => r.ok);
+      for (const r of reads.filter((x) => !x.ok)) evidenceLimits.push(`${path.basename(r.file)} could not be read (${r.text.replace(/^Error:\s*/i, '').slice(0, 160)})`);
+      if (gathered.length && !signal?.aborted) {
+        try {
+          const followUpFloor = agent.state.messages.length;
+          const writtenNow = folderLedger.writtenFiles().map((f) => path.basename(f));
+          await agent.prompt(`Evidence check: your answer did not rest on every document in the folder (you read only some, or none). Pandesh has now read the documents you had not opened; their real contents are below. Give the user your complete answer again, taking EVERY document into account (those you read earlier and these), and show the comparison briefly. Files actually written this turn: ${writtenNow.length ? writtenNow.join(', ') : 'NONE'}. If the user asked for a file that is not in that list, or a written file is now wrong, call write_file now. If a document is irrelevant to the question, say so in one short line. Do not search the web.\n\n${gathered.map((r) => r.text).join('\n\n')}`);
+          await agent.waitForIdle();
+          const followUpReply = lastAssistantTextFrom(followUpFloor);
+          if (followUpReply && !isTruncationArtifact(followUpReply)) finalReply = followUpReply;
+        } catch (err: any) {
+          evidenceLimits.push(`the answer could not be revised after reading ${unreadFilesNotice(gathered.map((r) => r.file))}`);
+          console.warn('[piAgentEngine] folder evidence follow-up failed:', err?.message);
+        }
+      }
+    }
+    if (wholeFolderRequest) {
+      for (const folder of folderLedger.oversizedFolders()) {
+        evidenceLimits.push(`${path.basename(folder.directory) || folder.directory} holds ${folder.documents} documents, more than Pandesh examines automatically, so the answer may not cover all of them`);
+      }
+    }
+    if (evidenceLimits.length) {
+      finalReply = `${finalReply.trimEnd()}\n\n**Not fully compared:** ${evidenceLimits.join('; ')}.`;
+    }
+    // A file the request names as its output ("a note called rice_order.txt") must really exist at the end of the turn.
+    if (wholeFolderRequest && selectedWorkspace && !signal?.aborted) {
+      const outputsMissing = () => requestedOutputFiles(requestText).filter((name) => (
+        !folderLedger.writtenFiles().some((f) => path.basename(f).toLowerCase() === name.toLowerCase())
+        && !fs.existsSync(path.join(selectedWorkspace, name))
+      ));
+      let missingOutputs = outputsMissing();
+      if (missingOutputs.length) {
+        // The file is checked on disk, not taken from the model's word: one chance to really write it.
+        safeRecordRuntimeEvent(db, broadcaster, attemptId, 'requested_output_not_yet_written', { files: missingOutputs }, actor);
+        try {
+          const followUpFloor = agent.state.messages.length;
+          await agent.prompt(`Output check: the user asked for ${missingOutputs.join(', ')}, but it does not exist on disk — no write_file call for it succeeded. Any earlier hold on writing is lifted now that the documents have been read. Call write_file now with the full content for ${missingOutputs.join(', ')} in the selected folder, then give your final answer. Do not say it was written unless write_file succeeds.`);
+          await agent.waitForIdle();
+          const followUpReply = lastAssistantTextFrom(followUpFloor);
+          missingOutputs = outputsMissing();
+          if (followUpReply && !isTruncationArtifact(followUpReply) && missingOutputs.length === 0) {
+            // Keep the comparison the user needs; add the confirmation of the file that now really exists.
+            finalReply = /\b(?:cheapest|compare|€|eur)\b/i.test(followUpReply) ? followUpReply : `${finalReply.trimEnd()}\n\n${followUpReply.trim()}`;
+          }
+        } catch (err: any) {
+          console.warn('[piAgentEngine] requested output follow-up failed:', err?.message);
+        }
+      }
+      if (missingOutputs.length) {
+        safeRecordRuntimeEvent(db, broadcaster, attemptId, 'requested_output_missing', { files: missingOutputs }, actor);
+        finalReply = `${finalReply.trimEnd()}\n\n**Not done:** ${missingOutputs.join(', ')} was not written — no file was created.`;
+      }
+    }
+
     // The contract table is the deliverable only when the user's own words (not attached text) ask about contracts,
     // or explicitly resume a contract workflow. Any other Gmail request gets its own answer, not a contract table.
     const contractRequest = /\b(?:contracts?|agreements?)\b/i.test(requestText)
@@ -4717,7 +4838,8 @@ ${filesPromptSection}${webResearchPromptSection}${wishesPromptSection}${emailCal
         failed: [],
       };
     }
-    if (projectEvidence && turnOutcome.verdict === 'conversational') {
+    // "Verified from 0 files read" is not verification (C1 re-run): only a reply grounded in files Core read counts.
+    if (projectEvidence && projectEvidence.filesRead.length > 0 && turnOutcome.verdict === 'conversational') {
       // The model producing text is execution completion. The question counts as answered and verified only because
       // Core read the project's files and the reply is grounded in them.
       turnOutcome = { verdict: 'verified', reason: `answered from ${projectEvidence.filesRead.length} file(s) read in ${projectEvidence.root}${projectReplyReplaced ? ' (reply replaced by evidence-only answer)' : ''}`, performed: ['project_inspection'], refused: [], failed: [] };
