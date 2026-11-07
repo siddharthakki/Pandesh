@@ -4281,22 +4281,22 @@ export class DesktopSession {
       }
       return res.message;
     }
-    const target = 'target' in intent ? intent.target : (intent as any).query;
-    if (intent.kind === 'stop_timer') {
-      const res = this.timerManager.stopTimer(target);
-      return res.message;
-    }
-    if (intent.kind === 'pause_timer') {
-      const res = this.timerManager.pauseTimer(target);
-      return res.message;
-    }
-    if (intent.kind === 'resume_timer') {
-      const res = this.timerManager.resumeTimer(target);
-      return res.message;
-    }
-    if (intent.kind === 'query_timer') {
-      const res = this.timerManager.queryTimer(target);
-      return res.message;
+    // Compound commands ("pause the tea timer and cancel the pasta timer") run every action in order;
+    // each reply line is the timer manager's own result, so nothing is claimed that did not happen.
+    const actions = [intent, ...(('also' in intent && intent.also) ? intent.also : [])];
+    return actions.map((action) => this.processTimerAction(action)).join('\n');
+  }
+
+  private processTimerAction(action: { kind: string; target?: string; query?: string }): string {
+    const target = action.target ?? action.query;
+    if (action.kind === 'stop_timer') return this.timerManager.stopTimer(target).message;
+    if (action.kind === 'pause_timer') return this.timerManager.pauseTimer(target).message;
+    if (action.kind === 'resume_timer') return this.timerManager.resumeTimer(target).message;
+    if (action.kind === 'query_timer') {
+      const active = this.timerManager.listActiveTimers();
+      // No specific timer named and several are active: report each one, not just the latest.
+      if (!target && active.length > 1) return active.map((timer) => this.timerManager.queryTimer(`id:${timer.id}`).message).join('\n');
+      return this.timerManager.queryTimer(target).message;
     }
     return 'Timer command not recognized.';
   }

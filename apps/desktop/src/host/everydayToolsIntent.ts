@@ -13,10 +13,16 @@ export type EverydayIntent =
   | { kind: 'queue_add'; instruction: string }
   | { kind: 'daily_brief' }
   | { kind: 'start_timer'; durationMs: number; label: string; originalUnit: string; secondary?: { durationMs: number; label: string } }
-  | { kind: 'stop_timer'; target?: string }
-  | { kind: 'pause_timer'; target?: string }
-  | { kind: 'resume_timer'; target?: string }
-  | { kind: 'query_timer'; target?: string };
+  | { kind: 'stop_timer'; target?: string; also?: TimerActionIntent[] }
+  | { kind: 'pause_timer'; target?: string; also?: TimerActionIntent[] }
+  | { kind: 'resume_timer'; target?: string; also?: TimerActionIntent[] }
+  | { kind: 'query_timer'; target?: string; also?: TimerActionIntent[] };
+
+/** A single pause/resume/stop/query timer action (compound commands carry the rest in `also`). */
+export type TimerActionIntent = {
+  kind: 'stop_timer' | 'pause_timer' | 'resume_timer' | 'query_timer';
+  target?: string;
+};
 
 const NUMBER_WORDS: Record<string, number> = {
   a: 1,
@@ -122,18 +128,59 @@ export function isPersonalFact(body: string): boolean {
  * Recognizes deterministic timer requests (English and German).
  */
 export function parseTimerIntent(text: string): EverydayIntent | null {
+  const compound = parseCompoundTimerIntent(text);
+  if (compound) return compound;
+  return parseSingleTimerIntent(text);
+}
+
+/** "keep/leave the pasta timer running" — an explicit instruction to NOT touch a timer. */
+const TIMER_KEEP_CLAUSE = /^(?:leave|keep)\s+(?:the\s+|my\s+)?(?:[\w-]+\s+){0,3}?timer\s+(?:running|going|as\s+it\s+is|alone)$/i;
+
+/**
+ * Compound timer commands such as "Pause the tea timer, but leave the pasta timer running" or
+ * "Resume the tea timer and cancel the pasta timer". Every clause must be a recognised
+ * pause/resume/stop/query action (or an explicit keep-running clause); otherwise this returns null
+ * and the caller falls back to single-command parsing, so nothing is half-understood.
+ */
+function parseCompoundTimerIntent(text: string): EverydayIntent | null {
+  if (!/\btimers?\b/i.test(text)) return null;
+  const clauses = text
+    .trim()
+    .split(/\s*(?:,\s*)?\b(?:and(?:\s+then)?|but|then)\b\s+|\s*;\s*/i)
+    .map((c) => c.trim().replace(/[.!?]+$/, '').trim())
+    .filter(Boolean);
+  if (clauses.length < 2) return null;
+  const actions: TimerActionIntent[] = [];
+  for (const clause of clauses) {
+    if (TIMER_KEEP_CLAUSE.test(clause)) continue;
+    const parsed = parseSingleTimerIntent(clause);
+    if (!parsed || parsed.kind === 'start_timer' || !['stop_timer', 'pause_timer', 'resume_timer', 'query_timer'].includes(parsed.kind)) return null;
+    actions.push({ kind: parsed.kind as TimerActionIntent['kind'], target: (parsed as TimerActionIntent).target });
+  }
+  if (actions.length === 0) return null;
+  const [first, ...rest] = actions;
+  return rest.length ? { ...first, also: rest } : first;
+}
+
+function parseSingleTimerIntent(text: string): EverydayIntent | null {
   const cleaned = text
     .trim()
     .replace(/^(?:hey\s+pandesh|pandesh|please|can\s+you\s+(?:please\s+)?|bitte)\s*[,:]?\s*/i, '')
+    .replace(/[.!?]+$/, '')
     .trim();
 
   // 1. Query timer remaining time / status
+  const queryText = cleaned.replace(/^(?:(?:tell|show)\s+me|let\s+me\s+know)\s+/i, '');
   if (
-    /^(?:show\s+(?:me\s+)?(?:the\s+)?remaining\s+time|remaining\s+time|how\s+much\s+time\s+(?:is\s+)?left|timer\s+status|timer\s+remaining)\b/i.test(cleaned) ||
-    /^(?:what(?:'s| is)\s+(?:the\s+)?remaining\s+time|how\s+long\s+(?:is\s+)?left\s+on\s+(?:the\s+|my\s+)?timer)\b/i.test(cleaned)
+    /^(?:show\s+(?:me\s+)?(?:the\s+)?remaining\s+time|remaining\s+time|how\s+much\s+time\s+(?:is\s+)?left|timer\s+status|timer\s+remaining)\b/i.test(queryText) ||
+    /^(?:what(?:'s| is)\s+(?:the\s+)?remaining\s+time|how\s+long\s+(?:is\s+)?left\s+on\s+(?:the\s+|my\s+)?timer)\b/i.test(queryText)
   ) {
-    const targetMatch = cleaned.match(/(?:for|on)\s+(.+)$/i);
-    return { kind: 'query_timer', target: targetMatch ? targetMatch[1].trim() : undefined };
+    const targetMatch = queryText.match(/(?:for|on)\s+(.+)$/i);
+    let target = targetMatch ? targetMatch[1].trim() : undefined;
+    // "on each timer", "on all timers", "on both timers", "on my timers" mean every active timer.
+    if (target && /^(?:(?:each|every|all|both)(?:\s+(?:of\s+)?(?:the\s+|my\s+)?)?|(?:the\s+|my\s+))?timers?$/i.test(target)) target = undefined;
+    else if (target) target = target.replace(/^(?:the|my)\s+/i, '').replace(/\s+timer$/i, '').trim() || undefined;
+    return { kind: 'query_timer', target };
   }
 
   // 2. Pause timer
@@ -146,6 +193,9 @@ export function parseTimerIntent(text: string): EverydayIntent | null {
     const m = cleaned.match(/^(?:pause|freeze)\s+(?:the\s+|my\s+)?(short|long|first|second)\s+timer\b/i);
     return { kind: 'pause_timer', target: m ? m[1].trim() : undefined };
   }
+  // "pause the tea timer" — a timer named by its label.
+  const pauseLabelled = cleaned.match(/^(?:pause|freeze)\s+(?:the\s+|my\s+)?((?:[\w-]+\s+){0,2}[\w-]+)\s+timer$/i);
+  if (pauseLabelled) return { kind: 'pause_timer', target: pauseLabelled[1].trim() };
 
   // 3. Resume timer
   const resumeMatch = cleaned.match(/^(?:resume|unpause|continue)\s+(?:the\s+|my\s+)?(?:timer\s*(?:for\s+|id:)?|countdown\s*(?:for\s+|id:)?)(.*)$/i);
@@ -157,6 +207,8 @@ export function parseTimerIntent(text: string): EverydayIntent | null {
     const m = cleaned.match(/^(?:resume|unpause|continue)\s+(?:the\s+|my\s+)?(short|long|first|second)\s+timer\b/i);
     return { kind: 'resume_timer', target: m ? m[1].trim() : undefined };
   }
+  const resumeLabelled = cleaned.match(/^(?:resume|unpause|continue)\s+(?:the\s+|my\s+)?((?:[\w-]+\s+){0,2}[\w-]+)\s+timer$/i);
+  if (resumeLabelled) return { kind: 'resume_timer', target: resumeLabelled[1].trim() };
 
   // 4. Stop / cancel timer
   const stopMatch = cleaned.match(/^(?:stop|cancel|dismiss|abort)\s+(?:the\s+|my\s+)?(?:timer\s*(?:for\s+|id:)?|countdown\s*(?:for\s+|id:)?)(.*)$/i);
@@ -168,6 +220,8 @@ export function parseTimerIntent(text: string): EverydayIntent | null {
     const m = cleaned.match(/^(?:stop|cancel|dismiss|abort)\s+(?:the\s+|my\s+)?(short|long|first|second)\s+timer\b/i);
     return { kind: 'stop_timer', target: m ? m[1].trim() : undefined };
   }
+  const stopLabelled = cleaned.match(/^(?:stop|cancel|dismiss|abort)\s+(?:the\s+|my\s+)?((?:[\w-]+\s+){0,2}[\w-]+)\s+timer$/i);
+  if (stopLabelled) return { kind: 'stop_timer', target: stopLabelled[1].trim() };
 
   // 5. Multi-timer / compound timers (RWTS-322):
   // e.g. "start a 3-minute tea timer and a 10-minute pasta timer"
