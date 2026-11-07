@@ -315,6 +315,8 @@ export class EverydayTimerManager {
     try {
       const active = Array.from(this.timers.values())
         .filter((t) => t.state === 'running' || t.state === 'paused' || (t.state === 'completed' && Date.now() - t.deadlineMs < 300_000));
+      // A fresh profile has no data folder yet; without it every timer was silently lost on restart.
+      fs.mkdirSync(path.dirname(this.timersFile), { recursive: true });
       fs.writeFileSync(this.timersFile, JSON.stringify(active, null, 2), 'utf8');
     } catch (err) {
       this.log?.(`Failed to persist timers: ${(err as Error).message}`);

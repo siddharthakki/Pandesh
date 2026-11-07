@@ -17,7 +17,7 @@ export default defineConfig({
   test: {
     environment: 'jsdom',
     include: ['src/test/golden/**/*.{test,spec}.{ts,tsx}'],
-    setupFiles: ['src/test/setup/agentPanelHydration.ts'],
+    setupFiles: ['src/test/setup/isolatedProfile.ts', 'src/test/setup/agentPanelHydration.ts'],
     testTimeout: 20_000,
     fileParallelism: false,
   },
