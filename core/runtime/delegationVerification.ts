@@ -10,9 +10,9 @@
  *   3. flags changed test files (a fix that edits tests to go green is not a fix);
  *   4. re-runs the project's own test command and reports its real exit code and tail.
  */
-import * as cp from 'node:child_process';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
+import { runHardenedGit } from '../security/hardenedGit';
 
 export interface CommandRun { code: number | null; stdout: string; stderr: string; timedOut: boolean }
 export type CommandRunner = (command: string, cwd: string, timeoutMs: number, signal?: AbortSignal) => Promise<CommandRun>;
@@ -20,9 +20,11 @@ export type CommandRunner = (command: string, cwd: string, timeoutMs: number, si
 const MAX_DIFF_CHARS = 12_000;
 const TEST_TIMEOUT_MS = 5 * 60_000;
 
+/** Hardened git: a user's repository cannot run planted hooks, fsmonitor or external diff tools through these reads. */
 function git(cwd: string, args: string[]): string | null {
   try {
-    return cp.execFileSync('git', args, { cwd, encoding: 'utf8', timeout: 10_000, windowsHide: true, maxBuffer: 4 * 1024 * 1024 });
+    const r = runHardenedGit(args, { cwd, encoding: 'utf8', timeout: 10_000, windowsHide: true, maxBuffer: 4 * 1024 * 1024 });
+    return r.status === 0 ? String(r.stdout ?? '') : null;
   } catch {
     return null;
   }
