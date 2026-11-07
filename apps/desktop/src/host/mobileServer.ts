@@ -34,6 +34,20 @@ function stripKandevInternals(story: any): any {
   return rest;
 }
 
+/**
+ * Which address the phone server listens on. The real install (its own profile under %LOCALAPPDATA%\KarkeDikha\desktop)
+ * listens on the LAN so a phone can pair. Every other instance — smoke tests, the audit harness, a build run from a
+ * scratch folder with its own profile — listens on loopback only. A LAN listener from a new program path makes Windows
+ * Firewall ask "allow access?" again for every test build (2026-11-07: one prompt per remediation build), and a test
+ * instance has no business being reachable from the network.
+ */
+export function defaultMobileHost(env: NodeJS.ProcessEnv, dataDir: string, realDesktopDataDir: string): string {
+  if (env.KARKEDIKHA_MOBILE_HOST?.trim()) return env.KARKEDIKHA_MOBILE_HOST.trim();
+  if (env.KARKEDIKHA_DESKTOP_SMOKE_MODE === '1') return '127.0.0.1';
+  const norm = (p: string) => path.resolve(p).replace(/[\\/]+$/, '').toLowerCase();
+  return norm(dataDir) === norm(realDesktopDataDir) ? '0.0.0.0' : '127.0.0.1';
+}
+
 export class MobileServer {
   private server: http.Server | null = null;
   private pairingCode: string;
@@ -134,7 +148,8 @@ export class MobileServer {
   }
 
   public getPairingInfo(): MobilePairingInfo {
-    const ip = this.getPrimaryIp();
+    // A loopback-only instance is not reachable from a phone; do not advertise a LAN address it does not listen on.
+    const ip = this.host === '0.0.0.0' || this.host === '::' ? this.getPrimaryIp() : this.host;
     const liveSockets = this.sseClients.size;
     return {
       code: this.pairingCode,

@@ -28,7 +28,7 @@ import {
 import { JarvisTrayController } from './host/jarvisTray';
 import { createAppIcon } from './host/appIcon';
 import { normalizeSafeExternalUrl, normalizeSafeBrowserUrl } from './host/desktopSafeOpen';
-import { MobileServer } from './host/mobileServer';
+import { MobileServer, defaultMobileHost } from './host/mobileServer';
 
 /**
  * Dev: repo root. Portable / installed: directory that contains `app/` + `runtime/core.js`
@@ -763,7 +763,8 @@ async function createWindow(): Promise<void> {
       session,
       // Overrides exist so an isolated test instance can run beside the live app (loopback, another port).
       port: Number(process.env.KARKEDIKHA_MOBILE_PORT) || 3030,
-      ...(process.env.KARKEDIKHA_MOBILE_HOST ? { host: process.env.KARKEDIKHA_MOBILE_HOST } : {}),
+      // Test and scratch instances stay on loopback (no firewall prompt per build, not reachable from the LAN).
+      host: defaultMobileHost(process.env, dataDir, defaultDesktopDataDir()),
       log: (message) => hostLog(message),
       onClientsChanged: (count) => {
         sendSnapshot();
