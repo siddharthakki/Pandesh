@@ -98,7 +98,18 @@ Fixes made during the re-run: 01ba1db (orphan sweep killed host-raised approvals
 
 D15 (8f07720): Core's "no answer" notices are dropped from history, and an empty reply after real tool results is answered by one tool-free call over those results; F1 Resume then completed 8/8 locally. Root cause not removed: system + 79 tool definitions ≈ 18K tokens, and gemma4:12b returns nothing at ~26K in that conversation.
 
-Next: cut the tool list per request (≈ 52K chars of definitions on every call); store full research output for grounding checks (M9); re-run F3, M3, M9 on one build.
+Next: cut the tool list per request (≈ 52K chars of definitions on every call); store full research output for grounding checks (M9); re-run F3, M3, M9 on one build. — **done, see below.**
+
+## Final run (2026-11-08) — see `acceptance/claude-independent-audit/final_verdict_2026-11-08.md`
+
+- **b060bc6** M3: `write_file` refuses a `.csv` that is not one table (`core/runtime/csvShape.ts`); NUMBERS rule asks the reply to say how an ambiguous amount was counted. Frozen F3 and M3 re-run first: both PASS.
+- **d993e14** task-aware tool selection (`core/runtime/chatToolSelection.ts`): base tools + groups the request / previous user message / recent tools point at; `request_tools` adds groups mid-turn; a call to a hidden real tool adds its group; all tools stay executable (approvals, Plan Only, receipts unchanged) and only the model-facing declarations are filtered (`offerActiveTools` in `streamFn`). Capability bridge marks definitions with `capabilityId` and defers unselected chat capabilities. Telemetry events `tool_selection`, `tool_groups_added`, `hidden_tool_called`. Also: declined memory write is a failed call; "I don't have the permission" after a decline is replaced; a refused "satisfied" with no tool behind it gets a Core correction. gemma4:12b first-call prompt 17.4K → 4.8–7.4K tokens, model time/turn 11.3 → 6.5 s.
+- **f0b5fc7** M9 provenance: migration 47 `research_turn_sources` (URLs, title, SHA-256 of full text, redacted text ≤64K, 30-day text retention via `KARKEDIKHA_RESEARCH_RETENTION_DAYS`, purged at boot) recorded for `governed_research` and `web_research`; `core/runtime/researchGrounding.ts` checks organisations/URLs in research answers against stored sources + files + user words, one tool-free rewrite, else labels them unverified. (The older `research_sources` table belongs to the approval-based research-session flow and was left alone.)
+- **859d82e** C2 weekday/date correction from tool-reported dates (`core/runtime/dateConsistency.ts`); M9 grounding reads Company-column table cells.
+- Result: first attempt on f0b5fc7 **16/19**; after 859d82e, M9 and C2 retried → **18/19 (94.7 %)**. Remaining FAIL: M10 P3 merged two features instead of picking one (model variance, no fix). Verdict: not ready for production.
+- Tests at 859d82e: core 2,411 / desktop 598 pass; desktop typecheck 27 (baseline).
+
+Next: a second complete 19-mission run on `859d82e`; exercise the C2 date correction in the app; production smoke on a copy only with the user's approval.
 
 ## Open (priority order)
 
