@@ -8,6 +8,7 @@ import { describeRequestTools, groupOfTool, hiddenGroups, offerActiveTools, sele
 import { recordResearchProvenance, researchSourcesForTurn } from '../domain/researchProvenance';
 import { buildGroundingRewritePrompt, ungroundedClaims } from './researchGrounding';
 import { correctWeekdayDates } from './dateConsistency';
+import { asksForSingleChoice, SINGLE_CHOICE_RULE } from './choiceConstraint';
 import { renderDelegationReport, untrackedPaths, verifyDelegation } from './delegationVerification';
 import { FolderReadLedger, requestedOutputFiles, requiresSourceEvidence, requiresWholeFolder, unreadFilesNotice } from './folderCompleteness';
 import * as cp from 'node:child_process';
@@ -4235,6 +4236,12 @@ ${filesPromptSection}${webResearchPromptSection}${wishesPromptSection}${emailCal
         };
       }
       systemPrompt += '\n\nPLAN ONLY MODE: research, read and reason, then give the user a concrete step-by-step plan. Do not create, change, send, schedule, print or run anything that changes state; such tools are refused in this mode.';
+    }
+
+    // M10: an explicit single-choice request gets an explicit single-choice rule (see choiceConstraint.ts).
+    if (asksForSingleChoice(requestText)) {
+      systemPrompt += SINGLE_CHOICE_RULE;
+      safeRecordRuntimeEvent(db, broadcaster, attemptId, 'single_choice_rule_applied', {}, actor);
     }
 
     const agent = new Agent({
