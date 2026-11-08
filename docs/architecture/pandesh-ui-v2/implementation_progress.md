@@ -142,9 +142,20 @@ Tests: `core/test/socialDrafts.test.ts` 3/3; targeted Core 50/50; desktop 605/60
 
 Known issue: Media Studio shows the existing host image-studio probe verbatim, which reported "Ollama not answering" while Ollama was running (the probe's own definition; not changed here).
 
+## Milestone 2g — Voice in v2 · STATUS: done
+
+Reuses the existing local stack only (no new dependency, no cloud speech): the classic capture module `renderer/voiceCapture.js` (now loaded by `renderer/v2/index.html`), host `transcribeUtterance` (local Whisper), `speakText` / `stopSpeaking` / `markPlaybackFinished` (local Piper), `setVoiceMode`.
+
+- `renderer-v2/src/voice.ts` — `useVoice`: listening → transcribing → idle/error; speaking → idle or interrupted. Stop cancels both the audio element and the host TTS turn (generation counter guards late results).
+- `Chat.tsx` — mic button (disabled with the host's blocker text when local recognition is unavailable or Core is down); listening/transcribing bar (Type instead, Stop listening); speaking bar (Stop speaking; barge-in wording follows `speechInterrupt.spokenBargeIn`); "Stopped speaking" chip; transcripts flagged for review go to the composer instead of being sent; answers to spoken turns are spoken only when Speak replies (existing voice mode) is on. Route popover: speech readiness, Speak replies toggle, wake-word muted state.
+
+Real-app evidence (isolated profile, gemma4:12b): Piper produced a WAV of "What is two plus three?" (553 ms); the v2 listen path was driven with that WAV substituted only at the capture boundary (no microphone automation); local Whisper transcribed "What is 2 plus 3?" (no review), the turn was sent, the answer "2 plus 3 is 5." was spoken, Stop speaking → "Stopped speaking." and host `speaking=false`. Observed state sequence: Listening… → Transcribing on this PC… → Speaking → Stopped speaking. `acceptance-2g/voice-interrupted.png`. Desktop tests 605/605.
+
+Not done: a live-microphone test with a human voice; wake word stays in the Classic UI (v2 shows its muted state only); spoken barge-in is whatever the host already supports.
+
 ### Next executable step
 
-Milestone 2g — Voice in v2: reuse the existing local ASR (voiceCapture / transcribeUtterance) and TTS (speakText / stopSpeaking); listening, speaking, interrupted and muted states from the host snapshot; real cancellation.
+Phase 2 scope (2a–2g + Software Discovery 1B) is implemented locally and unpushed. Next: owner review of the branch, then a live-microphone pass and the open items in the final report (live PTY, MCP registry, Chief delegate tool, per-agent egress enforcement, bundled fonts). Software update execution (2B) needs separate approval.
 
 ### Resume
 

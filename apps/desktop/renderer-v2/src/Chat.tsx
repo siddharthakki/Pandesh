@@ -3,6 +3,7 @@ import { api, errorText, onDesktopEvent, type ApprovalCard, type BriefAction, ty
 import { Icon, Mark, elapsed, timeOf } from './ui';
 import { ActivityAside } from './Activity';
 import { Markdown } from './markdown';
+import { useVoice } from './voice';
 
 interface Props {
   snapshot: Snapshot | null;
@@ -147,8 +148,8 @@ export function Chat({ snapshot, snapshotError, refresh, narrow, openConversatio
   const decision = pendingDecision(snapshot);
   const showDecisionBar = narrow && Boolean(decision) && !deciding;
 
-  const send = async () => {
-    const goal = text.trim();
+  const send = async (spoken?: string) => {
+    const goal = (spoken ?? text).trim();
     if (!goal || busy) return;
     setBusy(true);
     setNotice(null);
@@ -237,12 +238,35 @@ export function Chat({ snapshot, snapshotError, refresh, narrow, openConversatio
   const coreDown = snapshot && snapshot.coreState !== 'connected' && snapshot.coreState !== 'ready';
   const needs = brief?.length ?? 0;
 
+  const awaitingSpokenAnswer = useRef<string | null>(null);
+  const voice = useVoice({
+    onTranscript: (t, needsReview, reasons) => {
+      if (needsReview) { setText(t); setNotice({ text: `Check what was heard before sending${reasons.length ? `: ${reasons.join(', ')}` : ''}.` }); textarea.current?.focus(); return; }
+      awaitingSpokenAnswer.current = t;
+      void send(t);
+    },
+  });
+  // Speak the answer to a spoken turn when Speak replies is on (existing voice mode).
+  useEffect(() => {
+    const asked = awaitingSpokenAnswer.current;
+    if (!asked || runningHere || !snapshot?.voiceMode) return;
+    const lastUser = [...messages].reverse().find((m) => m.role === 'user');
+    const lastAnswer = [...messages].reverse().find((m) => m.role === 'assistant');
+    if (lastUser?.content.trim() === asked.trim() && lastAnswer && messages.indexOf(lastAnswer) > messages.indexOf(lastUser)) {
+      awaitingSpokenAnswer.current = null;
+      void voice.speak(lastAnswer.content.replace(/```[\s\S]*?```/g, ' code block ').replace(/[*_`#>]/g, '').slice(0, 1200));
+    }
+  }, [messages.length, runningHere, snapshot?.voiceMode]);
+  const speechReady = snapshot?.localSpeech?.capability === 'available';
+  const speechBlocker = String((snapshot?.localSpeech as { blocker?: string } | undefined)?.blocker ?? 'Local speech recognition is not available.');
+
   const composer = (
     <div className={`composer${text.trim() ? ' has-text' : ''}`}>
       <label className="sr-only" htmlFor="v2-ask">Message Pandesh</label>
       <textarea id="v2-ask" ref={textarea} rows={1} value={text} placeholder="Ask Pandesh…" disabled={Boolean(coreDown)}
         onChange={(e) => { setText(e.target.value); e.target.style.height = 'auto'; e.target.style.height = `${Math.min(e.target.scrollHeight, 200)}px`; }}
         onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) { e.preventDefault(); void send(); } }} />
+      <button type="button" className="icon-btn" aria-label="Talk to Pandesh" title={speechReady ? 'Talk to Pandesh (local speech recognition)' : speechBlocker} disabled={!speechReady || Boolean(coreDown)} onClick={() => void voice.listen()}><Icon name="mic" /></button>
       {runningHere && <button type="button" className="icon-btn" title="Stop the running task" aria-label="Stop the running task" onClick={() => void stop()}><Icon name="stop" /></button>}
       <button type="button" className={`icon-btn send-btn${text.trim() ? ' ready' : ''}`} title="Send (Enter)" aria-label="Send" disabled={!text.trim() || busy} onClick={() => void send()}><Icon name="send" /></button>
     </div>
@@ -261,6 +285,9 @@ export function Chat({ snapshot, snapshotError, refresh, narrow, openConversatio
           <div className="kv"><span className="k">Context</span><span>{snapshot?.contextEnvelope ? `${Math.round(snapshot.contextEnvelope / 1024)}K tokens` : 'Not reported'}</span></div>
           <div className="kv"><span className="k">Model server</span><span>{snapshot?.modelServerReachable === false ? 'Not answering' : snapshot?.modelServerReachable ? 'Answering' : 'Unknown'}</span></div>
           <div className="kv"><span className="k">Outward actions</span><span>Ask you first (approval rules)</span></div>
+          <div className="kv"><span className="k">Speech</span><span>{speechReady ? `Local recognition ready${(snapshot?.localSpeech as { engine?: string } | undefined)?.engine ? ` (${(snapshot?.localSpeech as { engine?: string }).engine})` : ''}` : speechBlocker}</span></div>
+          <div className="kv"><span className="k">Speak replies</span><span><button type="button" className="btn small" onClick={() => void voice.setVoiceMode(!snapshot?.voiceMode).then(refresh)}>{snapshot?.voiceMode ? 'On — turn off' : 'Off — turn on'}</button></span></div>
+          {(snapshot as { wakeWord?: { enabled?: boolean; muted?: boolean } } | null)?.wakeWord?.enabled && <div className="kv"><span className="k">Wake word</span><span>{(snapshot as { wakeWord?: { muted?: boolean } }).wakeWord?.muted ? 'Muted' : 'Listening (Classic UI monitor)'}</span></div>}
           {snapshot?.modelNote && <div className="kv"><span className="k">Note</span><span>{snapshot.modelNote}</span></div>}
         </div>
       )}
@@ -387,7 +414,27 @@ export function Chat({ snapshot, snapshotError, refresh, narrow, openConversatio
                 <button type="button" className="btn primary" disabled={deciding} onClick={() => void resolve('approved')}>{decision.allowLabel}</button>
                 <div className="row"><button type="button" className="btn" disabled={deciding} onClick={() => void resolve('rejected')}>Don't allow</button></div>
               </div>
-            ) : composer}
+            ) : voice.state === 'listening' || voice.state === 'transcribing' ? (
+              <div className="composer" role="status" aria-live="polite" style={{ borderColor: 'var(--pulse)', alignItems: 'center', flexWrap: 'wrap', gap: '10px 14px', padding: '12px 14px' }}>
+                <span aria-hidden="true" style={{ display: 'flex', gap: 3, alignItems: 'center', height: 22 }}>{[8, 18, 12, 22, 10].map((h, i) => <span key={i} style={{ width: 3, height: voice.heard ? h : 4, borderRadius: 2, background: 'var(--pulse)' }} />)}</span>
+                <span style={{ flex: '1 1 160px', display: 'flex', flexDirection: 'column' }}><strong style={{ fontWeight: 500 }}>{voice.state === 'listening' ? 'Listening…' : 'Transcribing on this PC…'}</strong><span style={{ fontSize: 14, color: 'var(--muted)' }}>{voice.state === 'listening' ? (voice.heard ? 'Stops when you pause' : 'Speak now') : 'Local Whisper'}</span></span>
+                <button type="button" className="btn small" onClick={() => { void voice.stopListening(); textarea.current?.focus(); }}>Type instead</button>
+                {voice.state === 'listening' && <button type="button" className="btn small" onClick={() => void voice.stopListening()}>Stop listening</button>}
+              </div>
+            ) : voice.state === 'speaking' ? (
+              <div className="composer" role="status" aria-live="polite" style={{ alignItems: 'center', flexWrap: 'wrap', gap: '10px 14px', padding: '12px 14px' }}>
+                <span className="dot" aria-hidden="true" style={{ width: 10, height: 10 }} />
+                <span style={{ flex: '1 1 160px', display: 'flex', flexDirection: 'column' }}><strong style={{ fontWeight: 500 }}>Speaking</strong><span style={{ fontSize: 14, color: 'var(--muted)' }}>{(snapshot as { speechInterrupt?: { spokenBargeIn?: boolean } } | null)?.speechInterrupt?.spokenBargeIn ? 'Talk over me or press Stop.' : 'Press Stop to interrupt.'}</span></span>
+                <button type="button" className="btn small" onClick={() => voice.stopSpeaking()}>Stop speaking</button>
+              </div>
+            ) : (
+              <>
+                {voice.state === 'interrupted' && <div role="status" style={{ alignSelf: 'flex-start', display: 'flex', alignItems: 'center', gap: 8, padding: '4px 12px', borderRadius: 999, background: 'var(--raised)', fontSize: 14 }}>Stopped speaking. <button type="button" className="btn link" style={{ minHeight: 0, padding: 0 }} onClick={() => voice.clear()}>OK</button></div>}
+                {voice.state === 'error' && <div role="alert" className="notice error" style={{ margin: 0 }}>{voice.detail} <button type="button" className="btn link" style={{ minHeight: 0, padding: 0 }} onClick={() => voice.clear()}>OK</button></div>}
+                {voice.state === 'idle' && voice.detail && <div role="status" style={{ fontSize: 14, color: 'var(--muted)' }}>{voice.detail}</div>}
+                {composer}
+              </>
+            )}
             {!showDecisionBar && route}
           </div>
         </div>
