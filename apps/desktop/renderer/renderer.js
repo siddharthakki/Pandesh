@@ -437,6 +437,13 @@ let lastTranscriptRefetchKey = null;
 /** Detects a newly-created/changed selected conversation (e.g. the first
  * submit of a session lazily creating one) so the rail picks it up. */
 let lastKnownSelectedConversationId = null;
+/** The conversation the host restored at launch, until its history is actually
+ * on screen. While it is set the pane is blank ("New conversation") although
+ * the host still holds the old conversation — a send then must start fresh. */
+let restoredConversationAwaitingDisplay = null;
+let restoredTranscriptFetchInFlight = false;
+let restoredTranscriptAttempts = 0;
+let restoredTranscriptLastAttemptAt = 0;
 /** Detects a newly-appeared chat-triggered image approval (see
  * detectImageGenerationIntent) so its exact card is shown exactly once. */
 let lastKnownPendingImageApprovalId = null;
@@ -2936,11 +2943,40 @@ function renderConversationContext(context) {
   if (conversationExportStatus) conversationExportStatus.textContent = '';
 }
 
+/** Shows the conversation the host restored at launch; one fetch at a time,
+ * retried from the snapshot handler (at most every 3 s, 5 tries) until it
+ * succeeds. If it never does, a send starts a fresh conversation. */
+async function showRestoredTranscript(conversationId) {
+  if (restoredTranscriptFetchInFlight) return;
+  if (restoredTranscriptAttempts >= 5 || Date.now() - restoredTranscriptLastAttemptAt < 3000) return;
+  restoredTranscriptAttempts += 1;
+  restoredTranscriptLastAttemptAt = Date.now();
+  restoredTranscriptFetchInFlight = true;
+  try {
+    const shown = await refreshOpenedTranscript(conversationId);
+    if (shown && restoredConversationAwaitingDisplay === conversationId) restoredConversationAwaitingDisplay = null;
+  } finally {
+    restoredTranscriptFetchInFlight = false;
+  }
+}
+
+/** If the window still shows a blank pane while the host holds the conversation
+ * it restored at launch, start a fresh one, so what is sent is what the person
+ * sees: never a hidden earlier conversation with its history. */
+async function startFreshIfRestoredConversationHidden() {
+  const hidden = restoredConversationAwaitingDisplay;
+  if (!hidden || lastSnapshot?.selectedConversationId !== hidden) return;
+  if (lastSnapshot?.running || lastSnapshot?.pendingApproval || lastSnapshot?.pendingImageApproval) return;
+  if (result && [...result.children].some((node) => node.dataset?.liveEcho !== '1')) return;
+  await startNewConversation();
+}
+
+/** Returns true when the transcript was fetched and is now what the pane shows. */
 async function refreshOpenedTranscript(conversationId) {
   const fetchEpoch = activeConversationEpoch;
   try {
     const opened = await withCoreConnectRetry(() => api.openConversation(conversationId, false));
-    if (fetchEpoch !== activeConversationEpoch || viewingConversationId !== conversationId) return;
+    if (fetchEpoch !== activeConversationEpoch || viewingConversationId !== conversationId) return false;
     const resultNode = document.getElementById('result');
     if (resultNode && viewingConversationId === conversationId) {
       if (opened.messages.length > 0) {
@@ -2959,9 +2995,12 @@ async function refreshOpenedTranscript(conversationId) {
     }
     updateQuickAnswerFromMessages(opened.messages);
     if (viewingConversationId === conversationId && fetchEpoch === activeConversationEpoch) renderConversationContext(opened.context);
+    syncAssistantMode();
     void refreshConversationsRail();
+    return true;
   } catch (err) {
     showOperationError?.(err);
+    return false;
   }
 }
 
@@ -3179,6 +3218,7 @@ async function refreshConversationsRail() {
 }
 
 async function openConversationFromRail(conversationId) {
+  restoredConversationAwaitingDisplay = null;
   const fetchEpoch = ++conversationEpoch;
   activeConversationEpoch = fetchEpoch;
   try {
@@ -3204,6 +3244,7 @@ async function openConversationFromRail(conversationId) {
 }
 
 async function startNewConversation() {
+  restoredConversationAwaitingDisplay = null;
   activeConversationEpoch = ++conversationEpoch;
   viewingConversationId = null;
   lastTranscriptRefetchKey = null;
@@ -4441,15 +4482,26 @@ function renderSnapshot(snapshot) {
       // history in the thread instead of an empty pane.
       const restoredOnStartup = previousSelected === null && !viewingConversationId;
       if (restoredOnStartup) {
+        restoredConversationAwaitingDisplay = snapshot.selectedConversationId;
         setViewingConversation(snapshot.selectedConversationId);
-        void refreshOpenedTranscript(snapshot.selectedConversationId);
+        void showRestoredTranscript(snapshot.selectedConversationId);
+      } else {
+        restoredConversationAwaitingDisplay = null;
       }
     } else {
+      restoredConversationAwaitingDisplay = null;
       // The host cleared the selection: a new conversation was started (from
       // this window, from the phone, or by anything else). The pane must be
       // empty — never the previous conversation's turns.
       clearConversationPane();
     }
+  } else if (restoredConversationAwaitingDisplay
+    && snapshot.coreState === 'connected'
+    && snapshot.selectedConversationId === restoredConversationAwaitingDisplay
+    && viewingConversationId === restoredConversationAwaitingDisplay) {
+    // The launch-time fetch failed while Core was still starting (it can take
+    // longer than the short connect retry); try again now that Core is up.
+    void showRestoredTranscript(restoredConversationAwaitingDisplay);
   }
   const chatImageApproval = snapshot.pendingImageApproval;
   if (chatImageApproval && chatImageApproval.approvalId !== lastKnownPendingImageApprovalId) {
@@ -4822,6 +4874,7 @@ async function onMicPress(mode = 'manual') {
     result.textContent = '';
     followLatest = true;
     logVoiceStage(turn, 'transcript_submitted');
+    await startFreshIfRestoredConversationHidden();
     await api.submitTask(transcript, workerSelect?.value, turn?.turnId);
     if (isVoiceTurnStale(turn)) {
       logVoiceStage(turn, 'dropped_stale_turn', 'stage=after_submit');
@@ -5599,6 +5652,7 @@ submit.addEventListener('click', async () => {
     }
   }
   unsentDraftText = '';
+  await startFreshIfRestoredConversationHidden();
   if (taskInput) taskInput.value = ''; // Cleanly clears composer immediately on submit
 
   // Immediately append user's turn to active conversation stream
@@ -6207,6 +6261,7 @@ async function beginVadUtterance(source = 'wake') {
     result.textContent = '';
     followLatest = true;
     logVoiceStage(turn, 'transcript_submitted');
+    await startFreshIfRestoredConversationHidden();
     await api.submitTask(transcript, workerSelect?.value, turn.turnId);
     if (isVoiceTurnStale(turn)) {
       logVoiceStage(turn, 'dropped_stale_turn', 'stage=after_submit');
