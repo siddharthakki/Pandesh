@@ -92,11 +92,13 @@ Not re-run: M1–M3, M6–M8, M10, M11, C2, C3, F1–F4, AUTO. No new 19-mission
 
 ## 19-mission re-run (2026-11-08) — see `acceptance/claude-independent-audit/rerun_verdict_2026-11-08.md`
 
-Fresh profile/fixtures (harness `make-fixtures.mjs`; old profile kept as `.tmp/claude-audit-profile-pre-rerun`), unchanged prompts and criteria, strict grading. **First attempt 14/19 PASS (F1 invalid), final 15/19 PASS = 78.9 %** (original audit final 52.6 %). Still FAIL: M3 (delivery interpretation not stated), M9 (3 of 6 named companies not traceable; search output stored truncated), F1 (truthful failure + header now PASS, but retry/resume in the same conversation still returns an empty reply at ~26K tokens), F3 (decline wording; widened fix 8161092 not re-run). Not ready.
+Fresh profile/fixtures (harness `make-fixtures.mjs`; old profile kept as `.tmp/claude-audit-profile-pre-rerun`), unchanged prompts and criteria, strict grading. **First attempt 14/19 PASS (F1 invalid), final 16/19 PASS = 84.2 %** (F1 passed after 8f07720) (original audit final 52.6 %). Still FAIL: M3 (delivery interpretation not stated), M9 (3 of 6 named companies not traceable; search output stored truncated), F3 (decline wording; widened fix 8161092 not re-run). Not ready.
 
 Fixes made during the re-run: 01ba1db (orphan sweep killed host-raised approvals → M11 image card died after ~1 s; Stop could not end an image turn; research fallback replaced a real answer with "Based"), f84c100 (detailed local image prompt before the card; user: keep), 162c642 + 8161092 (decline is "You declined…", no protection/workaround wording), 8161092 (launch-time Ollama address beats the VS Code `ollama-agent.apiBase` setting), 4d1c139 (num_ctx growth: 5 % + 3K instead of ×1.3 + 4K). Tests after all of them: core 2,368 / desktop 598 pass.
 
-Next: D15 same-conversation empty reply at ~26K (system + 79 tool definitions ≈ 18K tokens before any history — cut the tool list per request); store full research output for grounding checks (M9); re-run F3, M3, M9, F1 on one build.
+D15 (8f07720): Core's "no answer" notices are dropped from history, and an empty reply after real tool results is answered by one tool-free call over those results; F1 Resume then completed 8/8 locally. Root cause not removed: system + 79 tool definitions ≈ 18K tokens, and gemma4:12b returns nothing at ~26K in that conversation.
+
+Next: cut the tool list per request (≈ 52K chars of definitions on every call); store full research output for grounding checks (M9); re-run F3, M3, M9 on one build.
 
 ## Open (priority order)
 
