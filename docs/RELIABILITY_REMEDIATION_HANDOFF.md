@@ -109,7 +109,16 @@ Next: cut the tool list per request (≈ 52K chars of definitions on every call)
 - Result: first attempt on f0b5fc7 **16/19**; after 859d82e, M9 and C2 retried → **18/19 (94.7 %)**. Remaining FAIL: M10 P3 merged two features instead of picking one (model variance, no fix). Verdict: not ready for production.
 - Tests at 859d82e: core 2,411 / desktop 598 pass; desktop typecheck 27 (baseline).
 
-Next: a second complete 19-mission run on `859d82e`; exercise the C2 date correction in the app; production smoke on a copy only with the user's approval.
+Next: a second complete 19-mission run on `859d82e`; exercise the C2 date correction in the app; production smoke on a copy only with the user's approval. — superseded by the release candidate below (the second run stopped after M1–M8, all PASS, evidence `evidence/second-859d82e/`).
+
+## Release candidate 557b0c4 (2026-11-08) — see `acceptance/claude-independent-audit/release_candidate_557b0c4.md`
+
+- Security: `fix/xmldom-ghsa` cherry-picked (`-x`) as 0815055 / 1b13bd5 / 2019e1b; pdfjs-dist 6.2.108 and @xmldom/xmldom 0.8.15 in lockfile, `npm ci`, and the packaged Core (crafted 120K-attribute DOCX 451 ms vs 29 s before).
+- 72379f0 M10: 5-trial comparison showed a real regression from the smaller prompt (5/5 → 2/5); explicit single-choice requests get a single-choice rule (5/5 after).
+- C2 date guard exercised in the packaged app (model told to say "November 11", Core corrected to 10; one reminder).
+- 557b0c4 M9 audit: governed_research now gets the D2 public-query check; research redactor (shared redaction caught 1/7 synthetic secrets); figures about a named organisation need nearby support; boot purge verified in the package.
+- RC built from a clean detached worktree `D:\Projects\Pandesh-rc` (`sourceState: clean`), package `.tmp/rc-557b0c4-clean`. 19 missions on that one build: **18/19 first attempt**, no retry. M9 FAIL (low): two job locations wrong (Vattenfall Berlin→"Munich", Sartorius Göttingen→"Hamburg"); privacy held.
+- Verdict: **NO-GO for production** (Electron 33.4.11 unsupported with high advisories; Dependabot reconciliation for bundled packages open); CONDITIONAL GO for isolated alpha use and the standalone P1 prototype.
 
 ## Open (priority order)
 
