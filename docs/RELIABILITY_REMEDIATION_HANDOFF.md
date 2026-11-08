@@ -90,6 +90,14 @@ Note: a governed call appears twice in `tool_invocations` (capability anchor att
 
 Not re-run: M1–M3, M6–M8, M10, M11, C2, C3, F1–F4, AUTO. No new 19-mission verdict is claimed.
 
+## 19-mission re-run (2026-11-08) — see `acceptance/claude-independent-audit/rerun_verdict_2026-11-08.md`
+
+Fresh profile/fixtures (harness `make-fixtures.mjs`; old profile kept as `.tmp/claude-audit-profile-pre-rerun`), unchanged prompts and criteria, strict grading. **First attempt 14/19 PASS (F1 invalid), final 15/19 PASS = 78.9 %** (original audit final 52.6 %). Still FAIL: M3 (delivery interpretation not stated), M9 (3 of 6 named companies not traceable; search output stored truncated), F1 (truthful failure + header now PASS, but retry/resume in the same conversation still returns an empty reply at ~26K tokens), F3 (decline wording; widened fix 8161092 not re-run). Not ready.
+
+Fixes made during the re-run: 01ba1db (orphan sweep killed host-raised approvals → M11 image card died after ~1 s; Stop could not end an image turn; research fallback replaced a real answer with "Based"), f84c100 (detailed local image prompt before the card; user: keep), 162c642 + 8161092 (decline is "You declined…", no protection/workaround wording), 8161092 (launch-time Ollama address beats the VS Code `ollama-agent.apiBase` setting), 4d1c139 (num_ctx growth: 5 % + 3K instead of ×1.3 + 4K). Tests after all of them: core 2,368 / desktop 598 pass.
+
+Next: D15 same-conversation empty reply at ~26K (system + 79 tool definitions ≈ 18K tokens before any history — cut the tool list per request); store full research output for grounding checks (M9); re-run F3, M3, M9, F1 on one build.
+
 ## Open (priority order)
 
 1. ~~M4 re-run, D5, D10~~ done (2d65b9c).
