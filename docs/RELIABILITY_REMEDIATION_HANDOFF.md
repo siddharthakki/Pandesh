@@ -23,6 +23,7 @@ Re-run evidence: `acceptance/claude-independent-audit/evidence/remediation-01a4d
 | 938f5ae | M4 (fresh re-run) | A request that builds output from a local document it names as the source, with nothing read this turn: `write_file` / `export_document_pdf` (inline text) are held until Core has listed the folder and read the documents; refusal carries the real contents |
 | 4c0d612, 2dd36b6 | D11 | `calculate` tool (exact BigInt rationals, read-only in every mode) + prompt rule; `checkStatedTotals` re-adds a list of single amounts before a "total/sum/gesamt" line and corrects a wrong stated total ("Corrected by Pandesh"), never touching profit/net/margin/average lines, mixed currencies, tables, code. Evidence prompt no longer yields "previous check" artefacts |
 | 8c15bef | Windows Firewall prompt per test build (user report) | Phone server listens on the LAN only for the real install profile (`%LOCALAPPDATA%KarkeDikhadesktop`); smoke mode / any other profile → 127.0.0.1 (no firewall prompt, not on the LAN); loopback instances do not advertise a LAN pairing URL. Harness also sets `KARKEDIKHA_MOBILE_HOST=127.0.0.1`, port 3131. Verified: test build listens on 127.0.0.1:3131, no new firewall rule |
+| 3bfe15b | D6, D7/D8, D15, D9, D13/D14 | See "D6–D15 batch" below |
 | 7047617 | New-conversation restore | Restored history re-fetched once Core is connected; a send while it is still hidden starts a new conversation (renderer only) |
 | 6a9f972, ee06c90, 70717b3 | D12 | After every OpenCode delegation Core itself reads git status/diff (hardened git), removes `.opencode/` only if this delegation created it, flags changed test files, re-runs the project test command; verified report goes to the model and is appended to the reply; Core's re-run is the turn's last `run_checks` outcome. OpenCode engine no longer writes its own message or completes/fails the attempt when delegated |
 
@@ -94,14 +95,25 @@ Not re-run: M1–M3, M6–M8, M10, M11, C2, C3, F1–F4, AUTO. No new 19-mission
 1. ~~M4 re-run, D5, D10~~ done (2d65b9c).
 2. ~~C1 completeness~~ done (06d1a87). Real print of P1 awaiting user approval.
    (old note: model stopped after 2 of 3 files — fixed)
-3. ~~D11~~ done (4c0d612). ~~D12~~ done (70717b3); **D6** orphan `running` anchor attempts.
-4. **D7/D8** Core must use the configured `ollama-agent.apiBase`; connection-loss must not be reported as "completed without a reply"; header must leave "Connected". **D15** retry in a long conversation.
-5. **D9** Auto model selection (uninstalled chain models, wrong model shown); **D13/D14** wording and image-prompt contamination.
+3. ~~D11~~ done (4c0d612). ~~D12~~ done (70717b3). ~~D6~~ done (3bfe15b).
+4. ~~D7/D8, D15~~ done in code (3bfe15b); **not exercised against a stopped Ollama** (F1 needs the user's approval to stop Ollama).
+5. ~~D9, D13/D14~~ done in code (3bfe15b); AUTO and M11 not re-run.
 6. Re-run the full frozen 19-mission set on one clean build and write a new verdict.
+
+### D6–D15 batch 3bfe15b (user asked for all remaining defects with one combined test pass)
+
+- **D6** `core/domain/bootReconciliation.ts` `settleIdleCapabilityAnchorsOnBoot`: at Core start, shared conversation anchors ("M38 governed capability dispatch anchor for conv_…", no owner) with no pending approval and no saved continuation are settled `completed`. `ensureCapabilityAttempt` gives such a conversation a fresh anchor under the next generation key (`conv#1`, …); approvals never carry over; owned anchors keep the never-reopen rule. `src/core-client/CoreLauncher.ts`: waits up to 60 s while the spawned Core process is alive (was 10 s → "Core unavailable" on a slow first boot). Build `.tmp/remediation-build-d6d15` on the audit profile: 11 stuck anchors closed at start, 0 running afterwards, Core up in 5 s, a governed-tool turn in a new conversation completed.
+- **D7** `desktopConfig.ts`: one Ollama address — a configured `ollama-agent.apiBase` wins, else the `KARKEDIKHA_OLLAMA_URL` the app was started with, else 127.0.0.1:11434; the same value feeds host probes and Core (Core already honoured `KARKEDIKHA_OLLAMA_URL`; the host overwrote it with the default).
+- **D8** Host tracks `modelServerReachable`; an unreachable Ollama is reported as "Ollama is not reachable at … your message was not sent" (not "model not installed"); header shows "Local AI · Ollama not reachable"; a refused send puts the text back in the composer and removes its echo; a failed local turn re-probes. Core: a native stream that ends without Ollama's final frame is an error ("connection … closed before the reply finished"), and an unanswered turn whose last model call failed is reported as "Lost the connection to the local model server (Ollama)…".
+- **D15** `piAgentEngine`: prior history is trimmed (oldest first) to half the 32K window minus system prompt and tool definitions, so a long conversation no longer forces num_ctx 64K (VRAM spill → empty reply).
+- **D9** `modelRouting.ts`: an unreachable catalog throws "Ollama is not reachable" instead of selecting `qwen2.5-coder:1.5b`; when no chain tag is installed Auto uses an installed generative model (chat family first); the chat model is in the question chain. Host snapshot under Auto shows the model Core last chose (not the `gemma4:12b` label).
+- **D13** Prompt rule: a decline is "you declined", never "system protection", no manual workaround; offer actions only with a tool for them. The "no running task will report back" correction needs a first-person promise ("I'll let you know"), not any "let you know".
+- **D14** `extractImageGenerationPrompt` drops "using my local image-generation tools"-style phrases and following save/show/name sentences (audit M11 prompt → "realistic, a steaming plate of chicken biryani with raita").
+- Tests: `core/test/remediationD6D9D13.test.ts`, `apps/desktop/test/remediationD7D14.test.ts`.
 
 ## New findings
 
-- First launch of a fresh build: Core boots in ~13 s (boot reconciliation of 8 orphaned `running` attempts, D6), the host gives up after 10 s and the window stays "Core unavailable" with no retry; a second launch connects. Belongs with D6 + D7/D8.
+- First launch of a fresh build: Core boots in ~13 s (boot reconciliation of 8 orphaned `running` attempts, D6), the host gives up after 10 s and the window stays "Core unavailable" with no retry; a second launch connects. Fixed in the D6–D15 batch.
 
 ## Operational notes
 
