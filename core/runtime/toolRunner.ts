@@ -126,6 +126,12 @@ export interface ToolExecutionResult {
   pathRecovery?: RepositoryPathRecoveryResult;
   /** What the contextual workspace shows for this call (see core/shared/toolActivity.ts). */
   activity?: ToolActivity;
+  /** Research tools: every fetched source with its full readable text, persisted by Core (core/domain/researchProvenance.ts). */
+  researchProvenance?: {
+    query: string;
+    retrievedAt: string;
+    sources: Array<{ marker?: string | null; searchUrl?: string | null; finalUrl: string; title?: string | null; fullText: string; excerptChars: number }>;
+  };
 }
 
 export interface ToolRunner {

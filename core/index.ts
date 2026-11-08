@@ -19,6 +19,7 @@ import { resolveDataDir, resolvePaths } from './env/dataDir';
 import { openCoreDatabase } from './db/openCore';
 import { CoreDatabaseFailedError } from './db/preflight';
 import { failDeadExecutorAttemptsOnBoot, scanOrphanedAttemptsOnBoot, settleIdleCapabilityAnchorsOnBoot } from './domain/bootReconciliation';
+import { purgeExpiredResearchContent } from './domain/researchProvenance';
 import { createWeatherCapabilityAdapter } from './runtime/weatherCapability';
 import { createFilesystemCapabilityAdapter } from './runtime/filesystemCapability';
 import { createNetworkDriveCapabilityAdapter } from './runtime/networkDriveCapability';
@@ -391,6 +392,12 @@ async function main(): Promise<void> {
     if (anchors.length > 0) redactedLog(`boot reconciliation: closed ${anchors.length} idle conversation capability anchor(s)`);
   } catch (err) {
     redactedLog(`boot reconciliation: anchor settlement failed: ${err instanceof Error ? err.message : String(err)}`);
+  }
+  try {
+    const purged = purgeExpiredResearchContent(db);
+    if (purged > 0) redactedLog(`research provenance: cleared the stored text of ${purged} source(s) past retention`);
+  } catch (err) {
+    redactedLog(`research provenance: retention purge failed: ${err instanceof Error ? err.message : String(err)}`);
   }
   const bootReconciliation = scanOrphanedAttemptsOnBoot(db);
   if (bootReconciliation.orphaned.length > 0) {

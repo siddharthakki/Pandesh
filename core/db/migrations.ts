@@ -1714,6 +1714,32 @@ CREATE INDEX IF NOT EXISTS idx_bridge_checkpoints_task ON bridge_task_checkpoint
 // result -> no second write) and makes an edit whose outcome is UNCERTAIN
 // non-replayable (the file matches neither -> the side effect is never
 // repeated on a guess).
+// Re-run M9: Pandesh kept only the 4,000-character excerpt the model saw, so a named company could not be traced to a
+// source or shown to be missing from it. One row per fetched source; `content` is the redacted readable text and is
+// cleared after `contentExpiresAt` (URL, title and hash stay, so a citation can still be re-fetched and verified).
+const MIGRATION_47_RESEARCH_SOURCES = `
+CREATE TABLE IF NOT EXISTS research_turn_sources (
+  id TEXT PRIMARY KEY,
+  attemptId TEXT NOT NULL,
+  conversationId TEXT,
+  invocationId TEXT,
+  toolName TEXT NOT NULL,
+  query TEXT NOT NULL,
+  marker TEXT,
+  searchUrl TEXT,
+  finalUrl TEXT NOT NULL,
+  title TEXT,
+  contentSha256 TEXT NOT NULL,
+  contentChars INTEGER NOT NULL,
+  excerptChars INTEGER NOT NULL,
+  content TEXT,
+  retrievedAt TEXT NOT NULL,
+  contentExpiresAt TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_research_turn_sources_attempt ON research_turn_sources(attemptId);
+CREATE INDEX IF NOT EXISTS idx_research_turn_sources_conversation ON research_turn_sources(conversationId, retrievedAt);
+`;
+
 const MIGRATION_46_MUTATION_LEDGER = `
 CREATE TABLE IF NOT EXISTS mutation_ledger (
   fingerprint TEXT PRIMARY KEY,
@@ -1777,6 +1803,7 @@ export const MIGRATIONS: Migration[] = [
   { version: 44, description: 'Household OS: PC organization move journal and rules, bounded recurring routines with run history, household obligations with evidence, JUGAAD companion sync', sql: MIGRATION_44_HOUSEHOLD_OS },
   { version: 45, description: 'Household OS hardening: replay nonces that survive a restart, per-folder document-reading grants', sql: MIGRATION_45_HOUSEHOLD_HARDENING },
   { version: 46, description: 'Durable mutation ledger: restart-safe, idempotent workspace edits and non-replayable uncertain mutations', sql: MIGRATION_46_MUTATION_LEDGER },
+  { version: 47, description: 'Research provenance: every fetched web source (URL, title, content hash, redacted text with an expiry) so citations can be reconstructed and claims checked', sql: MIGRATION_47_RESEARCH_SOURCES },
 ];
 
 

@@ -34,6 +34,7 @@ import { sanitizeToolActivity } from '../shared/toolActivity';
 import { withIdempotency, lookupIdempotencyResult } from './idempotency';
 import { CoreError } from './errors';
 import { getAttemptContext } from './attemptContext';
+import { recordResearchProvenance } from './researchProvenance';
 import { evaluateMachineControlAuthorization, isUnattendedClientId } from './processTerminationPolicy';
 import type {
   ApprovalRecord,
@@ -677,6 +678,20 @@ async function executeAndRecord(
   const attemptAfter = getAttempt(db, attemptId);
   const cancelled = Boolean(attemptAfter.cancelRequestedAt);
   const activity = sanitizeToolActivity(result.activity);
+  // Re-run M9: a research call's fetched sources are kept (redacted, with an expiry) so its citations can be checked.
+  if (!cancelled && result.status === 'succeeded' && result.researchProvenance) {
+    try {
+      recordResearchProvenance(db, {
+        attemptId,
+        conversationId: input.correlationId?.startsWith('conv_') ? input.correlationId : null,
+        invocationId: started.id,
+        toolName: input.toolName,
+        provenance: result.researchProvenance,
+      });
+    } catch (err) {
+      console.warn('[capabilityDispatch] research provenance not recorded:', err instanceof Error ? err.message : err);
+    }
+  }
   return completeToolInvocation(db, started.id, {
     status: cancelled ? 'cancelled' : result.status === 'succeeded' ? 'succeeded' : 'failed',
     exitCode: cancelled ? null : result.exitCode,
