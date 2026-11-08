@@ -908,7 +908,10 @@ export class PiAgentEngine implements EngineAdapter {
       baseUrl: ollamaRoot,
       // Grow only when the prompt genuinely needs it: a different num_ctx makes Ollama reload the model.
       numCtx: (estimated) => {
-        const needed = Math.ceil(estimated * 1.3) + 4_096;
+        // D15 / re-run F1: the chars/4 estimate tracks Ollama's real count closely (25.6K est vs 26.1K actual), but the
+        // old ×1.3 + 4K reserve moved a 26K-token prompt to 64K — which spills gemma4:12b out of VRAM and returns an
+        // empty reply. A 5% margin plus a 3K answer reserve keeps prompts up to ~28K in the 32K window.
+        const needed = Math.ceil(estimated * 1.05) + 3_072;
         if (needed <= baseNumCtx) return baseNumCtx;
         return OLLAMA_IMPLICIT_NUM_CTX_BUCKETS.find((size) => size >= needed) ?? OLLAMA_IMPLICIT_NUM_CTX_BUCKETS[OLLAMA_IMPLICIT_NUM_CTX_BUCKETS.length - 1];
       },
