@@ -1,0 +1,171 @@
+{
+ "T1": {
+  "model_calls": 3,
+  "prompt_tokens": 30481,
+  "output_tokens": 432,
+  "model_tool_calls": 3,
+  "first_token_ms": 3509,
+  "tools_recorded": 3,
+  "tools_ok": 3,
+  "tools_failed": 0,
+  "approvals": [],
+  "status": "completed",
+  "duration_s": 16.9,
+  "handoffs": 0
+ },
+ "T2": {
+  "model_calls": 3,
+  "prompt_tokens": 28202,
+  "output_tokens": 511,
+  "model_tool_calls": 2,
+  "first_token_ms": 4248,
+  "tools_recorded": 2,
+  "tools_ok": 1,
+  "tools_failed": 1,
+  "approvals": [
+   [
+    "web_research",
+    "rejected"
+   ]
+  ],
+  "status": "completed",
+  "duration_s": 28.1,
+  "handoffs": 0
+ },
+ "T3": {
+  "model_calls": 2,
+  "prompt_tokens": 10926,
+  "output_tokens": 294,
+  "model_tool_calls": 1,
+  "first_token_ms": 2308,
+  "tools_recorded": 1,
+  "tools_ok": 1,
+  "tools_failed": 0,
+  "approvals": [
+   [
+    "web_research",
+    "approved"
+   ]
+  ],
+  "status": "completed",
+  "duration_s": 34.7,
+  "handoffs": 0
+ },
+ "T4": {
+  "model_calls": 2,
+  "prompt_tokens": 22706,
+  "output_tokens": 465,
+  "model_tool_calls": 2,
+  "first_token_ms": 5916,
+  "tools_recorded": 4,
+  "tools_ok": 4,
+  "tools_failed": 0,
+  "approvals": [
+   [
+    "delegate_to_opencode",
+    "approved"
+   ]
+  ],
+  "status": "completed",
+  "duration_s": 93.7,
+  "handoffs": 0
+ },
+ "T6": {
+  "model_calls": 6,
+  "prompt_tokens": 74798,
+  "output_tokens": 230,
+  "model_tool_calls": 5,
+  "first_token_ms": 5207,
+  "tools_recorded": 5,
+  "tools_ok": 5,
+  "tools_failed": 0,
+  "approvals": [],
+  "status": "completed",
+  "duration_s": 10.0,
+  "handoffs": 0
+ },
+ "T7": {
+  "model_calls": 9,
+  "prompt_tokens": 108696,
+  "output_tokens": 604,
+  "model_tool_calls": 8,
+  "first_token_ms": 6482,
+  "tools_recorded": 5,
+  "tools_ok": 4,
+  "tools_failed": 1,
+  "approvals": [
+   [
+    "authorize_mission",
+    "approved"
+   ],
+   [
+    "run_checks",
+    "approved"
+   ]
+  ],
+  "status": "completed",
+  "duration_s": 66.4,
+  "handoffs": 0
+ },
+ "T8": {
+  "model_calls": 1,
+  "prompt_tokens": 11477,
+  "output_tokens": 110,
+  "model_tool_calls": 0,
+  "first_token_ms": 4400,
+  "tools_recorded": 0,
+  "tools_ok": 0,
+  "tools_failed": 0,
+  "approvals": [],
+  "status": "completed",
+  "duration_s": 6.1,
+  "handoffs": 0
+ },
+ "T9": {
+  "model_calls": 1,
+  "prompt_tokens": 9582,
+  "output_tokens": 43,
+  "model_tool_calls": 0,
+  "first_token_ms": 3838,
+  "tools_recorded": 0,
+  "tools_ok": 0,
+  "tools_failed": 0,
+  "approvals": [],
+  "status": "completed",
+  "duration_s": 4.6,
+  "handoffs": 0
+ },
+ "T10": {
+  "model_calls": 2,
+  "prompt_tokens": 22169,
+  "output_tokens": 133,
+  "model_tool_calls": 1,
+  "first_token_ms": 5240,
+  "tools_recorded": 1,
+  "tools_ok": 1,
+  "tools_failed": 0,
+  "approvals": [],
+  "status": "completed",
+  "duration_s": 6.9,
+  "handoffs": 0
+ },
+ "T12": {
+  "model_calls": 4,
+  "prompt_tokens": 37660,
+  "output_tokens": 1459,
+  "model_tool_calls": 2,
+  "first_token_ms": 6332,
+  "tools_recorded": 2,
+  "tools_ok": 1,
+  "tools_failed": 1,
+  "approvals": [
+   [
+    "delegate_to_opencode",
+    "approved"
+   ]
+  ],
+  "status": "failed",
+  "duration_s": 84.5,
+  "handoffs": 0
+ }
+}
