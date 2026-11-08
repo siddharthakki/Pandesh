@@ -117,7 +117,7 @@ export const TOOL_GROUPS: Record<string, ToolGroup> = {
 /** Offered on every request. */
 export const BASE_TOOLS = new Set([
   'request_tools', 'get_system_info', 'resolve_time', 'calculate', 'update_task_outcome',
-  'list_directory', 'read_file', 'write_file', 'search_files',
+  'list_directory', 'read_file', 'write_file', 'search_files', 'open_local_file',
 ]);
 
 export const NATIVE_GROUP: Record<string, string> = {

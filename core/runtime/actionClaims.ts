@@ -89,6 +89,14 @@ const CATEGORIES: ActionClaimCategory[] = [
     label: 'file change',
   },
   {
+    // Alpha review: "I have opened the file in my internal System View" while the only page tool had been refused.
+    kind: 'open',
+    object: /[\w.-]+\.(?:pdf|md|txt|html?|png|jpe?g|svg|gif|webp)\b|\b(?:files?|pages?|dashboard|browser)\b/i,
+    verbs: 'opened|launched|displayed',
+    tools: /^open_local_file$|^inspect_page$|^browser_open_site$/i,
+    label: 'file opening',
+  },
+  {
     kind: 'execution',
     object: /\b(?:commands?|actions?|steps?|tasks?|requests?|instructions?|changes?)\b/i,
     verbs: 'executed|carried out|completed|performed|applied|run|ran|done|finished',

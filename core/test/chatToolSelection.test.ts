@@ -5,7 +5,7 @@ import { buildPiCapabilityBridge } from '../runtime/piCapabilityBridge';
 import { GovernedCapabilityRegistry } from '../runtime/governedCapability';
 
 const NATIVE = [
-  'get_system_info', 'list_system_drives', 'request_search_permission', 'find_project_roots', 'search_files', 'resolve_time',
+  'get_system_info', 'open_local_file', 'list_system_drives', 'request_search_permission', 'find_project_roots', 'search_files', 'resolve_time',
   'dev_stories_plan', 'dev_stories_status', 'create_reminder', 'list_reminders', 'create_note', 'update_task_outcome',
   'create_commitment', 'create_wish_goal', 'wish_order', 'schedule_task', 'get_briefing_data', 'web_research',
   'list_directory', 'read_file', 'write_file', 'run_checks', 'delegate_to_opencode', 'calculate', 'list_printers',

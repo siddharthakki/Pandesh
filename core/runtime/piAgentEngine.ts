@@ -9,7 +9,7 @@ import { recordResearchProvenance, researchSourcesForTurn } from '../domain/rese
 import { buildGroundingRewritePrompt, problemCount, ungroundedClaims } from './researchGrounding';
 import { correctWeekdayDates } from './dateConsistency';
 import { asksForSingleChoice, SINGLE_CHOICE_RULE } from './choiceConstraint';
-import { renderDelegationReport, untrackedPaths, verifyDelegation } from './delegationVerification';
+import { delegationChangedNothing, isGitRepository, renderDelegationReport, snapshotFiles, untrackedPaths, verifyDelegation } from './delegationVerification';
 import { FolderReadLedger, requestedOutputFiles, requiresSourceEvidence, requiresWholeFolder, unreadFilesNotice } from './folderCompleteness';
 import * as cp from 'node:child_process';
 import { holdAwaitedApproval } from './cancellationRecovery';
@@ -471,6 +471,38 @@ export function resolveWorkspaceRelativeArgs(args: Record<string, unknown>, work
     next[key] = path.resolve(workspaceRoot, value.trim());
   }
   return next ?? args;
+}
+
+/** inspect_page's `path` stays workspace-relative; an absolute path inside the selected folder is made relative. */
+export function inspectPageArgs(args: Record<string, unknown>, workspaceRoot: string | null): Record<string, unknown> {
+  const value = typeof args.path === 'string' ? args.path.trim() : '';
+  if (!workspaceRoot || !value || !path.isAbsolute(value)) return args;
+  const rel = path.relative(path.resolve(workspaceRoot), path.resolve(value));
+  if (!rel || rel.startsWith('..') || path.isAbsolute(rel)) return args;
+  return { ...args, path: rel.split(path.sep).join('/') };
+}
+
+/** Files Pandesh may open in the person's default app (browser, PDF or image viewer) with open_local_file. */
+export const OPENABLE_EXTENSIONS = new Set(['.html', '.htm', '.pdf', '.png', '.jpg', '.jpeg', '.gif', '.svg', '.webp', '.txt', '.md']);
+
+/** Where open_local_file would open `requested`, or why it must not. Only an existing file inside the selected folder. */
+export function resolveOpenableFile(requested: string, workspaceRoot: string | null): { ok: true; file: string } | { ok: false; reason: string } {
+  const value = String(requested ?? '').trim().replace(/^file:\/\/\/?/i, '').replace(/^["']|["']$/g, '');
+  if (!value) return { ok: false, reason: 'no file was named' };
+  if (!workspaceRoot) return { ok: false, reason: 'no folder is selected for this conversation' };
+  const root = path.resolve(workspaceRoot);
+  const file = path.resolve(root, value);
+  const rel = path.relative(root, file);
+  if (!rel || rel.startsWith('..') || path.isAbsolute(rel)) return { ok: false, reason: `${value} is outside the selected folder ${root}` };
+  if (!OPENABLE_EXTENSIONS.has(path.extname(file).toLowerCase())) return { ok: false, reason: `only ${[...OPENABLE_EXTENSIONS].join(', ')} files can be opened this way` };
+  if (!fs.existsSync(file) || !fs.statSync(file).isFile()) return { ok: false, reason: `${rel} does not exist in ${root}` };
+  return { ok: true, file };
+}
+
+/** A command that only hands a file to the desktop (start, explorer, open) — it belongs to open_local_file, not run_checks. */
+export function isDesktopOpenCommand(command: string): boolean {
+  return /^\s*(?:cmd(?:\.exe)?\s+\/c\s+)?(?:start|explorer(?:\.exe)?|open|xdg-open|invoke-item|ii)\b/i.test(command)
+    || /^\s*powershell[^"]*"\s*(?:start-process|invoke-item|ii|start)\b/i.test(command);
 }
 
 /**
@@ -3042,6 +3074,36 @@ export class PiAgentEngine implements EngineAdapter {
         },
       },
       {
+        name: 'open_local_file',
+        label: 'open_local_file',
+        description: `Open a file from the selected folder on the user's screen in its default app: an .html page in their web browser, a .pdf, image, .txt or .md in its viewer. Use it when the user asks to open, show or see a file. Only existing files inside the selected folder (${[...OPENABLE_EXTENSIONS].join(' ')}). Nothing is changed.`,
+        parameters: {
+          type: 'object',
+          properties: { path: { type: 'string', description: 'The file, relative to the selected folder (e.g. dashboard.html) or its absolute path inside that folder.' } },
+          required: ['path'],
+        },
+        execute: async (_id: string, args: any) => {
+          const target = resolveOpenableFile(String(args?.path ?? ''), selectedWorkspace || null);
+          if (!target.ok) {
+            return { content: [{ type: 'text', text: `NOT OPENED: ${target.reason}. Nothing was opened; tell the user so.` }], details: { success: false, error: target.reason }, isError: true };
+          }
+          try {
+            // The OS's own file association, detached: explorer (Windows) / open (macOS) / xdg-open return at once.
+            const [bin, argv] = process.platform === 'win32' ? ['explorer.exe', [target.file]] : process.platform === 'darwin' ? ['open', [target.file]] : ['xdg-open', [target.file]];
+            const child = cp.spawn(bin, argv as string[], { detached: true, stdio: 'ignore', windowsHide: false });
+            child.on('error', () => { /* reported below only if spawn throws synchronously */ });
+            child.unref();
+          } catch (err: any) {
+            return { content: [{ type: 'text', text: `NOT OPENED: ${err?.message ?? String(err)}` }], details: { success: false }, isError: true };
+          }
+          const shown = path.relative(selectedWorkspace!, target.file);
+          return {
+            content: [{ type: 'text', text: `Opened ${shown} in the default app for ${path.extname(target.file)} files on the user's screen (${target.file}).` }],
+            details: { success: true, output: target.file, activity: { kind: 'tool', title: `Opened ${shown}`, path: target.file } },
+          };
+        },
+      },
+      {
         name: 'run_checks',
         label: 'run_checks',
         description: `Execute build, test, or check commands in the project workspace to verify code correctness. Runs under ${process.platform === 'win32' ? 'Windows cmd.exe (use && to chain; no bash syntax; use powershell -NoProfile -Command "..." for PowerShell)' : '/bin/sh'}; timeout 120s.`,
@@ -3062,6 +3124,14 @@ export class PiAgentEngine implements EngineAdapter {
             };
           }
 
+          // Alpha review: `start "cat_garden.html"` (a quoted first argument is a window title) opened a console that
+          // never exited, and the check timed out after 120 s with nothing opened.
+          if (isDesktopOpenCommand(String(args.command || ''))) {
+            return {
+              content: [{ type: 'text', text: "Not run: opening a file for the user is not a check. Use 'open_local_file' with the file's path in the selected folder." }],
+              isError: true,
+            };
+          }
           if (isShellPrintCommand(String(args.command || ''))) {
             return {
               content: [{ type: 'text', text: "Not run: printing is not done through run_checks. Use 'list_printers' to find the installed printer and 'print_test_page' to print the Windows test page." }],
@@ -3165,6 +3235,8 @@ ${String(args.objective ?? '').slice(0, 600)}`,
 
           // Audit D12: what was untracked before, so cleanup afterwards only touches what this delegation created.
           const untrackedBefore = untrackedPaths(targetDir);
+          // A plain folder has no git status: record its files so the real effect can still be read from disk.
+          const snapshotBefore = isGitRepository(targetDir) ? undefined : snapshotFiles(targetDir);
           const result = await OpenCodeEngine.executeCodingObjective({
             db,
             broadcaster,
@@ -3180,7 +3252,7 @@ ${String(args.objective ?? '').slice(0, 600)}`,
           });
 
           // Audit D12: Core verifies the delegation itself — git status/diff, OpenCode's leftovers, a real test run.
-          const verification = await verifyDelegation(targetDir, untrackedBefore, runShellCommand, signal);
+          const verification = await verifyDelegation(targetDir, untrackedBefore, runShellCommand, signal, snapshotBefore);
           const report = redactCredentialShapes(renderDelegationReport(verification));
           delegationReports.push(report);
           // Core's own post-fix test run is the authoritative check of this turn: the last run_checks outcome, so a
@@ -3199,6 +3271,16 @@ ${String(args.objective ?? '').slice(0, 600)}`,
             changedFiles: verification.changedFiles, newUntracked: verification.newUntracked, removed: verification.removed,
             testFilesChanged: verification.testFilesChanged, test: verification.test ? { command: verification.test.command, code: verification.test.code, timedOut: verification.test.timedOut } : null,
           }, actor);
+          // Alpha review: with a local model OpenCode sometimes prints a tool call as text ("```json {"action":"write"…")
+          // instead of calling it, and finishes "successfully" having done nothing. Nothing on disk changed, so the
+          // delegation did not do the work: a failed call, so neither the reply nor the claim guard can treat it as done.
+          if (delegationChangedNothing(verification) && !signal?.aborted) {
+            return {
+              content: [{ type: 'text', text: `NOT DONE: OpenCode finished, but no file in ${targetDir} was created, changed or deleted. Its own text below is not a result (it may describe or print a file it never wrote). Tell the user plainly that nothing was created; do not say a file exists, and do not give its path as if it existed. You may offer to try again (for example with write_file for a single file).\n\nOpenCode's text (unverified):\n${String(result.reply ?? '').slice(0, 1_500)}\n\n${report}` }],
+              details: { ...result, success: false, activity: { kind: 'code', title: `OpenCode: ${String(args.objective).slice(0, 120)}`, excerpt: 'No file was created, changed or deleted.' } },
+              isError: true,
+            };
+          }
           return {
             content: [{ type: 'text', text: `${result.reply}\n\n${report}\n\nReport these verified results; do not claim tests passed unless the re-run above passed.` }],
             // What OpenCode really changed: the working-tree diff, read after it finished.
@@ -3583,7 +3665,10 @@ ${String(args.objective ?? '').slice(0, 600)}`,
       const bridge = ctx.capabilities;
       if (!bridge) return connectorText('That capability is not available in this build.', true);
       // Audit D10: a relative file path means "in the folder the person selected", never the install folder.
-      const args = resolveWorkspaceRelativeArgs(rawArgs, selectedWorkspace || null);
+      // inspect_page addresses a page by its workspace-relative path (the command policy refuses absolute paths), so it
+      // keeps a relative path, and an absolute one inside the selected folder is made relative (alpha review:
+      // "dashboard.html" was absolutised here and then refused as "absolute path is not authorized").
+      const args = toolName === 'inspect_page' ? inspectPageArgs(rawArgs, selectedWorkspace || null) : resolveWorkspaceRelativeArgs(rawArgs, selectedWorkspace || null);
       // Privacy boundary (audit D2) for the governed research tool too (M9 audit: only web_research was checked, and
       // the model used governed_research in every M9 run): only a short public query may leave the machine.
       if (toolName === 'governed_research') {
@@ -4203,6 +4288,7 @@ ${hasBriefing ? `- For a daily briefing call 'get_briefing_data' once and presen
 Product: KarkeDikha (KKD).
 Assistant Name: Pandesh. (You are Pandesh; the user is the human operator. The user is NOT Pandesh. When the user addresses you as Pandesh, acknowledge that you are Pandesh).
 Visual Mascot: Cyber Panda (the approved futuristic mascot of KarkeDikha).
+Where you run: on the user's own PC, inside the KarkeDikha desktop app, with a local model. You are not a cloud or remote service; never say you are. To show the user a file from the selected folder on their screen (an HTML page in their browser, a PDF, an image), call 'open_local_file'; never claim you opened something unless that tool succeeded.
 Running on: ${process.platform}. Current local time: ${new Date().toLocaleString('en-GB', { timeZone: localTimeZone, weekday: 'long', year: 'numeric', month: 'long', day: 'numeric', hour: '2-digit', minute: '2-digit' })} in time zone ${localTimeZone} (UTC${utcOffsetLabel()}). Interpret every time the user mentions in this zone. NEVER calculate dates or weekdays yourself: call 'resolve_time' for any relative expression (tomorrow, next Friday, in 8 days, 3pm on Thursday) and use its date/time/iso verbatim. Reference days: ${upcomingDaysTable(Date.now(), localTimeZone)}.
 
 MOBILE COMPANION STATUS:
@@ -5231,8 +5317,12 @@ ${filesPromptSection}${webResearchPromptSection}${wishesPromptSection}${emailCal
         if (!ctx.workspaceRoot) return true; // nothing to resolve against: do not guess
         if (fs.existsSync(path.resolve(ctx.workspaceRoot, clean)) || fs.existsSync(path.join(ctx.workspaceRoot, path.basename(clean)))) return true;
         // Saved somewhere else (Desktop, Documents): a succeeded tool that names the file is the evidence.
+        // A hand-off (its objective names the file it is asked to make, its result is another model's text) and the
+        // task record are never that evidence: alpha review, "Create dashboard.html" in the objective let three
+        // "dashboard.html was successfully created" replies stand while the file did not exist.
         const base = path.basename(clean).toLowerCase();
-        return toolCallsRecorded.some((t) => t.status === 'completed' && `${JSON.stringify(t.args ?? '')} ${extractToolResultText(t.result)}`.toLowerCase().includes(base));
+        return toolCallsRecorded.some((t) => t.status === 'completed' && !/^delegate_|^update_task_outcome$|^request_tools$/.test(t.tool)
+          && `${JSON.stringify(t.args ?? '')} ${extractToolResultText(t.result)}`.toLowerCase().includes(base));
       };
       // Re-run M9: organisations and links named after web research must be in what was retrieved (the stored full
       // source text), the user's files or the user's words. One tool-free rewrite drops the rest; what still remains
