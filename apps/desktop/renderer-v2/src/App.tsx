@@ -7,8 +7,9 @@ import { Software } from './Software';
 import { Team } from './Team';
 import { ToolsHub } from './ToolsHub';
 import { SecondBrain } from './SecondBrain';
+import { Processes } from './Processes';
 
-export type View = 'chat' | 'board' | 'team' | 'space' | 'system' | 'software' | 'tools' | 'brain';
+export type View = 'chat' | 'board' | 'team' | 'space' | 'system' | 'software' | 'tools' | 'brain' | 'processes';
 
 interface PaletteEntry { group: string; label: string; run: () => void }
 
@@ -77,6 +78,7 @@ export function App() {
       ? { name: 'Classic UI is locked off', sub: 'PANDESH_UI_V2=1 is set for this launch; start without it to switch', run: () => {} }
       : { name: 'Use the Classic UI', sub: 'Reloads the window in the existing interface', run: () => void useClassic() },
     { name: 'Tools & Skills', sub: 'Capabilities, agents × tools, skills, MCP, capability tests', run: () => go('tools') },
+    { name: 'Processes', sub: 'What Pandesh started, checked against Windows now', run: () => go('processes') },
     { name: 'Software & Services', sub: 'Ports, installed tools, GitHub projects, updates (read-only)', run: () => go('software') },
     { name: `Theme: ${theme}`, sub: 'Cycle dark → light → follow Windows', run: cycleTheme },
     { name: labels ? 'Hide rail labels' : 'Show rail labels', sub: 'Names next to the navigation icons', run: toggleLabels },
@@ -93,6 +95,7 @@ export function App() {
     { group: 'GO TO', label: 'Team', run: () => go('team') },
     { group: 'GO TO', label: 'Tools & Skills', run: () => go('tools') },
     { group: 'GO TO', label: 'Second Brain', run: () => go('brain') },
+    { group: 'GO TO', label: 'Processes', run: () => go('processes') },
     { group: 'ACTIONS', label: 'New chat', run: () => { void api.newConversation().then(refresh); setOpenConversationId(null); go('chat'); } },
     { group: 'ACTIONS', label: 'Use the Classic UI', run: () => void useClassic() },
     { group: 'ACTIONS', label: 'Change theme', run: cycleTheme },
@@ -131,6 +134,7 @@ export function App() {
         {view === 'software' && <Software narrow={narrow} />}
         {view === 'tools' && <ToolsHub narrow={narrow} />}
         {view === 'brain' && <SecondBrain narrow={narrow} />}
+        {view === 'processes' && <Processes narrow={narrow} />}
         {view === 'team' && <Team narrow={narrow} latestAttemptId={(overview.data?.tasks ?? []).find((t) => t.conversationId === snapshot?.selectedConversationId)?.attemptId ?? overview.data?.tasks?.[0]?.attemptId ?? null}
           onMessage={(agentId) => { void (async () => { await api.household('selectAgent', { agentId }); await api.newConversation(); setOpenConversationId(null); refresh(); go('chat'); })(); }} />}
         {view === 'space' && placeholder && (

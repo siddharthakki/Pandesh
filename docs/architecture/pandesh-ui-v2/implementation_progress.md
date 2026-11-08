@@ -109,9 +109,22 @@ Real app (isolated profile): scenario 9 PASS — memory created in chat with con
 
 Gaps: no watcher (index refreshes on access when a source changed); suggested/extracted edges and confirm/reject are not built (no extraction); 3D view deferred (D2); folder picker is a path field (no native dialog for this purpose yet).
 
+## Milestone 2e — Visual Execution · STATUS: done (embedded workspace; Show My Work partial)
+
+| Area | Implementation |
+|---|---|
+| Activity/Preview aside | `Activity.tsx` in chat: every step Core recorded for the conversation (state, capability, duration); preview of the selected step exactly as the tool published it — command output (run_checks' recorded tail), coloured unified diff of file changes, page URL and text, image artifacts; files of the conversation with on-disk verification and Open / Show in folder. Opens by itself once per task when a viewable step appears; closing keeps it closed for that task; "Workspace · n" reopens it; full-screen on narrow widths. |
+| Processes | `core/api/processRoutes.ts` + `Processes.tsx` (System → Processes): processes Pandesh recorded launching (ownership ledger, Port Manager registry, browser launch record), checked with one CIM query: running only when executable and start time match; ended; pid reused; identity unconfirmed. Read-only — stopping is task cancellation and the existing ownership boundary. |
+| Answers | Safe Markdown rendering (React elements only). Composer height resets after sending. |
+| Show My Work | "Show folder" opens the workspace in Explorer; artifacts open in their default app. Opening VS Code / Windows Terminal windows and a live PTY terminal are NOT built (node-pty/xterm trial not run; D2). |
+
+Tests: `core/test/ownedProcesses.test.ts` 6/6 (running only on matching identity, ended, pid reuse by executable and by start time, unconfirmed, record merge, single CIM query); targeted Core 47/47; desktop 605/605.
+
+Real app (isolated profile, Coding agent, gemma4:12b): scenario 11 PASS — "create calc.js + calc.test.js, run node calc.test.js": approvals for file changes and for running code; steps Editing calc.js [diff], Editing calc.test.js [diff], Running node calc.test.js [output "PASS"]; files verified on disk (independent re-run prints PASS); aside opened by itself. Processes view: current Core running (pid, port, identity matched), 9 earlier Cores (incl. the two killed in scenario 6) ended. `acceptance-2e/`.
+
 ### Next executable step
 
-Milestone 2e — Visual Execution: Core process registry view over `processOwnership.ts` (owned processes, ports, lifecycle), live terminal output, test results, diffs, artifacts and previews for coding runs in the Activity/Preview aside; cancellation that never touches unowned processes; optional Show My Work.
+Milestone 2f — User workspaces: Projects, Wish to Reality, Social Studio (drafts + approvals, no publishing), Media Studio, Automations — each from existing Core records, labelled unavailable where no backend exists.
 
 ### Resume
 

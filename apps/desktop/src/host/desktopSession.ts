@@ -2709,6 +2709,7 @@ export class DesktopSession {
       softwareUpdates: { path: '/v1/software/updates' },
       softwareCheckUpdates: { path: '/v1/software/updates/check', method: 'POST', body: {} },
       toolHub: { path: '/v1/tools/hub' },
+      processes: { path: '/v1/processes' },
       brainStatus: { path: '/v1/knowledge/status' },
       brainReindex: { path: '/v1/knowledge/reindex', method: 'POST', body: {} },
       brainSearch: { path: `/v1/knowledge/search?q=${encodeURIComponent(String(args.q ?? ''))}${args.types ? `&types=${encodeURIComponent(String(args.types))}` : ''}` },

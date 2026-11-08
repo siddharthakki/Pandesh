@@ -10,7 +10,9 @@ export type ApprovalResolution = 'approved' | 'rejected';
 
 export interface ApprovalCard { approvalId: string; gate: string; toolName: string; scope: string; paths: string[]; detail: string }
 
-export interface WorkspaceActivity { id: string; conversationId: string | null; taskId: string | null; label?: string; title?: string; state: 'running' | 'completed' | 'failed' | 'cancelled'; startedAt?: string; [k: string]: unknown }
+export interface ArtifactView { id: string; conversationId: string | null; kind: 'image' | 'video' | 'document' | 'file'; title: string; mimeType: string; fileName: string; byteSize: number; source: string; createdAt: string; availability: 'ready' | 'missing' | 'changed' | 'unreadable' }
+export interface ToolPreview { kind: string; title?: string; url?: string; path?: string; artifactIds?: string[]; excerpt?: string; diff?: string }
+export interface WorkspaceActivity { id: string; conversationId: string | null; taskId: string | null; capability?: string; kind?: string; title?: string; state: 'running' | 'completed' | 'failed' | 'cancelled'; startedAt?: string; endedAt?: string | null; detail?: string | null; preview?: ToolPreview | null; [k: string]: unknown }
 
 export interface Snapshot {
   coreState: string;
@@ -75,6 +77,11 @@ export interface DesktopApi {
   retryCoreConnection(): Promise<Snapshot | null>;
   household(action: string, args?: Record<string, unknown>): Promise<unknown>;
   openExternalUrl(url: string): Promise<{ opened: boolean }>;
+  listArtifacts(conversationId?: string): Promise<ArtifactView[]>;
+  loadArtifactPreview(artifactId: string): Promise<{ artifact: ArtifactView; dataUrl: string; fileUrl?: string }>;
+  openArtifactFile(artifactId: string): Promise<{ opened: boolean }>;
+  openArtifactFolder(artifactId: string): Promise<{ opened: boolean }>;
+  openWorkspaceFolder(): Promise<{ opened: boolean }>;
   onEvent(listener: (event: ActivityEvent) => void): () => void;
 }
 

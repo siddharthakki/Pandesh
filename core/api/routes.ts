@@ -18,6 +18,7 @@ import { registerSoftwareRoutes } from './softwareRoutes';
 import { registerAgentRoutes } from './agentRoutes';
 import { registerToolHubRoutes } from './toolHubRoutes';
 import { registerSecondBrainRoutes } from './secondBrainRoutes';
+import { registerProcessRoutes } from './processRoutes';
 import { agentScopeForAttempt, assignAgentRun } from '../domain/agents';
 
 const kandevClient = new KandevClient();
@@ -499,6 +500,8 @@ export function buildRouter(
   registerToolHubRoutes(router, { registry: capabilities, connectors, dataDir: bridge?.dataDir ?? null });
   // --- Second Brain: search, inspector, timeline, graph, correct/forget (core/api/secondBrainRoutes.ts) ---
   registerSecondBrainRoutes(router);
+  // --- Visual Execution: processes Pandesh started, live-verified (core/api/processRoutes.ts) ---
+  if (bridge) registerProcessRoutes(router, { dataDir: bridge.dataDir });
 
   // --- Stories ---
   router.get('/v1/stories', (ctx) => {

@@ -1,6 +1,8 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { api, errorText, onDesktopEvent, type ApprovalCard, type BriefAction, type BriefItem, type Snapshot, type TranscriptMessage } from './bridge';
 import { Icon, Mark, elapsed, timeOf } from './ui';
+import { ActivityAside } from './Activity';
+import { Markdown } from './markdown';
 
 interface Props {
   snapshot: Snapshot | null;
@@ -69,6 +71,8 @@ export function Chat({ snapshot, snapshotError, refresh, narrow, openConversatio
   const [text, setText] = useState('');
   const [busy, setBusy] = useState(false);
   const [deciding, setDeciding] = useState(false);
+  const [closedFor, setClosedFor] = useState<string | null>(null);
+  const [forcedOpen, setForcedOpen] = useState(false);
   const [declined, setDeclined] = useState(false);
   const [routeOpen, setRouteOpen] = useState(false);
   const [brief, setBrief] = useState<BriefItem[] | null>(null);
@@ -147,6 +151,7 @@ export function Chat({ snapshot, snapshotError, refresh, narrow, openConversatio
     setDeclined(false);
     setPendingUser(goal);
     setText('');
+    if (textarea.current) textarea.current.style.height = 'auto';
     try {
       const r = await api.submitTask(goal);
       if (r?.routed && ROUTED[r.routed]) setNotice({ text: ROUTED[r.routed] });
@@ -217,6 +222,10 @@ export function Chat({ snapshot, snapshotError, refresh, narrow, openConversatio
   };
 
   const activities = (snapshot?.workspaceActivities ?? []).filter((a) => a.conversationId === convId);
+  // The aside opens by itself once per task, when that task first shows a viewable step; closed stays closed for that task.
+  const activeTaskKey = [...activities].reverse().find((a) => a.taskId)?.taskId ?? convId ?? 'none';
+  const viewable = activities.some((a) => a.preview || a.state === 'running');
+  const asideOpen = (forcedOpen || (viewable && closedFor !== activeTaskKey)) && activities.length > 0;
   const step = [...activities].reverse().find((a) => a.state === 'running');
   const modelLabel = snapshot?.model ? (snapshot.modelIsAuto ? `${snapshot.model} (auto)` : snapshot.model) : 'model not chosen';
   const isLocal = (snapshot?.provider ?? snapshot?.selectedInferenceProvider ?? 'ollama') === 'ollama';
@@ -255,7 +264,8 @@ export function Chat({ snapshot, snapshotError, refresh, narrow, openConversatio
   );
 
   return (
-    <>
+    <div style={{ flex: '1 1 auto', minHeight: 0, display: 'flex', position: 'relative' }}>
+    <div style={{ flex: '1 1 auto', minWidth: 0, display: 'flex', flexDirection: 'column' }}>
       <div className="topbar">
         <button type="button" className="ghost-icon" title="Chats (Ctrl K)" aria-label="Open chats" onClick={onOpenPalette}><Icon name="chats" size={18} /></button>
         <span className="title">{idle ? 'New chat' : 'Chat'}</span>
@@ -266,6 +276,7 @@ export function Chat({ snapshot, snapshotError, refresh, narrow, openConversatio
           </span>
         )}
         <span className="grow" />
+        {activities.length > 0 && !asideOpen && <button type="button" className="btn small" title="Show what Pandesh did in this chat" onClick={() => { setClosedFor(null); setForcedOpen(true); }}>Workspace · {activities.length}</button>}
         <button type="button" className="ghost-icon" title="New chat" aria-label="New chat" onClick={() => { void api.newConversation().then(() => { setMessages([]); setLoadedFor(null); refresh(); }); }}><Icon name="plus" size={18} /></button>
         <button type="button" className="search-btn" title="Search everything (Ctrl K)" onClick={onOpenPalette}><Icon name="search" size={16} /><span>Search</span>{!narrow && <kbd>Ctrl K</kbd>}</button>
       </div>
@@ -320,7 +331,7 @@ export function Chat({ snapshot, snapshotError, refresh, narrow, openConversatio
                   <div key={m.id} className="msg-assistant">
                     <Mark />
                     <div className="content">
-                      <p className="text">{m.content}</p>
+                      <Markdown text={m.content} />
                       <div className="meta">{[m.model, timeOf(m.createdAt)].filter(Boolean).join(' · ')}</div>
                     </div>
                   </div>
@@ -378,7 +389,9 @@ export function Chat({ snapshot, snapshotError, refresh, narrow, openConversatio
         </div>
         <div className="spacer-v" />
       </div>
-    </>
+    </div>
+    {asideOpen && <ActivityAside activities={activities} conversationId={convId} narrow={narrow} onClose={() => { setClosedFor(activeTaskKey); setForcedOpen(false); }} />}
+    </div>
   );
 }
 
