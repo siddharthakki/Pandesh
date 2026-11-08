@@ -19,7 +19,7 @@ import {
   resolveBuildIdentity,
   type DesktopBuildIdentity,
 } from './host/desktopBuildIdentity';
-import { readHostPreferences, writeHostPreferences } from './host/desktopHostPreferences';
+import { readHostPreferences, resolveUiVariant, writeHostPreferences } from './host/desktopHostPreferences';
 import { DESKTOP_CHANNELS, type DesktopAppMetadata, type DesktopUpdateStartResult, type DesktopUpdateStatus } from './ipc';
 import {
   acknowledgeUpdateResult, inspectPackage, launchUpdater, quiesceCore, readCoreReadiness, readUpdateResult,
@@ -669,8 +669,15 @@ async function ensureMainWindow(): Promise<BrowserWindow> {
     callback(permission === 'media');
   });
   window.webContents.session.setPermissionCheckHandler((_wc, permission) => permission === 'media');
-  await window.loadFile(path.join(__dirname, '..', 'renderer', 'index.html'));
+  await window.loadFile(rendererEntry());
   return window;
+}
+
+/** Classic renderer unless the Phase 2 UI is selected (PANDESH_UI_V2 or the saved preference). */
+function rendererEntry(): string {
+  return resolveUiVariant(prefs) === 'v2'
+    ? path.join(__dirname, '..', 'renderer', 'v2', 'index.html')
+    : path.join(__dirname, '..', 'renderer', 'index.html');
 }
 
 async function createWindow(): Promise<void> {
@@ -1582,6 +1589,17 @@ function registerIpc(): void {
   });
   ipcMain.handle(DESKTOP_CHANNELS.quitApp, () => {
     void shutdownAndQuit();
+  });
+  ipcMain.handle(DESKTOP_CHANNELS.getUiVariant, () => ({
+    variant: resolveUiVariant(prefs),
+    forcedByEnv: Boolean(process.env.PANDESH_UI_V2?.trim()),
+  }));
+  ipcMain.handle(DESKTOP_CHANNELS.setUiVariant, (event, variant: unknown) => {
+    prefs = writeHostPreferences(dataDir, { uiVariant: variant === 'v2' ? 'v2' : 'classic' });
+    // Reload only the window that asked, after the reply is delivered.
+    const target = BrowserWindow.fromWebContents(event.sender);
+    if (target && !target.isDestroyed()) setTimeout(() => { void target.loadFile(rendererEntry()); }, 50);
+    return { variant: resolveUiVariant(prefs), forcedByEnv: Boolean(process.env.PANDESH_UI_V2?.trim()) };
   });
   ipcMain.handle(DESKTOP_CHANNELS.getUpdateStatus, (): DesktopUpdateStatus => {
     const identity = currentBuildIdentity();

@@ -164,6 +164,9 @@ export const DESKTOP_CHANNELS = {
   closePopoutWorkbench: 'desktop:closePopoutWorkbench',
   copyToClipboard: 'desktop:copyToClipboard',
   quitApp: 'desktop:quitApp',
+  /** Phase 2: which renderer is loaded (`classic` | `v2`) and switching between them. */
+  getUiVariant: 'desktop:getUiVariant',
+  setUiVariant: 'desktop:setUiVariant',
   /** Update & Restart: verify a user-chosen local package, make Core safe to stop, then hand over to the updater. */
   startUpdate: 'desktop:startUpdate',
   getUpdateStatus: 'desktop:getUpdateStatus',

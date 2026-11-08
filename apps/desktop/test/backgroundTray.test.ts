@@ -26,6 +26,7 @@ describe('desktop host preferences', () => {
       wakeEnabled: false,
       wakeMuted: false,
       ttsEngine: 'piper',
+      uiVariant: 'classic',
     });
     const next = writeHostPreferences(dir, {
       firstCloseExplained: true,
