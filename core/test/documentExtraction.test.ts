@@ -62,3 +62,24 @@ describe('local document extraction (pdfjs-dist / mammoth)', () => {
     expect(result).toBeNull();
   });
 });
+
+// Security floor for the document parsers bundled into Core (core.js runs as
+// Electron-as-Node, outside the renderer sandbox). A lockfile change must
+// never quietly resolve below a patched release.
+describe('bundled document-parser security floor', () => {
+  function installedVersion(pkg: string): number[] {
+    const manifest = path.join(__dirname, '..', '..', 'node_modules', ...pkg.split('/'), 'package.json');
+    const version = JSON.parse(fs.readFileSync(manifest, 'utf8')).version as string;
+    return version.split('-')[0].split('.').map(Number);
+  }
+  function atLeast(actual: number[], floor: number[]): boolean {
+    for (let i = 0; i < floor.length; i++) {
+      if ((actual[i] ?? 0) !== floor[i]) return (actual[i] ?? 0) > floor[i];
+    }
+    return true;
+  }
+
+  it('pdfjs-dist is at or above 6.2.108 (GHSA-hq66-cqwq-w95j: JS execution from a malicious PDF)', () => {
+    expect(atLeast(installedVersion('pdfjs-dist'), [6, 2, 108])).toBe(true);
+  });
+});
