@@ -3,6 +3,7 @@ import { answerTaskStatusQuestion, isTaskStatusQuestion, listPriorTurns, renderT
 import { checkPublicQuery, derivePublicQuery, explicitlyRequestsWebSearch, referencesLocalContent } from './publicQueryGuard';
 import { checkStatedTotals, evaluateExpression } from './arithmeticCheck';
 import { enforceDeclineWording } from './declineWording';
+import { csvShapeProblem } from './csvShape';
 import { renderDelegationReport, untrackedPaths, verifyDelegation } from './delegationVerification';
 import { FolderReadLedger, requestedOutputFiles, requiresSourceEvidence, requiresWholeFolder, unreadFilesNotice } from './folderCompleteness';
 import * as cp from 'node:child_process';
@@ -2943,6 +2944,10 @@ export class PiAgentEngine implements EngineAdapter {
             return { content: [{ type: 'text', text }], isError: true };
           };
           if (typeof args.content !== 'string') return refuse('Error: write_file needs the full text content to write. Nothing was written.', 'no text content');
+          if (/\.csv$/i.test(full)) {
+            const csvProblem = csvShapeProblem(args.content);
+            if (csvProblem) return refuse(`NOT WRITTEN: ${path.basename(full)} would not open as one table: ${csvProblem}. Write one header row and give every row the same columns, with no separator, blank or title lines (put a total on its own row with the same columns). Nothing was written; call write_file again with the corrected content.`, 'csv not one table');
+          }
           // Audit C1: a note that answers a question about the folder's files may only be written once every listed
           // document has been read; otherwise it is built on part of the evidence.
           const held = await evidenceGate(full, 'write_file');
@@ -4056,7 +4061,7 @@ ${filesPromptSection}${webResearchPromptSection}${wishesPromptSection}${emailCal
     }
     // Audit D11: totals are computed by the calculate tool, not by the model.
     if (availableToolNames.has('calculate')) {
-      systemPrompt += '\n\nNUMBERS: for every total, sum, difference, price for a quantity (including delivery fees) or percentage, call calculate with the exact expression and report its result. Never add or multiply numbers yourself, and include every fee that applies instead of saying "if applicable".';
+      systemPrompt += '\n\nNUMBERS: for every total, sum, difference, price for a quantity (including delivery fees) or percentage, call calculate with the exact expression and report its result. Never add or multiply numbers yourself, and include every fee that applies instead of saying "if applicable". When an amount could be counted in more than one way (for example a charge that might be passed on to a customer or paid by the user), choose one, and say in the reply in one sentence which way you counted it, so the totals can be checked.';
     }
     // Earlier tasks' real outcomes (cancelled / failed / interrupted), so the model never presents them as pending (D4).
     const taskHistorySection = renderTaskHistorySection(priorTurns);
