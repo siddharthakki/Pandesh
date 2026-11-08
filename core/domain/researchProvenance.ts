@@ -34,6 +34,29 @@ export interface ResearchProvenance {
   sources: ResearchSourceInput[];
 }
 
+/**
+ * Credential shapes that public pages can carry by mistake, on top of the shared `redactSecrets` set (M9 audit: the
+ * shared set redacted 1 of 7 representative synthetic secrets — GitHub, AWS, Slack, JWT, PEM keys and token query
+ * parameters were stored as-is).
+ */
+const RESEARCH_SECRET_SHAPES: Array<[RegExp, string]> = [
+  [/-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----/g, '[redacted private key]'],
+  [/\b(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9]{20,}\b/g, '[redacted]'],
+  [/\bgithub_pat_[A-Za-z0-9_]{20,}\b/g, '[redacted]'],
+  [/\b(?:AKIA|ASIA)[0-9A-Z]{16}\b/g, '[redacted]'],
+  [/\bxox[abprs]-[A-Za-z0-9-]{10,}\b/g, '[redacted]'],
+  [/\beyJ[A-Za-z0-9_-]{8,}\.eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\b/g, '[redacted]'],
+  // ?access_token=…, &api_key=…, &sig=… — keep the parameter name, drop the value
+  [/([?&;](?:access_token|refresh_token|id_token|token|api[_-]?key|apikey|key|secret|client_secret|password|passwd|pwd|auth|signature|sig|session|sessionid|code)=)[^&#\s"'<>]+/gi, '$1[redacted]'],
+  [/\b((?:password|passwd|pwd|secret|api[_-]?key|access[_-]?token)\s*[:=]\s*)["']?[^\s"'<>&,;]{6,}/gi, '$1[redacted]'],
+];
+
+export function redactResearchText(text: string): string {
+  let out = redactSecrets(String(text ?? ''));
+  for (const [shape, replacement] of RESEARCH_SECRET_SHAPES) out = out.replace(shape, replacement);
+  return out;
+}
+
 export function retentionDays(env: NodeJS.ProcessEnv = process.env): number {
   const raw = Number(env.KARKEDIKHA_RESEARCH_RETENTION_DAYS);
   return Number.isFinite(raw) && raw >= 0 && raw <= 365 ? raw : DEFAULT_SOURCE_RETENTION_DAYS;
@@ -46,9 +69,9 @@ function safeUrl(url: string): string {
     u.username = '';
     u.password = '';
     u.hash = '';
-    return redactSecrets(u.toString());
+    return redactResearchText(u.toString());
   } catch {
-    return redactSecrets(String(url)).slice(0, 2_000);
+    return redactResearchText(String(url)).slice(0, 2_000);
   }
 }
 
@@ -67,15 +90,15 @@ export function recordResearchProvenance(db: CoreDatabase, input: {
   for (const source of input.provenance.sources) {
     const full = String(source.fullText ?? '');
     const sha = crypto.createHash('sha256').update(full, 'utf8').digest('hex');
-    const stored = redactSecrets(full.slice(0, MAX_STORED_SOURCE_CHARS));
+    const stored = redactResearchText(full.slice(0, MAX_STORED_SOURCE_CHARS));
     db.run(
       `INSERT INTO research_turn_sources (id, attemptId, conversationId, invocationId, toolName, query, marker, searchUrl, finalUrl, title,
          contentSha256, contentChars, excerptChars, content, retrievedAt, contentExpiresAt)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         `rsrc_${crypto.randomUUID()}`, input.attemptId, input.conversationId ?? null, input.invocationId ?? null, input.toolName,
-        redactSecrets(input.provenance.query).slice(0, 500), source.marker ?? null, source.searchUrl ? safeUrl(source.searchUrl) : null,
-        safeUrl(source.finalUrl), source.title ? redactSecrets(source.title).slice(0, 500) : null,
+        redactResearchText(input.provenance.query).slice(0, 500), source.marker ?? null, source.searchUrl ? safeUrl(source.searchUrl) : null,
+        safeUrl(source.finalUrl), source.title ? redactResearchText(source.title).slice(0, 500) : null,
         sha, full.length, source.excerptChars, stored, input.provenance.retrievedAt || now.toISOString(), expires,
       ],
     );

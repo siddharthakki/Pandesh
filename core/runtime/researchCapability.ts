@@ -16,6 +16,7 @@
  * requires it" — reusing the same mutation-approval gate as an external
  * write, per ADR-7, rather than inventing a second approval axis.
  */
+import { redactResearchText } from '../domain/researchProvenance';
 import type { ModelToolDefinition, ModelToolCall } from './modelBackend';
 import type { ToolExecutionContext, ToolExecutionResult } from './toolRunner';
 import type { CapabilityHealth, GovernedCapabilityAdapter } from './governedCapability';
@@ -111,7 +112,9 @@ function createResearchCapabilityAdapterInternal(options: ResearchCapabilityOpti
       if (!res.ok) throw new Error(`source_http_${res.status}`);
       const raw = await boundedText(res);
       const fullText = extractReadableText(raw);
-      const text = fullText.slice(0, MAX_EVIDENCE_CHARS);
+      // M9 audit: the excerpt goes to the model and into tool evidence, so it is redacted here; the full text is
+      // hashed as fetched and redacted where it is stored (researchProvenance).
+      const text = redactResearchText(fullText.slice(0, MAX_EVIDENCE_CHARS));
       if (text.length < 40) throw new Error('insufficient_readable_text');
       return { finalUrl: url.toString(), text, fullText };
     }

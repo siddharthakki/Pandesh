@@ -69,10 +69,47 @@ export function urlsIn(text: string): string[] {
 const norm = (s: string) => ` ${s.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, ' ').trim()} `;
 const normUrl = (u: string) => u.toLowerCase().replace(/^https?:\/\//, '').replace(/^www\./, '').replace(/[#?].*$/, '').replace(/\/+$/, '');
 
-export interface GroundingResult { names: string[]; urls: string[] }
+export interface GroundingResult { names: string[]; urls: string[]; claims?: string[] }
 
-/** Names and URLs in the reply that appear nowhere in the corpus (sources, files read, the user's words). */
-export function ungroundedClaims(reply: string, corpus: string): GroundingResult {
+const NUMBER = /(?:[€$£]\s?\d[\d.,]*\d|\d[\d.,]*\d\s?(?:%|€|eur\b|euros?\b|k\b)|\b\d[\d.,]*\d\b)/gi;
+const digitsOf = (s: string) => s.replace(/[^\d]/g, '');
+const isYear = (d: string) => /^(?:19|20)\d\d$/.test(d);
+const SUPPORT_WINDOW = 1_500;
+
+/**
+ * Figures (amounts, percentages, counts) stated in a sentence about a named organisation must appear near that
+ * organisation in a retrieved source — a name being somewhere in a page does not support every claim made about it
+ * (M9 audit). Organisations the sources never mention are left to the name check.
+ */
+export function unsupportedFigures(reply: string, sourceTexts: readonly string[]): string[] {
+  const orgs = namedOrganisations(reply);
+  if (orgs.length === 0) return [];
+  const lowerSources = sourceTexts.map((s) => s.toLowerCase());
+  const out: string[] = [];
+  for (const sentence of clean(reply).split(/(?<=[.!?])\s+|\n+/)) {
+    for (const org of orgs) {
+      const needle = org.toLowerCase();
+      if (!sentence.toLowerCase().includes(needle)) continue;
+      const windows: string[] = [];
+      for (const src of lowerSources) {
+        for (let i = src.indexOf(needle); i >= 0 && windows.length < 50; i = src.indexOf(needle, i + needle.length)) {
+          windows.push(src.slice(Math.max(0, i - SUPPORT_WINDOW), i + needle.length + SUPPORT_WINDOW));
+        }
+      }
+      if (windows.length === 0) continue;
+      const near = new Set(windows.flatMap((w) => [...w.matchAll(NUMBER)].map((m) => digitsOf(m[0]))));
+      for (const m of sentence.matchAll(NUMBER)) {
+        const d = digitsOf(m[0]);
+        if (d.length < 2 || isYear(d) || near.has(d)) continue;
+        out.push(`${org}: ${m[0].trim()}`);
+      }
+    }
+  }
+  return [...new Set(out)];
+}
+
+/** Names and URLs in the reply that appear nowhere in the corpus (sources, files read, the user's words); with the source texts, also figures about a named organisation that no source states near it. */
+export function ungroundedClaims(reply: string, corpus: string, sourceTexts?: readonly string[]): GroundingResult {
   const corpusNorm = norm(corpus);
   const corpusUrls = new Set(urlsIn(corpus).map(normUrl));
   const corpusLower = corpus.toLowerCase();
@@ -81,11 +118,15 @@ export function ungroundedClaims(reply: string, corpus: string): GroundingResult
     const n = normUrl(u);
     return !corpusUrls.has(n) && !corpusLower.includes(n);
   });
-  return { names, urls };
+  return { names, urls, ...(sourceTexts ? { claims: unsupportedFigures(reply, sourceTexts) } : {}) };
+}
+
+export function problemCount(p: GroundingResult): number {
+  return p.names.length + p.urls.length + (p.claims?.length ?? 0);
 }
 
 export function buildGroundingRewritePrompt(request: string, reply: string, problems: GroundingResult, sources: Array<{ marker: string | null; title: string | null; url: string; text: string }>): string {
-  const listed = [...problems.names, ...problems.urls].map((x) => `- ${x}`).join('\n');
+  const listed = [...problems.names, ...problems.urls, ...(problems.claims ?? []).map((c) => `${c} (this figure is not stated near that organisation in any source)`)].map((x) => `- ${x}`).join('\n');
   let budget = 24_000;
   const blocks: string[] = [];
   for (const s of sources) {

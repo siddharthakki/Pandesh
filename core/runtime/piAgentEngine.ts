@@ -6,7 +6,7 @@ import { enforceDeclineWording } from './declineWording';
 import { csvShapeProblem } from './csvShape';
 import { describeRequestTools, groupOfTool, hiddenGroups, offerActiveTools, selectChatTools, toolsInGroups } from './chatToolSelection';
 import { recordResearchProvenance, researchSourcesForTurn } from '../domain/researchProvenance';
-import { buildGroundingRewritePrompt, ungroundedClaims } from './researchGrounding';
+import { buildGroundingRewritePrompt, problemCount, ungroundedClaims } from './researchGrounding';
 import { correctWeekdayDates } from './dateConsistency';
 import { asksForSingleChoice, SINGLE_CHOICE_RULE } from './choiceConstraint';
 import { renderDelegationReport, untrackedPaths, verifyDelegation } from './delegationVerification';
@@ -3569,6 +3569,19 @@ ${String(args.objective ?? '').slice(0, 600)}`,
       if (!bridge) return connectorText('That capability is not available in this build.', true);
       // Audit D10: a relative file path means "in the folder the person selected", never the install folder.
       const args = resolveWorkspaceRelativeArgs(rawArgs, selectedWorkspace || null);
+      // Privacy boundary (audit D2) for the governed research tool too (M9 audit: only web_research was checked, and
+      // the model used governed_research in every M9 run): only a short public query may leave the machine.
+      if (toolName === 'governed_research') {
+        const query = String(args.query ?? '').trim();
+        const privateTexts = toolCallsRecorded
+          .filter((t) => /read|document|ocr|list_directory|gmail_|memory_recall|household/i.test(t.tool) && t.status === 'completed')
+          .map((t) => extractToolResultText(t.result));
+        const queryCheck = checkPublicQuery(query, { userMessage: ctx.currentMessage ?? requestText, privateTexts });
+        if (!queryCheck.ok) {
+          safeRecordRuntimeEvent(db, broadcaster, attemptId, 'web_research_query_refused', { tool: toolName, reason: queryCheck.reason, queryChars: query.length }, actor);
+          return connectorText(`NOT SEARCHED: ${queryCheck.reason}. Nothing was sent off this computer. If public research is needed, call governed_research again with a short public query (topic, role, place; at most 120 characters) that contains no personal details and no text from the user's files.`, true);
+        }
+      }
       // A PDF written from inline text is a write like any other: its source evidence must have been read (M4).
       if (toolName === 'export_document_pdf' && typeof args.markdown === 'string') {
         const held = await evidenceGate(typeof args.output === 'string' ? args.output : null, 'export_document_pdf');
@@ -5096,9 +5109,10 @@ ${filesPromptSection}${webResearchPromptSection}${wishesPromptSection}${emailCal
             ...sources.map((s) => `${s.title ?? ''} ${s.finalUrl} ${s.searchUrl ?? ''} ${s.content ?? ''}`),
             ...toolCallsRecorded.filter((t) => t.status === 'completed').map((t) => `${JSON.stringify(t.args ?? '')} ${extractToolResultText(t.result)}`),
           ].join('\n');
-          let problems = ungroundedClaims(finalReply, corpus);
-          if (problems.names.length + problems.urls.length > 0) {
-            safeRecordRuntimeEvent(db, broadcaster, attemptId, 'research_claims_unverified', { names: problems.names, urls: problems.urls, sources: sources.length }, actor);
+          const sourceTexts = sources.map((s) => s.content ?? '');
+          let problems = ungroundedClaims(finalReply, corpus, sourceTexts);
+          if (problemCount(problems) > 0) {
+            safeRecordRuntimeEvent(db, broadcaster, attemptId, 'research_claims_unverified', { names: problems.names, urls: problems.urls, claims: problems.claims, sources: sources.length }, actor);
             const rewriteStream = models.streamSimple(
               models.getModel('ollama', selectedModel),
               {
@@ -5111,15 +5125,15 @@ ${filesPromptSection}${webResearchPromptSection}${wishesPromptSection}${emailCal
             const rewriteMsg = await rewriteStream.result();
             const rewritten = (rewriteMsg.content || []).filter((c: any) => c.type === 'text').map((c: any) => c.text).join('\n').trim();
             if (rewritten.length >= 80 && !isTruncationArtifact(rewritten)) {
-              const after = ungroundedClaims(rewritten, corpus);
-              if (after.names.length + after.urls.length < problems.names.length + problems.urls.length) {
+              const after = ungroundedClaims(rewritten, corpus, sourceTexts);
+              if (problemCount(after) < problemCount(problems)) {
                 finalReply = rewritten;
                 problems = after;
                 safeRecordRuntimeEvent(db, broadcaster, attemptId, 'research_answer_regrounded', { remainingNames: after.names, remainingUrls: after.urls }, actor);
               }
             }
-            if (problems.names.length + problems.urls.length > 0) {
-              finalReply = `${finalReply.trimEnd()}\n\nNot found in the sources retrieved for this answer, so treat as unverified: ${[...problems.names, ...problems.urls].join(', ')}.`;
+            if (problemCount(problems) > 0) {
+              finalReply = `${finalReply.trimEnd()}\n\nNot found in the sources retrieved for this answer, so treat as unverified: ${[...problems.names, ...problems.urls, ...(problems.claims ?? [])].join(', ')}.`;
             }
           }
         } catch (err: any) {
