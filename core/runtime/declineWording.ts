@@ -7,7 +7,9 @@
 
 const DECLINE_RESULT = /\b(?:the user|you)\s+(?:declined|rejected|did not approve|didn't approve)\b/i;
 const ALREADY_SAYS_DECLINED = /\byou\s+(?:declined|rejected|did not approve|didn't approve|chose not to)\b/i;
-const MISATTRIBUTION = /\b(?:not\s+(?:been\s+)?authori[sz]ed|unauthori[sz]ed|requires?\s+(?:specific\s+|special\s+|additional\s+|explicit\s+)?permission|permission\s+(?:was\s+)?denied|protected\s+(?:configuration|config|area|file|system)|system[- ]level\s+protection|security\s+(?:restriction|polic(?:y|ies))|blocked\s+by\s+(?:the\s+)?system)\b/i;
+// After a decline, any sentence that blames protection/authorization or offers a way around it goes (re-run F3:
+// "Since this file is marked as protected, I cannot modify it directly. Would you like me to try a different approach").
+const MISATTRIBUTION = /\b(?:not\s+(?:been\s+)?authori[sz]ed|unauthori[sz]ed|requires?\s+(?:specific\s+|special\s+|additional\s+|explicit\s+)?permission|permission\s+(?:was\s+)?denied|protected|protection|security\s+(?:restriction|polic(?:y|ies))|blocked\s+by\s+(?:the\s+)?system|cannot\s+modify\s+it\s+directly|different\s+approach|work\s*around|manually)\b/i;
 
 export interface DeclineCheck { text: string; corrected: boolean }
 

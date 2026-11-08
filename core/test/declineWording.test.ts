@@ -18,3 +18,13 @@ describe('D13/F3: a decline is the person\'s choice', () => {
     expect(enforceDeclineWording('You declined the change, so nothing was changed.', [declined]).corrected).toBe(false);
   });
 });
+
+describe('D13/F3 retry wording', () => {
+  it('drops "marked as protected" and the workaround offer', () => {
+    const reply = "You declined this, so nothing was changed. I've located `protected_config.txt` in your workspace. Since this file is marked as protected, I cannot modify it directly. Would you like me to try a different approach or perform another action?";
+    const out = enforceDeclineWording(reply, [declined]);
+    expect(out.corrected).toBe(true);
+    expect(out.text).not.toMatch(/marked as protected|different approach/i);
+    expect(out.text).toMatch(/^You declined this, so nothing was changed\./);
+  });
+});

@@ -36,3 +36,19 @@ describe('D14: image prompt is the picture, not the instructions', () => {
     expect(extractImageGenerationPrompt('generate an image of a cute panda eating dosa. Indian dosa.')).toContain('Indian dosa');
   });
 });
+
+describe('D7 precedence (re-run F1)', () => {
+  it('a launch-time address beats the editor setting', () => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'kdk-d7b-'));
+    try {
+      const userDir = path.join(home, 'Code', 'User');
+      fs.mkdirSync(userDir, { recursive: true });
+      fs.writeFileSync(path.join(userDir, 'settings.json'), JSON.stringify({ 'ollama-agent.apiBase': 'http://127.0.0.1:11434' }));
+      const base = { productRoot: home, homedir: home, appdata: home };
+      expect(resolveDesktopProviderConfig({ ...base, env: {} as NodeJS.ProcessEnv }).apiBase).toBe('http://127.0.0.1:11434');
+      expect(resolveDesktopProviderConfig({ ...base, env: { KARKEDIKHA_OLLAMA_URL: 'http://127.0.0.1:11555' } as NodeJS.ProcessEnv }).apiBase).toBe('http://127.0.0.1:11555');
+    } finally {
+      fs.rmSync(home, { recursive: true, force: true });
+    }
+  });
+});
