@@ -110,4 +110,9 @@ Read-only system inspection (T1), honest "not found" answers (T6), the safety bo
 - `screens/`: screenshots per scenario and approval card. `t02-updates.png` lists installed software; review before sharing.
 - `h.py`, `send.mjs`: the read-only verifier and the composer driver.
 
-**Unexplained event:** one Firefly "Remember …" send at 23:10:59Z was not issued by any QA harness command. It produced one of the four duplicate notes.
+**Concurrent-session event (explained):** a forked Claude session briefly drove the same alpha app and re-sent the Test 5 prompt through `send.mjs`. It reports doing this at about 23:14Z, but the matching duplicate note is timestamped 23:10:59Z. That send went through the host note router, so it created no Core request, but it did create **one of the four duplicate notes** (23:10:59Z). The same session overwrote `t5.since` and appended "T5 start(resend)", "T5 end" and "T6 end" lines to `times.log`; those entries are not QA's.
+
+Effect on the evidence:
+- **Test 5:** the verdict is unchanged. Three of the notes came from QA (two UI sends and one bridge call), one from the forked session.
+- **Test 6:** QA's own `t6.since` and attempt `att_135e3d69` are unaffected, and all four notes were present either way.
+- **No other changes:** the forked session made no other changes to code, the profile or files.
