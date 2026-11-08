@@ -14,7 +14,7 @@ const LEADING_NAME = /^((?:[A-Z0-9][\w&.'’-]*|[a-z]+\d\w*)(?:\s+(?:[A-Z0-9][\w
 const NOT_A_NAME = new Set(['the', 'other', 'others', 'many', 'more', 'similar', 'various', 'several', 'some', 'most', 'all', 'these', 'those', 'smaller', 'larger', 'local', 'german', 'english', 'remote', 'i', 'you', 'we', 'they']);
 
 function clean(text: string): string {
-  return text.replace(/\*\*|__|`/g, '');
+  return text.replace(/\*+|__|`/g, '');
 }
 
 function namesFromList(list: string): string[] {
@@ -25,14 +25,36 @@ function namesFromList(list: string): string[] {
     if (!m) continue;
     const name = m[1].replace(/[.'’-]+$/, '').trim();
     if (name.length < 2 || NOT_A_NAME.has(name.toLowerCase())) continue;
+    // A category ("SaaS Platforms", "Logistics Firms", "Tech Infrastructure") is not a named organisation.
+    if (/\b(?:firms?|platforms?|compan(?:y|ies)|startups?|infrastructure|tech|technology|sectors?|industr(?:y|ies)|roles?|agencies|providers?|ecosystems?|space|types?|hubs?|teams?)$/i.test(name)) continue;
     names.push(name);
   }
   return names;
 }
 
+const ORG_HEADER = /\b(?:company|companies|employer|employers|organi[sz]ation|firm|business|vendor|supplier|provider|brand)\b/i;
+
+/** Cells of markdown-table columns headed Company / Employer / … (final-run M9: "| **Deliveroo / Lieferando** | …"). */
+function organisationTableCells(reply: string): string[] {
+  const cells: string[] = [];
+  const lines = reply.split(/\r?\n/);
+  for (let i = 0; i + 1 < lines.length; i += 1) {
+    if (!/^\s*\|.*\|\s*$/.test(lines[i]) || !/^\s*\|[\s:|-]+\|\s*$/.test(lines[i + 1])) continue;
+    const split = (line: string) => line.trim().replace(/^\||\|$/g, '').split('|').map((c) => c.trim());
+    const cols = split(lines[i]).map((h, idx) => (ORG_HEADER.test(h) ? idx : -1)).filter((idx) => idx >= 0);
+    if (cols.length === 0) continue;
+    for (let j = i + 2; j < lines.length && /^\s*\|.*\|\s*$/.test(lines[j]); j += 1) {
+      const row = split(lines[j]);
+      for (const c of cols) if (row[c]) cells.push(clean(row[c]));
+    }
+  }
+  return cells;
+}
+
 /** Organisation names the reply introduces as companies/employers. */
 export function namedOrganisations(reply: string): string[] {
   const found = new Set<string>();
+  for (const cell of organisationTableCells(reply)) for (const n of namesFromList(cell)) found.add(n);
   for (const m of reply.matchAll(BOLD_AFTER_PREP)) for (const n of namesFromList(m[1])) found.add(n);
   const text = clean(reply);
   for (const m of text.matchAll(ORG_LIST)) for (const n of namesFromList(m[1])) found.add(n);

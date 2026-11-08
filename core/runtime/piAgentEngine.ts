@@ -7,6 +7,7 @@ import { csvShapeProblem } from './csvShape';
 import { describeRequestTools, groupOfTool, hiddenGroups, offerActiveTools, selectChatTools, toolsInGroups } from './chatToolSelection';
 import { recordResearchProvenance, researchSourcesForTurn } from '../domain/researchProvenance';
 import { buildGroundingRewritePrompt, ungroundedClaims } from './researchGrounding';
+import { correctWeekdayDates } from './dateConsistency';
 import { renderDelegationReport, untrackedPaths, verifyDelegation } from './delegationVerification';
 import { FolderReadLedger, requestedOutputFiles, requiresSourceEvidence, requiresWholeFolder, unreadFilesNotice } from './folderCompleteness';
 import * as cp from 'node:child_process';
@@ -5127,6 +5128,12 @@ ${filesPromptSection}${webResearchPromptSection}${wishesPromptSection}${emailCal
       if (totals.corrections.length) {
         safeRecordRuntimeEvent(db, broadcaster, attemptId, 'stated_total_corrected', { corrections: totals.corrections }, actor);
         finalReply = totals.text;
+      }
+      // Re-run C2: a weekday and date that do not belong together are corrected from the date the tools reported.
+      const dates = correctWeekdayDates(finalReply, toolCallsRecorded.filter((t) => t.status === 'completed').map((t) => extractToolResultText(t.result)));
+      if (dates.corrections.length) {
+        finalReply = dates.text;
+        safeRecordRuntimeEvent(db, broadcaster, attemptId, 'weekday_date_corrected', { corrections: dates.corrections }, actor);
       }
       // Audit D13/F3: a declined approval is reported as the person's choice, never as a protection rule.
       const declineResults = toolCallsRecorded.filter((t) => t.status !== 'completed').map((t) => {

@@ -30,3 +30,20 @@ describe('ungroundedClaims', () => {
     expect(urlsIn('[link](https://a.de/x).')).toEqual(['https://a.de/x']);
   });
 });
+
+describe('company tables (final-run M9)', () => {
+  const reply = [
+    '| Company | Role Type | Location | Why it fits |',
+    '| :--- | :--- | :--- | :--- |',
+    '| **Deliveroo / Lieferando** | Product Manager (Enablement Platform) | Berlin | High relevance. |',
+    '| **Quest/Logistics Firms** | Senior Product Manager | Various | Match. |',
+    '| **SaaS Platforms** | Senior Product Manager | Berlin/Remote | Companies like *n8n* or *Bitpanda* are hiring. |',
+  ].join('\n');
+  it('reads the company column and skips categories', () => {
+    expect(namedOrganisations(reply).sort()).toEqual(['Bitpanda', 'Deliveroo', 'Lieferando', 'Quest', 'n8n'].sort());
+  });
+  it('flags the company no source mentions', () => {
+    const corpus = 'Product Manager Lieferando Berlin ... n8n ... Bitpanda ... Quest Analytics';
+    expect(ungroundedClaims(reply, corpus).names).toEqual(['Deliveroo']);
+  });
+});
