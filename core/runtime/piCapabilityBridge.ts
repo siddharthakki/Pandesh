@@ -26,7 +26,11 @@ import { buildCapabilityBrief } from './capabilityBrief';
 import type { CapabilityInventory } from './capabilityInventory';
 
 export interface PiCapabilityBridge {
-  definitions: Array<{ name: string; description: string; parameters: any; consequential: boolean }>;
+  /**
+   * `deferred` definitions belong to chat capabilities the request did not point at: they are executable, but the
+   * chat engine offers them only when the model asks for their group (request_tools).
+   */
+  definitions: Array<{ name: string; description: string; parameters: any; consequential: boolean; capabilityId?: string; deferred?: boolean }>;
   dispatch(toolName: string, args: Record<string, unknown>): Promise<CapabilityDispatchResult>;
   /**
    * The honest, current capability brief: what this build can really do and
@@ -187,7 +191,15 @@ export interface BuildPiCapabilityBridgeOptions {
    * diverge.
    */
   capabilityIds?: readonly string[];
+  /**
+   * Capabilities the request did not select that the chat engine may add during the turn. Defaults, for a
+   * request-selected set, to the rest of the chat set; an explicit `capabilityIds` defers nothing.
+   */
+  deferredCapabilityIds?: readonly string[];
 }
+
+/** Chat capabilities the intent selection can add beyond the bounded set. */
+export const CHAT_EXPANDABLE_CAPABILITY_IDS = [...CHAT_CAPABILITY_IDS, 'system-management', 'port-management', 'computer-use', 'pc-organizer'] as const;
 
 /**
  * Builds the bridge, or returns undefined when this build's registry owns none
@@ -197,11 +209,15 @@ export function buildPiCapabilityBridge(options: BuildPiCapabilityBridgeOptions)
   const { registry } = options;
   const capabilityIds = options.capabilityIds ?? (options.requestText ? selectCapabilitiesForIntent(options.requestText) : CHAT_CAPABILITY_IDS);
   const allowed = new Set<string>(capabilityIds);
+  const deferredIds = new Set<string>(
+    (options.deferredCapabilityIds ?? (options.capabilityIds || !options.requestText ? [] : CHAT_EXPANDABLE_CAPABILITY_IDS))
+      .filter((id) => !allowed.has(id)),
+  );
   const excluded = new Set(options.excludeToolNames ?? []);
   const definitions = registry.definitions().filter((def) => {
     if (excluded.has(def.name)) return false;
     const owner = registry.classify(def.name)?.capabilityId;
-    return owner !== undefined && allowed.has(owner);
+    return owner !== undefined && (allowed.has(owner) || deferredIds.has(owner));
   });
   if (definitions.length === 0) return undefined;
   const brief = buildCapabilityBrief({
@@ -210,12 +226,17 @@ export function buildPiCapabilityBridge(options: BuildPiCapabilityBridgeOptions)
     inventory: options.inventory ?? null,
   });
   return {
-    definitions: definitions.map((def) => ({
-      name: def.name,
-      description: def.description,
-      parameters: def.parameters,
-      consequential: registry.classify(def.name)?.risk === 'consequential',
-    })),
+    definitions: definitions.map((def) => {
+      const capabilityId = registry.classify(def.name)?.capabilityId;
+      return {
+        name: def.name,
+        description: def.description,
+        parameters: def.parameters,
+        consequential: registry.classify(def.name)?.risk === 'consequential',
+        ...(capabilityId ? { capabilityId } : {}),
+        ...(capabilityId && deferredIds.has(capabilityId) ? { deferred: true } : {}),
+      };
+    }),
     brief: brief.text,
     dispatch: (toolName, args) => dispatchCapability(options.db, registry, {
       correlationId: options.correlationId,

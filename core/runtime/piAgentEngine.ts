@@ -4,6 +4,7 @@ import { checkPublicQuery, derivePublicQuery, explicitlyRequestsWebSearch, refer
 import { checkStatedTotals, evaluateExpression } from './arithmeticCheck';
 import { enforceDeclineWording } from './declineWording';
 import { csvShapeProblem } from './csvShape';
+import { describeRequestTools, groupOfTool, hiddenGroups, offerActiveTools, selectChatTools, toolsInGroups } from './chatToolSelection';
 import { renderDelegationReport, untrackedPaths, verifyDelegation } from './delegationVerification';
 import { FolderReadLedger, requestedOutputFiles, requiresSourceEvidence, requiresWholeFolder, unreadFilesNotice } from './folderCompleteness';
 import * as cp from 'node:child_process';
@@ -3509,7 +3510,7 @@ ${String(args.objective ?? '').slice(0, 600)}`,
         if (decision !== 'approved') {
           return connectorText(decision === 'timeout'
             ? 'The user did not respond to the memory approval in time. NOTHING was written. Do not claim it was remembered; offer to try again.'
-            : 'The user declined this memory change. NOTHING was written. Do not claim it was remembered and do not retry it unless they ask again.');
+            : 'The user declined this memory change. NOTHING was written. Do not claim it was remembered and do not retry it unless they ask again.', true);
         }
         outcome = await bridge.dispatch(toolName, args);
       }
@@ -3629,7 +3630,74 @@ ${String(args.objective ?? '').slice(0, 600)}`,
       tools.push(...scopedTools);
     }
 
-    const availableToolNames = new Set<string>(tools.map((t) => t.name));
+    // ── Task-aware tool selection (chatToolSelection.ts) ──
+    // The first model call is offered the base tools and the groups this request points at; the rest stay executable
+    // and the model adds them with request_tools. The hidden tools are the same objects (approvals, Plan Only, receipts).
+    const capabilityMarks = new Map<string, { capabilityId?: string; deferred?: boolean }>(
+      (ctx.capabilities?.definitions ?? []).map((d) => [d.name, { capabilityId: d.capabilityId, deferred: d.deferred }]),
+    );
+    const activeToolNames = new Set<string>();
+    let requestToolsCalls = 0;
+    if (isPublicResearch) {
+      for (const t of tools) activeToolNames.add(t.name);
+    } else {
+      let previousUserText = '';
+      let recentToolNames: string[] = [];
+      if (conversationId) {
+        try {
+          const userTexts = listMessages(db, conversationId).filter((m) => m.role === 'user' && m.content).map((m) => String(m.content));
+          if (userTexts.length > 0 && userTexts[userTexts.length - 1] === (ctx.currentMessage ?? prompt)) userTexts.pop();
+          previousUserText = userTexts[userTexts.length - 1] ?? '';
+          recentToolNames = db.all<{ toolName: string }>(
+            `SELECT DISTINCT ti.toolName AS toolName FROM tool_invocations ti JOIN attempts a ON a.id = ti.attemptId
+              WHERE a.requestId IN (SELECT id FROM requests WHERE conversationId = ? ORDER BY createdAt DESC LIMIT 4) AND a.id != ?`,
+            [conversationId, attemptId],
+          ).map((r) => r.toolName);
+        } catch { /* selection then rests on this request alone */ }
+      }
+      const allNames = tools.map((t) => t.name).concat('request_tools');
+      const selection = selectChatTools(allNames, { requestText, previousUserText, recentToolNames, capabilities: capabilityMarks });
+      for (const name of selection.offered) activeToolNames.add(name);
+      const addable = hiddenGroups(allNames, activeToolNames, capabilityMarks);
+      if (addable.length > 0) {
+        tools.push({
+          name: 'request_tools',
+          label: 'request_tools',
+          description: describeRequestTools(addable),
+          parameters: {
+            type: 'object',
+            properties: {
+              groups: { type: 'array', items: { type: 'string', enum: addable }, description: 'The tool groups to add.' },
+              reason: { type: 'string', description: 'What in the request needs them, in a few words.' },
+            },
+            required: ['groups'],
+          },
+          execute: async (_id: string, args: any) => {
+            requestToolsCalls += 1;
+            const asked = (Array.isArray(args?.groups) ? args.groups : [args?.groups]).map((g: unknown) => String(g ?? '').trim()).filter(Boolean);
+            const known = asked.filter((g: string) => addable.includes(g));
+            const unknown = asked.filter((g: string) => !addable.includes(g));
+            if (requestToolsCalls > 4) return { content: [{ type: 'text', text: 'NOT DONE: request_tools was already used 4 times in this turn. Work with the tools you have and tell the user what is missing.' }], isError: true };
+            const added = toolsInGroups(tools.map((t) => t.name), known, capabilityMarks).filter((n) => !activeToolNames.has(n));
+            for (const n of added) activeToolNames.add(n);
+            safeRecordRuntimeEvent(db, broadcaster, attemptId, 'tool_groups_added', { groups: known, unknown, added, reason: String(args?.reason ?? '').slice(0, 200) }, actor);
+            if (added.length === 0) {
+              return { content: [{ type: 'text', text: `Nothing added${unknown.length ? ` (unknown group: ${unknown.join(', ')})` : ''}. Groups you can add: ${addable.join(', ')}.` }], isError: unknown.length > 0 && known.length === 0 };
+            }
+            return { content: [{ type: 'text', text: `Added ${added.length} tools: ${added.join(', ')}. Use them now if they fit the request.` }], details: { groups: known, added } };
+          },
+        });
+        activeToolNames.add('request_tools');
+      } else {
+        activeToolNames.delete('request_tools');
+      }
+      try {
+        const offeredChars = JSON.stringify(tools.filter((t) => activeToolNames.has(t.name)).map((t) => ({ n: t.name, d: t.description, p: t.parameters }))).length;
+        const allChars = JSON.stringify(tools.map((t) => ({ n: t.name, d: t.description, p: t.parameters }))).length;
+        safeRecordRuntimeEvent(db, broadcaster, attemptId, 'tool_selection', { offered: activeToolNames.size, total: tools.length, offeredChars, allChars, groups: selection.groups, addable }, actor);
+      } catch { /* telemetry only */ }
+    }
+    const availableToolNames = new Set<string>(activeToolNames);
 
     let mobileCompanionState = 'Mobile Companion State: no phone has been paired.';
     const pairedPhones = pairedPhoneCount(ctx.dataDir);
@@ -4080,7 +4148,7 @@ ${filesPromptSection}${webResearchPromptSection}${wishesPromptSection}${emailCal
         }
         // Rule 4: Preserve historical conversation messages. Supply truthful connector
         // status, distinguishing tool availability from authentication and execution.
-        const connectorState = evaluateConnectorTruth(tools, {
+        const connectorState = evaluateConnectorTruth(tools.filter((t) => activeToolNames.has(t.name)), {
           toolCalls: toolCallsRecorded,
         });
         if (connectorState.hasTools) {
@@ -4094,7 +4162,7 @@ ${filesPromptSection}${webResearchPromptSection}${wishesPromptSection}${emailCal
         // new conversation worked). Keep history within a share of the window so the turn's own work still fits:
         // the oldest turns go first (~4 chars per token).
         let toolChars = 0;
-        try { toolChars = JSON.stringify(tools ?? []).length; } catch { /* estimate only */ }
+        try { toolChars = JSON.stringify(tools.filter((t) => activeToolNames.has(t.name))).length; } catch { /* estimate only */ }
         const historyBudgetChars = Math.max(4_000, Math.floor(PI_CONTEXT_WINDOW * 4 * 0.5) - systemPrompt.length - toolChars);
         let historyChars = keptTurns.reduce((sum, t) => sum + t.content.length, 0);
         while (keptTurns.length > 2 && historyChars > historyBudgetChars) {
@@ -4137,6 +4205,7 @@ ${filesPromptSection}${webResearchPromptSection}${wishesPromptSection}${emailCal
       ]);
       for (let i = 0; i < tools.length; i += 1) {
         const tool = tools[i];
+        if (tool.name === 'request_tools') continue; // adds tools, changes nothing
         const original = tool.execute;
         tools[i] = {
           ...tool,
@@ -4159,7 +4228,9 @@ ${filesPromptSection}${webResearchPromptSection}${wishesPromptSection}${emailCal
         tools: simpleInteractive ? [] : tools,
         messages: priorMessages,
       },
-      streamFn: (model: any, context: any, streamOptions: any) => models.streamSimple(model, context, { ...streamOptions, fetch: piFetch }),
+      // Every tool stays executable (same approvals and receipts); the model is offered the active set only, which
+      // request_tools (or a call to a hidden tool) grows during the turn. Pi declares tools on system messages.
+      streamFn: (model: any, context: any, streamOptions: any) => models.streamSimple(model, simpleInteractive ? context : offerActiveTools(context, activeToolNames), { ...streamOptions, fetch: piFetch }),
       getApiKey: () => 'no-key',
       // Runs before every model call of the loop: the cooperative yield point for the interactive lane.
       transformContext: async (messages: any[], ctxSignal?: AbortSignal) => {
@@ -4176,6 +4247,14 @@ ${filesPromptSection}${webResearchPromptSection}${wishesPromptSection}${emailCal
         const toolName = hookCtx.toolCall.name;
         const callId = hookCtx.toolCall.id || `${toolName}_${Date.now()}`;
         const args = hookCtx.args || {};
+
+        // A real tool the model was not offered (named in earlier history, or guessed right): its group joins the
+        // offered set and the call goes through the same checks as any other.
+        if (!simpleInteractive && !activeToolNames.has(toolName) && tools.some((t) => t.name === toolName)) {
+          const joined = toolsInGroups(tools.map((t) => t.name), [groupOfTool(toolName, capabilityMarks.get(toolName)) ?? ''], capabilityMarks);
+          for (const n of [toolName, ...joined]) activeToolNames.add(n);
+          safeRecordRuntimeEvent(db, broadcaster, attemptId, 'hidden_tool_called', { toolName, added: joined }, actor);
+        }
 
         const earlierFailure = failedCalls.get(callSignature(toolName, args));
         if (earlierFailure !== undefined) {
@@ -5002,6 +5081,15 @@ ${filesPromptSection}${webResearchPromptSection}${wishesPromptSection}${emailCal
       if (decline.corrected) {
         finalReply = decline.text;
         safeRecordRuntimeEvent(db, broadcaster, attemptId, 'decline_wording_corrected', {}, actor);
+      }
+      // The task record refused "satisfied" (no evidence) and no tool did anything this turn: the reply's "done" has
+      // nothing behind it (tool-selection run: "I've noted that you are vegetarian and will keep that in mind for our
+      // future conversations", with nothing saved). Core says so instead of letting the claim stand.
+      const refusedSatisfied = toolCallsRecorded.some((t) => t.tool === 'update_task_outcome' && t.status !== 'completed' && /can only be satisfied with evidence/i.test(extractToolResultText(t.result)));
+      const anyWork = toolCallsRecorded.some((t) => t.status === 'completed' && t.tool !== 'update_task_outcome' && t.tool !== 'request_tools');
+      if (refusedSatisfied && !anyWork) {
+        finalReply = `${finalReply.trimEnd()}\n\nCorrection: nothing was saved or changed in this turn — no tool carried this out, so it is not done.`;
+        safeRecordRuntimeEvent(db, broadcaster, attemptId, 'unbacked_completion_corrected', {}, actor);
       }
       const guarded = withholdUnsupportedActionClaims(finalReply, succeeded, { fileExists });
       if (guarded.withheld.length > 0) {

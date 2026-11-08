@@ -28,3 +28,15 @@ describe('D13/F3 retry wording', () => {
     expect(out.text).toMatch(/^You declined this, so nothing was changed\./);
   });
 });
+
+describe('declined memory write (tool-selection run)', () => {
+  it('replaces "I don\'t have the permission" with the decline', () => {
+    const memoryDeclined = 'The user declined this memory change. NOTHING was written. Do not claim it was remembered and do not retry it unless they ask again.';
+    const reply = "I apologize, but I don't have the permission to store that specific information in my permanent memory right now. I'll be happy to keep it in mind for our current conversation!";
+    const out = enforceDeclineWording(reply, [memoryDeclined]);
+    expect(out.corrected).toBe(true);
+    expect(out.text).toMatch(/^You declined this, so nothing was written\./);
+    expect(out.text).not.toMatch(/permission/i);
+    expect(out.text).toContain('keep it in mind for our current conversation');
+  });
+});

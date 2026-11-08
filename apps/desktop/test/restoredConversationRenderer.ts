@@ -75,6 +75,8 @@ export function bootRendererWithRestoredConversation(conversationId: string): Sc
       host.calls.push('newConversation');
       host.snapshot = { ...host.snapshot, selectedConversationId: null } as DesktopSnapshot;
     },
+    // The renderer hides the household section when it cannot load; these tests are about the conversation pane.
+    household: async () => { throw new Error('household is not part of this test'); },
     submitTask: async (goal: string) => {
       host.calls.push(`submitTask:${goal}:${host.snapshot.selectedConversationId ?? 'fresh'}`);
       return { requestId: 'req', attemptId: 'att', model: 'qwen' };
