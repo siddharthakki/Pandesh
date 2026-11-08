@@ -5,7 +5,10 @@ import { spawn, type ChildProcess } from 'node:child_process';
 export interface ImageStudioServiceStatus {
   studio: boolean;
   comfyui: boolean;
+  /** Ollama itself answered /api/version (probed directly, not the Studio's opinion of it). */
   ollama: boolean;
+  /** Ollama's own reported version, when it answered. */
+  ollamaVersion?: string | null;
   detail: string;
   checkpoints: Array<{ name: string; category: string }>;
 }
@@ -56,14 +59,25 @@ async function reachable(fetcher: typeof fetch, url: string): Promise<boolean> {
   try { return (await fetcher(url, { signal: AbortSignal.timeout(3_000) })).ok; } catch { return false; }
 }
 
-export async function probeImageStudioServices(fetcher: typeof fetch = fetch): Promise<ImageStudioServiceStatus> {
-  let studio = false; let comfyui = false; let ollama = false;
+/** Probes Ollama directly. The Studio's own `ollama` flag is not used: with the Studio down it is always false. */
+async function probeOllama(fetcher: typeof fetch, base: string): Promise<{ ok: boolean; version: string | null }> {
+  try {
+    const response = await fetcher(new URL('/api/version', base).toString(), { signal: AbortSignal.timeout(3_000) });
+    if (!response.ok) return { ok: false, version: null };
+    const body = await response.json().catch(() => ({})) as { version?: unknown };
+    return { ok: true, version: typeof body.version === 'string' ? body.version : null };
+  } catch { return { ok: false, version: null }; }
+}
+
+export async function probeImageStudioServices(fetcher: typeof fetch = fetch, ollamaBase = process.env.KARKEDIKHA_OLLAMA_URL || 'http://127.0.0.1:11434'): Promise<ImageStudioServiceStatus> {
+  let studio = false; let comfyui = false;
+  const ollamaProbe = probeOllama(fetcher, ollamaBase);
   let checkpoints: Array<{ name: string; category: string }> = [];
   try {
     const response = await fetcher('http://127.0.0.1:8989/api/status', { signal: AbortSignal.timeout(3_000) });
     if (response.ok) {
-      const body = await response.json() as { comfyui?: boolean; ollama?: boolean };
-      studio = true; comfyui = body.comfyui === true; ollama = body.ollama === true;
+      const body = await response.json() as { comfyui?: boolean };
+      studio = true; comfyui = body.comfyui === true;
     }
   } catch { /* honest down state */ }
   if (!comfyui) comfyui = await reachable(fetcher, 'http://127.0.0.1:8188/system_stats');
@@ -85,7 +99,8 @@ export async function probeImageStudioServices(fetcher: typeof fetch = fetch): P
   const detail = studio && comfyui
     ? checkpoints.length > 0 ? 'Image Generation Studio and ComfyUI are ready' : 'Services are ready, but no checkpoint is available'
     : !comfyui ? 'ComfyUI is not running' : 'Image Generation Studio is not running';
-  return { studio, comfyui, ollama, detail, checkpoints };
+  const o = await ollamaProbe;
+  return { studio, comfyui, ollama: o.ok, ollamaVersion: o.version, detail, checkpoints };
 }
 
 let ensureInFlight: Promise<ImageStudioServiceStatus> | null = null;

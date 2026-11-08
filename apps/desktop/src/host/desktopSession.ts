@@ -4857,6 +4857,9 @@ export class DesktopSession {
       // operator must be told that nothing was approved. Only when there is no
       // live turn is there nothing else to do.
       if (!this.active || this.active.terminal) return;
+      // A specialist agent this turn delegated to asks inside its own task; its card belongs here, where the
+      // delegating turn is waiting (Core lists delegated children's approvals under this conversation).
+      if (event.eventType === 'approval_requested' && !this.pending) void this.loadPendingApproval();
     }
     // The worker that was waiting for this turn's answer is gone (Core restarted). The turn is interrupted, not
     // running: it must stop holding the active slot, or every later message would queue behind a ghost.

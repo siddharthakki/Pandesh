@@ -283,6 +283,8 @@ function syncTrayFromSession(): void {
     openAtLogin: prefs.openAtLogin,
     windowHidden,
     mobileServerStatus: mobileStatus,
+    uiVariant: resolveUiVariant(prefs),
+    uiVariantForced: Boolean(process.env.PANDESH_UI_V2?.trim()),
   });
 }
 
@@ -710,6 +712,11 @@ async function createWindow(): Promise<void> {
         const info = mobileServer.getPairingInfo();
         void shell.openExternal(info.url);
       }
+    },
+    setUiVariant: (variant) => {
+      prefs = writeHostPreferences(dataDir, { uiVariant: variant });
+      if (window && !window.isDestroyed()) void window.loadFile(rendererEntry());
+      syncTrayFromSession();
     },
   }, hostLog);
   const trayInstance = tray.ensure();

@@ -121,6 +121,8 @@ export interface ScopeLayer {
   memory: Array<{ scope: string; access: MemoryAccess }> | null;
   egress: Egress | null;
   localOnly: boolean;
+  /** A user's recorded OK (approval id) for this delegation's internet use, given in the parent's turn. */
+  egressApprovalId?: string | null;
 }
 
 export interface EffectiveScope { agentId: string; agentVersion: number; depth: number; layers: ScopeLayer[]; conversationRoot: string | null }
@@ -140,10 +142,10 @@ export function layerFromDefinition(d: AgentDefinition, conversationRoot: string
   return { source: `agent:${d.id}@${d.version}`, tools: d.tools, deny: d.toolDenylist, roots: resolveRoots(d.workspaceRoots, conversationRoot), memory: d.memoryScopes, egress: d.egress, localOnly: d.modelPolicy.localOnly };
 }
 
-export interface Grant { tools?: string[]; roots?: string[]; memory?: Array<{ scope: string; access: MemoryAccess }>; egress?: Egress }
+export interface Grant { tools?: string[]; roots?: string[]; memory?: Array<{ scope: string; access: MemoryAccess }>; egress?: Egress; egressApprovalId?: string }
 
 export function layerFromGrant(g: Grant, source: string): ScopeLayer {
-  return { source, tools: g.tools ?? null, deny: [], roots: g.roots ? g.roots.map((r) => path.resolve(r)) : null, memory: g.memory ?? null, egress: g.egress ?? null, localOnly: false };
+  return { source, tools: g.tools ?? null, deny: [], roots: g.roots ? g.roots.map((r) => path.resolve(r)) : null, memory: g.memory ?? null, egress: g.egress ?? null, localOnly: false, egressApprovalId: g.egressApprovalId ?? null };
 }
 
 /** Child scope = child definition ∩ every parent layer ∩ explicit grant. */
@@ -205,17 +207,98 @@ export function allowedMemoryScopes(scope: EffectiveScope, access: MemoryAccess)
   return allowed;
 }
 
-export function effectiveEgress(scope: EffectiveScope): Egress {
-  let out: Egress | null = null;
+/**
+ * Internet access of a run, intersected across layers. Default deny: a scope in which no layer authorizes
+ * egress has none. `approval` anywhere means every network use still needs the user's OK; domain lists
+ * intersect (a child can never reach a domain its parent could not).
+ */
+export interface EgressVerdict { mode: 'none' | 'any' | 'domains'; domains: string[]; approval: boolean }
+
+export function egressOf(scope: EffectiveScope): EgressVerdict {
+  let mode: EgressVerdict['mode'] | null = null;
+  let domains: string[] = [];
+  let approval = false;
   for (const l of scope.layers) {
     const e = l.egress;
     if (e === null) continue;
-    if (e === 'none' || out === 'none') { out = 'none'; continue; }
-    if (out === null) { out = e; continue; }
-    if (out === 'approval') { out = e; continue; }
-    if (typeof out === 'object' && typeof e === 'object') { const allowed = e.domains; out = { domains: out.domains.filter((d) => allowed.includes(d)) }; }
+    if (e === 'none') return { mode: 'none', domains: [], approval: false };
+    if (e === 'approval') { approval = true; if (mode === null) mode = 'any'; continue; }
+    const listed = e.domains.map((d) => d.toLowerCase());
+    if (mode === 'domains') domains = domains.filter((d) => listed.includes(d));
+    else { mode = 'domains'; domains = listed; }
   }
-  return out ?? 'approval';
+  if (mode === null || (mode === 'domains' && domains.length === 0)) return { mode: 'none', domains: [], approval: false };
+  return { mode, domains, approval };
+}
+
+/** Legacy shape for the Team UI. */
+export function effectiveEgress(scope: EffectiveScope): Egress {
+  const v = egressOf(scope);
+  if (v.mode === 'none') return 'none';
+  if (v.mode === 'domains') return { domains: v.domains };
+  return 'approval';
+}
+
+/** Tools that reach the internet. A URL argument pointing at this machine is not egress. */
+const NETWORK_TOOLS = ['web_research', 'governed_research', 'browser_*', 'inspect_page', 'scout_*', 'gmail_*', 'calendar_*', 'advance_wish', 'weather_*', 'get_weather', 'send_to_phone', 'ollama_pull_model'];
+const LOCAL_HOST = /^(?:localhost|127(?:\.\d{1,3}){3}|\[?::1\]?|[\w-]+\.localhost)$/i;
+
+function urlHosts(args: Record<string, unknown>): string[] {
+  const hosts: string[] = [];
+  for (const k of ['url', 'href', 'link', 'site', 'address']) {
+    const v = args[k];
+    if (typeof v !== 'string' || !v.trim()) continue;
+    try { hosts.push(new URL(/^[a-z]+:\/\//i.test(v.trim()) ? v.trim() : `https://${v.trim()}`).hostname.toLowerCase()); } catch { hosts.push(v.trim().toLowerCase()); }
+  }
+  return hosts;
+}
+
+export function isNetworkTool(toolName: string): boolean { return matches(NETWORK_TOOLS, toolName); }
+
+/**
+ * True when the user's OK for this run's internet use is already recorded: a grant layer names an approval that
+ * Core holds as approved. A grant that merely claims approval without a real approved record counts for nothing.
+ */
+export function egressPreapproved(db: CoreDatabase, scope: EffectiveScope): boolean {
+  for (const l of scope.layers) {
+    if (!l.egressApprovalId) continue;
+    const row = db.get<{ status: string }>('SELECT status FROM approvals WHERE id = ?', [l.egressApprovalId]);
+    if (row?.status === 'approved') return true;
+  }
+  return false;
+}
+
+/**
+ * Core's egress gate for one tool call. `needsApproval` means the call is authorized only with the user's
+ * recorded OK for this run (the caller asks, or uses an approval already recorded for the run).
+ */
+export function checkEgress(scope: EffectiveScope, toolName: string, args: Record<string, unknown>): { allowed: true; needsApproval: boolean; network: boolean } | { allowed: false; reason: string } {
+  if (!isNetworkTool(toolName)) return { allowed: true, needsApproval: false, network: false };
+  const hosts = urlHosts(args);
+  // A page on this machine (a local preview) is not internet access.
+  if (hosts.length > 0 && hosts.every((h) => LOCAL_HOST.test(h)) && (toolName.startsWith('browser_') || toolName === 'inspect_page')) return { allowed: true, needsApproval: false, network: false };
+  const v = egressOf(scope);
+  const who = scope.agentId;
+  if (v.mode === 'none') return { allowed: false, reason: `the ${who} agent has no internet access in this task${scope.depth > 0 ? ' (its delegation does not authorize any)' : ''}` };
+  if (v.mode === 'domains') {
+    if (hosts.length === 0) return { allowed: false, reason: `the ${who} agent may only reach ${v.domains.join(', ')}; ${toolName} does not name one of them` };
+    const outside = hosts.filter((h) => !v.domains.some((d) => h === d || h.endsWith(`.${d}`)));
+    if (outside.length) return { allowed: false, reason: `the ${who} agent may only reach ${v.domains.join(', ')}, not ${outside.join(', ')}` };
+  }
+  return { allowed: true, needsApproval: v.approval, network: true };
+}
+
+/**
+ * The layer an ordinary Pandesh turn delegates from. The Chief itself runs with its own (read-mostly) tools, but
+ * what it may hand to a specialist is bounded by what the user's turn authorizes: the conversation's folder only,
+ * and internet only with the user's OK. Each specialist's own definition still applies on top.
+ */
+export function chiefDelegationLayer(conversationRoot: string | null): ScopeLayer {
+  return { source: 'chief-delegation', tools: null, deny: [], roots: conversationRoot ? [path.resolve(conversationRoot)] : [], memory: null, egress: 'approval', localOnly: true };
+}
+
+export function chiefDelegationScope(conversationRoot: string | null): EffectiveScope {
+  return { agentId: 'chief', agentVersion: 1, depth: 0, layers: [chiefDelegationLayer(conversationRoot)], conversationRoot: conversationRoot ? path.resolve(conversationRoot) : null };
 }
 
 // ---------- persistence ----------

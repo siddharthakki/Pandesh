@@ -80,4 +80,18 @@ describe('Desktop Image Studio service manager', () => {
       delay: async () => undefined, timeoutMs: 0,
     })).rejects.toThrow(/did not become ready/);
   });
+
+  it('reports Ollama from Ollama itself, even when the Studio is down', async () => {
+    const up = vi.fn(async (input: string | URL | Request) => {
+      const url = String(input);
+      if (url.endsWith('/api/version')) return new Response(JSON.stringify({ version: '0.12.3' }), { status: 200 });
+      throw new Error('ECONNREFUSED');
+    });
+    expect(await probeImageStudioServices(up as typeof fetch, 'http://127.0.0.1:11434')).toMatchObject({ studio: false, comfyui: false, ollama: true, ollamaVersion: '0.12.3' });
+    const down = vi.fn(async (input: string | URL | Request) => {
+      if (String(input).includes('/api/status')) return new Response(JSON.stringify({ comfyui: true, ollama: true }), { status: 200 });
+      throw new Error('ECONNREFUSED');
+    });
+    expect((await probeImageStudioServices(down as typeof fetch, 'http://127.0.0.1:11434')).ollama).toBe(false);
+  });
 });

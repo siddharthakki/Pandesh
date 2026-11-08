@@ -48,7 +48,7 @@ import type { GovernedCapabilityRegistry } from '../runtime/governedCapability';
 import { LocalAutonomySecurityKernel } from '../security/kernel';
 import type { ExecutionGrant } from '../security/types';
 import { decidePermission, recordPermissionDecision, STANDING_AUTHORIZATION_ACTOR } from './permissionModes';
-import { agentScopeForAttempt, checkMemoryArguments, checkPathArguments, isToolAllowed, recordScopeRefusal } from './agents';
+import { agentScopeForAttempt, checkEgress, checkMemoryArguments, checkPathArguments, isToolAllowed, recordScopeRefusal } from './agents';
 import { parseBaselineIdentity, type WriteBaselineIdentity, type WriteProposalPresentation } from '../runtime/writeProposal';
 import {
   CORE_POLICY_ACTOR,
@@ -254,7 +254,19 @@ function findCapabilityAttemptIds(db: CoreDatabase, correlationId: string, clien
       ORDER BY a.createdAt`,
     [correlationId],
   ).map((row) => row.id);
-  return [...new Set([...direct.reverse(), ...owned, ...directAttempts])];
+  // A specialist agent's task delegated from a turn in this conversation runs in its own conversation, but its
+  // approvals belong to the person in THIS conversation, where the delegating turn is waiting for it.
+  const delegated = db.all<{ id: string }>(
+    `SELECT child.id AS id
+       FROM agent_handoffs h
+       JOIN attempts parent ON parent.id = h.parentAttemptId
+       JOIN requests pr ON pr.id = parent.requestId
+       JOIN attempts child ON child.requestId = h.childRequestId
+      WHERE pr.conversationId = ?
+      ORDER BY child.createdAt`,
+    [correlationId],
+  ).map((row) => row.id);
+  return [...new Set([...direct.reverse(), ...owned, ...directAttempts, ...delegated])];
 }
 
 /**
@@ -746,7 +758,8 @@ export async function dispatchCapability(db: CoreDatabase, registry: GovernedCap
   if (agentScope) {
     const toolCheck = isToolAllowed(agentScope, input.toolName);
     const verdict = toolCheck.allowed ? checkPathArguments(agentScope, input.arguments ?? {}) : toolCheck;
-    const memory = verdict.allowed ? checkMemoryArguments(db, agentScope, input.toolName, input.arguments ?? {}) : verdict;
+    const egressVerdict = verdict.allowed ? checkEgress(agentScope, input.toolName, input.arguments ?? {}) : verdict;
+    const memory = egressVerdict.allowed ? checkMemoryArguments(db, agentScope, input.toolName, input.arguments ?? {}) : egressVerdict;
     if (!memory.allowed) {
       recordScopeRefusal(db, actingAttemptId!, agentScope.agentId, input.toolName, memory.reason);
       return { outcome: 'denied', attemptId: input.correlationId, reason: `agent_scope_denied: ${memory.reason}` };

@@ -30,6 +30,8 @@ export function useVoice(opts: { onTranscript: (text: string, needsReview: boole
   const session = useRef<CaptureSession | null>(null);
   const audio = useRef<HTMLAudioElement | null>(null);
   const generation = useRef(0);
+  /** Bumped by Stop listening / Type instead: whatever that capture recorded is discarded, never transcribed or sent. */
+  const listenGen = useRef(0);
 
   useEffect(() => () => { void session.current?.stop(); audio.current?.pause(); }, []);
 
@@ -37,26 +39,30 @@ export function useVoice(opts: { onTranscript: (text: string, needsReview: boole
     const mod = capture();
     if (!mod) { setState('error'); setDetail('The microphone helper did not load.'); return; }
     stopPlayback(false);
+    const mine = ++listenGen.current;
     setHeard(false); setDetail(''); setState('listening');
     try {
       session.current = mod.startVadUtteranceCapture({ onState: (s) => { if (s === 'speech_started') setHeard(true); if (s === 'end_of_speech') setState('transcribing'); } });
       const wav = await session.current.done;
       session.current = null;
+      if (mine !== listenGen.current) return; // stopped by the user: discard
       const bytes = wav instanceof Uint8Array ? wav : wav ? new Uint8Array(wav) : null;
       if (!bytes || bytes.length < 44) { setState('idle'); setDetail('No speech was captured.'); return; }
       setState('transcribing');
       const r = await vapi.transcribeUtterance(mod.bytesToBase64(bytes));
+      if (mine !== listenGen.current) return;
       setState('idle');
       const text = r.transcript.trim();
       if (!text) { setDetail('Nothing was recognised. Try again or type.'); return; }
       opts.onTranscript(text, Boolean(r.review?.required), r.review?.reasons ?? []);
     } catch (err) {
       session.current = null;
+      if (mine !== listenGen.current) return;
       setState('error'); setDetail(errorText(err));
     }
   };
 
-  const stopListening = async () => { const s = session.current; session.current = null; setState('idle'); if (s) await s.stop().catch(() => undefined); };
+  const stopListening = async () => { listenGen.current++; const s = session.current; session.current = null; setState('idle'); setDetail('Stopped listening. Nothing was sent.'); if (s) await s.stop().catch(() => undefined); };
 
   const speak = async (text: string) => {
     const gen = ++generation.current;

@@ -26,3 +26,19 @@ export function needsYouCount(tasks: BoardTask[], pendingInSnapshot: boolean): n
   const n = tasks.filter((t) => columnOf(t) === 'needs').length;
   return n || (pendingInSnapshot ? 1 : 0);
 }
+
+// ---- Activity grouping (Activity aside) ----
+interface GroupableStep { capability?: string; kind?: string; [k: string]: unknown }
+/** Consecutive steps of the same kind (e.g. eight file reads) fold into one row; a failure is never hidden. */
+export interface ActivityGroup<T> { key: string; items: T[] }
+export function groupActivities<T extends GroupableStep>(list: T[]): Array<ActivityGroup<T>> {
+  const out: Array<ActivityGroup<T>> = [];
+  for (const a of list) {
+    const k = String(a.capability ?? a.kind ?? 'step');
+    const last = out[out.length - 1];
+    if (last && last.key === k) last.items.push(a); else out.push({ key: k, items: [a] });
+  }
+  // Only runs of 3+ are folded; shorter runs stay as single rows.
+  return out.flatMap((g) => (g.items.length >= 3 ? [g] : g.items.map((a) => ({ key: g.key, items: [a] }))));
+}
+

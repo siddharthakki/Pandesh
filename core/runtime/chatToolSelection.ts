@@ -104,6 +104,10 @@ export const TOOL_GROUPS: Record<string, ToolGroup> = {
     purpose: 'put a file on the paired phone',
     pattern: /\b(?:phone|mobile|smartphone|android|iphone)\b/i,
   },
+  agents: {
+    purpose: "hand work to Pandesh's specialist agents (Coding, Research, Operations, Personal) and get their result",
+    pattern: /\b(?:delegate|hand (?:it|this|that) (?:off|over)|agents?|specialists?|(?:research|coding|operations|personal) (?:agent|team)|my team|ask (?:the )?(?:research|coding|operations)|have (?:the )?(?:research|coding|operations))\b/i,
+  },
   weather: {
     purpose: 'weather and forecast',
     pattern: /\b(?:weather|forecast|temperature|rain\w*|snow\w*|sunny|umbrella|degrees|celsius)\b/i,
@@ -132,6 +136,7 @@ export const NATIVE_GROUP: Record<string, string> = {
   run_checks: 'coding', delegate_to_opencode: 'coding',
   list_printers: 'printing', print_test_page: 'printing',
   send_to_phone: 'phone',
+  delegate_to_agent: 'agents',
 };
 
 /** Governed capability id → group. */

@@ -40,7 +40,8 @@ export function Mark({ size = 22 }: { size?: number }) {
 }
 
 export function elapsed(ms: number): string {
-  const s = Math.max(0, Math.round(ms / 1000));
+  if (ms < 1000) return `${Math.max(0, Math.round(ms))} ms`;
+  const s = Math.round(ms / 1000);
   if (s < 60) return `${s} s`;
   const m = Math.floor(s / 60);
   if (m < 60) return `${m} min ${s % 60} s`;

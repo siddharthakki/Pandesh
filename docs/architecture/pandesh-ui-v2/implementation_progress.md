@@ -153,9 +153,52 @@ Real-app evidence (isolated profile, gemma4:12b): Piper produced a WAV of "What 
 
 Not done: a live-microphone test with a human voice; wake word stays in the Classic UI (v2 shows its muted state only); spoken barge-in is whatever the host already supports.
 
+## Alpha closure pass · STATUS: done (voice with a human speaker unverified)
+
+### 1. Chief → specialist delegation (real, Core-scoped)
+- `core/domain/delegation.ts` — one path for the host API and the Chief's tool: `startDelegation` (limits from `proposeHandoff`: depth ≤ 2, ≤ 3 active children, dedupe, restated brief) and `delegationOutcome`. The child runs in its own conversation ("Coding · …"), its scope frozen as specialist ∩ `chief-delegation` (the user's turn: this conversation's folder only; internet only with the user's OK) ∩ grant.
+- `delegate_to_agent` tool (piAgentEngine) for an ordinary Pandesh turn: asks the user in THIS chat when the child could go online, starts the child through the executor, waits for its terminal state (Stop on the parent cancels the child), returns the child's answer; the Chief reports it naming the agent. Offered when the request points at an agent (`agents` tool group).
+- A delegated child's approvals are listed under the delegating conversation (`findCapabilityAttemptIds`) and the host loads them on `approval_requested`, so the card appears where the person is, saying which agent asks.
+
+Real app (isolated profile, gemma4:12b), from natural-language requests:
+| Request | Core record | Result |
+|---|---|---|
+| "Ask the coding agent to read calc.js and calc.test.js … should not run anything" | chief→coding depth 1, returned; child `read_file` ×2 | correct analysis reported, 10 s |
+| "Ask the research agent to find the current Node.js LTS line from nodejs.org" | internet card in the parent chat → approved; grant `egressApprovalId`; child `web_research` (no second card) | "v26.13.0 … Source: nodejs.org/en/download" |
+| "Ask the coding agent to run node --test calc.test.js …" | child `run_checks` approval surfaced in the parent chat ("The Coding agent … asks") → approved | "tests 1, pass 1, fail 0 … Exit Code 0" |
+| "Ask the coding agent to open https://example.com …" | child `browser_open_site` refused by Core: "the coding agent has no internet access in this task (its delegation does not authorize any)" | Pandesh reported the refusal; Team → Coding → Refusals shows it |
+
+### 2. Per-agent internet access enforced in Core
+`egressOf` / `checkEgress` (agents.ts): default deny (no authorizing layer → none); `none` anywhere → none; domain lists intersect; `approval` anywhere → the user's OK is required. A URL on this machine (localhost preview) is not internet. Enforced at both gates: the engine's per-call wrapper (and it asks once per run for network tools that do not ask themselves) and `dispatchCapability`. A grant's `egressApprovalId` counts only when Core holds that approval as approved.
+Tests `core/test/agentDelegation.test.ts` (13): default deny; prohibited (Coding → example.com refused, localhost allowed); permitted (Research under Pandesh → allowed with approval); domain grant narrows (github.com yes, evil.example no, open search no); exceeding the parent (Research under Coding gets none, a grant cannot add it back); fake pre-approval ignored; dispatch refusal recorded; delegation scope/limits/outcome; child approval listed only under the delegating conversation.
+
+### 3. UI refinements (verified in the real app; defects fixed)
+| Refinement | Before this pass | Now |
+|---|---|---|
+| Markdown | no tables, links as plain text | GFM tables; links open outside the app (`openExternalUrl`) |
+| Compact composer | ok | unchanged |
+| Truthful durations | run timer counted from when the window noticed the turn; sub-second steps "0 s" | timer from Core's `startedAt`; command duration measured by the runner; sub-second shown in ms |
+| Grouped repetitive activity | none | 3+ consecutive same steps fold ("read file × 3"); a failed step opens its group |
+| Command output | excerpt only | command, exit code (or timed out), duration, test counts parsed from the runner's own line (vitest/jest/pytest/mocha/dotnet/TAP/node --test) with that line shown; output in an expander, open when the exit code ≠ 0 |
+Also fixed: approval card showed the raw `mutation:…` id and "It changes files" for every gate (now plain words per tool); "Approved … Core runs it now" stayed after the turn ended (now cleared).
+
+### 4. Media Studio Ollama status
+Root cause: `ollama` came from the Image Studio's own `/api/status`, so with the Studio down it always said "not answering". Now probed directly (`/api/version`), version shown: "Image Studio not running · ComfyUI not answering · Ollama answering (v0.40.12)" — matches `curl /api/version`.
+
+### 5. Voice with the real microphone
+USB microphone present ("Mikrofon (USB Audio Device)"); the v2 listen path opened it (Listening… → no speech detected in 15 s → nothing sent). A human speaking into it was **not** tested: **UNVERIFIED**. Defect found and fixed: Stop listening still transcribed (and could have sent) what was captured; now it is discarded ("Stopped listening. Nothing was sent.").
+
+### 6. Switching interfaces
+Tray menu: "Switch to the new interface (v2)" / "Switch to the Classic interface" (persists `uiVariant`, reloads the window); disabled with an explanation when `PANDESH_UI_V2` pins the variant. v2 also has "Use the Classic UI" in System and the command palette.
+
+### 7. Tests
+Core targeted (42 files: agents, delegation, dispatch, chat tool selection, Pi engine, approvals, research, Second Brain, Software, processes, social): 358/358. Desktop full suite: 83 files, 609/609. Core and desktop type-checks: Core clean; desktop at the pre-existing baseline of 27. New: `apps/desktop/test/uiV2ActivityModel.test.ts` (grouping, test-summary parser, sanitizer), `desktopImageStudio.test.ts` (+1: Ollama probed directly).
+
+Screenshots: `acceptance-closure/` (deleg-coding, deleg-research-approval, deleg-child-approval, activity-command, walk-media, walk-team-coding, walk-team-refusals, walk-board).
+
 ### Next executable step
 
-Phase 2 scope (2a–2g + Software Discovery 1B) is implemented locally and unpushed. Next: owner review of the branch, then a live-microphone pass and the open items in the final report (live PTY, MCP registry, Chief delegate tool, per-agent egress enforcement, bundled fonts). Software update execution (2B) needs separate approval.
+Owner hands-on alpha review on a separate data folder (see `alpha_walkthrough.md`), including one live-microphone turn spoken by a person. Separate follow-ups: MCP registry, software update execution (needs approval), embedded terminal windows, Electron upgrade, bundled fonts.
 
 ### Resume
 

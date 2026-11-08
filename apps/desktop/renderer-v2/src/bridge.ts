@@ -11,7 +11,7 @@ export type ApprovalResolution = 'approved' | 'rejected';
 export interface ApprovalCard { approvalId: string; gate: string; toolName: string; scope: string; paths: string[]; detail: string }
 
 export interface ArtifactView { id: string; conversationId: string | null; kind: 'image' | 'video' | 'document' | 'file'; title: string; mimeType: string; fileName: string; byteSize: number; source: string; createdAt: string; availability: 'ready' | 'missing' | 'changed' | 'unreadable' }
-export interface ToolPreview { kind: string; title?: string; url?: string; path?: string; artifactIds?: string[]; excerpt?: string; diff?: string }
+export interface ToolPreview { kind: string; title?: string; url?: string; path?: string; artifactIds?: string[]; excerpt?: string; diff?: string; command?: string; exitCode?: number | null; timedOut?: boolean; durationMs?: number; tests?: { passed?: number; failed?: number; skipped?: number; total?: number; line: string } }
 export interface WorkspaceActivity { id: string; conversationId: string | null; taskId: string | null; capability?: string; kind?: string; title?: string; state: 'running' | 'completed' | 'failed' | 'cancelled'; startedAt?: string; endedAt?: string | null; detail?: string | null; preview?: ToolPreview | null; [k: string]: unknown }
 
 export interface Snapshot {

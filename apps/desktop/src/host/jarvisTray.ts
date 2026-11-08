@@ -14,6 +14,8 @@ export interface JarvisTrayHandlers {
   setOpenAtLogin: (enabled: boolean) => void;
   quitJarvis: () => void;
   openMobileUrl?: () => void;
+  /** Switch between the Classic and the new (v2) interface; reloads the window. */
+  setUiVariant?: (variant: 'classic' | 'v2') => void;
 }
 
 export interface JarvisTrayState {
@@ -23,6 +25,9 @@ export interface JarvisTrayState {
   openAtLogin: boolean;
   windowHidden: boolean;
   mobileServerStatus?: string;
+  /** The interface the window shows, and whether PANDESH_UI_V2 pins it (then the menu cannot change it). */
+  uiVariant?: 'classic' | 'v2';
+  uiVariantForced?: boolean;
 }
 
 function trayIcon(): NativeImage {
@@ -122,6 +127,11 @@ export class JarvisTrayController {
         click: () => this.handlers.stopSpeaking(),
       },
       { type: 'separator' },
+      ...(this.handlers.setUiVariant && s.uiVariant ? [{
+        label: s.uiVariantForced ? `Interface: ${s.uiVariant === 'v2' ? 'new (v2)' : 'Classic'} — set by PANDESH_UI_V2` : s.uiVariant === 'v2' ? 'Switch to the Classic interface' : 'Switch to the new interface (v2)',
+        enabled: !s.uiVariantForced,
+        click: () => this.handlers.setUiVariant?.(s.uiVariant === 'v2' ? 'classic' : 'v2'),
+      }, { type: 'separator' as const }] : []),
       {
         label: 'Start KarkeDikha when I sign in',
         type: 'checkbox',

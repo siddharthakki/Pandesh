@@ -32,15 +32,17 @@ const ROUTED: Record<string, string> = {
 const AGENT_NAMES: Record<string, string> = { personal: 'Personal', coding: 'Coding', research: 'Research', operations: 'Operations', voice: 'Voice' };
 
 /** Plain words for the governed actions users meet most; anything else falls back to Core's scope text. */
-const TOOL_WORDS: Record<string, { title: string; allow: string }> = {
+const TOOL_WORDS: Record<string, { title: string; allow: string; why?: string }> = {
+  delegate_to_agent: { title: 'Let an agent use the internet', allow: 'Allow internet for this task', why: 'The agent will go online (public web only)' },
+  run_checks: { title: 'Run a command in this folder', allow: 'Allow running this command', why: 'It runs code in this folder' },
   authorize_mission: { title: 'Change files in this folder', allow: 'Allow file changes in this folder' },
   write_file: { title: 'Write a file', allow: 'Allow writing this file' },
   run_command: { title: 'Run a command', allow: 'Allow running this command' },
   run_check: { title: 'Run a check', allow: 'Allow running this check' },
   send_email: { title: 'Send an email', allow: 'Allow sending this email' },
   gmail_send: { title: 'Send an email', allow: 'Allow sending this email' },
-  web_research: { title: 'Search the web', allow: 'Allow this web search' },
-  governed_research: { title: 'Search the web', allow: 'Allow this web search' },
+  web_research: { title: 'Search the web', allow: 'Allow this web search', why: 'It goes online (public web only)' },
+  governed_research: { title: 'Search the web', allow: 'Allow this web search', why: 'It goes online (public web only)' },
 };
 function humanize(id: string): string { const s = id.replace(/[_-]+/g, ' ').trim(); return s.charAt(0).toUpperCase() + s.slice(1); }
 
@@ -53,7 +55,8 @@ function pendingDecision(s: Snapshot | null): null | { kind: 'tool' | 'image' | 
     const title = named?.title ?? (a.scope || humanize(a.toolName));
     const rows: Array<[string, string]> = [['Action', title], ['Tool', a.toolName]];
     if (a.paths?.length) rows.push(['Affects', a.paths.join('\n')]);
-    if (a.gate) rows.push(['Why it asks', a.gate === 'mutation' ? 'It changes files' : a.gate]);
+    const why = named?.why ?? (/^(?:write_file|authorize_mission|propose_)/.test(a.toolName) ? 'It changes files' : /^(?:run_|delegate_to_opencode)/.test(a.toolName) ? 'It runs code' : /^(?:browser_|inspect_page|gmail_|calendar_)/.test(a.toolName) ? 'It acts outside this PC' : a.gate === 'mutation' ? 'It acts outside this chat' : a.gate);
+    if (why) rows.push(['Why it asks', why]);
     return { kind: 'tool', approvalId: a.approvalId, title, rows, detail: a.detail, allowLabel: named?.allow ?? `Allow: ${title}` };
   }
   if (s.pendingImageApproval) {
@@ -120,10 +123,18 @@ export function Chat({ snapshot, snapshotError, refresh, narrow, openConversatio
     if (e.kind === 'assistant_approval_changed') void loadBrief();
   }), [convId]);
 
-  // Elapsed time counts from when this window saw the turn start.
+  // Elapsed time counts from when Core started the attempt (not from when this window first noticed it).
   useEffect(() => {
     if (runningHere) {
-      if (!runStart.current || runStart.current.attemptId !== snapshot?.attemptId) runStart.current = { attemptId: snapshot?.attemptId ?? null, at: Date.now() };
+      if (!runStart.current || runStart.current.attemptId !== snapshot?.attemptId) {
+        const attemptId = snapshot?.attemptId ?? null;
+        runStart.current = { attemptId, at: Date.now() };
+        if (attemptId) void api.getTaskOverview().then(({ tasks }) => {
+          const row = tasks.find((t) => t.attemptId === attemptId);
+          const at = Date.parse(row?.startedAt ?? row?.createdAt ?? '');
+          if (Number.isFinite(at) && runStart.current?.attemptId === attemptId) { runStart.current = { attemptId, at }; setNow(Date.now()); }
+        }).catch(() => undefined);
+      }
       const t = setInterval(() => setNow(Date.now()), 1000);
       return () => clearInterval(t);
     }
@@ -185,6 +196,13 @@ export function Chat({ snapshot, snapshotError, refresh, narrow, openConversatio
     const o = snapshot?.lastTurnOutcome;
     setNotice({ text: o === 'cancelled' ? 'Stopped. Core recorded the task as cancelled.' : o ? `It finished before it could stop (${o}).` : 'Stop requested; Core has not reported the outcome yet.' });
   }, [runningHere, snapshot?.lastTurnOutcome]);
+  // "Approved … Core runs it now" is true only while the turn runs; once it ends the answer speaks for itself.
+  const approvedNotice = useRef(false);
+  useEffect(() => {
+    if (!approvedNotice.current || runningHere) return;
+    approvedNotice.current = false;
+    setNotice((n) => (n && n.text.startsWith('Approved:') ? null : n));
+  }, [runningHere]);
 
   const resolve = async (resolution: 'approved' | 'rejected') => {
     if (!decision) return;
@@ -194,6 +212,7 @@ export function Chat({ snapshot, snapshotError, refresh, narrow, openConversatio
       else if (decision.kind === 'image') await api.resolveImageApproval(decision.approvalId, resolution);
       else await api.resolveWeatherApproval(decision.approvalId, resolution);
       setDeclined(resolution === 'rejected');
+      approvedNotice.current = resolution === 'approved';
       setNotice({ text: resolution === 'approved' ? `Approved: ${decision.title}. Core runs it now.` : `Declined: ${decision.title}. Nothing was run.` });
     } catch (err) {
       setNotice({ text: `The decision was not recorded: ${errorText(err)}`, error: true });

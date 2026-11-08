@@ -758,7 +758,7 @@ export interface DesktopArtifactPreview {
   fileUrl?: string;
 }
 
-export interface DesktopImageStudioStatus { studio: boolean; comfyui: boolean; ollama: boolean; detail: string; checkpoints: Array<{ name: string; category: string }> }
+export interface DesktopImageStudioStatus { studio: boolean; comfyui: boolean; ollama: boolean; ollamaVersion?: string | null; detail: string; checkpoints: Array<{ name: string; category: string }> }
 export type DesktopImageGenerationResult =
   | { outcome: 'approval_required'; approvalId: string; attemptId: string; presentation: Record<string, unknown> | null }
   | { outcome: 'executed'; attemptId: string; artifactIds: string[]; message: string }

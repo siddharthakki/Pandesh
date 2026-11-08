@@ -5067,6 +5067,12 @@ export class RuntimeExecutor {
       connectors: this.buildPiConnectorBridge(request.conversationId || attemptId, request.clientId, workspaceRoot, signal, request.currentMessage, attemptId),
       memory: this.buildPiMemoryBridge(request.conversationId || attemptId, request.clientId, workspaceRoot, signal, attemptId),
       capabilities: this.buildPiCapabilityBridge(request.conversationId || attemptId, request.clientId, workspaceRoot, signal, attemptId, request.currentMessage),
+      delegation: {
+        clientId: request.clientId,
+        defaults: { selectedProvider: context.selectedProvider, selectedModel: context.selectedModel },
+        run: (childAttemptId: string) => this.execute(childAttemptId),
+        cancel: (childAttemptId: string) => { this.active.get(childAttemptId)?.abort(); },
+      },
     });
   }
 

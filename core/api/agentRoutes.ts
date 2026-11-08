@@ -6,8 +6,8 @@
 import type { ApiContext, ApiResult } from './context';
 import type { Router } from './router';
 import { CoreError } from '../domain/errors';
-import { agentHistory, agentScopeForAttempt, agentStatuses, assignAgentRun, deriveScope, getAgentDefinition, getHandoff, listScopeRefusals, markHandoff, proposeHandoff, updateAgentDefinition, type Grant } from '../domain/agents';
-import { submitRequest } from '../domain/submission';
+import { agentHistory, agentStatuses, getAgentDefinition, getHandoff, listScopeRefusals, updateAgentDefinition, type Grant } from '../domain/agents';
+import { startDelegation } from '../domain/delegation';
 
 function requireHost(ctx: ApiContext): void {
   const p = ctx.principal;
@@ -45,50 +45,17 @@ export function registerAgentRoutes(router: Router<ApiContext, ApiResult>, optio
   router.post('/v1/agents/delegate', async (ctx) => {
     requireHost(ctx);
     const b = rec(ctx.body);
-    const parentAttemptId = String(b.parentAttemptId ?? '');
-    const toAgentId = String(b.toAgentId ?? '');
-    const brief = String(b.brief ?? '');
     const grant = b.grant && typeof b.grant === 'object' ? b.grant as Grant : null;
-    const parent = ctx.db.get<{ requestId: string; conversationId: string | null }>('SELECT a.requestId AS requestId, q.conversationId AS conversationId FROM attempts a JOIN requests q ON q.id = a.requestId WHERE a.id = ?', [parentAttemptId]);
-    if (!parent) throw new CoreError('not_found', `parent task '${parentAttemptId}' does not exist`);
-    const handoff = proposeHandoff(ctx.db, { parentAttemptId, toAgentId, brief, grant });
-    if (handoff.existing && handoff.childRequestId) return ok({ handoff, duplicate: true });
-
-    const parentScope = agentScopeForAttempt(ctx.db, parentAttemptId);
-    const workspaceRoot = parentScope?.conversationRoot ?? (typeof b.workspaceRoot === 'string' ? b.workspaceRoot : null);
-    const defaults = options.executor?.contextDefaults();
-    const result = ctx.db.transaction(() => {
-      const submitted = submitRequest(ctx.db, {
-        clientId: ctx.clientId,
-        currentMessage: brief,
-        requestedMode: 'baat_kar',
-        conversationId: parent.conversationId,
-        requestedProvider: defaults?.selectedProvider ?? null,
-        requestedModel: defaults?.selectedModel ?? null,
-        selectedProvider: defaults?.selectedProvider ?? null,
-        selectedModel: defaults?.selectedModel ?? null,
-        workspaceRoot,
-        effectiveAllowedTools: [],
-        toolPermissionPolicy: {},
-        capability: { hasWorkspace: Boolean(workspaceRoot), gitCapable: false },
-        correlationId: `delegation:${handoff.id}`,
-        idempotencyKey: `delegation:${handoff.id}`,
-      });
-      // A parent without its own agent scope is an ordinary Pandesh turn: the Chief of Staff definition is its scope.
-      const parentEffective = parentScope ?? assignChiefScope(ctx.db, workspaceRoot);
-      assignAgentRun(ctx.db, { requestId: submitted.request.id, agentId: toAgentId, conversationRoot: workspaceRoot, parent: parentEffective, grant, handoffId: handoff.id });
-      markHandoff(ctx.db, handoff.id, { status: 'running', childRequestId: submitted.request.id });
-      return submitted;
+    const started = startDelegation(ctx.db, {
+      parentAttemptId: String(b.parentAttemptId ?? ''), toAgentId: String(b.toAgentId ?? ''), brief: String(b.brief ?? ''), grant,
+      clientId: ctx.clientId, defaults: options.executor?.contextDefaults(),
+      workspaceRoot: typeof b.workspaceRoot === 'string' ? b.workspaceRoot : null,
+      conversation: b.ownConversation === true ? 'own' : 'parent',
     });
-    if (options.executor) void options.executor.execute(result.attempt.id).catch(() => { /* the terminal state is recorded durably */ });
-    return ok({ handoff: getHandoff(ctx.db, handoff.id), attempt: result.attempt, request: result.request }, 201);
+    if (started.duplicate) return ok({ handoff: started.handoff, duplicate: true });
+    if (options.executor && started.attemptId) void options.executor.execute(started.attemptId).catch(() => { /* the terminal state is recorded durably */ });
+    return ok({ handoff: started.handoff, attempt: { id: started.attemptId }, request: { id: started.requestId }, conversationId: started.conversationId }, 201);
   });
 
   router.get('/v1/agents/handoffs/:id', (ctx, match) => ok({ handoff: getHandoff(ctx.db, match.params.id) }));
-}
-
-/** The scope an ordinary (non-agent) Pandesh turn delegates from: the Chief of Staff definition, frozen now. */
-function assignChiefScope(db: ApiContext['db'], workspaceRoot: string | null) {
-  // Derived without persisting: the parent request already exists and is not an agent run.
-  return deriveScope(getAgentDefinition(db, 'chief'), workspaceRoot, null, null);
 }

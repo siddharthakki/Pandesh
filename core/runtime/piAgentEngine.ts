@@ -67,7 +67,7 @@ import { synthesizeContractInventory } from '../domain/contractInventory';
 import { evaluateConnectorTruth, formatConnectorTruthPrompt } from '../domain/connectorTruth';
 import { OpenCodeEngine } from './opencodeEngine';
 import { buildUnifiedDiff } from './writeProposal';
-import { sanitizeToolActivity, type ToolActivity } from '../shared/toolActivity';
+import { parseTestSummary, sanitizeToolActivity, type ToolActivity } from '../shared/toolActivity';
 import { approveDevStoryReview, devStoryStatus, dispatchDevStories, planDevStories, reassignDevStory, retryDevStory, stopAllDevStories } from './kandev/devStories';
 import { KandevClient } from './kandev/kandevClient';
 import { ensureModelResident } from './ollamaResidency';
@@ -80,7 +80,8 @@ import {
   type EngineExecutionResult,
   EngineRegistry
 } from './adapters/EngineAdapter';
-import { agentScopeForAttempt, BUILTIN_AGENTS, checkPathArguments, isToolAllowed, recordScopeRefusal } from '../domain/agents';
+import { agentScopeForAttempt, BUILTIN_AGENTS, checkEgress, checkPathArguments, egressOf, egressPreapproved, getAgentDefinition, isToolAllowed, recordScopeRefusal, chiefDelegationScope, deriveScope } from '../domain/agents';
+import { delegationOutcome, isTerminalAttemptStatus as isTerminalDelegation, startDelegation } from '../domain/delegation';
 import {
   isGmailContractExtractionRequest,
   isTaskStatusRequest,
@@ -705,6 +706,8 @@ export interface PiRunContext {
   signal?: AbortSignal;
   /** Test seam: runs the fixed printing scripts. Production uses the real PowerShell runner. */
   powerShellRunner?: PowerShellRunner;
+  /** Chief → specialist delegation (alpha closure): runs a child attempt Core already scoped. */
+  delegation?: { clientId: string; defaults: { selectedProvider?: string | null; selectedModel?: string | null }; run(attemptId: string): Promise<void>; cancel(attemptId: string): void };
 }
 
 /**
@@ -1271,6 +1274,12 @@ export class PiAgentEngine implements EngineAdapter {
       // Auto: a standing authorization in force when this turn started may cover this exact action. Core decides from
       // the actual tool and arguments; the approval is recorded as Core's, never as a person's click.
       const toolName = String(summary.toolName ?? '');
+      // A delegated specialist's card says which agent is asking: the person sees it in the delegating conversation.
+      const askingScope = agentScopeForAttempt(db, attemptId);
+      if (askingScope && askingScope.depth > 0 && typeof summary.cardText === 'string') {
+        const agentName = BUILTIN_AGENTS.find((a) => a.id === askingScope.agentId)?.name ?? askingScope.agentId;
+        summary = { ...summary, delegatedAgent: askingScope.agentId, cardText: `The ${agentName} agent (working on a task Pandesh delegated) asks: ${summary.cardText}` };
+      }
       const permission = decidePermission(db, {
         attemptIds: [attemptId],
         toolName,
@@ -3081,9 +3090,14 @@ export class PiAgentEngine implements EngineAdapter {
               };
             }
           }
+          const ranAt = Date.now();
           const run = await runShellCommand(String(args.command), targetDir, RUN_CHECKS_TIMEOUT_MS, signal);
           const combined = redactCredentialShapes(`${run.stdout}${run.stderr ? `\n${run.stderr}` : ''}`);
-          const checkView = { kind: 'code', title: `Ran ${String(args.command).slice(0, 120)}`, excerpt: combined.slice(-1_200) };
+          const checkView = {
+            kind: 'code', title: `Ran ${String(args.command).slice(0, 120)}`, excerpt: combined.slice(-1_200),
+            command: String(args.command).slice(0, 300), exitCode: run.timedOut ? null : run.code, timedOut: Boolean(run.timedOut), durationMs: Date.now() - ranAt,
+            tests: parseTestSummary(combined),
+          };
           if (run.code === 0 && !run.timedOut) {
             return {
               content: [{ type: 'text', text: `Check passed with output:\n${combined.slice(-4000)}` }],
@@ -3652,18 +3666,109 @@ ${String(args.objective ?? '').slice(0, 600)}`,
     // (definition ∩ every delegating parent ∩ grant). Each kept tool re-checks its path arguments on every call; the
     // governed dispatch path enforces the same scope again in Core.
     const agentScope = agentScopeForAttempt(db, attemptId);
+
+    // ── Alpha closure: Chief → specialist delegation ──
+    // Offered to an ordinary Pandesh turn (the Chief). Core's startDelegation enforces the limits (depth, fan-out,
+    // dedupe, restated brief) and freezes the child's scope as (specialist ∩ this turn's authority ∩ grant).
+    if (ctx.delegation && (!agentScope || agentScope.agentId === 'chief')) {
+      const delegation = ctx.delegation;
+      const NAMES: Record<string, string> = { coding: 'Coding', research: 'Research', operations: 'Operations', personal: 'Personal' };
+      tools.push({
+        name: 'delegate_to_agent',
+        label: 'delegate_to_agent',
+        description: "Hand specialist work to one of Pandesh's agents and get its result back. coding: read, change and check code in the selected project folder only (no internet). research: public web research with cited sources (goes online only with the user's OK). operations: inspect this PC. personal: reminders, commitments, routines. Write the brief yourself: the objective and what to return (never paste web or email text). The call waits for the agent's result; then report it to the user, naming the agent, without adding facts it does not contain. Answer simple questions yourself instead of delegating.",
+        parameters: { type: 'object', properties: { agent: { type: 'string', enum: ['coding', 'research', 'operations', 'personal'] }, brief: { type: 'string', description: 'Objective and expected result, in your own words.' } }, required: ['agent', 'brief'] },
+        execute: async (_id: string, args: any) => {
+          const toAgentId = String(args?.agent ?? '').trim();
+          const brief = String(args?.brief ?? '').trim();
+          const name = NAMES[toAgentId] ?? toAgentId;
+          let grant: { egressApprovalId?: string } | null = null;
+          try {
+            // Would the child be able to go online at all? Ask the user here, in this conversation, before it starts.
+            const root = agentScope?.conversationRoot ?? (selectedWorkspace || null);
+            const childScope = deriveScope(getAgentDefinition(db, toAgentId), root, agentScope ?? chiefDelegationScope(root), null);
+            const egress = egressOf(childScope);
+            if (egress.mode !== 'none' && egress.approval) {
+              const decision = await requestToolApproval({
+                toolName: 'delegate_to_agent',
+                agent: toAgentId,
+                brief: brief.slice(0, 300),
+                cardText: `Pandesh wants the ${name} agent to use the internet for this task: "${brief.slice(0, 200)}". Queries go to public search engines and public pages; nothing private is sent.`,
+              });
+              if (decision.outcome !== 'approved') return { content: [{ type: 'text', text: describeUnansweredApproval(decision) }], isError: true };
+              if (decision.approvalId) grant = { egressApprovalId: decision.approvalId };
+            }
+          } catch (err: any) {
+            return { content: [{ type: 'text', text: `NOT DONE (delegation): ${err?.message ?? String(err)}` }], isError: true };
+          }
+          let started: ReturnType<typeof startDelegation>;
+          try {
+            started = mutateWithBroadcast(db, broadcaster, () => startDelegation(db, {
+              parentAttemptId: attemptId, toAgentId, brief, grant, clientId: delegation.clientId, defaults: delegation.defaults,
+              workspaceRoot: selectedWorkspace || null, conversation: 'own',
+            }));
+          } catch (err: any) {
+            return { content: [{ type: 'text', text: `NOT DONE (delegation refused by Core): ${err?.message ?? String(err)}. Tell the user exactly that.` }], isError: true };
+          }
+          safeRecordRuntimeEvent(db, broadcaster, attemptId, 'agent_delegated', { handoffId: started.handoff.id, toAgentId, childAttemptId: started.attemptId, duplicate: started.duplicate }, actor);
+          if (!started.attemptId) return { content: [{ type: 'text', text: 'NOT DONE: the delegated task could not be started.' }], isError: true };
+          const childAttemptId = started.attemptId;
+          const onAbort = () => delegation.cancel(childAttemptId);
+          signal?.addEventListener('abort', onAbort, { once: true });
+          const t0 = Date.now();
+          try {
+            if (!started.duplicate) await delegation.run(childAttemptId);
+            // A duplicate (or a run that returned early) is followed until it settles; bounded by the agent's wall limit.
+            let out = delegationOutcome(db, started.handoff.id);
+            while (!isTerminalDelegation(out.status) && Date.now() - t0 < 15 * 60_000 && !signal?.aborted) {
+              await new Promise((r) => setTimeout(r, 1000));
+              out = delegationOutcome(db, started.handoff.id);
+            }
+            const secs = Math.round((Date.now() - t0) / 1000);
+            if (out.status !== 'completed' || !out.answer) {
+              return { content: [{ type: 'text', text: `NOT DONE: the ${name} agent's task ended as "${out.status}" after ${secs}s${out.answer ? `. Its last message: ${out.answer.slice(0, 1500)}` : ''}. Tell the user exactly that; do not do the task yourself.` }], isError: true,
+                details: { activity: { kind: 'document', title: `${name} agent: ${out.status}`, excerpt: (out.answer ?? '').slice(0, 1200) } } };
+            }
+            return {
+              content: [{ type: 'text', text: `RESULT FROM THE ${name.toUpperCase()} AGENT (completed in ${secs}s; its task runs in its own conversation "${name} · ${brief.slice(0, 60)}"):
+
+${out.answer.slice(0, 6000)}
+
+Report this to the user, saying the ${name} agent did the work. Do not add facts it does not contain.` }],
+              details: { activity: { kind: 'document', title: `${name} agent returned (${secs}s)`, excerpt: out.answer.slice(0, 1200) } },
+            };
+          } finally {
+            signal?.removeEventListener('abort', onAbort);
+          }
+        },
+      });
+    }
+
     if (agentScope) {
+      // A delegation the user already OK'd for internet use needs no second card inside the child.
+      const preapprovedEgress = egressPreapproved(db, agentScope);
+      if (preapprovedEgress) webResearchApproved = true;
+      let egressApproved = preapprovedEgress;
+      // These tools ask the user themselves before going online; every other network tool asks here once per run.
+      const SELF_APPROVING = new Set(['web_research', 'governed_research', 'inspect_page', 'browser_open_site', 'browser_submit', 'advance_wish']);
       const removed: string[] = [];
       const kept = tools.filter((t) => { const ok = isToolAllowed(agentScope, t.name).allowed; if (!ok) removed.push(t.name); return ok; });
       for (const t of kept) {
         const run = t.execute;
         t.execute = async (id: string, args: any) => {
+          const a = (args ?? {}) as Record<string, unknown>;
           const toolCheck = isToolAllowed(agentScope, t.name);
-          const verdict = toolCheck.allowed ? checkPathArguments(agentScope, (args ?? {}) as Record<string, unknown>) : toolCheck;
-          if (!verdict.allowed) {
-            recordScopeRefusal(db, attemptId, agentScope.agentId, t.name, verdict.reason);
-            safeRecordRuntimeEvent(db, broadcaster, attemptId, 'agent_scope_refused', { agentId: agentScope.agentId, tool: t.name, reason: verdict.reason }, actor);
-            return { content: [{ type: 'text', text: `NOT DONE (agent scope): ${verdict.reason}. This needs a different agent or the user's own request; tell the user exactly that.` }], isError: true };
+          const pathCheck = toolCheck.allowed ? checkPathArguments(agentScope, a) : toolCheck;
+          const egress = pathCheck.allowed ? checkEgress(agentScope, t.name, a) : pathCheck;
+          if (!egress.allowed) {
+            recordScopeRefusal(db, attemptId, agentScope.agentId, t.name, egress.reason);
+            safeRecordRuntimeEvent(db, broadcaster, attemptId, 'agent_scope_refused', { agentId: agentScope.agentId, tool: t.name, reason: egress.reason }, actor);
+            return { content: [{ type: 'text', text: `NOT DONE (agent scope): ${egress.reason}. This needs a different agent or the user's own request; tell the user exactly that.` }], isError: true };
+          }
+          if (egress.needsApproval && !egressApproved && !SELF_APPROVING.has(t.name)) {
+            const decision = await requestToolApproval({ toolName: t.name, cardText: `The ${agentScope.agentId} agent wants to go online with ${t.name}${typeof a.url === 'string' ? ` (${String(a.url).slice(0, 120)})` : ''}.` });
+            if (decision.outcome !== 'approved') return { content: [{ type: 'text', text: describeUnansweredApproval(decision) }], isError: true };
+            egressApproved = true;
           }
           return run(id, args);
         };

@@ -144,7 +144,7 @@ function MediaView({ studio, files, onAskPandesh, narrow }: { studio: Rec | null
     <>
       <div className="card">
         <span className="title">Local image studio</span>
-        <span className="meta">{studio ? `ComfyUI ${studio.comfyui ? 'answering' : 'not answering'} · Ollama ${studio.ollama ? 'answering' : 'not answering'}` : 'Status unknown'}</span>
+        <span className="meta">{studio ? `Image Studio ${studio.studio ? 'running' : 'not running'} · ComfyUI ${studio.comfyui ? 'answering' : 'not answering'} · Ollama ${studio.ollama ? `answering${studio.ollamaVersion ? ` (v${str(studio.ollamaVersion)})` : ''}` : 'not answering'}` : 'Status unknown'}</span>
         {studio?.detail ? <span style={{ fontSize: 14 }}>{str(studio.detail)}</span> : null}
         <div className="actions"><button type="button" className="btn small" onClick={() => onAskPandesh('Generate an image of ')}>Ask Pandesh for an image</button></div>
         <span className="meta">Generation runs locally and asks for your approval first.</span>
