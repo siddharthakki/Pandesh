@@ -106,6 +106,30 @@ const RUN_CHECKS_TIMEOUT_MS = 120_000;
 /** Pi's model window. Measured: gemma4 26B runs fully in VRAM at 32K and spills at the 64K machine default. */
 const PI_CONTEXT_WINDOW = 32_768;
 
+/** D15: the replies `describeUnansweredTurn` writes when the model produced no answer (with Core's correction line). */
+export function isUnansweredTurnNotice(text: string): boolean {
+  return /^(?:\d+ steps? ran, but I did not write a final answer\.|I did not get past the first step\.|I finished this turn without producing a reply\.|Stopped\. Nothing after the last finished step was done\.)/.test(text.trim());
+}
+
+/**
+ * D15: one tool-free call that answers from this turn's tool results only. Used when the model ended a turn that had
+ * real tool results with an empty reply: the full context (system prompt, ~80 tool definitions, history) is ~26K
+ * tokens, and the same evidence alone is a few thousand. Results are bounded so the call stays well inside the window.
+ */
+export function buildToolEvidenceSynthesisPrompt(request: string, results: Array<{ tool: string; text: string }>): string {
+  const perResult = 6_000;
+  let budget = 48_000;
+  const blocks: string[] = [];
+  for (const r of results) {
+    if (budget <= 0) { blocks.push('[further results omitted]'); break; }
+    const text = r.text.length > perResult ? `${r.text.slice(0, perResult)}\n[…truncated]` : r.text;
+    blocks.push(`### ${r.tool}\n${text.slice(0, budget)}`);
+    budget -= text.length;
+  }
+  return `User request: "${request}"\n\nResults of the tools that ran for this request (real outputs, read on this PC):\n\n${blocks.join('\n\n')}\n\n`
+    + 'Answer the user request now, completely, using only these results. If something the request needs is not in the results, say exactly what is missing. Do not call tools and do not describe this instruction.';
+}
+
 /** Re-run M9: a follow-up prompt answered with a fragment ("Based") must never replace a substantive answer. */
 export function isDegenerateReplacement(next: string, current: string | null | undefined): boolean {
   return next.trim().length < 40 && (current ?? '').trim().length >= 200;
@@ -4041,7 +4065,10 @@ ${filesPromptSection}${webResearchPromptSection}${wishesPromptSection}${emailCal
     if (conversationId) {
       try {
         const dbMsgs = listMessages(db, conversationId);
-        let turns = dbMsgs.filter(m => (m.role === 'user' || m.role === 'assistant') && m.content);
+        // D15: Core's own "no answer" notices are not conversation content. Left in the history, the model echoed them
+        // on the retry — it read the earlier turn as "I could not answer" and ended its turn with an empty reply. The
+        // task-history section already states that the earlier turn failed.
+        let turns = dbMsgs.filter(m => (m.role === 'user' || m.role === 'assistant') && m.content && !(m.role === 'assistant' && isUnansweredTurnNotice(String(m.content))));
         // Exclude current user prompt if already appended by submission.ts so agent.prompt(prompt) doesn't duplicate it
         if (turns.length > 0 && turns[turns.length - 1].role === 'user' && turns[turns.length - 1].content === (ctx.currentMessage ?? prompt)) {
           turns = turns.slice(0, -1);
@@ -4827,6 +4854,41 @@ ${filesPromptSection}${webResearchPromptSection}${wishesPromptSection}${emailCal
         finalReply = formatMemoryOutputToNaturalLanguage('memory_recall', finalReply);
       } else if (finalReply.includes('"memoryId"')) {
         finalReply = formatMemoryOutputToNaturalLanguage('memory_remember', finalReply);
+      }
+    }
+    // D15: the model ended a turn that had real tool results with no answer. Answer from those results alone with one
+    // tool-free call (a few thousand tokens instead of the ~26K full context) before giving up.
+    if (!isPublicResearch && !signal?.aborted && isResearchStubReply(finalReply, false, isTruncationArtifact)) {
+      const evidence = toolCallsRecorded
+        .filter((t) => t.status === 'completed' && t.result)
+        .map((t) => ({ tool: t.tool, text: extractToolResultText(t.result) }))
+        .filter((r) => r.text.trim());
+      if (evidence.length > 0) {
+        safeRecordRuntimeEvent(db, broadcaster, attemptId, 'tool_evidence_synthesis_started', { results: evidence.length }, actor);
+        try {
+          const synthStream = models.streamSimple(
+            models.getModel('ollama', selectedModel),
+            {
+              systemPrompt: 'You are Pandesh, a precise local assistant. Answer the user request from the tool results provided. Never invent facts that are not in them.',
+              messages: [{ role: 'user', content: [{ type: 'text', text: buildToolEvidenceSynthesisPrompt(requestText, evidence) }] }],
+              tools: [],
+            },
+            { fetch: piFetch, signal },
+          );
+          for await (const event of synthStream) {
+            if (event.type === 'text_delta' && typeof event.delta === 'string' && broadcaster && typeof broadcaster.publishRuntimeToken === 'function') {
+              broadcaster.publishRuntimeToken({ attemptId, invocationId: 'pi', delta: event.delta });
+            }
+          }
+          const synthMsg = await synthStream.result();
+          const synthText = (synthMsg.content || []).filter((c: any) => c.type === 'text').map((c: any) => c.text).join('\n').trim();
+          if (synthText.length >= 20 && !isTruncationArtifact(synthText)) {
+            finalReply = synthText;
+            safeRecordRuntimeEvent(db, broadcaster, attemptId, 'tool_evidence_synthesis_completed', { replyLength: finalReply.length }, actor);
+          }
+        } catch (err: any) {
+          safeRecordRuntimeEvent(db, broadcaster, attemptId, 'tool_evidence_synthesis_failed', { error: err?.message ?? String(err) }, actor);
+        }
       }
     }
     const isStubReply = isResearchStubReply(finalReply, isPublicResearch, isTruncationArtifact);
