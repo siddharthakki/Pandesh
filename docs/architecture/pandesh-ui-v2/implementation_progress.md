@@ -122,9 +122,29 @@ Tests: `core/test/ownedProcesses.test.ts` 6/6 (running only on matching identity
 
 Real app (isolated profile, Coding agent, gemma4:12b): scenario 11 PASS — "create calc.js + calc.test.js, run node calc.test.js": approvals for file changes and for running code; steps Editing calc.js [diff], Editing calc.test.js [diff], Running node calc.test.js [output "PASS"]; files verified on disk (independent re-run prints PASS); aside opened by itself. Processes view: current Core running (pid, port, identity matched), 9 earlier Cores (incl. the two killed in scenario 6) ended. `acceptance-2e/`.
 
+## Milestone 2f — User workspaces · STATUS: done
+
+Spaces → Projects, Wish to Reality, Social Studio, Media Studio, Automations (`Workspaces.tsx`), each from existing Core records:
+
+| Space | Source | Actions |
+|---|---|---|
+| Projects | `/v1/projects` | read; details per record |
+| Wish to Reality | `/v1/wishes`, `/v1/wishes/business` | read only (feature-frozen); "not recorded — outward actions stay disabled"; demo records labelled |
+| Social Studio | NEW `social_drafts` (migration 50, `core/domain/socialDrafts.ts`, host-only routes) | save draft, approve (→ "approved, not published"), ask for revision (with note or new text → revision+1), reject (reason required); "Ask Pandesh to draft" pre-fills chat. No publishing exists. |
+| Media Studio | existing image-studio probe + image/video artifacts | thumbnails, open; "Ask Pandesh for an image" pre-fills chat (generation stays governed, approval first) |
+| Automations | household routines, daily-brief routine, command queue | Run now / Pause / Resume on routines (existing routine control) |
+
+Also: an app-wide error boundary (a failing surface shows the error with Reload / Use the Classic UI instead of a blank window), `PANDESH_UI_V2_DEV=1` readable development bundle.
+
+Bug found in the real app and fixed: switching spaces rendered the new view once with the previous space's data → crash (blank window before the boundary existed). Data is now tagged with its space.
+
+Tests: `core/test/socialDrafts.test.ts` 3/3; targeted Core 50/50; desktop 605/605. Real app: all five spaces open with truthful (empty-profile) content; a Social draft saved and approved → "approved not published", note "It is NOT published". `acceptance-2f/social.png`.
+
+Known issue: Media Studio shows the existing host image-studio probe verbatim, which reported "Ollama not answering" while Ollama was running (the probe's own definition; not changed here).
+
 ### Next executable step
 
-Milestone 2f — User workspaces: Projects, Wish to Reality, Social Studio (drafts + approvals, no publishing), Media Studio, Automations — each from existing Core records, labelled unavailable where no backend exists.
+Milestone 2g — Voice in v2: reuse the existing local ASR (voiceCapture / transcribeUtterance) and TTS (speakText / stopSpeaking); listening, speaking, interrupted and muted states from the host snapshot; real cancellation.
 
 ### Resume
 

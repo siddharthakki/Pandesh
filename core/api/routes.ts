@@ -19,6 +19,7 @@ import { registerAgentRoutes } from './agentRoutes';
 import { registerToolHubRoutes } from './toolHubRoutes';
 import { registerSecondBrainRoutes } from './secondBrainRoutes';
 import { registerProcessRoutes } from './processRoutes';
+import { registerWorkspaceRoutes } from './workspaceRoutes';
 import { agentScopeForAttempt, assignAgentRun } from '../domain/agents';
 
 const kandevClient = new KandevClient();
@@ -502,6 +503,8 @@ export function buildRouter(
   registerSecondBrainRoutes(router);
   // --- Visual Execution: processes Pandesh started, live-verified (core/api/processRoutes.ts) ---
   if (bridge) registerProcessRoutes(router, { dataDir: bridge.dataDir });
+  // --- User workspaces: Social Studio drafts (core/api/workspaceRoutes.ts) ---
+  registerWorkspaceRoutes(router);
 
   // --- Stories ---
   router.get('/v1/stories', (ctx) => {

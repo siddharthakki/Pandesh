@@ -8,8 +8,9 @@ import { Team } from './Team';
 import { ToolsHub } from './ToolsHub';
 import { SecondBrain } from './SecondBrain';
 import { Processes } from './Processes';
+import { Workspace, type SpaceId } from './Workspaces';
 
-export type View = 'chat' | 'board' | 'team' | 'space' | 'system' | 'software' | 'tools' | 'brain' | 'processes';
+export type View = 'chat' | 'board' | 'team' | 'space' | 'system' | 'software' | 'tools' | 'brain' | 'processes' | 'workspace';
 
 interface PaletteEntry { group: string; label: string; run: () => void }
 
@@ -60,6 +61,7 @@ export function App() {
   const useClassic = async () => { try { await api.setUiVariant('classic'); } catch (err) { alert(errorText(err)); } };
 
   const go = (v: View) => { setView(v); setPop(null); };
+  const openSpace = (id: SpaceId) => { setSpace(id); go('workspace'); };
   const rail: Array<{ id: View; label: string; text: string; icon: IconName; badge?: number; onClick: () => void }> = [
     { id: 'chat', label: 'Pandesh — home and chats', text: 'Pandesh', icon: 'home', onClick: () => go('chat') },
     { id: 'board', label: needs ? `Board — ${needs} need you` : 'Board — tasks and their real status', text: 'Board', icon: 'board', badge: needs || undefined, onClick: () => go('board') },
@@ -68,10 +70,11 @@ export function App() {
 
   const spaces = [
     { name: 'Second Brain', sub: 'Search your memories, notes and documents', run: () => go('brain') },
-    { name: 'Projects', sub: 'Milestone 2f — use the Classic UI meanwhile', run: () => showPlaceholder('Projects', 'Projects arrive in milestone 2f. The Classic UI keeps every existing workspace.') },
-    { name: 'Wish to Reality', sub: 'Milestone 2f — use the Classic UI meanwhile', run: () => showPlaceholder('Wish to Reality', 'Arrives in milestone 2f. Nothing is published, sold or sent from here.') },
-    { name: 'Social Studio', sub: 'Milestone 2f — not available yet', run: () => showPlaceholder('Social Studio', 'Drafting with approvals arrives in milestone 2f. No external publishing is connected.') },
-    { name: 'Media Studio', sub: 'Milestone 2f — use the Classic UI meanwhile', run: () => showPlaceholder('Media Studio', 'Arrives in milestone 2f. Image generation remains available in the Classic UI.') },
+    { name: 'Projects', sub: 'Projects, repositories and stories', run: () => openSpace('projects') },
+    { name: 'Wish to Reality', sub: 'Goals and offers (feature-frozen)', run: () => openSpace('wish') },
+    { name: 'Social Studio', sub: 'Drafts and your decisions (no publishing)', run: () => openSpace('social') },
+    { name: 'Media Studio', sub: 'Local image studio and media Pandesh made', run: () => openSpace('media') },
+    { name: 'Automations', sub: 'Routines, daily brief, command queue', run: () => openSpace('automations') },
   ];
   const system = [
     variantForced
@@ -87,6 +90,8 @@ export function App() {
   const [conversations, setConversations] = useState<ConversationEntry[]>([]);
   useEffect(() => { if (pop === 'palette') api.listConversations(false).then(setConversations).catch(() => setConversations([])); }, [pop]);
   const [openConversationId, setOpenConversationId] = useState<string | null>(null);
+  const [space, setSpace] = useState<SpaceId>('projects');
+  const [draft, setDraft] = useState<string | null>(null);
 
   const paletteEntries: PaletteEntry[] = useMemo(() => [
     { group: 'GO TO', label: 'Pandesh (chat)', run: () => go('chat') },
@@ -129,12 +134,13 @@ export function App() {
       )}
 
       <div className="main">
-        {view === 'chat' && <Chat snapshot={snapshot} snapshotError={error} refresh={refresh} narrow={narrow} openConversationId={openConversationId} onOpenPalette={() => openPop('palette')} onOpenBoard={() => go('board')} />}
+        {view === 'chat' && <Chat snapshot={snapshot} snapshotError={error} refresh={refresh} narrow={narrow} openConversationId={openConversationId} onOpenPalette={() => openPop('palette')} onOpenBoard={() => go('board')} draft={draft} onDraftUsed={() => setDraft(null)} />}
         {view === 'board' && <Board overview={overview} narrow={narrow} onOpenPalette={() => openPop('palette')} onOpenConversation={(id) => { setOpenConversationId(id); go('chat'); }} />}
         {view === 'software' && <Software narrow={narrow} />}
         {view === 'tools' && <ToolsHub narrow={narrow} />}
         {view === 'brain' && <SecondBrain narrow={narrow} />}
         {view === 'processes' && <Processes narrow={narrow} />}
+        {view === 'workspace' && <Workspace space={space} narrow={narrow} onAskPandesh={(t) => { setDraft(t); go('chat'); }} />}
         {view === 'team' && <Team narrow={narrow} latestAttemptId={(overview.data?.tasks ?? []).find((t) => t.conversationId === snapshot?.selectedConversationId)?.attemptId ?? overview.data?.tasks?.[0]?.attemptId ?? null}
           onMessage={(agentId) => { void (async () => { await api.household('selectAgent', { agentId }); await api.newConversation(); setOpenConversationId(null); refresh(); go('chat'); })(); }} />}
         {view === 'space' && placeholder && (

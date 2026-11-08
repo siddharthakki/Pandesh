@@ -12,6 +12,9 @@ interface Props {
   openConversationId: string | null;
   onOpenPalette: () => void;
   onOpenBoard: () => void;
+  /** Text to place in the composer (from a workspace's "Ask Pandesh"). */
+  draft?: string | null;
+  onDraftUsed?: () => void;
 }
 
 const ROUTED: Record<string, string> = {
@@ -62,7 +65,7 @@ function pendingDecision(s: Snapshot | null): null | { kind: 'tool' | 'image' | 
   return null;
 }
 
-export function Chat({ snapshot, snapshotError, refresh, narrow, openConversationId, onOpenPalette, onOpenBoard }: Props) {
+export function Chat({ snapshot, snapshotError, refresh, narrow, openConversationId, onOpenPalette, onOpenBoard, draft, onDraftUsed }: Props) {
   const [messages, setMessages] = useState<TranscriptMessage[]>([]);
   const [loadedFor, setLoadedFor] = useState<string | null | undefined>(undefined);
   const [live, setLive] = useState<{ attemptId: string | null; text: string }>({ attemptId: null, text: '' });
@@ -83,6 +86,7 @@ export function Chat({ snapshot, snapshotError, refresh, narrow, openConversatio
   const scroller = useRef<HTMLDivElement | null>(null);
   const textarea = useRef<HTMLTextAreaElement | null>(null);
 
+  useEffect(() => { if (draft) { setText(draft); onDraftUsed?.(); setTimeout(() => textarea.current?.focus(), 0); } }, [draft]);
   const convId = openConversationId ?? snapshot?.selectedConversationId ?? null;
   const runningHere = Boolean(snapshot?.running) && (snapshot?.activeConversationId ?? null) === convId;
 

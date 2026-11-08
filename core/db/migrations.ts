@@ -1851,6 +1851,23 @@ CREATE TABLE IF NOT EXISTS brain_index_state (
 );
 `;
 
+/** Phase 2f — Social Studio drafts (core/domain/socialDrafts.ts). Drafting and
+ * the user's decisions only: nothing here publishes, schedules or sends. */
+const MIGRATION_50_SOCIAL_DRAFTS = `
+CREATE TABLE IF NOT EXISTS social_drafts (
+  id TEXT PRIMARY KEY,
+  channel TEXT NOT NULL,
+  text TEXT NOT NULL,
+  status TEXT NOT NULL,
+  decisionNote TEXT,
+  decidedAt TEXT,
+  revision INTEGER NOT NULL DEFAULT 1,
+  createdAt TEXT NOT NULL,
+  updatedAt TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_social_drafts_status ON social_drafts(status, updatedAt);
+`;
+
 export const MIGRATIONS: Migration[] = [
   { version: 1, description: 'bootstrap core_metadata and schema_migrations', sql: MIGRATION_1_BOOTSTRAP },
   { version: 2, description: 'M31 domain schema (projects/repositories/stories/events/etc.)', sql: MIGRATION_2_DOMAIN },
@@ -1901,6 +1918,7 @@ export const MIGRATIONS: Migration[] = [
   { version: 47, description: 'Research provenance: every fetched web source (URL, title, content hash, redacted text with an expiry) so citations can be reconstructed and claims checked', sql: MIGRATION_47_RESEARCH_SOURCES },
   { version: 48, description: 'Specialist agents: custom definitions and overrides, agent runs with their frozen scope, delegations, scope refusals', sql: MIGRATION_48_AGENTS },
   { version: 49, description: 'Second Brain: knowledge sources, rebuildable chunks, structural links and a full-text index', sql: MIGRATION_49_SECOND_BRAIN },
+  { version: 50, description: 'Social Studio drafts and the user decisions on them (no publishing)', sql: MIGRATION_50_SOCIAL_DRAFTS },
 ];
 
 
