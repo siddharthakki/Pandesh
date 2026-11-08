@@ -79,9 +79,17 @@ Real app (isolated profile, gemma4:12b): scenario 7 PASS — ordinary task → U
 
 Known gaps (2b): memory tools are gated per agent, but recall is not yet filtered by memory scope type (2d); egress policy is recorded and shown, enforcement remains the existing global approval rules; delegation is started by the user from the UI — a model-callable `delegate_to_agent` tool for the Chief is not added yet (needs the approval card "Coding, for Pandesh …"); a Chief delegation cannot grant writes (by the intersection rule) — writes need Message Coding directly.
 
+## Milestone 2c — Tools, Skills & MCP Hub · STATUS: done
+
+System → Tools & Skills (`core/api/toolHubRoutes.ts`, `ToolsHub.tsx`), a read-only projection of existing registries — no new registry: governed capabilities (GovernedCapabilityRegistry: tools, risk, health), chat-engine tools (chatToolSelection map), agent × tool matrix computed with the 2b scope rules (exactly what Core allows; edits go through Team, tighten-only), built-in skills, connectors (existing `/v1/connectors`), MCP shown honestly as "no servers registered with Core", 30-day usage per tool from `tool_invocations`, and capability tests = the existing capability-inventory probe (checks only) with a durable history (`capability-test-history.json`).
+
+Verified: Core api/agentScope/chatToolSelection 53/53, desktop 605/605. Real app: 161 tools (116 governed, 45 native), 25 capabilities with real health (Gmail/Calendar/WhatsApp/Printer "authorization required" in the scratch profile), usage evidence from earlier acceptance runs, Research mapped to exactly its 10 public-research tools; capability test 8 s — 40 working, 4 unverified, 1 unreachable, 3 missing, 4 not connected; history recorded. `acceptance-2c/hub-tools.png`.
+
+Gaps: no Core MCP registry (nothing to show or connect); assigning capabilities to agents is tighten-only via Team (widening a built-in is deliberately impossible); custom agents from templates are not built yet.
+
 ### Next executable step
 
-Milestone 2c — Tools, Skills & MCP Hub (System → Tools & Skills): governed capability catalog with risk class and executor, agent × capability mapping from 2b definitions, connector status and capability-test evidence; reuse existing registries.
+Milestone 2d — Second Brain: `knowledge_sources` registry + rebuildable `knowledge_chunks` FTS5 index over existing memory tables; source-backed search, inspector, timeline, provenance, correction/forget, 2D graph of real relationships; per-agent memory scope filtering on recall.
 
 ### Resume
 

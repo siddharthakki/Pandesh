@@ -16,6 +16,7 @@ import { registerOperatorRoutes } from './operatorRoutes';
 import { registerHouseholdRoutes } from './householdRoutes';
 import { registerSoftwareRoutes } from './softwareRoutes';
 import { registerAgentRoutes } from './agentRoutes';
+import { registerToolHubRoutes } from './toolHubRoutes';
 import { agentScopeForAttempt, assignAgentRun } from '../domain/agents';
 
 const kandevClient = new KandevClient();
@@ -493,6 +494,8 @@ export function buildRouter(
   if (bridge) registerSoftwareRoutes(router, { dataDir: bridge.dataDir });
   // --- Specialist agents: definitions, status, history, delegation (core/api/agentRoutes.ts) ---
   registerAgentRoutes(router, { executor });
+  // --- Tools, Skills & MCP hub (core/api/toolHubRoutes.ts) ---
+  registerToolHubRoutes(router, { registry: capabilities, connectors, dataDir: bridge?.dataDir ?? null });
 
   // --- Stories ---
   router.get('/v1/stories', (ctx) => {

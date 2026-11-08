@@ -116,7 +116,7 @@ export const BASE_TOOLS = new Set([
   'list_directory', 'read_file', 'write_file', 'search_files',
 ]);
 
-const NATIVE_GROUP: Record<string, string> = {
+export const NATIVE_GROUP: Record<string, string> = {
   request_search_permission: 'files_more', find_project_roots: 'files_more', find_duplicate_files: 'files_more',
   get_project_context: 'files_more', search_recent_projects: 'files_more',
   list_system_drives: 'pc',
