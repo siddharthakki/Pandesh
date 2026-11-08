@@ -31,6 +31,7 @@ export interface Snapshot {
   turnOutcomeKind: string | null;
   blockedReason: string | null;
   selectedConversationId: string | null;
+  selectedAgentId?: string | null;
   activeConversationId: string | null;
   contextEnvelope?: number | null;
   speaking: boolean;

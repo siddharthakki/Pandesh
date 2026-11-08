@@ -80,6 +80,7 @@ import {
   type EngineExecutionResult,
   EngineRegistry
 } from './adapters/EngineAdapter';
+import { agentScopeForAttempt, BUILTIN_AGENTS, checkPathArguments, isToolAllowed, recordScopeRefusal } from '../domain/agents';
 import {
   isGmailContractExtractionRequest,
   isTaskStatusRequest,
@@ -3646,6 +3647,32 @@ ${String(args.objective ?? '').slice(0, 600)}`,
       });
     }
 
+    // ── Phase 2b agent scope (core/domain/agents.ts) ──
+    // A request run by a specialist agent only sees, and can only execute, the tools in its frozen effective scope
+    // (definition ∩ every delegating parent ∩ grant). Each kept tool re-checks its path arguments on every call; the
+    // governed dispatch path enforces the same scope again in Core.
+    const agentScope = agentScopeForAttempt(db, attemptId);
+    if (agentScope) {
+      const removed: string[] = [];
+      const kept = tools.filter((t) => { const ok = isToolAllowed(agentScope, t.name).allowed; if (!ok) removed.push(t.name); return ok; });
+      for (const t of kept) {
+        const run = t.execute;
+        t.execute = async (id: string, args: any) => {
+          const toolCheck = isToolAllowed(agentScope, t.name);
+          const verdict = toolCheck.allowed ? checkPathArguments(agentScope, (args ?? {}) as Record<string, unknown>) : toolCheck;
+          if (!verdict.allowed) {
+            recordScopeRefusal(db, attemptId, agentScope.agentId, t.name, verdict.reason);
+            safeRecordRuntimeEvent(db, broadcaster, attemptId, 'agent_scope_refused', { agentId: agentScope.agentId, tool: t.name, reason: verdict.reason }, actor);
+            return { content: [{ type: 'text', text: `NOT DONE (agent scope): ${verdict.reason}. This needs a different agent or the user's own request; tell the user exactly that.` }], isError: true };
+          }
+          return run(id, args);
+        };
+      }
+      tools.length = 0;
+      tools.push(...kept);
+      safeRecordRuntimeEvent(db, broadcaster, attemptId, 'agent_scope_applied', { agentId: agentScope.agentId, agentVersion: agentScope.agentVersion, depth: agentScope.depth, offered: kept.map((t) => t.name), removedCount: removed.length }, actor);
+    }
+
     // A request about the user's own files (CV, price lists in this folder) is answered from those files first: research
     // scoping would remove every local tool, so the private file is never read (audit D2, M9).
     const requestReferencesLocalContent = referencesLocalContent(requestText);
@@ -4160,6 +4187,10 @@ ${filesPromptSection}${webResearchPromptSection}${wishesPromptSection}${emailCal
     // Audit D11: totals are computed by the calculate tool, not by the model.
     if (availableToolNames.has('calculate')) {
       systemPrompt += '\n\nNUMBERS: for every total, sum, difference, price for a quantity (including delivery fees) or percentage, call calculate with the exact expression and report its result. Never add or multiply numbers yourself, and include every fee that applies instead of saying "if applicable". When an amount could be counted in more than one way (for example a charge that might be passed on to a customer or paid by the user), choose one, and say in the reply in one sentence which way you counted it, so the totals can be checked.';
+    }
+    if (agentScope) {
+      const agentDef = BUILTIN_AGENTS.find((a) => a.id === agentScope.agentId);
+      systemPrompt += `\n\nAGENT: this request is handled by the ${agentDef?.name ?? agentScope.agentId} agent${agentScope.depth > 0 ? ', delegated by another agent' : ''}. ${agentDef?.instructions ?? ''} You can only use the tools you were given; if the request needs anything else, say so plainly instead of trying another way.`;
     }
     // Earlier tasks' real outcomes (cancelled / failed / interrupted), so the model never presents them as pending (D4).
     const taskHistorySection = renderTaskHistorySection(priorTurns);

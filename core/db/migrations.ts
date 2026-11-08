@@ -1737,6 +1737,54 @@ CREATE TABLE IF NOT EXISTS research_turn_sources (
   contentExpiresAt TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_research_turn_sources_attempt ON research_turn_sources(attemptId);
+`;
+
+/** Phase 2b — specialist agents (core/domain/agents.ts). Additive only: built-in
+ * definitions live in code; this stores custom agents and user overrides, which
+ * request ran as which agent with which frozen scope, and delegations. */
+const MIGRATION_48_AGENTS = `
+CREATE TABLE IF NOT EXISTS agent_definitions (
+  id TEXT PRIMARY KEY,
+  kind TEXT NOT NULL,
+  version INTEGER NOT NULL,
+  definition TEXT NOT NULL,
+  createdAt TEXT NOT NULL,
+  updatedAt TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS agent_runs (
+  requestId TEXT PRIMARY KEY REFERENCES requests(id),
+  agentId TEXT NOT NULL,
+  agentVersion INTEGER NOT NULL,
+  scope TEXT NOT NULL,
+  handoffId TEXT,
+  createdAt TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_agent_runs_agent ON agent_runs(agentId, createdAt);
+CREATE TABLE IF NOT EXISTS agent_handoffs (
+  id TEXT PRIMARY KEY,
+  parentAttemptId TEXT NOT NULL,
+  childRequestId TEXT,
+  fromAgentId TEXT NOT NULL,
+  toAgentId TEXT NOT NULL,
+  brief TEXT NOT NULL,
+  grantJson TEXT NOT NULL,
+  dedupeKey TEXT NOT NULL,
+  depth INTEGER NOT NULL,
+  status TEXT NOT NULL,
+  createdAt TEXT NOT NULL,
+  updatedAt TEXT NOT NULL,
+  UNIQUE(parentAttemptId, dedupeKey)
+);
+CREATE INDEX IF NOT EXISTS idx_agent_handoffs_parent ON agent_handoffs(parentAttemptId);
+CREATE TABLE IF NOT EXISTS agent_scope_refusals (
+  id TEXT PRIMARY KEY,
+  attemptId TEXT NOT NULL,
+  agentId TEXT NOT NULL,
+  toolName TEXT NOT NULL,
+  reason TEXT NOT NULL,
+  createdAt TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_agent_scope_refusals_agent ON agent_scope_refusals(agentId, createdAt);
 CREATE INDEX IF NOT EXISTS idx_research_turn_sources_conversation ON research_turn_sources(conversationId, retrievedAt);
 `;
 
@@ -1804,6 +1852,7 @@ export const MIGRATIONS: Migration[] = [
   { version: 45, description: 'Household OS hardening: replay nonces that survive a restart, per-folder document-reading grants', sql: MIGRATION_45_HOUSEHOLD_HARDENING },
   { version: 46, description: 'Durable mutation ledger: restart-safe, idempotent workspace edits and non-replayable uncertain mutations', sql: MIGRATION_46_MUTATION_LEDGER },
   { version: 47, description: 'Research provenance: every fetched web source (URL, title, content hash, redacted text with an expiry) so citations can be reconstructed and claims checked', sql: MIGRATION_47_RESEARCH_SOURCES },
+  { version: 48, description: 'Specialist agents: custom definitions and overrides, agent runs with their frozen scope, delegations, scope refusals', sql: MIGRATION_48_AGENTS },
 ];
 
 

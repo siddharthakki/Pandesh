@@ -4,6 +4,7 @@ import { Icon, useNarrow, type IconName } from './ui';
 import { Chat } from './Chat';
 import { Board, useTaskOverview, needsYouCount } from './Board';
 import { Software } from './Software';
+import { Team } from './Team';
 
 export type View = 'chat' | 'board' | 'team' | 'space' | 'system' | 'software';
 
@@ -59,7 +60,7 @@ export function App() {
   const rail: Array<{ id: View; label: string; text: string; icon: IconName; badge?: number; onClick: () => void }> = [
     { id: 'chat', label: 'Pandesh — home and chats', text: 'Pandesh', icon: 'home', onClick: () => go('chat') },
     { id: 'board', label: needs ? `Board — ${needs} need you` : 'Board — tasks and their real status', text: 'Board', icon: 'board', badge: needs || undefined, onClick: () => go('board') },
-    { id: 'team', label: 'Team — specialist agents (milestone 2b)', text: 'Team', icon: 'team', onClick: () => showPlaceholder('Agent Team', 'Specialist agents arrive in milestone 2b. Nothing here runs yet.') },
+    { id: 'team', label: 'Team — specialist agents', text: 'Team', icon: 'team', onClick: () => go('team') },
   ];
 
   const spaces = [
@@ -86,6 +87,7 @@ export function App() {
     { group: 'GO TO', label: 'Pandesh (chat)', run: () => go('chat') },
     { group: 'GO TO', label: 'Board', run: () => go('board') },
     { group: 'GO TO', label: 'Software & Services', run: () => go('software') },
+    { group: 'GO TO', label: 'Team', run: () => go('team') },
     { group: 'ACTIONS', label: 'New chat', run: () => { void api.newConversation().then(refresh); setOpenConversationId(null); go('chat'); } },
     { group: 'ACTIONS', label: 'Use the Classic UI', run: () => void useClassic() },
     { group: 'ACTIONS', label: 'Change theme', run: cycleTheme },
@@ -122,6 +124,8 @@ export function App() {
         {view === 'chat' && <Chat snapshot={snapshot} snapshotError={error} refresh={refresh} narrow={narrow} openConversationId={openConversationId} onOpenPalette={() => openPop('palette')} onOpenBoard={() => go('board')} />}
         {view === 'board' && <Board overview={overview} narrow={narrow} onOpenPalette={() => openPop('palette')} onOpenConversation={(id) => { setOpenConversationId(id); go('chat'); }} />}
         {view === 'software' && <Software narrow={narrow} />}
+        {view === 'team' && <Team narrow={narrow} latestAttemptId={(overview.data?.tasks ?? []).find((t) => t.conversationId === snapshot?.selectedConversationId)?.attemptId ?? overview.data?.tasks?.[0]?.attemptId ?? null}
+          onMessage={(agentId) => { void (async () => { await api.household('selectAgent', { agentId }); await api.newConversation(); setOpenConversationId(null); refresh(); go('chat'); })(); }} />}
         {view === 'space' && placeholder && (
           <div className="placeholder" role="region" aria-label={placeholder.title}>
             <h1>{placeholder.title}</h1>

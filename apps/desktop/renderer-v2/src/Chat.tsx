@@ -23,6 +23,8 @@ const ROUTED: Record<string, string> = {
   corrected_steered: 'Corrected — the running task has your correction.',
 };
 
+const AGENT_NAMES: Record<string, string> = { personal: 'Personal', coding: 'Coding', research: 'Research', operations: 'Operations', voice: 'Voice' };
+
 /** Plain words for the governed actions users meet most; anything else falls back to Core's scope text. */
 const TOOL_WORDS: Record<string, { title: string; allow: string }> = {
   authorize_mission: { title: 'Change files in this folder', allow: 'Allow file changes in this folder' },
@@ -257,6 +259,12 @@ export function Chat({ snapshot, snapshotError, refresh, narrow, openConversatio
       <div className="topbar">
         <button type="button" className="ghost-icon" title="Chats (Ctrl K)" aria-label="Open chats" onClick={onOpenPalette}><Icon name="chats" size={18} /></button>
         <span className="title">{idle ? 'New chat' : 'Chat'}</span>
+        {snapshot?.selectedAgentId && (
+          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8, padding: '2px 4px 2px 10px', border: '1px solid var(--pulse)', borderRadius: 999, fontSize: 13 }}>
+            Talking to {AGENT_NAMES[snapshot.selectedAgentId] ?? snapshot.selectedAgentId}
+            <button type="button" className="btn small" style={{ height: 26 }} onClick={() => void api.household('selectAgent', { agentId: null }).then(refresh)}>Back to Pandesh</button>
+          </span>
+        )}
         <span className="grow" />
         <button type="button" className="ghost-icon" title="New chat" aria-label="New chat" onClick={() => { void api.newConversation().then(() => { setMessages([]); setLoadedFor(null); refresh(); }); }}><Icon name="plus" size={18} /></button>
         <button type="button" className="search-btn" title="Search everything (Ctrl K)" onClick={onOpenPalette}><Icon name="search" size={16} /><span>Search</span>{!narrow && <kbd>Ctrl K</kbd>}</button>

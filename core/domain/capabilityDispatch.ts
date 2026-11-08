@@ -48,6 +48,7 @@ import type { GovernedCapabilityRegistry } from '../runtime/governedCapability';
 import { LocalAutonomySecurityKernel } from '../security/kernel';
 import type { ExecutionGrant } from '../security/types';
 import { decidePermission, recordPermissionDecision, STANDING_AUTHORIZATION_ACTOR } from './permissionModes';
+import { agentScopeForAttempt, checkPathArguments, isToolAllowed, recordScopeRefusal } from './agents';
 import { parseBaselineIdentity, type WriteBaselineIdentity, type WriteProposalPresentation } from '../runtime/writeProposal';
 import {
   CORE_POLICY_ACTOR,
@@ -734,6 +735,19 @@ export async function dispatchCapability(db: CoreDatabase, registry: GovernedCap
   const kernel = LocalAutonomySecurityKernel.getInstance(db);
   if (kernel.isSafeModeActive()) {
     return { outcome: 'denied', attemptId: input.correlationId, reason: 'Security violation: SAFE_MODE / EXECUTION_DISABLED is currently active.' };
+  }
+  // Phase 2b scope gate: a call made for an agent run must fit that run's frozen
+  // effective scope (tool allowlist ∩ every delegating parent, path roots).
+  // Enforced here, at dispatch, whatever the model was shown.
+  const actingAttemptId = input.ownerAttemptId ?? input.permissionScope ?? input.scopeIdentity;
+  const agentScope = actingAttemptId ? agentScopeForAttempt(db, actingAttemptId) : null;
+  if (agentScope) {
+    const toolCheck = isToolAllowed(agentScope, input.toolName);
+    const verdict = toolCheck.allowed ? checkPathArguments(agentScope, input.arguments ?? {}) : toolCheck;
+    if (!verdict.allowed) {
+      recordScopeRefusal(db, actingAttemptId!, agentScope.agentId, input.toolName, verdict.reason);
+      return { outcome: 'denied', attemptId: input.correlationId, reason: `agent_scope_denied: ${verdict.reason}` };
+    }
   }
   const attemptId = ensureCapabilityAttempt(db, input);
   const classification = registry.classify(input.toolName);

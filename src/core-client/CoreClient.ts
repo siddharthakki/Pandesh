@@ -779,6 +779,8 @@ export class CoreClient {
     /** Stable, already-`ready` attachment ids for this turn (max 5). Requires
      * `conversationId`. Frozen into the attempt context by Core. */
     attachmentIds?: string[];
+    /** Phase 2b: run this request as a specialist agent (Core freezes its scope). */
+    agentId?: string;
   }): Promise<{ request: RequestEnvelopeRecord; attempt: AttemptRecord; planningOnly: boolean; messageId: string | null; modelSelection: ModelSelectionEvidence }> {
     return this.request('/v1/submit', { method: 'POST', body: input });
   }

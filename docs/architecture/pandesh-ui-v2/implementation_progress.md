@@ -63,9 +63,25 @@ Fixed during acceptance: brief not reloaded after Core finished starting; raw to
 
 Inserted by owner request after 2a. Details, tests and limits: [software_discovery.md](software_discovery.md). Read-only: no install/update/start/stop. Update execution (2B) awaits separate approval.
 
+## Milestone 2b — Specialist Agent Team · STATUS: done
+
+| Area | Implementation |
+|---|---|
+| Definitions | `core/domain/agents.ts`: built-ins Pandesh (Chief of Staff), Personal, Coding, Research, Operations, Voice; Sales, Marketing, Social Media, Customer Support as Phase 3 templates (cannot be enabled or run). Each has an allowlist (`prefix_*` families), denylist, folders (`conversation` = the chat's selected folder), memory scopes, egress, always-ask categories, local-only model policy, limits (depth ≤ 2). Built-ins can only be tightened (enabled, model policy, extra denials/approvals); every change bumps the version. Migration 48 (additive): `agent_definitions`, `agent_runs`, `agent_handoffs`, `agent_scope_refusals`. |
+| Scope gate | Effective scope = stack of layers (definition, every delegating parent, explicit grant); allowed only if every layer allows ⇒ delegation is an intersection and cannot widen tools, folders, memory or egress. Frozen into `agent_runs` at submission (later edits don't change a run in flight). Enforced (1) at exposure in the chat engine (tools filtered; agent identity in the system prompt), (2) per call on every kept tool (path arguments vs roots, incl. `..` and absolute escapes), (3) in Core's `dispatchCapability` for any governed call made for an agent run. Refusals are recorded and shown. |
+| Delegation | `POST /v1/agents/delegate` (host-only): child request runs as the target agent with parent scope ∩ child definition ∩ grant (an ordinary Pandesh turn delegates as Chief of Staff); dedupe; fan-out ≤ 3 active (finished children free their slot); depth ≤ 2; no self-delegation; a brief copying ≥120 chars of untrusted tool output (web, email, documents, files) from the parent turn is refused. |
+| Runs | On demand in the existing executor; `/v1/submit` takes `agentId` (atomic with the request). No resident model per agent. |
+| UI | Team: directory ordered by real state (needs you, working, idle, off, Phase 3), detail tabs Overview / Activity / Capabilities / Memory / Model & limits / Refusals, Message <agent> (chat header "Talking to Coding · Back to Pandesh"), turn on/off, delegate from your latest task with your own brief. |
+
+Tests: `core/test/agentScope.test.ts` 13/13 adversarial (tool and path escapes, traversal, grant widening, parent widening, depth, dedupe, fan-out + release, self/template delegation, injected brief, dispatch gate + audit, frozen scope, disabled/Phase 3). Full Core suite: 2458 passed, 3 failed — agentScope (suite started mid-edit; passes alone), hermesEngine (timeout under load; passes alone), m54 disk-CAS benchmark (fails identically without 2b: 8.8 ms vs 2 ms on this disk — pre-existing, environment-dependent).
+
+Real app (isolated profile, gemma4:12b): scenario 7 PASS — ordinary task → UI delegation to Coding → child ran with layers coding@1 ∩ chief@1, depth 1, answered "1 TypeScript file: src/a.ts" from the real workspace. Scenario 8 PASS — Message Coding "read C:\Windows…win.ini": model was offered read_file, Core refused the path at call time and recorded "outside the folders allowed by agent:coding@1"; the reply says so. Screenshots `acceptance-2b/`.
+
+Known gaps (2b): memory tools are gated per agent, but recall is not yet filtered by memory scope type (2d); egress policy is recorded and shown, enforcement remains the existing global approval rules; delegation is started by the user from the UI — a model-callable `delegate_to_agent` tool for the Chief is not added yet (needs the approval card "Coding, for Pandesh …"); a Chief delegation cannot grant writes (by the intersection rule) — writes need Message Coding directly.
+
 ### Next executable step
 
-Milestone 2b — Specialist Agent Team: Core `agent_definitions` + scope gate (multi_agent_architecture.md §6, review_decisions D4) with adversarial tests, then the Team UI.
+Milestone 2c — Tools, Skills & MCP Hub (System → Tools & Skills): governed capability catalog with risk class and executor, agent × capability mapping from 2b definitions, connector status and capability-test evidence; reuse existing registries.
 
 ### Resume
 

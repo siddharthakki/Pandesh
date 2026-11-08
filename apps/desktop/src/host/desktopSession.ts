@@ -277,6 +277,8 @@ export class DesktopSession {
   private readonly workspaceActivity: WorkspaceActivityLog;
   private missionStartedAt: string | null = null;
   private selectedWorker = 'local-core';
+  /** Phase 2b: the specialist agent the next turns are addressed to (null = Pandesh itself). */
+  private selectedAgentId: string | null = null;
   private selectedInferenceProvider: 'ollama' | 'openrouter' | 'cloud' = 'ollama';
   private cloudCatalogCache: DesktopCloudCatalog | null = null;
   private cloudListings = new Map<string, DesktopCloudModelListing>();
@@ -869,6 +871,7 @@ export class DesktopSession {
       coreBuild: this.coreBuild,
       workers: listWorkerOptions().map((option) => ({ ...option })),
       selectedWorker: this.selectedWorker,
+      selectedAgentId: this.selectedAgentId,
       activeWorker: this.activeWorker,
       openRouter: this.openRouterStatus(),
       localSpeech: this.getLocalSpeechStatus(),
@@ -1912,6 +1915,7 @@ export class DesktopSession {
     writeSelectedConversation(this.dataDir, conversationId);
     const submission = await client.submit({
       currentMessage: text,
+      ...(this.selectedAgentId ? { agentId: this.selectedAgentId } : {}),
       requestedMode: 'baat_kar',
       conversationId,
       requestedProvider: selection.providerId,
@@ -2220,6 +2224,7 @@ export class DesktopSession {
       : null;
     const submission = await client.submit({
       currentMessage: text,
+      ...(this.selectedAgentId ? { agentId: this.selectedAgentId } : {}),
       requestedMode,
       conversationId,
       ...(attachmentIds.length > 0 ? { attachmentIds } : {}),
@@ -2571,6 +2576,7 @@ export class DesktopSession {
     const model = this.activeModel as string;
     const submission = await client.submit({
       currentMessage: text,
+      ...(this.selectedAgentId ? { agentId: this.selectedAgentId } : {}),
       requestedMode: 'baat_kar',
       conversationId: active.conversationId,
       requestedProvider: 'ollama',
@@ -2702,8 +2708,16 @@ export class DesktopSession {
       softwareInventory: { path: `/v1/software/inventory${args.refresh ? '?refresh=1' : ''}` },
       softwareUpdates: { path: '/v1/software/updates' },
       softwareCheckUpdates: { path: '/v1/software/updates/check', method: 'POST', body: {} },
+      agents: { path: '/v1/agents' },
+      agent: { path: `/v1/agents/${id}` },
+      agentUpdate: { path: `/v1/agents/${id}/update`, method: 'POST', body: { enabled: args.enabled, modelPolicy: args.modelPolicy, toolDenylist: args.toolDenylist, alwaysAsk: args.alwaysAsk } },
+      agentDelegate: { path: '/v1/agents/delegate', method: 'POST', body: { parentAttemptId: args.parentAttemptId, toAgentId: args.toAgentId, brief: args.brief, grant: args.grant, workspaceRoot: this.folder ?? null } },
       softwareSettings: { path: '/v1/software/settings', method: 'POST', body: { periodicEnabled: args.periodicEnabled, intervalHours: args.intervalHours } },
     };
+    if (action === 'selectAgent') {
+      this.selectedAgentId = typeof args.agentId === 'string' && args.agentId && args.agentId !== 'chief' ? args.agentId : null;
+      return { selectedAgentId: this.selectedAgentId };
+    }
     const route = routes[action];
     if (!route) throw new Error(`unknown household action ${action}`);
     return client.requestAsHost(route.path, route.method ? { method: route.method, body: route.body } : {});

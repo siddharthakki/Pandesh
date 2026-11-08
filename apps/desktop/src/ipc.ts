@@ -588,6 +588,8 @@ export interface DesktopSnapshot {
   workspaceActivities: DesktopWorkspaceActivity[];
   workers: DesktopWorkerOption[];
   selectedWorker: string;
+  /** Phase 2b: the specialist agent the next turns go to; null = Pandesh. */
+  selectedAgentId?: string | null;
   /** Recorded on the request that ran, so the answer is attributable. */
   activeWorker: string | null;
   /** Gate 0: non-secret OpenRouter configuration status only. */
