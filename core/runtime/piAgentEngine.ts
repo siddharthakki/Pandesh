@@ -3872,7 +3872,7 @@ ${availableToolNames.has('system_hardware_telemetry') ? `- For disk, storage, or
 ` : '';
 
     const specialistPromptSection = ['desktop_screenshot', 'desktop_windows_list', 'inspect_page', 'scout_add_watch', 'hermes_list_skills'].some((t) => availableToolNames.has(t)) ? `COMPUTER, BROWSER, WATCHES AND SPECIALIST SKILLS (STRICT RULES):
-${availableToolNames.has('desktop_screenshot') ? `- 'desktop_screenshot' captures the real Windows desktop and returns the file path, size and SHA-256. 'desktop_windows_list' lists the visible top-level windows. Both are read-only.\n` : ''}${availableToolNames.has('inspect_page') ? `- 'inspect_page' opens a real page in the managed browser: a workspace-relative HTML path, or a live URL on this machine (http://127.0.0.1:<port>/...). It acts on a running page, so it needs the operator's approval. Quote only what the tool returned; never describe a page you did not open.\n` : ''}${availableToolNames.has('scout_add_watch') ? `- 'scout_add_watch' creates a durable watch that Core then checks on its own schedule; 'scout_list_watches', 'scout_run_watch' and 'scout_run_all' read and check them. Only add a watch when the user asked for one, and never claim a watch is running without a tool result.\n` : ''}${availableToolNames.has('hermes_list_skills') ? `- 'hermes_list_skills' lists the skills installed in the local Hermes agent; 'hermes_invoke_skill' runs one of them and returns Hermes' own result. Never invent a skill name — list the skills first, then invoke one of the names that were listed.\n` : ''}- When a tool result says NOT DONE, NOT AVAILABLE or that it was declined, say so plainly. Never present a tool's failure as a success, and never invent a file path, a number or a quote.
+${availableToolNames.has('desktop_screenshot') ? `- 'desktop_screenshot' captures the real Windows desktop and returns the file path, size and SHA-256. 'desktop_windows_list' lists the visible top-level windows. Both are read-only.\n` : ''}${availableToolNames.has('inspect_page') ? `- 'inspect_page' opens a real page in the managed browser: a workspace-relative HTML path, or a live URL on this machine (http://127.0.0.1:<port>/...). It acts on a running page, so it needs the operator's approval. Quote only what the tool returned; never describe a page you did not open.\n` : ''}${availableToolNames.has('scout_add_watch') ? `- 'scout_add_watch' creates a durable watch that Core then checks on its own schedule; 'scout_list_watches', 'scout_run_watch' and 'scout_run_all' read and check them. Only add a watch when the user asked for one, and never claim a watch is running without a tool result.\n` : ''}${availableToolNames.has('hermes_list_skills') ? `- 'hermes_list_skills' lists the skills installed in the local Hermes agent; 'hermes_invoke_skill' runs one of them and returns Hermes' own result. Never invent a skill name — list the skills first, then invoke one of the names that were listed.\n` : ''}- When a tool result says NOT DONE, NOT AVAILABLE or that it was declined, say so plainly. Never present a tool's failure as a success, and never invent a file path, a number or a quote. When the user declined an approval, say "you declined" — it is the user's choice, not a system protection — and do not offer a manual way around it. Offer to do something (send, book, buy, post) only when a tool for it is in your tool list.
 ` : '';
 
     const pcOrgPromptSection = ['pc_capability_inventory', 'pc_organize_scan', 'routine_create', 'household_scan_obligations'].some((t) => availableToolNames.has(t)) ? `PC ORGANIZATION, ROUTINES, HOUSEHOLD & JUGAAD (STRICT RULES):
@@ -4047,7 +4047,19 @@ ${filesPromptSection}${webResearchPromptSection}${wishesPromptSection}${emailCal
         }
         priorTurnsTotal = turns.length;
         const bounded = boundConversationContext(turns.map((m) => ({ role: m.role, content: String(m.content) })), requestText);
-        const keptTurns = bounded.turns;
+        let keptTurns = bounded.turns;
+        // D15: in a long conversation the history plus this turn's tool results pushed the prompt past the 32K window;
+        // Core then widened num_ctx to 64K, which spills out of VRAM and returned an empty reply (the same request in a
+        // new conversation worked). Keep history within a share of the window so the turn's own work still fits:
+        // the oldest turns go first (~4 chars per token).
+        let toolChars = 0;
+        try { toolChars = JSON.stringify(tools ?? []).length; } catch { /* estimate only */ }
+        const historyBudgetChars = Math.max(4_000, Math.floor(PI_CONTEXT_WINDOW * 4 * 0.5) - systemPrompt.length - toolChars);
+        let historyChars = keptTurns.reduce((sum, t) => sum + t.content.length, 0);
+        while (keptTurns.length > 2 && historyChars > historyBudgetChars) {
+          historyChars -= keptTurns[0].content.length;
+          keptTurns = keptTurns.slice(1);
+        }
         omittedTurnsCount = Math.max(0, priorTurnsTotal - keptTurns.length);
         if (bounded.newTopic) safeRecordRuntimeEvent(db, broadcaster, attemptId, 'context_new_topic', { priorTurns: priorTurnsTotal, kept: keptTurns.length }, actor);
         for (const m of keptTurns) {
@@ -4915,7 +4927,13 @@ ${filesPromptSection}${webResearchPromptSection}${wishesPromptSection}${emailCal
     // behind it is not a completed task.
     let turnOutcome = evaluateTurnOutcome(toolCallsRecorded);
     if (isUnanswered && turnOutcome.verdict === 'conversational') {
-      turnOutcome = { verdict: 'unverified', reason: 'The model completed the turn without generating a reply', performed: [], refused: [], failed: ['reply_generation'] };
+      // D8: when the last model call failed (Ollama stopped or the connection dropped), say so — the model did not
+      // "complete without a reply".
+      const lastCall = modelCalls[modelCalls.length - 1];
+      const reason = lastCall?.status === 'error'
+        ? `Lost the connection to the local model server (Ollama) before a reply was generated: ${lastCall.error ?? 'unknown error'}`
+        : 'The model completed the turn without generating a reply';
+      turnOutcome = { verdict: 'unverified', reason, performed: [], refused: [], failed: ['reply_generation'] };
     }
     // "Research evidence synthesized" only when a search really returned evidence (a rejected search returned none).
     if (isPublicResearch && !isUnanswered && finalReply && !isResearchStubReply(finalReply, true, isTruncationArtifact)

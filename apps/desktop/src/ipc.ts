@@ -553,6 +553,8 @@ export interface DesktopSnapshot {
   /** True when the next local submit delegates model choice to Core. */
   modelIsAuto: boolean;
   modelAvailable: boolean | null;
+  /** D8: false when the local model server (Ollama) did not answer the last probe; null when unknown or cloud. */
+  modelServerReachable?: boolean | null;
   /** Installed Ollama model names for the picker. */
   installedModels: string[];
   /** Free cloud providers, verified free model pools and selection. Off by default. */

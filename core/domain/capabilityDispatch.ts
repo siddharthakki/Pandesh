@@ -129,9 +129,22 @@ export function ensureCapabilityAttempt(
   db: CoreDatabase,
   input: { correlationId: string; actor: string; clientId: string; ownerAttemptId?: string },
 ): string {
+  // D6: a shared (unowned) conversation anchor settled at Core boot is never
+  // reopened either; the conversation's next governed call gets a fresh anchor
+  // under the next generation key. Approvals never carry over to it.
+  let key = input.correlationId;
+  if (!input.ownerAttemptId) {
+    for (let generation = 1; ; generation += 1) {
+      const existing = lookupIdempotencyResult<string>(db, { key, clientId: input.clientId, routeId: 'm38.capabilityAttempt.ensure' });
+      if (!existing) break;
+      const anchor = getAttempt(db, existing);
+      if (!isTerminalAttemptStatus(anchor.status) || anchor.parentAttemptId) break;
+      key = `${input.correlationId}#${generation}`;
+    }
+  }
   const attemptId = withIdempotency(
     db,
-    { key: input.correlationId, clientId: input.clientId, routeId: 'm38.capabilityAttempt.ensure' },
+    { key, clientId: input.clientId, routeId: 'm38.capabilityAttempt.ensure' },
     { correlationId: input.correlationId },
     () => {
       const request = createRequest(db, {
@@ -199,8 +212,15 @@ export function settleCapabilityAttempt(
  * attempt already created for this correlationId, if any, WITHOUT ever
  * creating one — a restoration query must never mint a new attempt/approval/
  * idempotency row just by asking whether one exists. */
-function findExistingCapabilityAttemptId(db: CoreDatabase, correlationId: string, clientId: string): string | undefined {
-  return lookupIdempotencyResult<string>(db, { key: correlationId, clientId, routeId: 'm38.capabilityAttempt.ensure' });
+function findExistingCapabilityAttemptIds(db: CoreDatabase, correlationId: string, clientId: string): string[] {
+  const ids: string[] = [];
+  for (let generation = 0; ; generation += 1) {
+    const key = generation === 0 ? correlationId : `${correlationId}#${generation}`;
+    const id = lookupIdempotencyResult<string>(db, { key, clientId, routeId: 'm38.capabilityAttempt.ensure' });
+    if (!id) break;
+    ids.push(id);
+  }
+  return ids;
 }
 
 /**
@@ -214,7 +234,7 @@ function findExistingCapabilityAttemptId(db: CoreDatabase, correlationId: string
  * unchanged for the caller while ownership stays per mission.
  */
 function findCapabilityAttemptIds(db: CoreDatabase, correlationId: string, clientId: string): string[] {
-  const direct = findExistingCapabilityAttemptId(db, correlationId, clientId);
+  const direct = findExistingCapabilityAttemptIds(db, correlationId, clientId);
   const owned = db.all<{ id: string }>(
     `SELECT anchor.id AS id
        FROM attempts anchor
@@ -232,7 +252,7 @@ function findCapabilityAttemptIds(db: CoreDatabase, correlationId: string, clien
       ORDER BY a.createdAt`,
     [correlationId],
   ).map((row) => row.id);
-  return [...new Set([...(direct ? [direct] : []), ...owned, ...directAttempts])];
+  return [...new Set([...direct.reverse(), ...owned, ...directAttempts])];
 }
 
 /**

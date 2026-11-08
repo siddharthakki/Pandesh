@@ -190,6 +190,7 @@ export function createPiOllamaFetch(options: PiOllamaFetchOptions): typeof fetch
       async start(controller) {
         const push = (text: string) => controller.enqueue(encoder.encode(text));
         const firstToken = () => { if (metrics.firstTokenMs == null) metrics.firstTokenMs = Date.now() - started; };
+        let sawDone = false;
         try {
           for await (const raw of upstream.lines) {
             const frame = raw as {
@@ -215,6 +216,7 @@ export function createPiOllamaFetch(options: PiOllamaFetchOptions): typeof fetch
               push(chunk({ tool_calls: [{ index, id: `call_${started.toString(36)}_${index}`, type: 'function', function: { name: call.function?.name ?? '', arguments: JSON.stringify(call.function?.arguments ?? {}) } }] }));
             }
             if (frame.done) {
+              sawDone = true;
               metrics.promptTokens = frame.prompt_eval_count ?? 0;
               metrics.promptMs = Math.round((frame.prompt_eval_duration ?? 0) / 1e6);
               metrics.outputTokens = frame.eval_count ?? 0;
@@ -224,6 +226,9 @@ export function createPiOllamaFetch(options: PiOllamaFetchOptions): typeof fetch
               push(chunk({}, finish, { prompt_tokens: metrics.promptTokens, completion_tokens: metrics.outputTokens, total_tokens: metrics.promptTokens + metrics.outputTokens }));
             }
           }
+          // D8: a stream that ends without Ollama's final frame was cut (server stopped, connection lost),
+          // not a finished reply; the turn must say the connection was lost, not "no reply".
+          if (!sawDone && !init.signal?.aborted) throw new Error('the connection to Ollama closed before the reply finished');
           push('data: [DONE]\n\n');
           report();
           controller.close();

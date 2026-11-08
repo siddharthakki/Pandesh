@@ -312,6 +312,8 @@ export class DesktopSession {
    * keeps working unchanged for the two call sites that never touch the
    * rail. `submitTask` prefers this one when set. */
   private selectedConversationId: string | null = null;
+  /** D8: whether the local model server answered the last probe (null = not probed yet). */
+  private modelServerReachable: boolean | null = null;
   private interactionMode: DesktopInteractionMode = 'chat';
   private lastTurnOutcome: DesktopTurnOutcome | null = null;
   /** Truthful "what actually happened" label, independent of the coarser
@@ -812,7 +814,11 @@ export class DesktopSession {
         ? (openRouter.model ?? null)
         : displayProvider === 'cloud' && cloudSelection
           ? cloudSelection.modelId
-          : (this.provider?.model ?? null);
+          // D9: under Auto the configured label (gemma4:12b) is not what ran; show the model Core
+          // last actually chose, or nothing until it has chosen one.
+          : modelIsAuto
+            ? (this.activeModel && this.activeModel !== AUTO_MODEL ? this.activeModel : null)
+            : (this.provider?.model ?? null);
     const displayApiBase = displayProvider === 'openrouter'
       ? OPENROUTER_OFFICIAL_API_BASE
       : (this.provider?.apiBase ?? 'http://127.0.0.1:11434');
@@ -823,6 +829,7 @@ export class DesktopSession {
       model: displayModel,
       modelIsAuto,
       modelAvailable: displayProvider === 'openrouter' ? null : this.modelAvailable,
+      modelServerReachable: displayProvider === 'openrouter' ? null : this.modelServerReachable,
       installedModels: [...this.installedModels],
       cloud: this.getCloudState(),
       selectedInferenceProvider: inference,
@@ -1267,7 +1274,7 @@ export class DesktopSession {
     let migrated: string | null = null;
     if (legacy) {
       try {
-        const installed = await listInstalledOllamaModels('http://127.0.0.1:11434');
+        const installed = await listInstalledOllamaModels(this.provider?.apiBase ?? 'http://127.0.0.1:11434');
         const isInstalled = installed.includes(legacy.model)
           || installed.some((name) => name === legacy.model || name.startsWith(`${legacy.model}:`));
         if (isInstalled) migrated = legacy.model;
@@ -1574,13 +1581,15 @@ export class DesktopSession {
     const apiBase = this.provider?.apiBase ?? 'http://127.0.0.1:11434';
     try {
       this.installedModels = await listInstalledOllamaModels(apiBase);
+      this.modelServerReachable = true;
       if (!this.operatorSelectedModel && this.installedModels.length === 1) {
         this.operatorSelectedModel = this.installedModels[0];
         writeSelectedModel(this.dataDir, this.operatorSelectedModel);
       }
     } catch (err) {
       this.installedModels = [];
-      this.coreDetail = (err as Error).message;
+      this.modelServerReachable = !/unreachable|ECONNREFUSED|fetch failed/i.test((err as Error).message);
+      this.coreDetail = this.modelServerReachable ? (err as Error).message : this.modelServerUnreachableMessage(apiBase);
       this.emit({ kind: 'error', at: nowIso(), summary: (err as Error).message });
     }
     return [...this.installedModels];
@@ -2098,13 +2107,16 @@ export class DesktopSession {
       openRouterSelection = requireOpenRouterSelection(config, openRouterApiKeyPresent(this.dataDir));
     } else if (isAutoModel) {
       await this.refreshInstalledModels();
+      if (this.installedModels.length === 0 && this.modelServerReachable === false) {
+        throw new Error(this.modelServerUnreachableMessage(this.provider?.apiBase ?? 'http://127.0.0.1:11434'));
+      }
       if (this.installedModels.length === 0) {
         throw new Error('No models found in Ollama. Install a model (e.g. ollama pull gemma4:12b) before submitting.');
       }
     } else {
       await this.refreshModelAvailability();
       if (this.modelAvailable !== true) {
-        throw new Error(`configured local model '${this.provider!.model}' is not installed in Ollama`);
+        throw new Error(this.localModelUnavailableMessage());
       }
     }
 
@@ -2342,7 +2354,7 @@ export class DesktopSession {
     this.refreshProvider();
     await this.refreshModelAvailability();
     if (this.modelAvailable !== true) {
-      throw new Error(`configured local model '${this.provider!.model}' is not installed in Ollama`);
+      throw new Error(this.localModelUnavailableMessage());
     }
     const scope = describeDesktopTaskScope(this.folder);
     if (!scope) throw new Error('select a repository before continuing');
@@ -4648,12 +4660,21 @@ export class DesktopSession {
     } catch {
       this.provider = {
         providerType: 'ollama',
-        apiBase: 'http://127.0.0.1:11434',
+        apiBase: (process.env.KARKEDIKHA_OLLAMA_URL?.trim() || 'http://127.0.0.1:11434').replace(/\/$/, ''),
         model: this.operatorSelectedModel === AUTO_MODEL ? '' : this.operatorSelectedModel ?? '',
         routingPolicy: 'local-only',
         source: 'unset',
       };
     }
+  }
+
+  private modelServerUnreachableMessage(apiBase: string): string {
+    return `Ollama is not reachable at ${apiBase}. Start Ollama, then send again — your message was not sent.`;
+  }
+
+  private localModelUnavailableMessage(): string {
+    if (this.modelServerReachable === false) return this.modelServerUnreachableMessage(this.provider?.apiBase ?? 'http://127.0.0.1:11434');
+    return `configured local model '${this.provider?.model ?? 'unset'}' is not installed in Ollama`;
   }
 
   private async refreshModelAvailability(): Promise<void> {
@@ -4677,8 +4698,18 @@ export class DesktopSession {
     try {
       await assertLocalModelInstalled(this.provider.apiBase, this.provider.model);
       this.modelAvailable = true;
+      this.modelServerReachable = true;
     } catch (err) {
       this.modelAvailable = false;
+      if (/Ollama is unreachable/i.test((err as Error).message)) {
+        // D8: an unreachable server is not a missing model.
+        this.modelServerReachable = false;
+        const detail = this.modelServerUnreachableMessage(this.provider.apiBase);
+        this.coreDetail = detail;
+        this.emit({ kind: 'error', at: nowIso(), summary: detail });
+        return;
+      }
+      this.modelServerReachable = true;
       // Fail closed, never silently substitute another model — the operator's
       // explicit selection was removed from Ollama since it was chosen.
       const detail = `Selected model '${this.provider.model}' is not installed. Select an installed model.`;
@@ -4980,6 +5011,9 @@ export class DesktopSession {
     if (!active || active.terminal) return;
     active.terminal = true;
     this.lastTurnOutcome = outcome;
+    // D8: a failed local turn may mean Ollama went away; re-probe so the header
+    // stops saying "Connected" when it is not (best effort, never blocks).
+    if (outcome !== 'completed' && this.selectedInferenceProvider !== 'cloud') void this.refreshInstalledModels().catch(() => undefined);
     this.turnOutcomeKind = classifyTurnOutcomeKind({ outcome, mode: this.interactionMode });
     // "Repository updated" only with evidence that files changed in this
     // attempt (cockpit-observed paths or file artifacts) — a Q&A answered by

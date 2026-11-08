@@ -4774,6 +4774,14 @@ openrouterSetKey?.addEventListener('click', async () => {
     if (openrouterKey) openrouterKey.value = '';
     await refresh();
   } catch (err) {
+    // D8: a send the host refused (e.g. Ollama not reachable) never ran — the
+    // typed text goes back into the composer and its echo is removed, so the
+    // message is not lost and the pane does not show it as sent.
+    [...(result?.querySelectorAll('[data-live-echo="1"]') ?? [])].pop()?.remove();
+    if (taskInput && !taskInput.value.trim()) {
+      taskInput.value = typedInput;
+      unsentDraftText = typedInput;
+    }
     await refresh();
     showOperationError(err);
   }
@@ -8386,7 +8394,7 @@ function renderWorkspace(snapshot) {
     const connected = connection === 'connected';
     const local = snapshot?.provider !== 'openrouter';
     const text = connected
-      ? (local ? 'Local AI · Connected' : 'Cloud AI · Connected')
+      ? (local ? (snapshot?.modelServerReachable === false ? 'Local AI · Ollama not reachable' : 'Local AI · Connected') : 'Cloud AI · Connected')
       : connection === 'reconnecting' || connection === 'starting'
         ? 'Local AI · Reconnecting…'
         : 'Local AI · Not connected';

@@ -23,7 +23,22 @@ function routingKind(mode: ResolvedMode, profile?: string): 'chat' | 'question' 
 function chainFor(kind: ReturnType<typeof routingKind>): string[] {
   if (kind === 'chat') return [AUTO_CHAT_MODEL, AUTO_RECOVERY_MODEL, AUTO_FALLBACK_MODEL];
   if (kind === 'mutation') return [AUTO_MUTATION_MODEL, AUTO_RECOVERY_MODEL, AUTO_FALLBACK_MODEL];
-  return [AUTO_QUESTION_MODEL, AUTO_MUTATION_MODEL, AUTO_RECOVERY_MODEL, AUTO_FALLBACK_MODEL];
+  return [AUTO_QUESTION_MODEL, AUTO_MUTATION_MODEL, AUTO_CHAT_MODEL, AUTO_RECOVERY_MODEL, AUTO_FALLBACK_MODEL];
+}
+
+/** Not a chat model: embedding/reranker tags cannot answer a request. */
+const NON_GENERATIVE = /embed|rerank|bge-|e5-|minilm/i;
+
+/**
+ * D9: the preference chain names tags that are not installed on every PC. When
+ * none of them is installed, Auto uses a model that is (the chat default's
+ * family first, then the first generative model in the catalog) instead of
+ * failing a request an installed model can serve.
+ */
+function installedFallback(catalog: InstalledModelsCatalog): string | undefined {
+  const generative = catalog.models.filter((model) => !NON_GENERATIVE.test(model));
+  const family = AUTO_CHAT_MODEL.split(':')[0];
+  return generative.find((model) => model.split(':')[0] === family) ?? generative[0];
 }
 
 function requirementsFor(
@@ -85,16 +100,24 @@ export function routeModel(
   options: RouteModelOptions = {},
 ): ModelSelectionEvidence {
   const kind = routingKind(resolvedMode, profile);
-  const chain = chainFor(kind);
   const installed = new Set(catalog.models);
-  const selectedModel = catalog.reachable
-    ? chain.find((model) => installed.has(model))
-    : AUTO_FALLBACK_MODEL;
+  // D9: an unreachable catalog never "selects" a model it cannot see installed.
+  if (!catalog.reachable) {
+    throw new CoreError(
+      'invalid_request',
+      'Ollama is not reachable, so Auto cannot choose an installed model. Start Ollama, then send again.',
+    );
+  }
+  const preferred = chainFor(kind);
+  const chained = preferred.find((model) => installed.has(model));
+  const fallback = chained ? undefined : installedFallback(catalog);
+  const chain = fallback ? [...preferred, fallback] : preferred;
+  const selectedModel = chained ?? fallback;
 
   if (!selectedModel) {
     throw new CoreError(
       'invalid_request',
-      `no installed Ollama model can serve '${kind}'; expected one of: ${chain.join(', ')}`,
+      `no installed Ollama model can serve '${kind}'; expected one of: ${preferred.join(', ')}`,
     );
   }
 

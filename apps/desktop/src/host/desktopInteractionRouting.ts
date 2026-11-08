@@ -152,12 +152,24 @@ export function selectImageCheckpoint(prompt: string, checkpoints: Array<{ name:
 export function extractImageGenerationPrompt(text: string): string {
   const trimmed = text.trim();
   const match = IMAGE_GENERATION_LEADING_PHRASE.exec(trimmed);
-  if (!match) return trimmed;
+  if (!match) return stripImageInstructions(trimmed) || trimmed;
   // Keep style words that sat before the noun ("photorealistic image of …").
   const style = (match[1] ?? '').trim();
-  const subject = trimmed.slice(match[0].length).trim();
+  const subject = stripImageInstructions(trimmed.slice(match[0].length).trim());
   if (!subject) return trimmed;
   return style ? `${style}, ${subject}` : subject;
+}
+
+/** "using my local image-generation tools", "with ComfyUI", … — how to make it, not what to draw. */
+const IMAGE_TOOL_PHRASE = /\s*,?\s*\b(?:using|with|via|through|on)\s+(?:my|the|your|a|our)?\s*(?:local\s+|own\s+)?(?:image[- ]generation|image|comfy\s*ui|comfyui|stable\s+diffusion|sdxl|flux|ai|diffusion)\s*(?:tools?|models?|setup|studio|generator|pipeline)?\b/gi;
+/** A following sentence that tells Pandesh what to do with the result (save, name, show, open…). */
+const IMAGE_FOLLOW_UP_SENTENCE = /(?:[.;!]\s+|\s+(?:and|then)\s+)(?:then\s+|also\s+|please\s+|and\s+)?(?:save|store|put|name|call|show|tell|open|send|keep|write|place|export|copy|move|give|let)\b[\s\S]*$/i;
+
+/** D14: instruction text ("using my local image-generation tools. Save the resulting image…") is not part of the picture. */
+function stripImageInstructions(subject: string): string {
+  const stripped = subject.replace(IMAGE_FOLLOW_UP_SENTENCE, '').replace(IMAGE_TOOL_PHRASE, '');
+  if (stripped === subject) return subject;
+  return stripped.replace(/\s{2,}/g, ' ').replace(/[\s,;:.]+$/, '').trim();
 }
 
 /** A request asking about weather/temperature/forecast conditions. Plain

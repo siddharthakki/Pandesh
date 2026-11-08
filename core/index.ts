@@ -18,7 +18,7 @@ import * as fs from 'node:fs';
 import { resolveDataDir, resolvePaths } from './env/dataDir';
 import { openCoreDatabase } from './db/openCore';
 import { CoreDatabaseFailedError } from './db/preflight';
-import { failDeadExecutorAttemptsOnBoot, scanOrphanedAttemptsOnBoot } from './domain/bootReconciliation';
+import { failDeadExecutorAttemptsOnBoot, scanOrphanedAttemptsOnBoot, settleIdleCapabilityAnchorsOnBoot } from './domain/bootReconciliation';
 import { createWeatherCapabilityAdapter } from './runtime/weatherCapability';
 import { createFilesystemCapabilityAdapter } from './runtime/filesystemCapability';
 import { createNetworkDriveCapabilityAdapter } from './runtime/networkDriveCapability';
@@ -385,6 +385,12 @@ async function main(): Promise<void> {
     }
   } catch (err) {
     redactedLog(`boot reconciliation: dead-executor settlement failed: ${err instanceof Error ? err.message : String(err)}`);
+  }
+  try {
+    const anchors = settleIdleCapabilityAnchorsOnBoot(db);
+    if (anchors.length > 0) redactedLog(`boot reconciliation: closed ${anchors.length} idle conversation capability anchor(s)`);
+  } catch (err) {
+    redactedLog(`boot reconciliation: anchor settlement failed: ${err instanceof Error ? err.message : String(err)}`);
   }
   const bootReconciliation = scanOrphanedAttemptsOnBoot(db);
   if (bootReconciliation.orphaned.length > 0) {

@@ -152,7 +152,11 @@ export function resolveDesktopProviderConfig(input: {
     throw new DesktopConfigError(`desktop slice requires local Ollama; configured provider is '${providerType}'`);
   }
 
-  const apiBaseRaw = stringSetting(layers, 'ollama-agent.apiBase')?.value ?? DEFAULTS.apiBase;
+  // D7: one Ollama address for everything — the host's health/model probes
+  // and Core's model calls (it is handed to Core as KARKEDIKHA_OLLAMA_URL).
+  // A configured setting wins; otherwise an address the app was started with.
+  const apiBaseRaw = stringSetting(layers, 'ollama-agent.apiBase')?.value
+    ?? (env.KARKEDIKHA_OLLAMA_URL?.trim() || DEFAULTS.apiBase);
   const apiBase = apiBaseRaw.replace(/\/$/, '');
 
   let model: string;

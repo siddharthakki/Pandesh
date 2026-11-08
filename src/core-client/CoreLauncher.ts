@@ -7,6 +7,8 @@ import { CORE_API_VERSION, type CoreInfo } from '../../core/shared/wireTypes';
 import { hashCoreBundle } from '../../core/runtime/coreBundle';
 
 const STARTUP_TIMEOUT_MS = 10_000;
+/** D6: boot reconciliation can take longer than 10 s on a large profile; while the spawned Core is still alive the launcher keeps waiting up to this long instead of reporting "unavailable" for a Core that is about to come up. */
+const STARTUP_ALIVE_TIMEOUT_MS = 60_000;
 const PROBE_TIMEOUT_MS = 2_000;
 const POLL_INTERVAL_MS = 150;
 const SHUTDOWN_WAIT_TIMEOUT_MS = 8_000;
@@ -288,7 +290,11 @@ export class CoreLauncher {
     });
     child.unref();
 
-    const deadline = Date.now() + STARTUP_TIMEOUT_MS;
+    const startedAt = Date.now();
+    const deadline = startedAt + STARTUP_TIMEOUT_MS;
+    const aliveDeadline = startedAt + STARTUP_ALIVE_TIMEOUT_MS;
+    let exited = false;
+    child.once('exit', () => { exited = true; });
     let earlyExitCode: number | null = null;
     child.once('exit', (code) => {
       earlyExitCode = code;
@@ -307,7 +313,7 @@ export class CoreLauncher {
       spawnError = err as NodeJS.ErrnoException;
     });
 
-    while (Date.now() < deadline) {
+    while (Date.now() < (exited ? deadline : aliveDeadline)) {
       if (spawnError !== null) {
         const err = spawnError as NodeJS.ErrnoException;
         // Full diagnostic (executable/corePath/cwd/code/errno/syscall) goes to
@@ -335,7 +341,7 @@ export class CoreLauncher {
       }
       await sleep(POLL_INTERVAL_MS);
     }
-    return { state: 'unavailable', detail: `Core did not become healthy within ${STARTUP_TIMEOUT_MS}ms` };
+    return { state: 'unavailable', detail: `Core did not become healthy within ${Math.round((Date.now() - startedAt) / 1000)} s` };
   }
 
   /** The last lines of the Core's own log, for a failed start. */

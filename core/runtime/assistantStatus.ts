@@ -111,7 +111,9 @@ export function composeStatusAnswer(db: CoreDatabase, topics: StatusTopic[], now
 }
 
 const FUTURE_WORK = /\b(?:i(?:'ll|\s+will|'m\s+going\s+to|\s+am\s+going\s+to)|i(?:'m|\s+am)\s+(?:currently\s+|now\s+)?(?:processing|retrying|working\s+on)|stand(?:ing)?\s+by)\b[^.\n]{0,80}\b(?:retry|try\s+again|continue|process|complete|finish|work|monitor|proceed|batch|wait)\w*|\bin\s+the\s+background\b|\bin\s+a\s+few\s+minutes\b/i;
-const NOTIFY_PROMISE = /\b(?:notify\s+you|let\s+you\s+know|update\s+you|message\s+you|send\s+you\s+(?:a\s+)?(?:notification|update)|tell\s+you\s+when|ping\s+you|alert\s+you)\b/i;
+// D13: only a first-person promise counts ("I'll let you know…"); "this lets you know", "I can't notify you" and
+// "would you like me to let you know" no longer trigger a stray correction.
+const NOTIFY_PROMISE = /\b(?:i(?:'ll|\s+will)|i(?:'m|\s+am)\s+going\s+to)\s+(?:\w+\s+){0,3}?(?:notify\s+you|let\s+you\s+know|update\s+you|message\s+you|send\s+you\s+(?:a\s+)?(?:notification|update)|tell\s+you\s+when|ping\s+you|alert\s+you)\b/i;
 
 /**
  * A reply may promise future work or a notification only if something real will do it. Returns the correction to
