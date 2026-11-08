@@ -105,6 +105,11 @@ const RUN_CHECKS_TIMEOUT_MS = 120_000;
 /** Pi's model window. Measured: gemma4 26B runs fully in VRAM at 32K and spills at the 64K machine default. */
 const PI_CONTEXT_WINDOW = 32_768;
 
+/** Re-run M9: a follow-up prompt answered with a fragment ("Based") must never replace a substantive answer. */
+export function isDegenerateReplacement(next: string, current: string | null | undefined): boolean {
+  return next.trim().length < 40 && (current ?? '').trim().length >= 200;
+}
+
 const UNBACKED_ACTION_REQUEST = /\b(remember|remind|schedule|create|make|write|add|delete|remove|move|rename|organi[sz]e|fix|run|set up|book|save|generate|install|update|cancel|draft)\b/i;
 const UNBACKED_COMPLETION_CLAIM = /\b(done|remembered|scheduled|created|saved|set!|all set|deleted|removed|moved|renamed|fixed|updated|cancelled|generated|wrote|written|i've (?:remembered|set|added|made|created))\b/i;
 
@@ -4362,7 +4367,7 @@ ${filesPromptSection}${webResearchPromptSection}${wishesPromptSection}${emailCal
     let isUnanswered = false;
 
     if (isPublicResearch && !signal?.aborted) {
-      let researchCalls = toolCallsRecorded.filter(t => t.tool === 'web_research' && t.status === 'completed' && t.result);
+      let researchCalls = toolCallsRecorded.filter(t => (t.tool === 'web_research' || t.tool === 'governed_research') && t.status === 'completed' && t.result);
 
       if (researchCalls.length === 0) {
         const webTool = tools.find(t => t.name === 'web_research');
@@ -4379,7 +4384,7 @@ ${filesPromptSection}${webResearchPromptSection}${wishesPromptSection}${emailCal
               safeRecordRuntimeEvent(db, broadcaster, attemptId, 'web_research_auto_failed', { query: q, error: err?.message }, actor);
             }
           }
-          researchCalls = toolCallsRecorded.filter(t => t.tool === 'web_research' && t.status === 'completed' && t.result);
+          researchCalls = toolCallsRecorded.filter(t => (t.tool === 'web_research' || t.tool === 'governed_research') && t.status === 'completed' && t.result);
         }
       }
 
@@ -4517,7 +4522,7 @@ ${filesPromptSection}${webResearchPromptSection}${wishesPromptSection}${emailCal
           await agent.prompt(`Here is the verified list of models actually installed in Ollama on this machine:\n${inventoryOutput}\n\nBased ONLY on these actually installed models, please answer the user's request: "${currentMsg}". Compare and evaluate the strongest models among them for the user's stated criteria/hardware. Do not invent models not present in this list.`);
           await agent.waitForIdle();
           const followUpReply = lastAssistantTextFrom(followUpFloor);
-          if (followUpReply && !isTruncationArtifact(followUpReply)) {
+          if (followUpReply && !isTruncationArtifact(followUpReply) && !isDegenerateReplacement(followUpReply, finalReply)) {
             finalReply = followUpReply;
           }
         } catch (err: any) {
@@ -4645,7 +4650,9 @@ ${filesPromptSection}${webResearchPromptSection}${wishesPromptSection}${emailCal
     const fallbackIsLocal = referencesLocalContent(fallbackMessage);
     const fallbackAllowed = !fallbackIsLocal || explicitlyRequestsWebSearch(fallbackMessage);
     if (fallbackAllowed && isProductResearchRequest(fallbackMessage) && !signal?.aborted) {
-      const hasWebResearch = toolCallsRecorded.some(t => t.tool === 'web_research' && t.status === 'completed');
+      // Re-run M9: the governed research capability is web research too; ignoring it re-searched and re-prompted a
+      // turn that had already answered from two real searches, and the 1-token re-answer replaced the real answer.
+      const hasWebResearch = toolCallsRecorded.some(t => (t.tool === 'web_research' || t.tool === 'governed_research') && t.status === 'completed');
       const derivedQuery = derivePublicQuery(fallbackIsLocal ? fallbackMessage : extractSearchQueryWithContext(fallbackMessage));
       if (!hasWebResearch && derivedQuery) {
         const webTool = tools.find(t => t.name === 'web_research');
@@ -4661,7 +4668,7 @@ ${filesPromptSection}${webResearchPromptSection}${wishesPromptSection}${emailCal
               await agent.prompt(`Here is the verified web research evidence retrieved for "${searchQuery}":\n\n${outText}\n\nBased ONLY on this evidence, answer the user's request: "${ctx.currentMessage ?? prompt}". Cite the real URLs from the evidence. Distinguish complete standalone machines from accessories/attachments. Report prices accurately. If no verified offer matches the budget/location, say so plainly. Do not invent products, prices, or links.`);
               await agent.waitForIdle();
               const followUpReply = lastAssistantTextFrom(followUpFloor);
-              if (followUpReply && !isTruncationArtifact(followUpReply)) {
+              if (followUpReply && !isTruncationArtifact(followUpReply) && !isDegenerateReplacement(followUpReply, finalReply)) {
                 finalReply = followUpReply;
               }
             } else if (searchResult?.isError) {
@@ -4712,7 +4719,7 @@ ${filesPromptSection}${webResearchPromptSection}${wishesPromptSection}${emailCal
           await agent.prompt(`Evidence check: your answer did not rest on every document in the folder (you read only some, or none). Pandesh has now read the documents you had not opened; their real contents are below. Give the user your complete answer again, taking EVERY document into account (those you read earlier and these), and show the comparison briefly. Files actually written this turn: ${writtenNow.length ? writtenNow.join(', ') : 'NONE'}. If the user asked for a file that is not in that list, or a written file is now wrong, call write_file now. If a document is irrelevant to the question, say so in one short line. Do not search the web. Write it as one fresh, complete answer for the user: do not mention this check, a "previous" answer, or files "provided in this turn".\n\n${gathered.map((r) => r.text).join('\n\n')}`);
           await agent.waitForIdle();
           const followUpReply = lastAssistantTextFrom(followUpFloor);
-          if (followUpReply && !isTruncationArtifact(followUpReply)) finalReply = followUpReply;
+          if (followUpReply && !isTruncationArtifact(followUpReply) && !isDegenerateReplacement(followUpReply, finalReply)) finalReply = followUpReply;
         } catch (err: any) {
           evidenceLimits.push(`the answer could not be revised after reading ${unreadFilesNotice(gathered.map((r) => r.file))}`);
           console.warn('[piAgentEngine] folder evidence follow-up failed:', err?.message);
@@ -4775,7 +4782,7 @@ ${filesPromptSection}${webResearchPromptSection}${wishesPromptSection}${emailCal
           : "Answer the user's latest request from the real gmail tool results."));
         await agent.waitForIdle();
         const followUpReply = lastAssistantTextFrom(followUpFloor);
-        if (followUpReply) finalReply = followUpReply;
+        if (followUpReply && !isDegenerateReplacement(followUpReply, finalReply)) finalReply = followUpReply;
       } catch (err: any) {
         console.warn('[piAgentEngine] gmail hallucination follow-up failed:', err?.message);
       }
@@ -4937,7 +4944,7 @@ ${filesPromptSection}${webResearchPromptSection}${wishesPromptSection}${emailCal
     }
     // "Research evidence synthesized" only when a search really returned evidence (a rejected search returned none).
     if (isPublicResearch && !isUnanswered && finalReply && !isResearchStubReply(finalReply, true, isTruncationArtifact)
-      && toolCallsRecorded.some((t) => t.tool === 'web_research' && t.status === 'completed')) {
+      && toolCallsRecorded.some((t) => (t.tool === 'web_research' || t.tool === 'governed_research') && t.status === 'completed')) {
       turnOutcome = {
         verdict: 'verified',
         reason: 'Public research evidence synthesized and cited',

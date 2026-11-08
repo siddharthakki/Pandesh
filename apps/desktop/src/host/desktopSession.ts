@@ -2415,6 +2415,19 @@ export class DesktopSession {
     const active = this.active;
     if (!active || active.terminal) throw new Error('no running task to cancel');
     this.pending = undefined;
+    // Re-run M11: a chat image turn has a host-side id that Core does not know; stop it here (and any running
+    // capability action), so Stop always ends it.
+    if (active.attemptId.startsWith('image_att_')) {
+      this.pendingImageApproval = null;
+      try { await this.cancelImageGeneration(); } catch { /* nothing running in Core yet */ }
+      this.activeImageAttemptId = null;
+      active.terminal = true;
+      this.lastTurnOutcome = 'cancelled';
+      this.turnOutcomeKind = null;
+      this.emit({ kind: 'result', at: nowIso(), attemptId: active.attemptId, summary: 'Image Generation Studio', text: 'Image request stopped — nothing was generated.' });
+      this.drainSubmissionQueue();
+      return;
+    }
     await this.requireClient().cancelAttempt(active.attemptId);
     this.recordEvidence({ type: 'cancel-requested', attemptId: active.attemptId, requestId: active.requestId });
     this.emit({
@@ -3748,14 +3761,30 @@ export class DesktopSession {
     if (!held || held.approval.id !== approvalId) throw new Error('no matching pending image approval');
     this.pendingImageApproval = null;
     const client = this.requireClient();
-    await client.resolveCapabilityApproval(approvalId, {
-      resolution,
-      attemptId: held.approval.attemptId,
-      expectedAttemptRevision: held.approval.expectedAttemptRevision,
-      expectedAttemptStatus: held.approval.expectedAttemptStatus,
-      requestedActionDigest: held.approval.requestedActionDigest,
-      frozenContextHash: held.approval.frozenContextHash,
-    });
+    try {
+      await client.resolveCapabilityApproval(approvalId, {
+        resolution,
+        attemptId: held.approval.attemptId,
+        expectedAttemptRevision: held.approval.expectedAttemptRevision,
+        expectedAttemptStatus: held.approval.expectedAttemptStatus,
+        requestedActionDigest: held.approval.requestedActionDigest,
+        frozenContextHash: held.approval.frozenContextHash,
+      });
+    } catch (error) {
+      // Re-run M11: the approval could not be recorded (e.g. it had expired). Nothing was generated; end the image turn
+      // truthfully instead of leaving the window on "Waiting for your approval" with no card.
+      const reason = compactCapabilityFailure(error);
+      this.activeImageAttemptId = null;
+      await this.recordConversationMessage(held.correlationId, 'assistant', `Image not generated: your answer could not be recorded (${reason}). Ask again to retry.`);
+      if (this.isImageTurnFor(held.approval.attemptId)) {
+        this.active!.terminal = true;
+        this.lastTurnOutcome = 'failed';
+        this.turnOutcomeKind = 'failed';
+        this.drainSubmissionQueue();
+      }
+      this.emit({ kind: 'status', at: nowIso(), summary: reason, eventType: 'image_generation_failed' });
+      return { outcome: 'failed', attemptId: held.approval.attemptId, reason };
+    }
     if (resolution === 'rejected') {
       this.activeImageAttemptId = null;
       await this.recordConversationMessage(held.correlationId, 'assistant', 'Image request cancelled — nothing was generated.');
