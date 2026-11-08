@@ -164,6 +164,7 @@ import { collectDesktopHostTelemetry, type DesktopHostTelemetry } from './deskto
 import { buildConversationContextView, conversationWorkspaceIdentity } from './desktopConversationContext';
 import {
   ensureImageStudioServices,
+  optimizeImagePrompt,
   probeImageStudioServices,
   IMAGE_STUDIO_APP_URL,
   type ImageStudioServiceStatus,
@@ -203,6 +204,8 @@ export interface DesktopSessionOptions {
   /** What this host can honestly say about its notification channel. */
   notificationChannel?: () => { supported: boolean; detail: string };
   ensureImageStudio?: (onStatus?: (text: string) => void) => Promise<ImageStudioServiceStatus>;
+  /** Test seam for the Studio's local prompt optimizer. */
+  optimizeImagePrompt?: (prompt: string) => Promise<{ prompt: string; negativePrompt: string | null; optimized: boolean }>;
   probeImageStudio?: () => Promise<ImageStudioServiceStatus>;
   /** How long a Stop waits for Core to confirm the attempt reached a terminal
    * state before the desktop reports that the stop was not confirmed. */
@@ -4480,13 +4483,23 @@ export class DesktopSession {
           ? 'Image Studio is running but reports no image model (checkpoint). Add a checkpoint in ComfyUI\'s models/checkpoints folder, then ask again.'
           : `Image Studio could not be started: ${status.detail}.`);
       }
+      // A still image gets a concrete visual description from the Studio's local optimizer before the card is raised.
+      const optimized = isVideo || media.arguments.referenceArtifactId
+        ? { prompt, negativePrompt: null, optimized: false }
+        : this.options.optimizeImagePrompt
+          ? await this.options.optimizeImagePrompt(prompt)
+          // A stubbed Studio (tests) has no real optimizer behind it.
+          : this.options.probeImageStudio ? { prompt, negativePrompt: null, optimized: false } : await optimizeImagePrompt(prompt);
+      const drawPrompt = optimized.prompt;
       const result = await this.generateImage(isVideo
         ? { prompt, ...media.arguments }
-        : { prompt, checkpoint, width: 1024, height: 1024, steps: 20, ...media.arguments }, media.toolName);
+        : { prompt: drawPrompt, ...(optimized.negativePrompt ? { negativePrompt: optimized.negativePrompt } : {}), checkpoint, width: 1024, height: 1024, steps: 20, ...media.arguments }, media.toolName);
       if (result.outcome === 'approval_required') {
         reply = isVideo
           ? `I've prepared ${media.label} — prompt: "${prompt}" (about ${Number(media.arguments.seconds ?? 4)} s, LTX-Video). Approve it in the card below; it runs on this PC's GPU and takes a few minutes.`
-          : `I've prepared ${media.label} — prompt: "${prompt}", checkpoint: ${checkpoint}. Approve it in the card below to start; it runs on this PC's GPU.`;
+          : optimized.optimized
+            ? `I've prepared ${media.label} of "${prompt}". To get a faithful picture I described it in detail for the image model (written on this PC): "${drawPrompt}". Checkpoint: ${checkpoint}. Approve it in the card below to start; it runs on this PC's GPU.`
+            : `I've prepared ${media.label} — prompt: "${prompt}", checkpoint: ${checkpoint}. Approve it in the card below to start; it runs on this PC's GPU.`;
         await this.recordConversationMessage(conversationId, 'assistant', reply);
         // Keep active.terminal = false while awaiting approval so the task is truthfully represented
         this.emit({ kind: 'approval', at: nowIso(), requestId, attemptId, summary: reply, text: reply, clientOrigin });

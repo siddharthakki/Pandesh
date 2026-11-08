@@ -490,6 +490,8 @@ export function createImageStudioCapabilityAdapter(options: ImageStudioCapabilit
     const prompt = typeof args.prompt === 'string' ? args.prompt.replace(/\s+/g, ' ').trim() : '';
     if (!prompt || prompt.length > MAX_PROMPT_CHARS) return failure('prompt must be 1-4000 characters', 'invalid_arguments');
     if (call.name === 'video_generate') return runVideo(args, prompt, ctx);
+    // What the picture must not show (shown on the approval card with the prompt); bounded, plain text only.
+    const negativePrompt = typeof args.negativePrompt === 'string' ? args.negativePrompt.replace(/\s+/g, ' ').trim().slice(0, 1_500) : '';
     let width: number; let height: number; let steps: number; let cfg: number; let seed: number;
     let outputCount: number; let denoise: number; let reference: string | null;
     try {
@@ -524,7 +526,7 @@ export function createImageStudioCapabilityAdapter(options: ImageStudioCapabilit
       const response = await json('/api/generate', {
         method: 'POST', signal: generationAbort.signal,
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ prompt, width, height, steps, cfg, seed, checkpoint, batch_size: outputCount, enhance: false, ...(reference ? { image_ref: reference, denoise } : {}) }),
+        body: JSON.stringify({ prompt, width, height, steps, cfg, seed, checkpoint, batch_size: outputCount, enhance: false, ...(negativePrompt ? { negative_prompt: negativePrompt } : {}), ...(reference ? { image_ref: reference, denoise } : {}) }),
       }) as StudioGenerateResponse;
       if (response.status !== 'completed' || !Array.isArray(response.images) || response.images.length < 1) {
         return failure(
@@ -619,7 +621,7 @@ export function createImageStudioCapabilityAdapter(options: ImageStudioCapabilit
       {
         name: 'image_generate',
         description: 'Generate 1-4 still images through the configured local Image Generation Studio, optionally from a reference image artifact (edit / variations, strength via denoise). Consequential and approval-gated. checkpoint must be a name from image_list_checkpoints.',
-        parameters: { type: 'object', properties: { prompt: { type: 'string' }, checkpoint: { type: 'string' }, width: { type: 'number' }, height: { type: 'number' }, steps: { type: 'number' }, cfg: { type: 'number' }, seed: { type: 'number' }, outputCount: { type: 'number' }, referenceArtifactId: { type: 'string' }, denoise: { type: 'number' } }, required: ['prompt', 'checkpoint'] },
+        parameters: { type: 'object', properties: { prompt: { type: 'string' }, negativePrompt: { type: 'string' }, checkpoint: { type: 'string' }, width: { type: 'number' }, height: { type: 'number' }, steps: { type: 'number' }, cfg: { type: 'number' }, seed: { type: 'number' }, outputCount: { type: 'number' }, referenceArtifactId: { type: 'string' }, denoise: { type: 'number' } }, required: ['prompt', 'checkpoint'] },
       },
       {
         name: 'video_generate',
