@@ -2,6 +2,7 @@ import { withholdUnsupportedActionClaims } from './actionClaims';
 import { answerTaskStatusQuestion, isTaskStatusQuestion, listPriorTurns, renderTaskHistorySection } from '../domain/conversationTaskHistory';
 import { checkPublicQuery, derivePublicQuery, explicitlyRequestsWebSearch, referencesLocalContent } from './publicQueryGuard';
 import { checkStatedTotals, evaluateExpression } from './arithmeticCheck';
+import { enforceDeclineWording } from './declineWording';
 import { renderDelegationReport, untrackedPaths, verifyDelegation } from './delegationVerification';
 import { FolderReadLedger, requestedOutputFiles, requiresSourceEvidence, requiresWholeFolder, unreadFilesNotice } from './folderCompleteness';
 import * as cp from 'node:child_process';
@@ -4921,6 +4922,16 @@ ${filesPromptSection}${webResearchPromptSection}${wishesPromptSection}${emailCal
       if (totals.corrections.length) {
         safeRecordRuntimeEvent(db, broadcaster, attemptId, 'stated_total_corrected', { corrections: totals.corrections }, actor);
         finalReply = totals.text;
+      }
+      // Audit D13/F3: a declined approval is reported as the person's choice, never as a protection rule.
+      const declineResults = toolCallsRecorded.filter((t) => t.status !== 'completed').map((t) => {
+        const r = t.result as any;
+        return typeof r === 'string' ? r : String(r?.content?.[0]?.text ?? r?.output ?? '');
+      });
+      const decline = enforceDeclineWording(finalReply, declineResults);
+      if (decline.corrected) {
+        finalReply = decline.text;
+        safeRecordRuntimeEvent(db, broadcaster, attemptId, 'decline_wording_corrected', {}, actor);
       }
       const guarded = withholdUnsupportedActionClaims(finalReply, succeeded, { fileExists });
       if (guarded.withheld.length > 0) {
