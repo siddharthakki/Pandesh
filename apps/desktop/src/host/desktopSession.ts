@@ -2698,6 +2698,11 @@ export class DesktopSession {
       sendBriefing: { path: '/v1/household/companion/briefing', method: 'POST', body: {} },
       allowDocumentReading: { path: '/v1/household/document-reading', method: 'POST', body: { folder: args.folder } },
       revokeDocumentReading: { path: `/v1/household/document-reading/${id}/revoke`, method: 'POST', body: {} },
+      // Software & Services (read-only): inventory, update discovery, check settings.
+      softwareInventory: { path: `/v1/software/inventory${args.refresh ? '?refresh=1' : ''}` },
+      softwareUpdates: { path: '/v1/software/updates' },
+      softwareCheckUpdates: { path: '/v1/software/updates/check', method: 'POST', body: {} },
+      softwareSettings: { path: '/v1/software/settings', method: 'POST', body: { periodicEnabled: args.periodicEnabled, intervalHours: args.intervalHours } },
     };
     const route = routes[action];
     if (!route) throw new Error(`unknown household action ${action}`);

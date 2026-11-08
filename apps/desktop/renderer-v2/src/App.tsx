@@ -3,8 +3,9 @@ import { api, errorText, useSnapshot, type ConversationEntry } from './bridge';
 import { Icon, useNarrow, type IconName } from './ui';
 import { Chat } from './Chat';
 import { Board, useTaskOverview, needsYouCount } from './Board';
+import { Software } from './Software';
 
-export type View = 'chat' | 'board' | 'team' | 'space' | 'system';
+export type View = 'chat' | 'board' | 'team' | 'space' | 'system' | 'software';
 
 interface PaletteEntry { group: string; label: string; run: () => void }
 
@@ -72,6 +73,7 @@ export function App() {
     variantForced
       ? { name: 'Classic UI is locked off', sub: 'PANDESH_UI_V2=1 is set for this launch; start without it to switch', run: () => {} }
       : { name: 'Use the Classic UI', sub: 'Reloads the window in the existing interface', run: () => void useClassic() },
+    { name: 'Software & Services', sub: 'Ports, installed tools, GitHub projects, updates (read-only)', run: () => go('software') },
     { name: `Theme: ${theme}`, sub: 'Cycle dark → light → follow Windows', run: cycleTheme },
     { name: labels ? 'Hide rail labels' : 'Show rail labels', sub: 'Names next to the navigation icons', run: toggleLabels },
   ];
@@ -83,6 +85,7 @@ export function App() {
   const paletteEntries: PaletteEntry[] = useMemo(() => [
     { group: 'GO TO', label: 'Pandesh (chat)', run: () => go('chat') },
     { group: 'GO TO', label: 'Board', run: () => go('board') },
+    { group: 'GO TO', label: 'Software & Services', run: () => go('software') },
     { group: 'ACTIONS', label: 'New chat', run: () => { void api.newConversation().then(refresh); setOpenConversationId(null); go('chat'); } },
     { group: 'ACTIONS', label: 'Use the Classic UI', run: () => void useClassic() },
     { group: 'ACTIONS', label: 'Change theme', run: cycleTheme },
@@ -118,6 +121,7 @@ export function App() {
       <div className="main">
         {view === 'chat' && <Chat snapshot={snapshot} snapshotError={error} refresh={refresh} narrow={narrow} openConversationId={openConversationId} onOpenPalette={() => openPop('palette')} onOpenBoard={() => go('board')} />}
         {view === 'board' && <Board overview={overview} narrow={narrow} onOpenPalette={() => openPop('palette')} onOpenConversation={(id) => { setOpenConversationId(id); go('chat'); }} />}
+        {view === 'software' && <Software narrow={narrow} />}
         {view === 'space' && placeholder && (
           <div className="placeholder" role="region" aria-label={placeholder.title}>
             <h1>{placeholder.title}</h1>

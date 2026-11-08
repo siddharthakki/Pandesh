@@ -59,6 +59,10 @@ Fixed during acceptance: brief not reloaded after Core finished starting; raw to
 - Attachments, model picker, permission-mode switch and conversation list drawer are reachable only via the Classic UI (palette lists recent chats).
 - Transcript keeps its scroll offset when the window is resized (not re-pinned to the end).
 
+## Software Discovery & Update Manager — milestone 1B (read-only) · STATUS: done
+
+Inserted by owner request after 2a. Details, tests and limits: [software_discovery.md](software_discovery.md). Read-only: no install/update/start/stop. Update execution (2B) awaits separate approval.
+
 ### Next executable step
 
 Milestone 2b — Specialist Agent Team: Core `agent_definitions` + scope gate (multi_agent_architecture.md §6, review_decisions D4) with adversarial tests, then the Team UI.
