@@ -5,6 +5,8 @@ Design package for review. Documentation only; implementation is blocked until P
 | Document | Content |
 |---|---|
 | [handoff.md](handoff.md) | Start here: summary, decisions needed, constraints |
+| [review_decisions.md](review_decisions.md) | **Owner review 2026-11-08: accepted baseline + refinements (authoritative)** |
+| [visual_prototype_plan.md](visual_prototype_plan.md) | Three isolated prototypes: idle chat, live coding, agents + Second Brain |
 | [reference_research.md](reference_research.md) | JARVIS 8.1 / AI Workshop evidence classification, earlier materials, reference UIs, sources |
 | [ai_workshop_archive_analysis.md](ai_workshop_archive_analysis.md) | Archive inventory, n8n analysis, security findings, Reuse/Adapt/Reject |
 | [current_system_inventory.md](current_system_inventory.md) | Existing Pandesh capabilities, contracts, reusable modules |

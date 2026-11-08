@@ -1,6 +1,8 @@
 # Handoff — Pandesh UI v2 / Phase 2 architecture
 
-Branch `docs/pandesh-ui-v2` (worktree `D:\Projects\Pandesh-ui-v2-docs`, from 89b8af2). Documentation only. Not pushed. No production code, migrations, dependencies or builds were changed. `fix/reliability-remediation` was not touched.
+Branch `docs/pandesh-ui-v2` (worktree `D:\Projects\Pandesh-ui-v2-docs`, from 89b8af2). Documentation only. **Pushed to `origin` at `fc7e88c`.** Because the branch was cut from `fix/reliability-remediation`, the remote branch also carries 36 reliability commits not on `main`. No PR is open yet; a docs-only PR needs a rebase onto `origin/main`. Later commits on this branch are local until pushed. No production code, migrations, dependencies or builds were changed. `fix/reliability-remediation` was not modified.
+
+**Status 2026-11-08:** the architecture is accepted as the design baseline with refinements. See [review_decisions.md](review_decisions.md) (it overrides the other documents where they conflict) and [visual_prototype_plan.md](visual_prototype_plan.md). Security triage is in [../../security/dependabot_triage_2026-11-08.md](../../security/dependabot_triage_2026-11-08.md).
 
 ## Read in this order
 
