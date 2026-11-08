@@ -3,7 +3,7 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { extractDocument } from '../attachments/documentExtraction';
-import { buildMinimalPdf, buildMinimalDocx } from './fixtures/documentFixtures';
+import { buildMinimalPdf, buildMinimalDocx, buildDocxWithManyAttributes } from './fixtures/documentFixtures';
 
 const tempFiles: string[] = [];
 function writeTempFile(name: string, bytes: Buffer): string {
@@ -81,5 +81,23 @@ describe('bundled document-parser security floor', () => {
 
   it('pdfjs-dist is at or above 6.2.108 (GHSA-hq66-cqwq-w95j: JS execution from a malicious PDF)', () => {
     expect(atLeast(installedVersion('pdfjs-dist'), [6, 2, 108])).toBe(true);
+  });
+
+  it('@xmldom/xmldom (mammoth DOCX parser) is at or above 0.8.15 (GHSA-8344-3jmq-59r6 and siblings)', () => {
+    expect(atLeast(installedVersion('@xmldom/xmldom'), [0, 8, 15])).toBe(true);
+  });
+
+  it('a crafted DOCX with 60,000 attributes on one element extracts promptly, not in quadratic time', async () => {
+    // Measured on the dev PC: xmldom 0.8.13 needs ~1.3 s for 40K attributes and
+    // grows quadratically (~3 s at 60K); 0.8.15 parses 60K in well under 100 ms.
+    const docxPath = writeTempFile('many-attributes.docx', await buildDocxWithManyAttributes(60_000));
+    const started = Date.now();
+    const result = await extractDocument(
+      docxPath,
+      'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    );
+    const elapsedMs = Date.now() - started;
+    expect(result?.sections.map((s) => s.text)).toEqual(['still readable']);
+    expect(elapsedMs).toBeLessThan(1500);
   });
 });

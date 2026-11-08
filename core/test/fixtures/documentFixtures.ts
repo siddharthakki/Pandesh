@@ -96,3 +96,21 @@ export function buildMinimalWav(): Buffer {
   buffer.writeUInt32LE(dataSize, 40);
   return buffer;
 }
+
+/** A valid DOCX whose first paragraph element carries `attributeCount` extra
+ * attributes. @xmldom/xmldom <= 0.8.14 deduplicates attributes in quadratic
+ * time (GHSA-8344-3jmq-59r6), so a small crafted DOCX can stall Core's
+ * mammoth extraction; >= 0.8.15 parses it in linear time. */
+export async function buildDocxWithManyAttributes(attributeCount: number, text = 'still readable'): Promise<Buffer> {
+  let attrs = '';
+  for (let i = 0; i < attributeCount; i++) attrs += ` x${i}="1"`;
+  const xml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+  <w:body><w:p${attrs}><w:r><w:t>${text}</w:t></w:r></w:p></w:body>
+</w:document>`;
+  const zip = new JSZip();
+  zip.file('[Content_Types].xml', CONTENT_TYPES_XML);
+  zip.file('_rels/.rels', RELS_XML);
+  zip.file('word/document.xml', xml);
+  return zip.generateAsync({ type: 'nodebuffer', compression: 'DEFLATE' });
+}
