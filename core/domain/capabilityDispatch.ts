@@ -48,7 +48,7 @@ import type { GovernedCapabilityRegistry } from '../runtime/governedCapability';
 import { LocalAutonomySecurityKernel } from '../security/kernel';
 import type { ExecutionGrant } from '../security/types';
 import { decidePermission, recordPermissionDecision, STANDING_AUTHORIZATION_ACTOR } from './permissionModes';
-import { agentScopeForAttempt, checkPathArguments, isToolAllowed, recordScopeRefusal } from './agents';
+import { agentScopeForAttempt, checkMemoryArguments, checkPathArguments, isToolAllowed, recordScopeRefusal } from './agents';
 import { parseBaselineIdentity, type WriteBaselineIdentity, type WriteProposalPresentation } from '../runtime/writeProposal';
 import {
   CORE_POLICY_ACTOR,
@@ -344,6 +344,8 @@ export interface DispatchCapabilityInput {
   /** Core-owned identity of the attempt whose frozen permission mode governs this action, when it is not the
    * scopeIdentity (the chat engine's connector bridge). Never part of the approval summary; HTTP callers never set it. */
   permissionScope?: string;
+  /** Phase 2b: the attempt whose agent scope governs this call when no other identity names it (memory bridge). Never part of approvals. */
+  actingAttemptId?: string;
   toolName: string;
   arguments: Record<string, unknown>;
   cwd: string;
@@ -739,15 +741,17 @@ export async function dispatchCapability(db: CoreDatabase, registry: GovernedCap
   // Phase 2b scope gate: a call made for an agent run must fit that run's frozen
   // effective scope (tool allowlist ∩ every delegating parent, path roots).
   // Enforced here, at dispatch, whatever the model was shown.
-  const actingAttemptId = input.ownerAttemptId ?? input.permissionScope ?? input.scopeIdentity;
+  const actingAttemptId = input.actingAttemptId ?? input.ownerAttemptId ?? input.permissionScope ?? input.scopeIdentity;
   const agentScope = actingAttemptId ? agentScopeForAttempt(db, actingAttemptId) : null;
   if (agentScope) {
     const toolCheck = isToolAllowed(agentScope, input.toolName);
     const verdict = toolCheck.allowed ? checkPathArguments(agentScope, input.arguments ?? {}) : toolCheck;
-    if (!verdict.allowed) {
-      recordScopeRefusal(db, actingAttemptId!, agentScope.agentId, input.toolName, verdict.reason);
-      return { outcome: 'denied', attemptId: input.correlationId, reason: `agent_scope_denied: ${verdict.reason}` };
+    const memory = verdict.allowed ? checkMemoryArguments(db, agentScope, input.toolName, input.arguments ?? {}) : verdict;
+    if (!memory.allowed) {
+      recordScopeRefusal(db, actingAttemptId!, agentScope.agentId, input.toolName, memory.reason);
+      return { outcome: 'denied', attemptId: input.correlationId, reason: `agent_scope_denied: ${memory.reason}` };
     }
+    if (memory.args !== input.arguments) input = { ...input, arguments: memory.args };
   }
   const attemptId = ensureCapabilityAttempt(db, input);
   const classification = registry.classify(input.toolName);

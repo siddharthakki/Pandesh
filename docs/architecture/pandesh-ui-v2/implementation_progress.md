@@ -87,9 +87,31 @@ Verified: Core api/agentScope/chatToolSelection 53/53, desktop 605/605. Real app
 
 Gaps: no Core MCP registry (nothing to show or connect); assigning capabilities to agents is tighten-only via Team (widening a built-in is deliberately impossible); custom agents from templates are not built yet.
 
+## Milestone 2d — Second Brain · STATUS: done
+
+| Area | Implementation |
+|---|---|
+| Storage | Existing memory tables kept. Migration 49 (additive): `knowledge_sources` (user-granted folders only), `knowledge_chunks` (derived, rebuildable), `knowledge_links` (explicit `[[wikilinks]]` / markdown links), `brain_fts` (FTS5, unicode, diacritics folded), `brain_index_state`. Rebuild only when a source signature changes. Migration 47 restored byte-identical (2b had split it). |
+| Index | Active facts (restricted never), notes, commitments, artifacts, real entities (decision/user mirrors excluded), and .md/.txt sections (≤ 512 KB, ≤ 2000 files) from folders allowed in `document_read_grants`. Revoked or deleted files leave the index. No crawling; no embeddings (gate not met). |
+| Search | bm25 with title weighting, best-column snippets, type/scope filters; user text is turned into a safe quoted-prefix FTS query (no operator injection). |
+| Inspector | Fact: content, scope, source message and conversation, history (revisions/forgotten), conflicts. Documents: section text, links and backlinks. Notes/commitments/artifacts/entities. |
+| Timeline | Facts, notes, commitments, artifacts by date. |
+| Graph | Only real edges: Core relationships (with evidence id), explicit document links, fact → source conversation provenance; deduped; ≤ 150 nodes with cluster counts beyond; deterministic SVG force layout (sigma/graphology trial not run). |
+| Correct / forget | Correction = user message in "Second Brain corrections" + rememberMemory with that evidence + forget old + resolve the recorded conflict as prefer_later. Forget shows `analyzeMemoryImpact` first, then tombstones via `forgetMemory`; search, timeline and graph update. |
+| Agent scopes | Memory tools at dispatch now enforce Core scope types per agent (user/project/task/repository/global; reads vs writes; recall without scope narrowed or refused); the memory bridge passes the acting attempt (`actingAttemptId`, not part of approvals). 2b definitions mapped to the real scope types. |
+| API / UI | Host-only `/v1/knowledge/{status,reindex,search,items/:type/:id,timeline,graph,facts/:id/{impact,forget,correct}}`; Spaces → Second Brain (Search, Timeline, Graph, Sources with add/revoke folder). |
+
+Full Core suite: 2469 passed, 2 failed — m54 disk benchmark (pre-existing) and householdHardening's TLS listener test, which binds a random port 49152–59152 and fails when it collides with a port held by the concurrently running isolated app (2 of 9 runs; 6/6 when rerun; code under test untouched).
+
+Tests: `core/test/secondBrain.test.ts` 10/10 (+ agentScope 13/13): mixed-type search with snippets, restricted exclusion, type filter, rebuild-on-change, revoked folder, query sanitising, link-only document edges (co-mention produces none), Core relationship + provenance edges, 150-node cap with clusters, correction provenance + conflict resolved + old value gone, forget, restricted inspector refusal, agent memory scopes incl. through delegation.
+
+Real app (isolated profile): scenario 9 PASS — memory created in chat with consent approval; Second Brain search found it and the inspector showed its source message/conversation; folder allowed from the UI indexed 4 sections; "hotel sacher" found `hotels.md › Hotels`; graph showed trip.md→hotels.md and trip.md→budget.md, not the merely co-mentioning museums.txt. Scenario 10 PASS — correction via inspector (new value with "Second Brain corrections" evidence, old value forgotten and gone from search), forget with impact preview ("1 linked item"), memory gone from search and graph. `acceptance-2d/`.
+
+Gaps: no watcher (index refreshes on access when a source changed); suggested/extracted edges and confirm/reject are not built (no extraction); 3D view deferred (D2); folder picker is a path field (no native dialog for this purpose yet).
+
 ### Next executable step
 
-Milestone 2d — Second Brain: `knowledge_sources` registry + rebuildable `knowledge_chunks` FTS5 index over existing memory tables; source-backed search, inspector, timeline, provenance, correction/forget, 2D graph of real relationships; per-agent memory scope filtering on recall.
+Milestone 2e — Visual Execution: Core process registry view over `processOwnership.ts` (owned processes, ports, lifecycle), live terminal output, test results, diffs, artifacts and previews for coding runs in the Activity/Preview aside; cancellation that never touches unowned processes; optional Show My Work.
 
 ### Resume
 

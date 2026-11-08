@@ -60,7 +60,7 @@ export const BUILTIN_AGENTS: AgentDefinition[] = [
     id: 'chief', kind: 'builtin', name: 'Pandesh', role: 'Chief of Staff — routes, plans, delegates, briefs and reports',
     instructions: 'You are Pandesh, the chief of staff. Answer directly when you can; delegate specialist work to the right agent with a restated brief; report only what evidence supports.',
     tools: ['read_file', 'list_directory', 'search_files', 'memory_recall', 'routine_list', 'list_reminders', 'list_commitments', 'list_scheduled_tasks', 'get_briefing_data', 'dev_stories_status', 'wish_status', 'household_obligations'],
-    memoryScopes: [{ scope: 'personal', access: 'read' }, { scope: 'chief', access: 'read_write' }],
+    memoryScopes: [{ scope: 'user', access: 'read' }, { scope: 'global', access: 'read' }, { scope: 'task', access: 'read_write' }],
     workspaceRoots: ['conversation'], egress: 'none',
   }),
   def({
@@ -68,7 +68,7 @@ export const BUILTIN_AGENTS: AgentDefinition[] = [
     instructions: 'You manage the user\'s commitments, reminders, routines and calendar. Never send, accept or book anything without the user\'s approval.',
     tools: ['create_reminder', 'list_reminders', 'dismiss_reminder', 'create_note', 'create_commitment', 'list_commitments', 'update_commitment', 'routine_*', 'schedule_task', 'list_scheduled_tasks', 'cancel_scheduled_task', 'calendar_list_events', 'calendar_check_availability', 'calendar_draft_event', 'gmail_search', 'gmail_read_thread', 'gmail_create_draft', 'household_*', 'get_briefing_data', 'memory_recall', 'memory_remember'],
     toolDenylist: ['gmail_send_draft', 'calendar_delete_event'],
-    memoryScopes: [{ scope: 'personal', access: 'read_write' }, { scope: 'household', access: 'read_write' }],
+    memoryScopes: [{ scope: 'user', access: 'read_write' }, { scope: 'task', access: 'read_write' }],
     workspaceRoots: [], egress: 'approval', alwaysAsk: ['calendar_write', 'email_send'],
   }),
   def({
@@ -76,14 +76,14 @@ export const BUILTIN_AGENTS: AgentDefinition[] = [
     instructions: 'You change code only inside the selected workspace, run its checks, and report exactly which files changed and which checks passed. Never push or install.',
     tools: ['read_file', 'list_directory', 'search_files', 'write_file', 'run_checks', 'delegate_to_opencode', 'dev_stories_*', 'dev_story_*', 'get_project_context', 'find_project_roots', 'search_recent_projects', 'port_list_services', 'port_service_health', 'port_check_setup', 'port_allocate', 'browser_open_site', 'browser_read', 'inspect_page', 'hermes_list_skills'],
     toolDenylist: ['read_file_outside_workspace', 'list_directory_outside_workspace', 'system_kill_process', 'port_stop_service'],
-    memoryScopes: [{ scope: 'project', access: 'read_write' }],
+    memoryScopes: [{ scope: 'project', access: 'read_write' }, { scope: 'repository', access: 'read_write' }, { scope: 'task', access: 'read_write' }],
     workspaceRoots: ['conversation'], egress: 'none', alwaysAsk: ['install', 'push'],
   }),
   def({
     id: 'research', kind: 'builtin', name: 'Research', role: 'Public research, source verification and comparison',
     instructions: 'You research public sources only, cite every claim, and never send private information in a query.',
     tools: ['web_research', 'governed_research', 'browser_open_site', 'browser_read', 'inspect_page', 'document_read', 'scout_research_repo', 'scout_list_watches', 'memory_recall', 'memory_remember'],
-    memoryScopes: [{ scope: 'research', access: 'read_write' }],
+    memoryScopes: [{ scope: 'global', access: 'read_write' }, { scope: 'task', access: 'read_write' }],
     workspaceRoots: [], egress: 'approval',
   }),
   def({
@@ -91,7 +91,7 @@ export const BUILTIN_AGENTS: AgentDefinition[] = [
     instructions: 'You inspect and organise this PC. Every change asks first; you never touch processes Pandesh does not own.',
     tools: ['read_file', 'list_directory', 'search_files', 'find_duplicate_files', 'list_system_drives', 'system_list_*', 'system_hardware_telemetry', 'run_system_diagnostics', 'list_printers', 'print_test_page', 'list_network_drives', 'port_list_services', 'port_service_health', 'desktop_windows_list', 'desktop_screenshot', 'request_search_permission'],
     toolDenylist: ['system_kill_process', 'system_stop_service', 'system_start_service', 'ollama_delete_model'],
-    memoryScopes: [{ scope: 'operations', access: 'read_write' }],
+    memoryScopes: [{ scope: 'task', access: 'read_write' }, { scope: 'global', access: 'read' }],
     workspaceRoots: ['conversation'], egress: 'none',
   }),
   def({
@@ -103,7 +103,7 @@ export const BUILTIN_AGENTS: AgentDefinition[] = [
     id, kind: 'template', name: { sales: 'Sales', marketing: 'Marketing', social: 'Social Media', support: 'Customer Support' }[id],
     role: { sales: 'Leads, pipeline, proposals (no unsolicited outreach)', marketing: 'Campaigns and research (no paid spend)', social: 'Drafts and calendar (every publish asks)', support: 'Customer inquiries from business knowledge only' }[id],
     instructions: 'Template: arrives in Phase 3 when its tools and business scopes exist.',
-    tools: [], memoryScopes: [{ scope: id === 'social' ? 'brand' : 'business', access: 'read_write' }], workspaceRoots: [], egress: 'approval',
+    tools: [], memoryScopes: [], workspaceRoots: [], egress: 'approval',
     enabled: false, availability: 'phase3',
   })),
 ];
@@ -404,4 +404,36 @@ export function agentHistory(db: CoreDatabase, agentId: string, limit = 30): Arr
 
 export function listScopeRefusals(db: CoreDatabase, agentId: string, limit = 20): Array<{ attemptId: string; toolName: string; reason: string; createdAt: string }> {
   return db.all('SELECT attemptId, toolName, reason, createdAt FROM agent_scope_refusals WHERE agentId = ? ORDER BY createdAt DESC LIMIT ?', [agentId, limit]);
+}
+
+const MEMORY_READ_TOOLS = new Set(['memory_recall', 'memory_export', 'memory_impact']);
+const MEMORY_WRITE_TOOLS = new Set(['memory_remember', 'memory_forget', 'memory_resolve_contradiction']);
+
+/**
+ * Memory scope gate for an agent run (Core memory scope types: user, project,
+ * task, repository, global): reads only in readable scope types, writes only in
+ * writable ones. A recall without a scope is narrowed to the single readable
+ * scope, or refused when the agent has several. Returns possibly-narrowed
+ * arguments.
+ */
+export function checkMemoryArguments(db: CoreDatabase, scope: EffectiveScope, toolName: string, args: Record<string, unknown>): { allowed: true; args: Record<string, unknown> } | { allowed: false; reason: string } {
+  if (!MEMORY_READ_TOOLS.has(toolName) && !MEMORY_WRITE_TOOLS.has(toolName)) return { allowed: true, args };
+  const write = MEMORY_WRITE_TOOLS.has(toolName);
+  const allowed = allowedMemoryScopes(scope, write ? 'read_write' : 'read');
+  if (allowed === null) return { allowed: true, args };
+  if (allowed.length === 0) return { allowed: false, reason: `${scope.agentId} has no ${write ? 'writable' : 'readable'} memory` };
+  const verb = write ? 'change' : 'read';
+  let scopeType = typeof args.scopeType === 'string' ? args.scopeType : null;
+  if (!scopeType && typeof args.memoryId === 'string') {
+    scopeType = db.get<{ scopeType: string }>('SELECT scopeType FROM memory_facts WHERE id = ?', [args.memoryId])?.scopeType ?? null;
+    if (!scopeType) return { allowed: false, reason: `memory ${args.memoryId} does not exist` };
+    if (!allowed.includes(scopeType)) return { allowed: false, reason: `memory ${args.memoryId} is in the ${scopeType} scope, outside what ${scope.agentId} may ${verb}` };
+    return { allowed: true, args };
+  }
+  if (!scopeType) {
+    if (allowed.length === 1) return { allowed: true, args: { ...args, scopeType: allowed[0] } };
+    return { allowed: false, reason: `say which memory scope to use: ${allowed.join(', ')}` };
+  }
+  if (!allowed.includes(scopeType)) return { allowed: false, reason: `the ${scopeType} memory scope is outside what ${scope.agentId} may ${verb}` };
+  return { allowed: true, args };
 }

@@ -6,8 +6,9 @@ import { Board, useTaskOverview, needsYouCount } from './Board';
 import { Software } from './Software';
 import { Team } from './Team';
 import { ToolsHub } from './ToolsHub';
+import { SecondBrain } from './SecondBrain';
 
-export type View = 'chat' | 'board' | 'team' | 'space' | 'system' | 'software' | 'tools';
+export type View = 'chat' | 'board' | 'team' | 'space' | 'system' | 'software' | 'tools' | 'brain';
 
 interface PaletteEntry { group: string; label: string; run: () => void }
 
@@ -65,7 +66,7 @@ export function App() {
   ];
 
   const spaces = [
-    { name: 'Second Brain', sub: 'Milestone 2d — not available yet', run: () => showPlaceholder('Second Brain', 'Source-backed search, timeline and graph arrive in milestone 2d. Memory still works in chat and in the Classic UI.') },
+    { name: 'Second Brain', sub: 'Search your memories, notes and documents', run: () => go('brain') },
     { name: 'Projects', sub: 'Milestone 2f — use the Classic UI meanwhile', run: () => showPlaceholder('Projects', 'Projects arrive in milestone 2f. The Classic UI keeps every existing workspace.') },
     { name: 'Wish to Reality', sub: 'Milestone 2f — use the Classic UI meanwhile', run: () => showPlaceholder('Wish to Reality', 'Arrives in milestone 2f. Nothing is published, sold or sent from here.') },
     { name: 'Social Studio', sub: 'Milestone 2f — not available yet', run: () => showPlaceholder('Social Studio', 'Drafting with approvals arrives in milestone 2f. No external publishing is connected.') },
@@ -91,6 +92,7 @@ export function App() {
     { group: 'GO TO', label: 'Software & Services', run: () => go('software') },
     { group: 'GO TO', label: 'Team', run: () => go('team') },
     { group: 'GO TO', label: 'Tools & Skills', run: () => go('tools') },
+    { group: 'GO TO', label: 'Second Brain', run: () => go('brain') },
     { group: 'ACTIONS', label: 'New chat', run: () => { void api.newConversation().then(refresh); setOpenConversationId(null); go('chat'); } },
     { group: 'ACTIONS', label: 'Use the Classic UI', run: () => void useClassic() },
     { group: 'ACTIONS', label: 'Change theme', run: cycleTheme },
@@ -128,6 +130,7 @@ export function App() {
         {view === 'board' && <Board overview={overview} narrow={narrow} onOpenPalette={() => openPop('palette')} onOpenConversation={(id) => { setOpenConversationId(id); go('chat'); }} />}
         {view === 'software' && <Software narrow={narrow} />}
         {view === 'tools' && <ToolsHub narrow={narrow} />}
+        {view === 'brain' && <SecondBrain narrow={narrow} />}
         {view === 'team' && <Team narrow={narrow} latestAttemptId={(overview.data?.tasks ?? []).find((t) => t.conversationId === snapshot?.selectedConversationId)?.attemptId ?? overview.data?.tasks?.[0]?.attemptId ?? null}
           onMessage={(agentId) => { void (async () => { await api.household('selectAgent', { agentId }); await api.newConversation(); setOpenConversationId(null); refresh(); go('chat'); })(); }} />}
         {view === 'space' && placeholder && (

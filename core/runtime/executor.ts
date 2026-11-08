@@ -5065,7 +5065,7 @@ export class RuntimeExecutor {
       fenceToken,
       signal,
       connectors: this.buildPiConnectorBridge(request.conversationId || attemptId, request.clientId, workspaceRoot, signal, request.currentMessage, attemptId),
-      memory: this.buildPiMemoryBridge(request.conversationId || attemptId, request.clientId, workspaceRoot, signal),
+      memory: this.buildPiMemoryBridge(request.conversationId || attemptId, request.clientId, workspaceRoot, signal, attemptId),
       capabilities: this.buildPiCapabilityBridge(request.conversationId || attemptId, request.clientId, workspaceRoot, signal, attemptId, request.currentMessage),
     });
   }
@@ -5124,7 +5124,7 @@ export class RuntimeExecutor {
    * redacted durable evidence. It creates no second approval authority, no
    * second memory store and no parallel runtime.
    */
-  private buildPiMemoryBridge(correlationId: string, clientId: string, workspaceRoot: string | undefined, signal: AbortSignal): PiMemoryBridge | undefined {
+  private buildPiMemoryBridge(correlationId: string, clientId: string, workspaceRoot: string | undefined, signal: AbortSignal, actingAttemptId?: string): PiMemoryBridge | undefined {
     const registry = this.governedCapabilities;
     if (!registry) return undefined;
     return buildPiMemoryBridge({
@@ -5135,6 +5135,7 @@ export class RuntimeExecutor {
       cwd: workspaceRoot || process.cwd(),
       actor: CORE_ACTOR,
       signal,
+      ...(actingAttemptId ? { actingAttemptId } : {}),
     });
   }
 
