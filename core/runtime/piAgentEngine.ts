@@ -1086,6 +1086,16 @@ export class PiAgentEngine implements EngineAdapter {
     const delegationReports: string[] = [];
     /** Core's own check of each file written this turn (syntax + values grounded in what was read), latest per path. */
     const outputChecks = new Map<string, OutputCheck>();
+    /** rwRun2 T13: reading back the file this turn wrote put its own unverified values into the evidence. A read of
+     * a file the turn produced is never a source for that file's values. */
+    const readsOwnOutput = (t: { tool: string; args?: unknown }): boolean => {
+      if (!/^(?:read_file|document_read)$/.test(t.tool)) return false;
+      const a = (t.args ?? {}) as Record<string, unknown>;
+      const ref = String(a.filePath ?? a.path ?? '');
+      if (!ref) return false;
+      const full = path.isAbsolute(ref) ? path.resolve(ref) : path.resolve(selectedWorkspace || '.', ref);
+      return [...outputChecks.keys()].some((k) => path.resolve(k).toLowerCase() === full.toLowerCase());
+    };
     const wholeFolderRequest = requiresWholeFolder(requestText);
     /**
      * Core runs the real read_file tool (same authorization, credential refusal and redaction) on documents the model
@@ -3146,7 +3156,7 @@ export class PiAgentEngine implements EngineAdapter {
             // Core checks what it just wrote: it must parse, and a report may not show values nothing returned.
             let checkNote = '';
             try {
-              const corpus = [requestText, ctx.currentMessage ?? '', HANDOFF_FACTS.get(attemptId) ?? '', ...toolCallsRecorded.filter((t) => t.status === 'completed' && !OWN_OUTPUT_TOOLS.test(t.tool)).map((t) => `${JSON.stringify(t.args ?? '')}\n${extractToolResultText(t.result)}`)].join('\n');
+              const corpus = [requestText, ctx.currentMessage ?? '', HANDOFF_FACTS.get(attemptId) ?? '', ...toolCallsRecorded.filter((t) => t.status === 'completed' && !OWN_OUTPUT_TOOLS.test(t.tool) && !readsOwnOutput(t)).map((t) => `${JSON.stringify(t.args ?? '')}\n${extractToolResultText(t.result)}`)].join('\n');
               const runner = (command: string, cmdArgs: string[]) => {
                 const r = cp.spawnSync(command, cmdArgs, { encoding: 'utf8', timeout: 15_000, windowsHide: true });
                 return { status: r.status, stdout: String(r.stdout ?? ''), stderr: String(r.stderr ?? ''), error: r.error };
@@ -3524,7 +3534,7 @@ ${String(args.objective ?? '').slice(0, 600)}`,
             }
             // The files it produced get the same Core check as Pandesh's own writes.
             const runner = (command: string, cmdArgs: string[]) => { const r = cp.spawnSync(command, cmdArgs, { encoding: 'utf8', timeout: 15_000, windowsHide: true }); return { status: r.status, stdout: String(r.stdout ?? ''), stderr: String(r.stderr ?? ''), error: r.error }; };
-            const corpus = [requestText, objective, ...toolCallsRecorded.filter((t) => t.status === 'completed' && !OWN_OUTPUT_TOOLS.test(t.tool)).map((t) => `${JSON.stringify(t.args ?? '')}\n${extractToolResultText(t.result)}`)].join('\n');
+            const corpus = [requestText, objective, ...toolCallsRecorded.filter((t) => t.status === 'completed' && !OWN_OUTPUT_TOOLS.test(t.tool) && !readsOwnOutput(t)).map((t) => `${JSON.stringify(t.args ?? '')}\n${extractToolResultText(t.result)}`)].join('\n');
             for (const rel of [...verification.newUntracked, ...verification.changedFiles].slice(0, 20)) {
               const full = path.join(dir, rel);
               try {
@@ -5805,7 +5815,7 @@ ${filesPromptSection}${webResearchPromptSection}${wishesPromptSection}${emailCal
       const lastLook = lastIndexWhere(done, (t) => t.status === 'completed' && /^(?:run_checks|read_file|inspect_page)$/.test(t.tool));
       // Values flagged at write time are checked again against everything the turn produced (F13d computed them with
       // calculate afterwards); what remains wrong is shown under the answer, whatever the model says.
-      const finalCorpus = [requestText, ctx.currentMessage ?? '', HANDOFF_FACTS.get(attemptId) ?? '', ...toolCallsRecorded.filter((t) => t.status === 'completed' && !OWN_OUTPUT_TOOLS.test(t.tool)).map((t) => `${JSON.stringify(t.args ?? '')}\n${extractToolResultText(t.result)}`)].join('\n');
+      const finalCorpus = [requestText, ctx.currentMessage ?? '', HANDOFF_FACTS.get(attemptId) ?? '', ...toolCallsRecorded.filter((t) => t.status === 'completed' && !OWN_OUTPUT_TOOLS.test(t.tool) && !readsOwnOutput(t)).map((t) => `${JSON.stringify(t.args ?? '')}\n${extractToolResultText(t.result)}`)].join('\n');
       for (const [file, c] of outputChecks) if (c.ungrounded.length) outputChecks.set(file, { ...c, ungrounded: ungroundedValues(c.ungrounded.join(' '), finalCorpus) });
       const coreChecksPass = outputChecks.size > 0 && [...outputChecks.entries()].every(([file, c]) => c.syntaxOk !== false && c.ungrounded.length === 0 && !(c.importProblems?.length) && fs.existsSync(file));
       outputsVerified = lastWrite < 0 ? lastLook >= 0 : (coreChecksPass || lastLook > lastWrite);
