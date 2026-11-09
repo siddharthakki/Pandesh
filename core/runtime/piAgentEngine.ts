@@ -14,6 +14,8 @@ import { explicitSpecialistRequest, handoffPreflight, SPECIALIST_NAMES } from '.
 
 /** Facts a delegating turn got from Pandesh's own local tools, keyed by the child attempt that receives them. */
 const HANDOFF_FACTS = new Map<string, string>();
+/** Tools whose arguments are the assistant's own output: never evidence for the values in that output (F13f). */
+const OWN_OUTPUT_TOOLS = /^(?:write_file|propose_file_change|propose_text_edit|update_task_outcome)$/;
 /** Wall-clock budget for one OpenCode delegation (Core then verifies whatever it changed). */
 const OPENCODE_BUDGET_MS = 6 * 60_000;
 const HANDOFF_FACT_TOOLS = /^(?:system_hardware_telemetry|run_system_diagnostics|get_system_info|software_updates|listening_ports|list_projects|ollama_list_models|pc_capability_inventory|port_list_services|calculate|resolve_time|list_reminders|memory_recall)$/;
@@ -3112,7 +3114,7 @@ export class PiAgentEngine implements EngineAdapter {
             // Core checks what it just wrote: it must parse, and a report may not show values nothing returned.
             let checkNote = '';
             try {
-              const corpus = [requestText, ctx.currentMessage ?? '', HANDOFF_FACTS.get(attemptId) ?? '', ...toolCallsRecorded.filter((t) => t.status === 'completed').map((t) => `${JSON.stringify(t.args ?? '')}\n${extractToolResultText(t.result)}`)].join('\n');
+              const corpus = [requestText, ctx.currentMessage ?? '', HANDOFF_FACTS.get(attemptId) ?? '', ...toolCallsRecorded.filter((t) => t.status === 'completed' && !OWN_OUTPUT_TOOLS.test(t.tool)).map((t) => `${JSON.stringify(t.args ?? '')}\n${extractToolResultText(t.result)}`)].join('\n');
               const check = checkWrittenOutput(full, String(args.content), corpus, (command, cmdArgs) => {
                 const r = cp.spawnSync(command, cmdArgs, { encoding: 'utf8', timeout: 15_000, windowsHide: true });
                 return { status: r.status, stdout: String(r.stdout ?? ''), stderr: String(r.stderr ?? ''), error: r.error };
@@ -5548,7 +5550,7 @@ ${filesPromptSection}${webResearchPromptSection}${wishesPromptSection}${emailCal
     // step is not an answer: the model is asked once to carry the step out now.
     if (!signal?.aborted && finalReply) {
       const tail = finalReply.trim().split(/\n\s*\n/).pop() ?? '';
-      const announcesNextStep = /\b(?:let me|i'll|i will|now i(?:'ll| will)|next,? i(?:'ll| will)|i am going to|i'm going to)\s+(?:now\s+|then\s+|go ahead and\s+)?(?:build|create|write|generate|make|run|verify|open|fix|update|save|put|assemble|render|draft)\b/i.test(tail)
+      const announcesNextStep = /\b(?:let me|i'll|i will|now i(?:'ll| will)|next,? i(?:'ll| will)|i am going to|i'm going to)\s+(?:now\s+|then\s+|go ahead and\s+)?(?:build|create|write|generate|make|run|verify|open|fix|update|save|put|assemble|render|draft|correct|change|replace|adjust|edit|rewrite|re-?write|apply|finish|complete|add)\b/i.test(tail)
         && !/\?\s*$/.test(tail);
       if (announcesNextStep) {
         safeRecordRuntimeEvent(db, broadcaster, attemptId, 'announced_step_continued', { tail: tail.slice(0, 200) }, actor);
@@ -5648,7 +5650,7 @@ ${filesPromptSection}${webResearchPromptSection}${wishesPromptSection}${emailCal
       const lastLook = lastIndexWhere(done, (t) => t.status === 'completed' && /^(?:run_checks|read_file|inspect_page)$/.test(t.tool));
       // Values flagged at write time are checked again against everything the turn produced (F13d computed them with
       // calculate afterwards); what remains wrong is shown under the answer, whatever the model says.
-      const finalCorpus = [requestText, ctx.currentMessage ?? '', HANDOFF_FACTS.get(attemptId) ?? '', ...toolCallsRecorded.filter((t) => t.status === 'completed').map((t) => `${JSON.stringify(t.args ?? '')}\n${extractToolResultText(t.result)}`)].join('\n');
+      const finalCorpus = [requestText, ctx.currentMessage ?? '', HANDOFF_FACTS.get(attemptId) ?? '', ...toolCallsRecorded.filter((t) => t.status === 'completed' && !OWN_OUTPUT_TOOLS.test(t.tool)).map((t) => `${JSON.stringify(t.args ?? '')}\n${extractToolResultText(t.result)}`)].join('\n');
       for (const [file, c] of outputChecks) if (c.ungrounded.length) outputChecks.set(file, { ...c, ungrounded: ungroundedValues(c.ungrounded.join(' '), finalCorpus) });
       const coreChecksPass = outputChecks.size > 0 && [...outputChecks.entries()].every(([file, c]) => c.syntaxOk !== false && c.ungrounded.length === 0 && fs.existsSync(file));
       outputsVerified = lastWrite < 0 ? lastLook >= 0 : (coreChecksPass || lastLook > lastWrite);
