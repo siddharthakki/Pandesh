@@ -20,6 +20,7 @@ const OWN_OUTPUT_TOOLS = /^(?:write_file|propose_file_change|propose_text_edit|u
 const OPENCODE_BUDGET_MS = 6 * 60_000;
 const HANDOFF_FACT_TOOLS = /^(?:system_hardware_telemetry|run_system_diagnostics|get_system_info|software_updates|listening_ports|list_projects|ollama_list_models|pc_capability_inventory|port_list_services|calculate|resolve_time|list_reminders|memory_recall)$/;
 import { checkWrittenOutput, ungroundedValues, type OutputCheck } from './outputChecks';
+import { suggestedCommandProblems, thirdPartyImportProblems, unfinishedRequestedSteps } from './taskCompletion';
 import { createProject, listProjects } from '../domain/projects';
 import { readUpdateState } from './software/updates';
 import { collectListeningPorts } from './software/inventory';
@@ -3115,10 +3116,16 @@ export class PiAgentEngine implements EngineAdapter {
             let checkNote = '';
             try {
               const corpus = [requestText, ctx.currentMessage ?? '', HANDOFF_FACTS.get(attemptId) ?? '', ...toolCallsRecorded.filter((t) => t.status === 'completed' && !OWN_OUTPUT_TOOLS.test(t.tool)).map((t) => `${JSON.stringify(t.args ?? '')}\n${extractToolResultText(t.result)}`)].join('\n');
-              const check = checkWrittenOutput(full, String(args.content), corpus, (command, cmdArgs) => {
+              const runner = (command: string, cmdArgs: string[]) => {
                 const r = cp.spawnSync(command, cmdArgs, { encoding: 'utf8', timeout: 15_000, windowsHide: true });
                 return { status: r.status, stdout: String(r.stdout ?? ''), stderr: String(r.stderr ?? ''), error: r.error };
-              });
+              };
+              const base = checkWrittenOutput(full, String(args.content), corpus, runner);
+              // Gap 5 (T14: Flask was broken on this PC and nobody noticed): the packages a Python file needs must load.
+              const importProblems = base.syntaxOk === false ? [] : thirdPartyImportProblems(full, String(args.content), runner);
+              const check: OutputCheck = importProblems.length
+                ? { ...base, importProblems, summary: `${base.summary ? `${base.summary} ` : `Pandesh checked ${path.basename(full)}: `}PROBLEM — ${importProblems.join('; ')}. Tell the user plainly, or use only packages that load here.` }
+                : base;
               outputChecks.set(full, check);
               if (check.summary) checkNote = `\n${check.summary}`;
               safeRecordRuntimeEvent(db, broadcaster, attemptId, 'output_checked', { path: full, syntaxOk: check.syntaxOk, problem: check.syntaxProblem, ungrounded: check.ungrounded }, actor);
@@ -5566,6 +5573,29 @@ ${filesPromptSection}${webResearchPromptSection}${wishesPromptSection}${emailCal
       }
     }
 
+    // Gap 1 (F13g): the dashboard was written but not opened although the user asked to open it, and the reply told the
+    // user to "correct line 92" although the model could write the file itself. Core compares what the request asked
+    // for with what the ledger shows and asks once to finish the missing steps.
+    if (!signal?.aborted && finalReply && selectedWorkspace) {
+      const missingSteps = unfinishedRequestedSteps(requestText, finalReply, toolCallsRecorded.filter((t) => t.status === 'completed').map((t) => t.tool), tools.some((t) => t.name === 'write_file'));
+      // Gap 4 (T14: "python -m board.cli" could not work): commands the reply tells the user to run are checked too.
+      const commandProblems = suggestedCommandProblems(finalReply, selectedWorkspace);
+      if (commandProblems.length) missingSteps.push(`the reply suggests commands that cannot work as written (${commandProblems.join('; ')}); give commands that do work, checked against the files`);
+      if (missingSteps.length) {
+        safeRecordRuntimeEvent(db, broadcaster, attemptId, 'requested_steps_completion', { missing: missingSteps }, actor);
+        try {
+          const floor = agent.state.messages.length;
+          for (const name of ['open_local_file', 'write_file', 'read_file']) activeToolNames.add(name);
+          await agent.prompt(`Completion check by Pandesh: the request is not finished yet — ${missingSteps.join('; ')}. Do these now with your tools in this turn, then give the final answer stating what really happened. If one cannot be done, say exactly why.`);
+          await agent.waitForIdle();
+          const finished = lastAssistantTextFrom(floor);
+          if (finished && !isTruncationArtifact(finished)) finalReply = finished;
+        } catch (err: any) {
+          safeRecordRuntimeEvent(db, broadcaster, attemptId, 'requested_steps_completion_failed', { error: err?.message ?? String(err) }, actor);
+        }
+      }
+    }
+
     // Challenge T13: the Coding agent replied "The file has been verified as created" without ever calling write_file.
     // When the reply presents a file that is not on disk, the model gets one chance to really write it (same tool, same
     // approval) or to say it was not created; the claim guard below still judges whatever it says.
@@ -5652,12 +5682,12 @@ ${filesPromptSection}${webResearchPromptSection}${wishesPromptSection}${emailCal
       // calculate afterwards); what remains wrong is shown under the answer, whatever the model says.
       const finalCorpus = [requestText, ctx.currentMessage ?? '', HANDOFF_FACTS.get(attemptId) ?? '', ...toolCallsRecorded.filter((t) => t.status === 'completed' && !OWN_OUTPUT_TOOLS.test(t.tool)).map((t) => `${JSON.stringify(t.args ?? '')}\n${extractToolResultText(t.result)}`)].join('\n');
       for (const [file, c] of outputChecks) if (c.ungrounded.length) outputChecks.set(file, { ...c, ungrounded: ungroundedValues(c.ungrounded.join(' '), finalCorpus) });
-      const coreChecksPass = outputChecks.size > 0 && [...outputChecks.entries()].every(([file, c]) => c.syntaxOk !== false && c.ungrounded.length === 0 && fs.existsSync(file));
+      const coreChecksPass = outputChecks.size > 0 && [...outputChecks.entries()].every(([file, c]) => c.syntaxOk !== false && c.ungrounded.length === 0 && !(c.importProblems?.length) && fs.existsSync(file));
       outputsVerified = lastWrite < 0 ? lastLook >= 0 : (coreChecksPass || lastLook > lastWrite);
       for (const [file, c] of outputChecks) {
-        if (!fs.existsSync(file) || (c.syntaxOk !== false && c.ungrounded.length === 0)) continue;
+        if (!fs.existsSync(file) || (c.syntaxOk !== false && c.ungrounded.length === 0 && !(c.importProblems?.length))) continue;
         const name = workspaceRelative(file) ?? path.basename(file);
-        coreNotes.push(`**Checked by Pandesh — ${name}:** ${c.syntaxOk === false ? `${c.syntaxProblem}. ` : ''}${c.ungrounded.length ? `These values in it were not found in anything read or computed this turn, so treat them as unverified: ${c.ungrounded.join(', ')}.` : ''}`.trim());
+        coreNotes.push(`**Checked by Pandesh — ${name}:** ${c.syntaxOk === false ? `${c.syntaxProblem}. ` : ''}${c.ungrounded.length ? `These values in it were not found in anything read or computed this turn, so treat them as unverified: ${c.ungrounded.join(', ')}. ` : ''}${c.importProblems?.length ? `It cannot run on this PC yet: ${c.importProblems.join('; ')}.` : ''}`.trim());
       }
     }
 
@@ -5802,6 +5832,10 @@ ${filesPromptSection}${webResearchPromptSection}${wishesPromptSection}${emailCal
         }
       }
     } catch { /* the memory tables are absent in some test databases */ }
+    if (selectedWorkspace && finalReply && !signal?.aborted) {
+      const stillBroken = suggestedCommandProblems(finalReply, selectedWorkspace);
+      if (stillBroken.length) coreNotes.push(`**Checked by Pandesh — commands:** ${stillBroken.join('; ')}.`);
+    }
     if (coreNotes.length && !signal?.aborted) finalReply = `${finalReply.trimEnd()}\n\n${coreNotes.join('\n\n')}`;
 
     // What actually happened, decided from the tool ledger rather than from

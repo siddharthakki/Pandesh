@@ -20,6 +20,8 @@ export interface OutputCheck {
   syntaxOk: boolean | null;
   syntaxProblem: string | null;
   ungrounded: string[];
+  /** Packages a written Python file needs that do not import on this PC (gap 5). */
+  importProblems?: string[];
 }
 
 const PY_PARSE = 'import ast,sys\nsrc=open(sys.argv[1],encoding="utf-8").read()\ntry:\n    ast.parse(src)\nexcept SyntaxError as e:\n    print(f"line {e.lineno}: {e.msg}"); sys.exit(1)';
