@@ -31,3 +31,33 @@ describe('claim guard: a nearby word is not the object of the claim', () => {
     expect(kinds(text, ['read_file'])).toContain(kind);
   });
 });
+
+import * as fs from 'node:fs';
+import * as os from 'node:os';
+import * as path from 'node:path';
+import { renderDelegationReport, snapshotFiles, testsCoverChanges, verifyDelegation } from '../runtime/delegationVerification';
+
+describe('delegation verification: tests about other work do not verify this change (baseline T14)', () => {
+  const tmp = () => fs.mkdtempSync(path.join(os.tmpdir(), 'pandesh-cover-'));
+  const passRun = async () => ({ code: 0, stdout: 'Ran 2 tests\nOK', stderr: '', timedOut: false });
+
+  it('a new task board next to the expense tracker tests is untested', async () => {
+    const dir = tmp();
+    fs.writeFileSync(path.join(dir, 'expense_tracker.py'), 'def add(): pass\n');
+    fs.writeFileSync(path.join(dir, 'test_expense_tracker.py'), 'from expense_tracker import add\n');
+    const before = snapshotFiles(dir);
+    fs.writeFileSync(path.join(dir, 'app.py'), 'tasks = []\n');
+    const v = await verifyDelegation(dir, new Set(), passRun, undefined, before);
+    expect(v.test?.coversChanges).toBe(false);
+    expect(renderDelegationReport(v)).toContain('do not cover the new or changed files');
+  });
+
+  it('a fix to a module its tests import is covered; new test files cover themselves', () => {
+    const dir = tmp();
+    fs.writeFileSync(path.join(dir, 'temperature.py'), 'x = 1\n');
+    fs.writeFileSync(path.join(dir, 'test_temperature.py'), 'from temperature import x\n');
+    expect(testsCoverChanges(dir, ['temperature.py'])).toBe(true);
+    expect(testsCoverChanges(dir, ['board.py', 'test_board.py'])).toBe(true);
+    expect(testsCoverChanges(dir, ['templates/index.html'])).toBe(false);
+  });
+});

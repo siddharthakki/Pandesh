@@ -3339,7 +3339,8 @@ ${String(args.objective ?? '').slice(0, 600)}`,
           // Core's own post-fix test run is the authoritative check of this turn: the last run_checks outcome, so a
           // diagnostic run that failed BEFORE the fix does not decide the verdict (M8 was "attempted_failed" although
           // the re-run after the fix passed). A failing re-run keeps the turn failed.
-          if (verification.test) {
+          // Tests about other work in the folder verify nothing here (challenge T14), so they are not this turn's check.
+          if (verification.test && verification.test.coversChanges) {
             const passed = verification.test.code === 0 && !verification.test.timedOut;
             toolCallsRecorded.push({
               tool: 'run_checks',

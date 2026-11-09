@@ -114,7 +114,9 @@ export interface DelegationVerification {
   removed: string[];
   diff: string;
   diffTruncated: boolean;
-  test: { command: string; code: number | null; timedOut: boolean; tail: string } | null;
+  /** coversChanges: false when no test file was written by this delegation or names a changed module (the tests in
+   * the folder are about other work; their result says nothing about this change). */
+  test: { command: string; code: number | null; timedOut: boolean; tail: string; coversChanges: boolean } | null;
   notes: string[];
 }
 
@@ -164,9 +166,27 @@ export async function verifyDelegation(dir: string, before: Set<string>, run: Co
   } else if (!signal?.aborted) {
     const r = await run(command, dir, TEST_TIMEOUT_MS, signal);
     const tail = `${r.stdout}\n${r.stderr}`.trim().split(/\r?\n/).slice(-15).join('\n');
-    test = { command, code: r.code, timedOut: r.timedOut, tail };
+    test = { command, code: r.code, timedOut: r.timedOut, tail, coversChanges: testsCoverChanges(dir, [...changedFiles, ...newUntracked]) };
+    if (!test.coversChanges) notes.push('the tests that ran do not cover the files this task created or changed (they are about other work in the folder), so they do not verify this change');
   }
   return { changedFiles, newUntracked, testFilesChanged, deletedFiles, source: !inGit && beforeSnapshot ? 'snapshot' : 'git', removed, diff, diffTruncated, test, notes };
+}
+
+/**
+ * Real-world challenge T14: a task board was "verified" by the expense tracker's tests in the same folder. Tests cover a
+ * change when this change wrote a test file, or when an existing test file names a changed source module.
+ */
+export function testsCoverChanges(dir: string, touched: string[]): boolean {
+  const norm = touched.map((f) => f.replace(/\\/g, '/').replace(/\/$/, ''));
+  if (norm.some((f) => TEST_FILE.test(f))) return true;
+  const modules = norm.filter((f) => /\.(?:py|[cm]?[jt]sx?)$/i.test(f)).map((f) => path.basename(f).replace(/\.[^.]+$/, '').toLowerCase()).filter((m) => m.length >= 2);
+  if (modules.length === 0) return false;
+  const tests = [...snapshotFiles(dir).keys()].filter((f) => TEST_FILE.test(f.replace(/\\/g, '/'))).slice(0, 200);
+  return tests.some((t) => {
+    let text = '';
+    try { text = fs.readFileSync(path.join(dir, t), 'utf8').slice(0, 200_000).toLowerCase(); } catch { return false; }
+    return modules.some((m) => new RegExp(`\\b${m.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`).test(text));
+  });
 }
 
 /** The verified report appended to the reply: the diff from git and the test run from Core, not the model's summary. */
@@ -188,7 +208,7 @@ export function renderDelegationReport(v: DelegationVerification): string {
   if (v.testFilesChanged.length) parts.push(`- **Warning:** test files were changed (${v.testFilesChanged.map((f) => `\`${f}\``).join(', ')}); check that the fix does not just change the tests.`);
   if (v.test) {
     const verdict = v.test.timedOut ? 'TIMED OUT' : v.test.code === 0 ? 'PASSED' : `FAILED (exit ${v.test.code ?? 'none'})`;
-    parts.push(`- Tests re-run by Pandesh: \`${v.test.command}\` → **${verdict}**`);
+    parts.push(`- Tests re-run by Pandesh: \`${v.test.command}\` → **${verdict}**${v.test.coversChanges ? '' : ' — **but these tests do not cover the new or changed files, so this change is untested**'}`);
     if (v.test.tail) parts.push(`\n\`\`\`text\n${v.test.tail}\n\`\`\``);
   }
   for (const note of v.notes) parts.push(`- Note: ${note}`);
