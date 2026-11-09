@@ -1198,7 +1198,7 @@ export class DesktopSession {
     }
     const candidate = [AUTO_CHAT_MODEL, AUTO_RECOVERY_MODEL, AUTO_FALLBACK_MODEL].find(isInstalled);
     if (!candidate) {
-      throw new Error('no installed local model is available for summarization; install an Ollama model or select one in Jarvis');
+      throw new Error('no installed local model is available for summarization; install an Ollama model or select one in Pandesh');
     }
     return candidate;
   }
@@ -3074,7 +3074,7 @@ export class DesktopSession {
       timezone,
       alertsWhileClosed: true,
       alertsWhileClosedDetail:
-        'Desktop alerts fire while Jarvis is running (window visible or hidden in the tray). Alerts do not fire after Quit, while the computer is asleep, or while the computer is off.',
+        'Desktop alerts fire while Pandesh is running (window visible or hidden in the tray). Alerts do not fire after Quit, while the computer is asleep, or while the computer is off.',
       catalog: everydayToolCatalog(connectorsResult.connectors),
       notes: notes.map((n) => ({
         id: n.id,
@@ -3434,7 +3434,7 @@ export class DesktopSession {
       client.exportConversation(conversationId, 'markdown'),
     ]);
     if (exported.format !== 'markdown') throw new Error('Core returned an invalid conversation export');
-    return { title: conversation.title?.trim() || 'Jarvis conversation', content: exported.content };
+    return { title: conversation.title?.trim() || 'Pandesh conversation', content: exported.content };
   }
 
   // --- Chat permission mode (Ask / Auto / Plan Only). Core stores and enforces it; the host only relays the choice. ---
@@ -4274,7 +4274,7 @@ export class DesktopSession {
           timezone,
         }) as { dueAt: string; title: string };
         const local = formatLocalInstant(reminder.dueAt, timezone);
-        reply = `Reminder set for ${intent.relativeLabel} (${local}, ${timezone}): ${reminder.title}. Desktop alert will fire if Jarvis is still running.`;
+        reply = `Reminder set for ${intent.relativeLabel} (${local}, ${timezone}): ${reminder.title}. Desktop alert will fire if Pandesh is still running.`;
       } else if (intent.kind === 'queue_add') {
         await client.enqueueCommand({ instruction: intent.instruction, source: 'text' });
         await this.refreshCommandQueue();
@@ -5356,7 +5356,7 @@ function emptyEverydayToolsSnapshot(): EverydayToolsSnapshot {
     timezone: hostTimezone(),
     alertsWhileClosed: true,
     alertsWhileClosedDetail:
-      'Desktop alerts fire while Jarvis is running (window visible or hidden in the tray). Alerts do not fire after Quit, while the computer is asleep, or while the computer is off.',
+      'Desktop alerts fire while Pandesh is running (window visible or hidden in the tray). Alerts do not fire after Quit, while the computer is asleep, or while the computer is off.',
     catalog: everydayToolCatalog(),
     notes: [],
     reminders: [],
