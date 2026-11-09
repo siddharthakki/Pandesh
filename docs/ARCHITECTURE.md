@@ -1,100 +1,54 @@
 # Pandesh architecture
 
-**Local-first, governed AI assistant for Windows.** This is a public architectural overview of the private development implementation and its design direction. It is **not** a claim that the entire application source is already published here or that every adapter is production-ready.
+![Architecture](media/architecture.svg)
 
-## System overview
+Pandesh has two processes that you run locally: the **desktop app** (Electron) and **Pandesh Core** (a Node.js service).
+Core is the authority. The model proposes tool calls, and Core decides whether each one may run, asks you when it has
+to, executes it, records the result and decides what the turn actually achieved.
 
-```mermaid
-flowchart TB
-  subgraph UX["User interfaces"]
-    W["Panda desktop UI<br/>Electron / Windows"]
-    V["VS Code extension<br/>engineering workflows"]
-    M["Mobile client<br/>paired / network-dependent"]
-  end
-  subgraph HOST["Pandesh desktop host / Core"]
-    API["Local session and transport APIs"]
-    CONTEXT["Conversation and context orchestration"]
-    MODEL["Provider selection and model execution"]
-    TASK["Durable task orchestration"]
-    POLICY{"Permission and<br/>approval checks"}
-    TOOLS["Registered tools and adapters"]
-    RECORDS[("Local persistence<br/>conversations · tasks · memory<br/>approvals · schedules")]
-    EVENTS["Progress, outcomes and evidence"]
-  end
-  subgraph EXTERNAL["Local models and optional integrations"]
-    OLLAMA["Ollama<br/>local models"]
-    OPENAI["OpenAI-compatible local server<br/>optional"]
-    AGENTS["Pi / OpenCode / Hermes<br/>where installed and configured"]
-    CONNECT["Gmail / Calendar / web APIs<br/>explicit service authorization"]
-    CLOUD["Optional cloud model providers<br/>user-enabled only"]
-  end
-  W <--> API
-  V <--> API
-  M -.->|"When connected"| API
-  API <--> CONTEXT
-  CONTEXT <--> MODEL
-  CONTEXT --> TASK
-  MODEL <--> OLLAMA
-  MODEL -.-> OPENAI
-  MODEL -.->|"Opt-in"| CLOUD
-  TASK --> POLICY
-  POLICY -->|"Authorized operation"| TOOLS
-  TOOLS <--> AGENTS
-  TOOLS -.->|"Permissioned connector"| CONNECT
-  CONTEXT <--> RECORDS
-  TASK <--> RECORDS
-  TASK --> EVENTS
-  EVENTS --> API
-```
+## Components
 
-Solid arrows indicate architectural relationships; dashed arrows indicate optional/configuration-dependent paths. This diagram is conceptual, **not** a measured topology of every deployed client.
+| Part | Where | What it does |
+|---|---|---|
+| Desktop host | `apps/desktop/src` | Electron main process: window, tray, approvals, voice, updater, Classic/v2 switch. Starts Core and talks to it over a token-authenticated localhost API. |
+| v2 interface | `apps/desktop/renderer-v2` | React UI: Chat, Activity (visual execution), Board, Team, Second Brain, Projects, Automations, Tools & Skills, Software & Services, Processes. Reaches Pandesh only through the preload bridge. |
+| Classic interface | `apps/desktop/renderer` | The previous UI, still available and switchable. |
+| Core API | `core/api` | HTTP + WebSocket on `127.0.0.1` with a per-launch token. Routes for conversations, agents, memory, projects, software, tools, processes. |
+| Agent engine | `core/runtime/piAgentEngine.ts` | Runs a turn with the Pi agent core against Ollama's native API. Selects the tools offered for the request, applies the agent's scope, and runs the completion and verification passes. |
+| Delegation | `core/domain/delegation.ts`, `core/runtime/agentRouting.ts` | The Chief Agent hands work to Coding, Research, Personal or Operations. A child attempt can only narrow what its parent may do. Child approvals appear in the parent chat. |
+| Governed capabilities | `core/domain/capabilityDispatch.ts` | Memory, research, files, coding engines and other capabilities that need consent run through one dispatch path with durable approvals, exactly-once execution and redacted evidence. |
+| Truth checks | `core/runtime/outputChecks.ts`, `taskCompletion.ts`, `actionClaims.ts` | Written files are parsed and their values grounded. Unfinished requested steps are pushed back to the model once. Suggested commands are checked against the files. Claims are matched to the tool ledger. |
+| Storage | `core/db` | SQLite (`node:sqlite`) with 50 versioned migrations: conversations, attempts, tool invocations, approvals, memory facts with evidence and contradictions, projects, routines. |
 
-## Governed task lifecycle
+## A turn, step by step
 
-```mermaid
-flowchart LR
-  U["User intent"] --> C["Plan and resolve context"]
-  C --> G{"Action risk / permission"}
-  G -->|"Read-only permitted"| EX["Execute tool"]
-  G -->|"Sensitive or mutating"| A["Request human approval"]
-  A -->|"Approved"| EX
-  A -->|"Rejected / expired"| STOP["Record refusal / stop"]
-  EX --> E["Observe tool evidence"]
-  E --> D{"Verified outcome?"}
-  D -->|"Yes"| DONE["Persist result + notify"]
-  D -->|"No"| FAIL["Report limitation / recover"]
-```
+1. You send a message. The desktop host forwards it to Core as a request with a frozen permission mode
+   (Ask / Auto / Plan Only).
+2. Core picks the model (your choice, or Auto: `gemma4:12b` for quick turns, `qwen3.8:27b` for real work when installed)
+   and the tool groups the request points at. Other tools can be added on request.
+3. If you addressed a specialist ("Ask the Coding specialist…"), Core routes the hand-off itself and starts a child
+   attempt under that agent's scope: its tools, workspace folders, memory scopes and network policy.
+4. Each tool call goes through Core. Read-only calls run. Consequential calls (writing files, running code, going online,
+   changing memory) wait for an approval card that names the exact action.
+5. After the model stops, Core runs its checks: output checks on written files, the finish-what-was-asked pass, the
+   suggested-command check and claim guards. Core then records a verdict (`verified`, `unverified`, `failed`,
+   `conversational`) from the ledger, not from the model's own sentence.
 
-**Invariant:** model text is not proof of execution. Permission to attempt an action is not proof that it completed. A successful user-visible outcome requires evidence from the actual tool or connector.
+## Privacy and safety model
 
-## Responsibilities
+- **Local by default.** Models run in Ollama on your PC, and data stays in your profile folder.
+- **Egress default-deny.** Agents have no network access unless their policy allows it. Research asks once per task, and
+  only a derived public query is sent, with private paths, file names and canaries stripped.
+- **No silent cloud fallback.** Cloud providers are opt-in, and a failed local model is never replaced by a paid one
+  without your choice.
+- **Scoped agents.** Delegation can only narrow permissions. "Never" tools stay unavailable, and "always asks" actions
+  (install, push) always ask.
+- **Fail-closed approvals.** An unanswered or expired approval means no action.
 
-| Component | Responsibility |
-| --- | --- |
-| Desktop shell | Application lifecycle, UI, sessions and presentation of actions/results |
-| Core | Shared task state, conversations, scheduler, permission checks, persistence |
-| Model/provider adapter | Request execution against configured Ollama or compatible provider; model availability is runtime-dependent |
-| Tool adapter | Mediates file, diagnostics, coding engine and optionally external-service actions |
-| Persistence | Local durable state; users must protect local profiles and backups |
-| Connectors | Separate authentication and least-privilege source access; failures must be visible |
-| Approval system | Human review for consequential external, filesystem, or system actions |
+## Known gaps
 
-## Important boundaries
+- Agent `memoryScopes` are declared per agent but not yet enforced on memory recall.
+- Each conversation keeps a governed-capability anchor attempt in state `running`, and those anchors are never closed.
+- Electron 33 is end-of-life, and upgrading it is the next release blocker.
 
-- **Local-first does not mean everything is offline.** Model inference through local Ollama can remain on the computer, while optional email, calendar, web and cloud integrations require network access and their own terms.
-- **Least authority.** The app must not terminate unrelated host processes; process ownership and identity should be checked before shutdown or port management.
-- **Approval isolation.** An operation approved for one scope must not authorize a different scope.
-- **Cross-client continuity is a design goal.** Desktop, VS Code and paired mobile behavior must be tested individually; connectivity and network configuration affect availability.
-- **Untrusted contributions.** Public pull requests only run on isolated GitHub-hosted CI; no contributor code is executed on a personal self-hosted runner.
-
-## Status against public release
-
-**Available publicly:** [Pandesh v0.1.1 Build 142](https://github.com/siddharthakki/Pandesh_Releases/releases/tag/v0.1.1-pandesh-alpha), a Windows alpha with reported sandbox and local-model acceptance.
-
-**Development-preview UI:** screenshots in [the gallery](SCREENSHOTS.md) show v0.1.2 Build 143, which is not automatically the version in the currently published installer.
-
-**Source availability:** public source publishing is staged pending credential remediation, an audited self-contained source snapshot, third-party notices and a clean build. See [publication gates](OPEN_SOURCE_STATUS.md).
-
-## Further reading
-
-[Roadmap](ROADMAP.md) · [Privacy and safety](PRIVACY.md) · [Screenshots](SCREENSHOTS.md) · [Third-party credits](https://github.com/siddharthakki/Pandesh_Releases/blob/main/THIRD_PARTY_NOTICES.md).
+See also: [UI v2 design documents](architecture/pandesh-ui-v2/), [acceptance runs](architecture/pandesh-ui-v2/real-world-challenge/README.md).
