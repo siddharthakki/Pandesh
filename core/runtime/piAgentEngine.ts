@@ -1,4 +1,4 @@
-import { leadStatusLine, withholdUnsupportedActionClaims } from './actionClaims';
+import { claimedOutputFiles, leadStatusLine, withholdUnsupportedActionClaims } from './actionClaims';
 import { answerTaskStatusQuestion, isTaskStatusQuestion, listPriorTurns, renderTaskHistorySection } from '../domain/conversationTaskHistory';
 import { checkPublicQuery, derivePublicQuery, explicitlyRequestsWebSearch, referencesLocalContent } from './publicQueryGuard';
 import { checkStatedTotals, evaluateExpression } from './arithmeticCheck';
@@ -5462,6 +5462,34 @@ ${filesPromptSection}${webResearchPromptSection}${wishesPromptSection}${emailCal
       finalReply = composeEvidenceAnswer(projectEvidence, requestText);
       projectReplyReplaced = true;
       safeRecordRuntimeEvent(db, broadcaster, attemptId, 'project_reply_replaced', { reason: 'reply not grounded in the active project', project: projectEvidence.name }, actor);
+    }
+
+    // Challenge T13: the Coding agent replied "The file has been verified as created" without ever calling write_file.
+    // When the reply presents a file that is not on disk, the model gets one chance to really write it (same tool, same
+    // approval) or to say it was not created; the claim guard below still judges whatever it says.
+    if (!signal?.aborted && finalReply && selectedWorkspace && tools.some((t) => t.name === 'write_file')) {
+      const onDisk = (ref: string) => {
+        const clean = ref.replace(/[\\/]+$/, '');
+        if (path.isAbsolute(clean)) return fs.existsSync(clean);
+        return fs.existsSync(path.resolve(selectedWorkspace, clean)) || fs.existsSync(path.join(selectedWorkspace, path.basename(clean)));
+      };
+      const insideWorkspace = (ref: string) => !path.isAbsolute(ref) || workspaceRelative(path.resolve(ref)) !== undefined;
+      // "Tasks are saved in tasks.json" / "will be created when you run it" describe the program, not a file made now.
+      const describesBehaviour = /\b(?:will|would|when(?:ever)?|each time|once you|are saved|is saved|gets? (?:saved|created)|at runtime|on first run)\b/i;
+      const missing = [...new Set(finalReply.split('\n').filter((line) => !describesBehaviour.test(line)).flatMap((line) => claimedOutputFiles(line)))].filter((f) => insideWorkspace(f) && !onDisk(f)).slice(0, 3);
+      if (missing.length) {
+        safeRecordRuntimeEvent(db, broadcaster, attemptId, 'claimed_file_missing_recovery', { files: missing }, actor);
+        try {
+          const floor = agent.state.messages.length;
+          activeToolNames.add('write_file');
+          await agent.prompt(`File check by Pandesh: your reply says ${missing.join(', ')} exists, but it is not on disk — no write_file call created it. Call write_file now with the complete content for ${missing.join(', ')} in the selected folder, then give your final answer. If you cannot, say plainly that it was not created.`);
+          await agent.waitForIdle();
+          const retried = lastAssistantTextFrom(floor);
+          if (retried && !isTruncationArtifact(retried)) finalReply = retried;
+        } catch (err: any) {
+          safeRecordRuntimeEvent(db, broadcaster, attemptId, 'claimed_file_missing_recovery_failed', { error: err?.message ?? String(err) }, actor);
+        }
+      }
     }
 
     // Alpha e2e T7: a check failed, a file was changed to fix it, and the turn ended without running the check again
