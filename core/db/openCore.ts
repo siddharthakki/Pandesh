@@ -78,8 +78,14 @@ function backupBeforeMigration(db: CoreDatabase, dir: string, schema: number, ke
     } finally {
       copy.close();
     }
-    const backups = fs.readdirSync(dir).filter((name) => /^core-schema\d+-.+\.db$/.test(name)).sort().reverse();
-    for (const old of backups.slice(Math.max(1, keep))) fs.rmSync(path.join(dir, old), { force: true });
+    // Newest first by modification time (a name sort would put schema 100 before schema 46); the one just made stays.
+    const backups = fs.readdirSync(dir)
+      .filter((name) => /^core-schema\d+-.+\.db$/.test(name))
+      .map((name) => ({ name, at: fs.statSync(path.join(dir, name)).mtimeMs }))
+      .sort((a, b) => b.at - a.at)
+      .map((b) => b.name)
+      .filter((name) => path.join(dir, name) !== target);
+    for (const old of backups.slice(Math.max(0, keep - 1))) fs.rmSync(path.join(dir, old), { force: true });
     return target;
   } catch (err) {
     throw new CoreDatabaseFailedError(

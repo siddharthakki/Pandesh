@@ -57,6 +57,26 @@ describe('schema upgrade safety', () => {
     expect(schemaOf(file)).toBe(latest);
   });
 
+  it('keeps only the newest backups, by age (not by name)', () => {
+    const file = path.join(dir, 'core.db');
+    const backups = path.join(dir, 'migration-backups');
+    fs.mkdirSync(backups);
+    const old = (name: string, ageMin: number) => {
+      fs.writeFileSync(path.join(backups, name), 'old');
+      const t = new Date(Date.now() - ageMin * 60_000);
+      fs.utimesSync(path.join(backups, name), t, t);
+    };
+    old('core-schema100-2026-01-01T00-00-00-000Z.db', 30); // sorts before "schema46" by name, but is the newest old one
+    old('core-schema45-2026-01-01T00-00-00-000Z.db', 90);
+    old('core-schema44-2026-01-01T00-00-00-000Z.db', 120);
+    previousBuildDatabase(file);
+    openCoreDatabase(file, { keepBackups: 2 }).db.close();
+    const left = fs.readdirSync(backups).sort();
+    expect(left).toHaveLength(2);
+    expect(left.some((n) => n.startsWith(`core-schema${latest - 1}-`))).toBe(true);
+    expect(left).toContain('core-schema100-2026-01-01T00-00-00-000Z.db');
+  });
+
   it('takes no backup for a new database or one already at the current schema', () => {
     const file = path.join(dir, 'core.db');
     openCoreDatabase(file).db.close();
