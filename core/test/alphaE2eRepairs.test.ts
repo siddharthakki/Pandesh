@@ -63,6 +63,8 @@ describe('alpha e2e: claims the guard now withholds', () => {
     const r = withholdUnsupportedActionClaims('I have initiated the creation of the Pandesh Alpha Playground project.', ['update_task_outcome']);
     expect(r.withheld.map((w) => w.kind)).toContain('project');
     expect(withholdUnsupportedActionClaims('I have created the project Pandesh Alpha Playground.', ['create_project']).withheld).toEqual([]);
+    // Re-run T4: a coding project made of files that write_file really wrote.
+    expect(withholdUnsupportedActionClaims('I have created the Python calculator project in your scratch workspace.', ['update_task_outcome', 'write_file', 'write_file', 'run_checks']).withheld).toEqual([]);
   });
 });
 

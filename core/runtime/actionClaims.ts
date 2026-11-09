@@ -123,10 +123,13 @@ const CATEGORIES: ActionClaimCategory[] = [
   {
     // Alpha e2e T10: "I have initiated the creation of the Pandesh Alpha Playground project" with 0 project rows.
     kind: 'project',
-    object: /\b(?:projects?|workspaces?)\b/i,
+    // "in your scratch workspace" is where files went, not a project record: only the word "project" counts.
+    object: /\bprojects?\b/i,
     verbs: 'created|initiated|set up|added|started|registered|saved|recorded',
     claim: /\bi(?:'ve|\s+have)?\s+(?:(?:now|just|already|successfully|also)\s+)*(?:created|initiated|set up|added|started|registered|saved|recorded)\b|\b(?:has|have)\s+(?:now\s+|already\s+|successfully\s+)*been\s+(?:successfully\s+)?(?:created|initiated|set up|added|registered|saved|recorded)\b|\b(?:is|are)\s+now\s+(?:created|set up|registered|saved)\b/i,
-    tools: /project/i,
+    // A coding project made of files is real when files were written (alpha e2e re-run T4: "I created the calculator
+    // project" after two successful write_file calls was wrongly withheld).
+    tools: /project|^write_file$|^propose_|file_change|^delegate_to_(?:opencode|agent)$/i,
     label: 'project creation',
   },
   {
