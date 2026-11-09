@@ -64,3 +64,15 @@ describe('memory_correct', () => {
     expect(registry.classify('memory_correct')).toEqual({ capabilityId: 'memory', risk: 'consequential' });
   });
 });
+
+describe('recall relevance (real-world challenge: unrelated project facts led every Cedar recall)', () => {
+  it('a two-word query returns the facts that match both words, not every "project" fact', () => {
+    const base = { memoryType: 'project' as never, scopeType: 'project' as const, predicate: 'review', sensitivity: 'internal' as const, sourceConversationId: conversationId, sourceMessageId: firstMessage, actor: 'test' };
+    rememberMemory(db, { ...base, scopeId: 'Project Firefly', subject: 'project firefly details', value: 'Meeting Wednesday 15:00' });
+    rememberMemory(db, { ...base, scopeId: 'Project Cedar', subject: 'project cedar review meeting', value: 'Meeting Monday 11:00' });
+    const r = recallMemories(db, { scopeType: 'project', query: 'Project Cedar' }) as { entries: Array<{ memory: { scopeId: string } }> };
+    expect(r.entries.map((e) => e.memory.scopeId)).toEqual(['Project Cedar']);
+    const one = recallMemories(db, { scopeType: 'project', query: 'project' }) as { entries: unknown[] };
+    expect(one.entries.length).toBe(2);
+  });
+});

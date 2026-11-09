@@ -710,6 +710,16 @@ export function recallMemories(db: CoreDatabase, input: RecallMemoriesInput = {}
     `SELECT * FROM memory_facts ${clauses.length ? `WHERE ${clauses.join(' AND ')}` : ''} ORDER BY createdAt DESC, id DESC LIMIT ?`,
     [...params, limit],
   ).map(asFact).reverse();
+  // Words match with OR, so "Project Cedar" also returned every other project's facts (and their contradictions) ahead
+  // of the Cedar fact (real-world challenge). When some facts match more of the query's words than others, only the
+  // best-matching ones are returned; a single-word query is unchanged.
+  if (words.length >= 2 && rows.length > 1) {
+    const score = (f: MemoryFactRecord) => words.filter((w) => `${f.subject} ${f.predicate} ${f.normalizedValue} ${f.displayValue}`.toLowerCase().includes(w)).length;
+    const best = Math.max(...rows.map(score));
+    if (best >= 2) {
+      for (let i = rows.length - 1; i >= 0; i -= 1) if (score(rows[i]) < best) rows.splice(i, 1);
+    }
+  }
 
   const entries: MemoryRecallEntry[] = [];
   for (const fact of rows) {
