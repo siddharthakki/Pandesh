@@ -20,7 +20,13 @@ describe('credential file guard', () => {
     expect(isCredentialFilePath(path.join(dir, name))).toBe(true);
   });
 
-  it.each(['README.md', 'package.json', '.env.example', 'credentials-guide.md', 'notes.txt'])('allows %s', (name) => {
+  // Build 161 audit: Pandesh's own live secrets in its profile folder (bearer tokens for Core and the host, the
+  // process-ownership token, the phone companion's vault and TLS key) were readable by name.
+  it.each(['core.token', 'host.token', 'port-manager.token', 'companion-vault.json', 'companion-tls.json'])('refuses Pandesh profile secret %s', (name) => {
+    expect(isCredentialFilePath(path.join(dir, name))).toBe(true);
+  });
+
+  it.each(['README.md', 'package.json', '.env.example', 'credentials-guide.md', 'notes.txt', 'tokens.md', 'core.json'])('allows %s', (name) => {
     expect(isCredentialFilePath(path.join(dir, name))).toBe(false);
   });
 

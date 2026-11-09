@@ -203,8 +203,21 @@ export function isToolAllowed(scope: EffectiveScope, toolName: string): { allowe
 }
 
 const PATH_KEYS = ['path', 'filePath', 'file', 'directory', 'dir', 'folder', 'root', 'roots', 'source', 'destination', 'target', 'cwd', 'paths', 'workspace'];
+/**
+ * Every argument NAMED like a filesystem location is checked, not only the fixed list above: the tools' own parameters
+ * are dirPath, searchRoots, searchRoot, projectPath, workspacePath, documentPath, repoPath (Build 161 audit — these
+ * skipped the gate), and a model may use file_path or outputFile.
+ */
+const PATH_KEY_PATTERN = /(?:path|paths|dir|dirs|directory|directories|folder|folders|root|roots|file|files)$/i;
+/** Named like a path but not a filesystem location (Windows Task Scheduler folder, e.g. "\\"). */
+const NON_FILESYSTEM_PATH_KEYS = new Set(['taskPath']);
 
-function looksLikePath(v: string): boolean { return /^(?:[A-Za-z]:[\\/]|\\\\|\/|\.{1,2}[\\/])/.test(v) || v.includes('\\') || v.includes('/'); }
+function isPathKey(key: string): boolean {
+  return !NON_FILESYSTEM_PATH_KEYS.has(key) && (PATH_KEYS.includes(key) || PATH_KEY_PATTERN.test(key));
+}
+
+/** Drive-relative ("C:notes.txt"), UNC, rooted, "." / ".." and anything with a separator. */
+function looksLikePath(v: string): boolean { return /^(?:[A-Za-z]:|\\\\|\/|\.{1,2}(?:[\\/]|$))/.test(v) || v.includes('\\') || v.includes('/'); }
 
 function inside(p: string, root: string): boolean {
   const rel = path.relative(root, p);
@@ -214,7 +227,7 @@ function inside(p: string, root: string): boolean {
 /** Every path-like argument must resolve inside the allowed roots of every layer that restricts paths. */
 export function checkPathArguments(scope: EffectiveScope, args: Record<string, unknown>): { allowed: true } | { allowed: false; reason: string } {
   const candidates: string[] = [];
-  for (const k of PATH_KEYS) {
+  for (const k of Object.keys(args).filter(isPathKey)) {
     const v = args[k];
     for (const s of Array.isArray(v) ? v : [v]) if (typeof s === 'string' && s.trim() && looksLikePath(s.trim())) candidates.push(s.trim());
   }

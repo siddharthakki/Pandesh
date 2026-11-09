@@ -14,11 +14,13 @@ import { explicitSpecialistRequest, handoffPreflight, SPECIALIST_NAMES } from '.
 
 /** Facts a delegating turn got from Pandesh's own local tools, keyed by the child attempt that receives them. */
 const HANDOFF_FACTS = new Map<string, string>();
+/** The private part of those facts (memory, reminders): the child's public web query must not repeat it. */
+const HANDOFF_PRIVATE_FACTS = new Map<string, string[]>();
 /** Tools whose arguments are the assistant's own output: never evidence for the values in that output (F13f). */
 const OWN_OUTPUT_TOOLS = /^(?:write_file|propose_file_change|propose_text_edit|update_task_outcome)$/;
 /** Wall-clock budget for one OpenCode delegation (Core then verifies whatever it changed). */
 const OPENCODE_BUDGET_MS = 6 * 60_000;
-const HANDOFF_FACT_TOOLS = /^(?:system_hardware_telemetry|run_system_diagnostics|get_system_info|software_updates|listening_ports|list_projects|ollama_list_models|pc_capability_inventory|port_list_services|calculate|resolve_time|list_reminders|memory_recall)$/;
+import { collectHandoffFacts } from './handoffFacts';
 import { checkWrittenOutput, ungroundedValues, type OutputCheck } from './outputChecks';
 import { expectedOutputFiles, inventedDates, suggestedCommandProblems, thirdPartyImportProblems, unfinishedRequestedSteps } from './taskCompletion';
 import { discoverCodingAgents, housekeepingRoot, spawnPlan } from './codingAgents';
@@ -95,7 +97,7 @@ import {
   type EngineExecutionResult,
   EngineRegistry
 } from './adapters/EngineAdapter';
-import { agentScopeForAttempt, BUILTIN_AGENTS, checkEgress, checkPathArguments, egressOf, egressPreapproved, getAgentDefinition, isToolAllowed, recordScopeRefusal, chiefDelegationScope, deriveScope } from '../domain/agents';
+import { agentScopeForAttempt, allowedMemoryScopes, BUILTIN_AGENTS, checkEgress, checkPathArguments, egressOf, egressPreapproved, getAgentDefinition, isToolAllowed, recordScopeRefusal, chiefDelegationScope, deriveScope } from '../domain/agents';
 import { delegationOutcome, isTerminalAttemptStatus as isTerminalDelegation, startDelegation } from '../domain/delegation';
 import {
   isGmailContractExtractionRequest,
@@ -2675,9 +2677,13 @@ export class PiAgentEngine implements EngineAdapter {
           if (!query) return { content: [{ type: 'text', text: 'web_research requires a query.' }], isError: true };
           // Privacy boundary (audit D2): only a short public query may leave the machine — never the user's message,
           // personal identifiers, local paths or text read from the user's files in this turn.
-          const privateTexts = toolCallsRecorded
-            .filter((t) => /read|document|ocr|list_directory|gmail_|memory_recall|household/i.test(t.tool) && t.status === 'completed')
-            .map((t) => extractToolResultText(t.result));
+          // Memory and reminders a delegating turn handed to this run are as private as what it read itself.
+          const privateTexts = [
+            ...toolCallsRecorded
+              .filter((t) => /read|document|ocr|list_directory|gmail_|memory_recall|household/i.test(t.tool) && t.status === 'completed')
+              .map((t) => extractToolResultText(t.result)),
+            ...(HANDOFF_PRIVATE_FACTS.get(attemptId) ?? []),
+          ];
           const queryCheck = checkPublicQuery(query, { userMessage: ctx.currentMessage ?? requestText, privateTexts });
           if (!queryCheck.ok) {
             safeRecordRuntimeEvent(db, broadcaster, attemptId, 'web_research_query_refused', { reason: queryCheck.reason, queryChars: query.length }, actor);
@@ -3967,9 +3973,12 @@ ${String(args.objective ?? '').slice(0, 600)}`,
       // the model used governed_research in every M9 run): only a short public query may leave the machine.
       if (toolName === 'governed_research') {
         const query = String(args.query ?? '').trim();
-        const privateTexts = toolCallsRecorded
-          .filter((t) => /read|document|ocr|list_directory|gmail_|memory_recall|household/i.test(t.tool) && t.status === 'completed')
-          .map((t) => extractToolResultText(t.result));
+        const privateTexts = [
+          ...toolCallsRecorded
+            .filter((t) => /read|document|ocr|list_directory|gmail_|memory_recall|household/i.test(t.tool) && t.status === 'completed')
+            .map((t) => extractToolResultText(t.result)),
+          ...(HANDOFF_PRIVATE_FACTS.get(attemptId) ?? []),
+        ];
         const queryCheck = checkPublicQuery(query, { userMessage: ctx.currentMessage ?? requestText, privateTexts });
         if (!queryCheck.ok) {
           safeRecordRuntimeEvent(db, broadcaster, attemptId, 'web_research_query_refused', { tool: toolName, reason: queryCheck.reason, queryChars: query.length }, actor);
@@ -4062,10 +4071,13 @@ ${String(args.objective ?? '').slice(0, 600)}`,
           const brief = String(args?.brief ?? '').trim();
           const name = NAMES[toAgentId] ?? toAgentId;
           let grant: { egressApprovalId?: string } | null = null;
+          // The memory the child may read: facts this turn recalled are passed on only within it.
+          let childReadableMemory: string[] | null = [];
           try {
             // Would the child be able to go online at all? Ask the user here, in this conversation, before it starts.
             const root = agentScope?.conversationRoot ?? (selectedWorkspace || null);
             const childScope = deriveScope(getAgentDefinition(db, toAgentId), root, agentScope ?? chiefDelegationScope(root), null);
+            childReadableMemory = allowedMemoryScopes(childScope, 'read');
             // Core's boundary is checked before the child starts, not left to the child's model to try (T15).
             const blocked = handoffPreflight(`${brief}\n${requestedSpecialist ? requestText : ''}`, childScope);
             if (blocked) {
@@ -4106,10 +4118,14 @@ ${String(args.objective ?? '').slice(0, 600)}`,
           // T13: the Operations agent's real data never reached the Coding agent, which then invented a task list and an
           // update row. Facts this turn got from Pandesh's own local tools travel with the hand-off (never web, email or
           // document text: those stay behind the untrusted-content rule).
-          const facts = toolCallsRecorded
-            .filter((t) => t.status === 'completed' && (HANDOFF_FACT_TOOLS.test(t.tool) || (t.tool === 'delegate_to_agent' && /^RESULT FROM THE OPERATIONS AGENT/.test(extractToolResultText(t.result)))))
-            .map((t) => `[${t.tool}]\n${extractToolResultText(t.result).slice(0, 2_500)}`);
-          if (facts.length) HANDOFF_FACTS.set(childAttemptId, facts.join('\n\n').slice(0, 8_000));
+          // Recalled memory is reduced to the child's readable scopes (Build 161 audit: a Research child received the
+          // user's private facts this turn had recalled), and its private part guards the child's public queries.
+          const handoff = collectHandoffFacts(
+            toolCallsRecorded.map((t) => ({ tool: t.tool, status: t.status, text: extractToolResultText(t.result) })),
+            childReadableMemory,
+          );
+          if (handoff.text) HANDOFF_FACTS.set(childAttemptId, handoff.text);
+          if (handoff.privateTexts.length) HANDOFF_PRIVATE_FACTS.set(childAttemptId, handoff.privateTexts);
           // Files the brief asks the agent to produce: a hand-off that should leave a file and leaves none is not done.
           const existingNames = selectedWorkspace ? new Set([...snapshotFiles(selectedWorkspace).keys()].map((k) => path.basename(k).toLowerCase())) : new Set<string>();
           const expectedOutputs = selectedWorkspace ? expectedOutputFiles(brief).filter((n) => !existingNames.has(n.toLowerCase())).slice(0, 5) : [];
@@ -4146,6 +4162,7 @@ Report this to the user, saying the ${name} agent did the work. Do not add facts
           } finally {
             signal?.removeEventListener('abort', onAbort);
             HANDOFF_FACTS.delete(childAttemptId);
+            HANDOFF_PRIVATE_FACTS.delete(childAttemptId);
           }
         },
       });

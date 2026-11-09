@@ -47,9 +47,11 @@ const SECRET_SHAPES: RegExp[] = [
 /**
  * Files that hold credentials and must never be read into a model conversation,
  * whatever the model asks for: env files, Google OAuth client files, encrypted
- * credential blobs, key material and the phone-pairing record.
+ * credential blobs, key material, the phone-pairing record, and Pandesh's own
+ * live secrets (Core/host bearer tokens, the process-ownership token, the
+ * phone companion's vault and TLS key).
  */
-const CREDENTIAL_FILE_NAME = /^(?:\.env(?:\.(?!example$|sample$|template$).+)?|credentials(?:\..+)?|secrets?(?:\..+)?|\.npmrc|\.netrc|id_(?:rsa|dsa|ecdsa|ed25519)|client_secret.*\.json|google-oauth-client\.json|mobile-pair\.json|.+\.credential\.bin|.+\.(?:pem|key|pfx|p12|keystore))$/i;
+const CREDENTIAL_FILE_NAME = /^(?:\.env(?:\.(?!example$|sample$|template$).+)?|credentials(?:\..+)?|secrets?(?:\..+)?|\.npmrc|\.netrc|id_(?:rsa|dsa|ecdsa|ed25519)|client_secret.*\.json|google-oauth-client\.json|mobile-pair\.json|companion-(?:vault|tls)\.json|.+\.token|.+\.credential\.bin|.+\.(?:pem|key|pfx|p12|keystore))$/i;
 
 /**
  * True when `target` names a credential file. Windows aliases are normalised
