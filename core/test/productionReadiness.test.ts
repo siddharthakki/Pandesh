@@ -51,6 +51,10 @@ describe("Core's check of a written file", () => {
     const c = checkWrittenOutput('dash.html', html, corpus);
     expect(c.ungrounded).toEqual(['4.0', '5.0.1']);
   });
+  it('accepts a value shown rounded from a computed number (F13d: 21750 / 1024 = 21.2402… shown as 21.2)', () => {
+    expect(ungroundedValues('VRAM used 21.2 GB of 24.6 GB', '21750 / 1024 = 21.240234375; VRAM total 24.6 GB')).toEqual([]);
+    expect(ungroundedValues('version 5.0.1', 'version 5.0.12')).toEqual(['5.0.1']);
+  });
   it('accepts values in any common spelling, including totals from calculate', () => {
     expect(ungroundedValues('Total EUR 267.39, A-1001 EUR 82.5, v26.13.0', '82.50 + 144.90 + 39.99 = 267.39\nNode v26.13.0')).toEqual([]);
   });

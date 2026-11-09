@@ -17,7 +17,7 @@ const HANDOFF_FACTS = new Map<string, string>();
 /** Wall-clock budget for one OpenCode delegation (Core then verifies whatever it changed). */
 const OPENCODE_BUDGET_MS = 6 * 60_000;
 const HANDOFF_FACT_TOOLS = /^(?:system_hardware_telemetry|run_system_diagnostics|get_system_info|software_updates|listening_ports|list_projects|ollama_list_models|pc_capability_inventory|port_list_services|calculate|resolve_time|list_reminders|memory_recall)$/;
-import { checkWrittenOutput, type OutputCheck } from './outputChecks';
+import { checkWrittenOutput, ungroundedValues, type OutputCheck } from './outputChecks';
 import { createProject, listProjects } from '../domain/projects';
 import { readUpdateState } from './software/updates';
 import { collectListeningPorts } from './software/inventory';
@@ -5528,7 +5528,10 @@ ${filesPromptSection}${webResearchPromptSection}${wishesPromptSection}${emailCal
     // A project question is answered only from the selected project's own files: a reply that asks which project, or that
     // describes Pandesh/KarkeDikha as the project, is replaced by the answer Core can prove from the evidence it read.
     let projectReplyReplaced = false;
-    if (projectEvidence && !isReplyGroundedInProject(finalReply, projectEvidence)) {
+    // Final run F13d: "…current project tasks… build the dashboard" did real work (write_file, open_local_file) and the
+    // whole answer was replaced by a "how to run this project" summary. Only an answer-type turn is replaced.
+    const didRealWork = toolCallsRecorded.some((t) => t.status === 'completed' && /^(?:write_file|open_local_file|run_checks|delegate_to_agent|delegate_to_opencode|create_project|memory_(?:remember|correct|forget))$|^propose_/.test(t.tool));
+    if (projectEvidence && !didRealWork && !isReplyGroundedInProject(finalReply, projectEvidence)) {
       finalReply = composeEvidenceAnswer(projectEvidence, requestText);
       projectReplyReplaced = true;
       safeRecordRuntimeEvent(db, broadcaster, attemptId, 'project_reply_replaced', { reason: 'reply not grounded in the active project', project: projectEvidence.name }, actor);
@@ -5637,9 +5640,12 @@ ${filesPromptSection}${webResearchPromptSection}${wishesPromptSection}${emailCal
       const done = finishedCalls();
       const lastWrite = lastIndexWhere(done, (t) => t.status === 'completed' && WRITE_TOOL.test(t.tool));
       const lastLook = lastIndexWhere(done, (t) => t.status === 'completed' && /^(?:run_checks|read_file|inspect_page)$/.test(t.tool));
+      // Values flagged at write time are checked again against everything the turn produced (F13d computed them with
+      // calculate afterwards); what remains wrong is shown under the answer, whatever the model says.
+      const finalCorpus = [requestText, ctx.currentMessage ?? '', HANDOFF_FACTS.get(attemptId) ?? '', ...toolCallsRecorded.filter((t) => t.status === 'completed').map((t) => `${JSON.stringify(t.args ?? '')}\n${extractToolResultText(t.result)}`)].join('\n');
+      for (const [file, c] of outputChecks) if (c.ungrounded.length) outputChecks.set(file, { ...c, ungrounded: ungroundedValues(c.ungrounded.join(' '), finalCorpus) });
       const coreChecksPass = outputChecks.size > 0 && [...outputChecks.entries()].every(([file, c]) => c.syntaxOk !== false && c.ungrounded.length === 0 && fs.existsSync(file));
       outputsVerified = lastWrite < 0 ? lastLook >= 0 : (coreChecksPass || lastLook > lastWrite);
-      // What remains wrong in a written file is shown under the answer, whatever the model says.
       for (const [file, c] of outputChecks) {
         if (!fs.existsSync(file) || (c.syntaxOk !== false && c.ungrounded.length === 0)) continue;
         const name = workspaceRelative(file) ?? path.basename(file);

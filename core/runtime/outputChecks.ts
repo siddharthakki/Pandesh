@@ -76,10 +76,21 @@ const norm = (v: string): string[] => {
 /** Decimal values / versions in `text` that appear nowhere in `corpus` (in any common spelling). */
 export function ungroundedValues(text: string, corpus: string): string[] {
   const hay = corpus.replace(/,(?=\d{3}\b)/g, '');
+  // Plain numbers in the corpus, so a value shown rounded (21.2 from 21750 / 1024 = 21.2402…) counts as grounded.
+  const corpusNumbers = [...hay.matchAll(/(?<![\d.])\d+(?:\.\d+)?(?![\d.]*\d)/g)].map((m) => Number(m[0])).filter(Number.isFinite);
+  const roundsTo = (value: string) => {
+    const plain = value.replace(/,/g, '').replace(/^v/, '');
+    if (!/^\d+\.\d+$/.test(plain)) return false; // versions must match exactly
+    const decimals = plain.split('.')[1].length;
+    const target = Number(plain);
+    return corpusNumbers.some((n) => Math.abs(Number(n.toFixed(decimals)) - target) < 1e-9);
+  };
   const out = new Set<string>();
   for (const m of text.matchAll(DECIMAL_OR_VERSION)) {
     const value = m[0];
-    if (!norm(value).some((v) => new RegExp(`(?<![\\d.])${v.replace(/\./g, '\\.')}(?![\\d])`).test(hay))) out.add(value);
+    if (norm(value).some((v) => new RegExp(`(?<![\\d.])${v.replace(/\./g, '\\.')}(?![\\d])`).test(hay))) continue;
+    if (roundsTo(value)) continue;
+    out.add(value);
   }
   return [...out].slice(0, 12);
 }
