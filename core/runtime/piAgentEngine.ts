@@ -5550,6 +5550,22 @@ ${filesPromptSection}${webResearchPromptSection}${wishesPromptSection}${emailCal
         finalReply = formatMemoryOutputToNaturalLanguage('memory_remember', finalReply);
       }
     }
+    // Live run AG2: after recording the task, the model's next call came back empty (0 tokens in under a second) and the
+    // turn went straight to the tool-evidence synthesis, which answered "the tool results only show a status update".
+    // An empty answer before any real work is retried once with the full context and tools.
+    if (!isPublicResearch && !signal?.aborted && isResearchStubReply(finalReply, false, isTruncationArtifact)
+      && !toolCallsRecorded.some((t) => t.status === 'completed' && !/^(?:update_task_outcome|request_tools|resolve_time|get_system_info)$/.test(t.tool))) {
+      safeRecordRuntimeEvent(db, broadcaster, attemptId, 'empty_reply_retried', { modelCalls: modelCalls.length }, actor);
+      try {
+        const floor = agent.state.messages.length;
+        await agent.prompt('Continue with the user\'s request now: use your tools to do it (the request is above), then give the final answer with what really happened.');
+        await agent.waitForIdle();
+        const retried = lastAssistantTextFrom(floor);
+        if (retried && !isTruncationArtifact(retried)) finalReply = retried;
+      } catch (err: any) {
+        safeRecordRuntimeEvent(db, broadcaster, attemptId, 'empty_reply_retry_failed', { error: err?.message ?? String(err) }, actor);
+      }
+    }
     // D15: the model ended a turn that had real tool results with no answer. Answer from those results alone with one
     // tool-free call (a few thousand tokens instead of the ~26K full context) before giving up.
     if (!isPublicResearch && !signal?.aborted && isResearchStubReply(finalReply, false, isTruncationArtifact)) {
