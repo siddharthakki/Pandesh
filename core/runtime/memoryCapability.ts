@@ -41,6 +41,7 @@ import {
   rememberMemory,
   resolveMemoryContradiction,
 } from '../domain/memory';
+import { MEMORY_SCOPE_FILTER_ARG } from '../domain/memory';
 import type { AffectedEntityInput } from '../domain/memory';
 
 export const MEMORY_CAPABILITY_ID = 'memory';
@@ -337,6 +338,13 @@ export function createMemoryCapabilityAdapter(options: MemoryCapabilityOptions):
           const result = keywordAtUserScope
             ? { ...recallMemories(db, { ...input, scopeType: 'project' as never }), includedScopes: ['user', 'global', 'project'] }
             : recallMemories(db, input);
+          // An agent run's readable scopes (set by Core's agent-scope gate, never widened here): a specialist sees only
+          // facts in those scope types, whatever the recall itself would have included.
+          const readable = Array.isArray(args[MEMORY_SCOPE_FILTER_ARG]) ? (args[MEMORY_SCOPE_FILTER_ARG] as unknown[]).map(String) : null;
+          if (readable) {
+            const entries = result.entries.filter((e) => readable.includes(e.memory.scopeType));
+            return ok({ ...result, entries, includedScopes: readable }, 'memory_recall_succeeded', safeArgs);
+          }
           return ok(result, 'memory_recall_succeeded', safeArgs);
         }
         case 'memory_resolve_contradiction': {

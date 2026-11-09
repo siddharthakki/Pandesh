@@ -43,6 +43,9 @@ import {
 
 export const MEMORY_TYPES: readonly MemoryType[] = ['user', 'project', 'task', 'episodic', 'semantic', 'procedural'];
 export const MEMORY_SCOPE_TYPES: readonly MemoryScopeType[] = ['user', 'project', 'task', 'repository', 'global'];
+
+/** Internal argument the agent-scope gate (capabilityDispatch) sets on an agent's memory_recall: the scope types it may read. */
+export const MEMORY_SCOPE_FILTER_ARG = '__agentReadableScopes';
 export const MEMORY_SENSITIVITIES: readonly MemorySensitivity[] = ['public', 'internal', 'confidential', 'restricted'];
 export const KNOWLEDGE_ENTITY_TYPES: readonly KnowledgeEntityType[] = [
   'user', 'project', 'task', 'decision', 'repository_file', 'github_issue', 'product_record',

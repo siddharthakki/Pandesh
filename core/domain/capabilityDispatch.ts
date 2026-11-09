@@ -48,7 +48,8 @@ import type { GovernedCapabilityRegistry } from '../runtime/governedCapability';
 import { LocalAutonomySecurityKernel } from '../security/kernel';
 import type { ExecutionGrant } from '../security/types';
 import { decidePermission, recordPermissionDecision, STANDING_AUTHORIZATION_ACTOR } from './permissionModes';
-import { agentScopeForAttempt, checkEgress, checkMemoryArguments, checkPathArguments, isToolAllowed, recordScopeRefusal } from './agents';
+import { agentScopeForAttempt, allowedMemoryScopes, checkEgress, checkMemoryArguments, checkPathArguments, isToolAllowed, recordScopeRefusal } from './agents';
+import { MEMORY_SCOPE_FILTER_ARG } from './memory';
 import { parseBaselineIdentity, type WriteBaselineIdentity, type WriteProposalPresentation } from '../runtime/writeProposal';
 import {
   CORE_POLICY_ACTOR,
@@ -274,7 +275,23 @@ export function findCapabilityAttemptIds(db: CoreDatabase, correlationId: string
       delegated,
     ).map((row) => row.id)
     : [];
-  return [...new Set([...direct.reverse(), ...owned, ...directAttempts, ...delegated, ...delegatedAnchors])];
+  // Release blocker 2026-11-09 (the browser_open_site hang, general form): a governed capability called inside the
+  // specialist's own conversation anchors its approval on that conversation's UNOWNED anchor (keyed by the child
+  // conversation id), which none of the lookups above reach — the card stayed invisible and the delegating turn waited
+  // until it was cancelled. Those anchors belong to the person in THIS conversation too.
+  const childConversationAnchors = db.all<{ id: string }>(
+    `SELECT anchor.id AS id
+       FROM agent_handoffs h
+       JOIN attempts parent ON parent.id = h.parentAttemptId
+       JOIN requests pr ON pr.id = parent.requestId
+       JOIN requests cr ON cr.id = h.childRequestId
+       JOIN requests ar ON ar.routeReason = 'm38_capability_dispatch' AND ar.correlationId = cr.conversationId
+       JOIN attempts anchor ON anchor.requestId = ar.id
+      WHERE pr.conversationId = ? AND cr.conversationId IS NOT NULL
+      ORDER BY anchor.createdAt`,
+    [correlationId],
+  ).map((row) => row.id);
+  return [...new Set([...direct.reverse(), ...owned, ...directAttempts, ...delegated, ...delegatedAnchors, ...childConversationAnchors])];
 }
 
 /**
@@ -773,6 +790,13 @@ export async function dispatchCapability(db: CoreDatabase, registry: GovernedCap
       return { outcome: 'denied', attemptId: input.correlationId, reason: `agent_scope_denied: ${memory.reason}` };
     }
     if (memory.args !== input.arguments) input = { ...input, arguments: memory.args };
+    // Release blocker 2026-11-09: a recall at one scope type also returns user/global facts (and a user-scope keyword
+    // recall includes project facts), so checking the requested scopeType alone let a specialist read memories outside
+    // its scopes. Reads carry the agent's exact readable scope types; the memory capability filters its results to them.
+    if (input.toolName === 'memory_recall') {
+      const readable = allowedMemoryScopes(agentScope, 'read');
+      if (readable) input = { ...input, arguments: { ...(input.arguments ?? {}), [MEMORY_SCOPE_FILTER_ARG]: readable } };
+    }
   }
   const attemptId = ensureCapabilityAttempt(db, input);
   const classification = registry.classify(input.toolName);
