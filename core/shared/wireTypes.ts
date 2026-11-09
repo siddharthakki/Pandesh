@@ -648,7 +648,7 @@ export interface AttemptContextRecord {
   contextHash: string;
 }
 
-export type RuntimeEventDomain = 'conversation' | 'request' | 'attempt' | 'model_invocation' | 'tool_invocation' | 'approval' | 'execution_quality' | 'research' | 'memory' | 'connector' | 'assistant_routine' | 'scout_routine' | 'background_task' | 'notification' | 'authorization';
+export type RuntimeEventDomain = 'conversation' | 'request' | 'attempt' | 'model_invocation' | 'tool_invocation' | 'approval' | 'execution_quality' | 'research' | 'memory' | 'connector' | 'assistant_routine' | 'scout_routine' | 'watchdog_routine' | 'background_task' | 'notification' | 'authorization';
 
 export type ExecutionQualityEventType =
   | 'model_selection_decided'

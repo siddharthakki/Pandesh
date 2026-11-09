@@ -44,12 +44,16 @@ These run in the current build and are covered by recorded runs or screenshots i
 | **Team and permissions** | Each agent's tools, folders, network access and "always asks" actions, read from the same rules Core enforces. |
 | **Tools & Skills** | 169 tools and 25 governed capabilities, each with its risk level, which agents may use it, and a capability self-test. |
 | **Software & Services** | Read-only inventory of installed tools, ports, local repositories and available updates. It never installs anything. |
+| **Reliability watchdog** | Every two days at 04:00 it runs the test suites plus five live scenarios on an isolated profile, compares with the last run, and tells you only what changed. See [docs/WATCHDOG.md](docs/WATCHDOG.md). |
+| **AI Radar** | Official releases and security advisories of local-AI tools (Ollama, llama.cpp, Aider, OpenCode, Qwen Code, MCP …) compared with what is installed here and with what Pandesh already does. Investigate, prepare an update, or dismiss; nothing installs itself. |
+| **Revenue team** | Sales, Marketing, Social Media and a Reviewer research public leads, write offers and drafts, and check them. Nothing is sent: drafts wait for your approval, and only you record responses, orders and money. |
+| **One morning briefing** | Calendar, mail and decisions, plus a short "Pandesh at work" section with only what changed in the watchdog, AI Radar and revenue pipeline. |
 | **Classic UI** | The previous interface is still there; switch from the tray or the System menu. |
 
 ### Experimental or not yet verified
 
 - **Voice**: the microphone opens and local speech engines (Whisper, Piper, Pocket TTS) are wired up, but speaking to Pandesh hasn't been tested by a human yet. The wake word only works in the Classic UI.
-- **Sales, Marketing, Social Media and Support agents** appear in Team as placeholders. They aren't active yet.
+- **Customer Support agent** is still a placeholder. The revenue agents draft and research only; they cannot send, publish or spend.
 - **Unattended work**: approvals stay on by default. See [release status](docs/ROADMAP.md#release-status).
 - Models vary from run to run. In the recorded demos the build-an-app task succeeded in 2 of 3 attempts with `gemma4:12b`, and the failed attempt was reported as a failure ([notes](docs/media/README.md)).
 
@@ -122,8 +126,7 @@ Real-speech and local-TTS tests are skipped unless their models are staged (`nod
 
 **Hardware:** the demos ran on an RTX 3090 (24 GB). `gemma4:12b` needs about 10 GB of VRAM; `qwen3.8:27b` about 20 GB.
 
-**Known limitations:** Electron 33 is end-of-life, and upgrading it is the next release blocker. Packaged v2 installers
-aren't published yet. See [docs/ROADMAP.md](docs/ROADMAP.md).
+**Known limitations:** packaged v2 installers aren't published yet (the desktop app runs on Electron 45). See [docs/ROADMAP.md](docs/ROADMAP.md).
 
 ## Project
 

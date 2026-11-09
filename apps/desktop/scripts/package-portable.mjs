@@ -329,7 +329,7 @@ fs.writeFileSync(path.join(outDir, 'portable-manifest.json'), `${JSON.stringify(
   platform: 'win32',
   arch: 'x64',
   builtAt: new Date().toISOString(),
-  electron: '33.4.11',
+  electron: JSON.parse(fs.readFileSync(path.join(desktopRoot, 'node_modules', 'electron', 'package.json'), 'utf8')).version,
   nodeRuntime: nodeSrc,
   coreBundle: 'runtime/core.js',
   launch: 'Launch-Pandesh.cmd',

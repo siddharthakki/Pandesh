@@ -49,6 +49,7 @@ import { createMemoryCapabilityAdapter } from './runtime/memoryCapability';
 import { createBrowserCapabilityAdapter } from './runtime/browserCapability';
 import { createImageStudioCapabilityAdapter } from './runtime/imageStudioCapability';
 import { createDocumentToolsAdapter } from './runtime/documentToolsCapability';
+import { createRevenueCapabilityAdapter } from './runtime/revenueCapability';
 import { createOllamaManagementAdapter } from './runtime/ollamaManagementCapability';
 import { createExecutionPlanAdapter } from './runtime/executionPlanCapability';
 import { createWishCapabilityAdapter } from './runtime/wishCapability';
@@ -317,6 +318,7 @@ function buildCapabilityRegistry(dataDir: string, db: CoreDatabase, connectors: 
     .register(createPcOrganizerAdapter({ db }))
     .register(createHouseholdCapabilityAdapter({ db, connectorRegistry: connectors }))
     .register(createDocumentToolsAdapter({ downloadsDir: path.join(dataDir, 'downloads') }))
+    .register(createRevenueCapabilityAdapter({ dataDir }))
     .register(createOllamaManagementAdapter({ db }))
     .register(createMediaProductionAdapter({}));
   // The plan capability reads the registry it is registered in (it checks a

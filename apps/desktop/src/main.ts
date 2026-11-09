@@ -293,7 +293,6 @@ function applyOpenAtLogin(enabled: boolean): void {
   try {
     app.setLoginItemSettings({
       openAtLogin: enabled,
-      openAsHidden: true,
       path: process.execPath,
       args: process.defaultApp ? [path.resolve(process.argv[1] || '')] : [],
     });

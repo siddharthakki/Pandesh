@@ -4162,7 +4162,10 @@ Report this to the user, saying the ${name} agent did the work. Do not add facts
       // Challenge T7: after the user OK'd the hand-off's internet use, governed_research (a governed capability with its
       // own consent card) asked a second time inside the child, and that card was only reachable from the Board. With
       // the egress already approved, the child searches with web_research, which honours that approval.
-      const coveredByHandoff = (name: string) => preapprovedEgress && name === 'governed_research' && tools.some((t) => t.name === 'web_research');
+      // Live revenue run 2026-11-09: the same happened with browser_open_site (its governed-capability card sat on the
+      // child's own anchor, invisible in the parent chat, and the Sales task waited 15 minutes until cancelled). Public
+      // pages are read through web_research under the hand-off's consent instead.
+      const coveredByHandoff = (name: string) => preapprovedEgress && (name === 'governed_research' || name === 'browser_open_site') && tools.some((t) => t.name === 'web_research');
       const kept = tools.filter((t) => { const ok = isToolAllowed(agentScope, t.name).allowed && !coveredByHandoff(t.name); if (!ok) removed.push(t.name); return ok; });
       for (const t of kept) {
         const run = t.execute;

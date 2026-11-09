@@ -9,6 +9,9 @@ import { runDailyBriefRoutine } from './assistantRoutine';
 import { DAILY_BRIEF_ROUTINE } from '../domain/assistantRoutine';
 import { runIntelligenceScoutRoutine } from './scoutRoutine';
 import { SCOUT_ROUTINE } from '../domain/scoutRoutine';
+import { WATCHDOG_ROUTINE } from '../domain/watchdogRoutine';
+import { runReliabilityWatchdogRoutine } from './watchdogRoutine';
+import { AI_RADAR_ROUTINE, runAiRadarRoutine } from './aiRadarRoutine';
 import type { IntelligenceScout } from './intelligenceScout';
 import type { ConnectorAdapter } from './connectors/connectorCapability';
 import type { ConnectorId } from '../shared/wireTypes';
@@ -81,6 +84,23 @@ export function startScheduledTaskLoop(
             .catch((err) => {
               console.error(`[karkedikha-core ${new Date().toISOString()}] household routine ${task.id} failed:`, err instanceof Error ? err.message : err);
             });
+          continue;
+        }
+        if (task.routine === WATCHDOG_ROUTINE) {
+          void runReliabilityWatchdogRoutine(db, broadcaster, { task })
+            .then((result) => {
+              console.log(`[karkedikha-core ${new Date().toISOString()}] reliability watchdog ${task.id} ${result.delivered ? 'reported' : 'quiet'} (${result.reason})`);
+            })
+            .catch((err) => {
+              console.error(`[karkedikha-core ${new Date().toISOString()}] reliability watchdog ${task.id} failed:`, err instanceof Error ? err.message : err);
+            });
+          continue;
+        }
+        if (task.routine === AI_RADAR_ROUTINE) {
+          if (!options.cwd) { console.error(`[karkedikha-core ${new Date().toISOString()}] ai radar ${task.id} skipped: no data dir`); continue; }
+          void runAiRadarRoutine(db, broadcaster, { task, dataDir: options.cwd })
+            .then((r) => console.log(`[karkedikha-core ${new Date().toISOString()}] ai radar ${task.id}: ${r.newFindings.length} new, ${r.urgent.length} urgent, ${r.errors.length} errors`))
+            .catch((err) => console.error(`[karkedikha-core ${new Date().toISOString()}] ai radar ${task.id} failed:`, err instanceof Error ? err.message : err));
           continue;
         }
         if (task.routine === SCOUT_ROUTINE) {

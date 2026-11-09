@@ -35,7 +35,7 @@ describe('speakText with Pocket TTS selected', () => {
     expect(wav.readUInt32LE(40)).toBe(wav.length - 44);
   }, 60_000);
 
-  it.runIf(havePiper)('falls back to Piper when Pocket fails, then skips Pocket during the cooldown', async () => {
+  it.runIf(havePiper && havePocket)('falls back to Piper when Pocket fails, then skips Pocket during the cooldown', async () => {
     const synthesize = vi.fn().mockRejectedValue(new Error('boom'));
     (host as unknown as Internals).pocketTts = { synthesize, cancel: () => undefined, dispose: async () => undefined };
     const first = await host.speakText('Fallback please.');

@@ -64,6 +64,10 @@ export const AUTHORITATIVE_PROCESS_SPAWN_ALLOWLIST: ReadonlySet<string> = new Se
   'core/runtime/kandev/storyAcceptance.ts',
   // Runs `node --test` (fixed argv, minimal environment) in a fresh checkout of a delivered deliverable to verify it independently of the worker.
   'core/runtime/operatorTestRun.ts',
+  // Runs the reliability watchdog: `node <operator-configured checkout>/scripts/watchdog/run-watchdog.mjs` with a fixed
+  // argv (no shell, no model-supplied input), a 5-hour limit and a verified process-tree kill past it. The checkout path
+  // comes from the authenticated watchdog schedule the operator created, never from a model.
+  'core/runtime/watchdogRoutine.ts',
   // Reads the local GPU's name and VRAM with one fixed-argument `nvidia-smi` query (no caller-supplied input); bounds concurrent GPU workloads.
   'core/runtime/hardwareCapacity.ts',
   // Local OCR and PDF text extraction: runs Poppler's `pdftoppm`/`pdftotext`

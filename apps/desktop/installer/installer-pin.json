@@ -11,7 +11,7 @@
   "privilegesRequired": "lowest",
   "defaultInstallDirName": "Programs\\Pandesh",
   "dataDirRelative": "KarkeDikha\\desktop",
-  "electronVersion": "33.4.11",
+  "electronVersion": "45.2.3",
   "notes": [
     "Builds from the existing portable tree (npm run desktop:package).",
     "The product version is NOT pinned here: it is read from apps/desktop/package.json at build time and passed to the installer as /DMyAppVersion, so there is exactly one version string.",
