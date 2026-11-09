@@ -59,14 +59,14 @@ export const BUILTIN_AGENTS: AgentDefinition[] = [
   def({
     id: 'chief', kind: 'builtin', name: 'Pandesh', role: 'Chief of Staff — routes, plans, delegates, briefs and reports',
     instructions: 'You are Pandesh, the chief of staff. Answer directly when you can; delegate specialist work to the right agent with a restated brief; report only what evidence supports.',
-    tools: ['read_file', 'list_directory', 'search_files', 'memory_recall', 'routine_list', 'list_reminders', 'list_commitments', 'list_scheduled_tasks', 'get_briefing_data', 'dev_stories_status', 'wish_status', 'household_obligations'],
+    tools: ['read_file', 'list_directory', 'search_files', 'memory_recall', 'routine_list', 'list_reminders', 'list_commitments', 'list_scheduled_tasks', 'get_briefing_data', 'dev_stories_status', 'wish_status', 'household_obligations', 'list_projects'],
     memoryScopes: [{ scope: 'user', access: 'read' }, { scope: 'global', access: 'read' }, { scope: 'task', access: 'read_write' }],
     workspaceRoots: ['conversation'], egress: 'none',
   }),
   def({
     id: 'personal', kind: 'builtin', name: 'Personal', role: 'Goals, routines, commitments, reminders and briefings',
     instructions: 'You manage the user\'s commitments, reminders, routines and calendar. Never send, accept or book anything without the user\'s approval.',
-    tools: ['create_reminder', 'list_reminders', 'dismiss_reminder', 'create_note', 'create_commitment', 'list_commitments', 'update_commitment', 'routine_*', 'schedule_task', 'list_scheduled_tasks', 'cancel_scheduled_task', 'calendar_list_events', 'calendar_check_availability', 'calendar_draft_event', 'gmail_search', 'gmail_read_thread', 'gmail_create_draft', 'household_*', 'get_briefing_data', 'memory_recall', 'memory_remember'],
+    tools: ['create_reminder', 'list_reminders', 'dismiss_reminder', 'create_note', 'create_commitment', 'list_commitments', 'update_commitment', 'routine_*', 'schedule_task', 'list_scheduled_tasks', 'cancel_scheduled_task', 'calendar_list_events', 'calendar_check_availability', 'calendar_draft_event', 'gmail_search', 'gmail_read_thread', 'gmail_create_draft', 'household_*', 'get_briefing_data', 'list_projects', 'create_project', 'memory_recall', 'memory_remember'],
     toolDenylist: ['gmail_send_draft', 'calendar_delete_event'],
     memoryScopes: [{ scope: 'user', access: 'read_write' }, { scope: 'task', access: 'read_write' }],
     workspaceRoots: [], egress: 'approval', alwaysAsk: ['calendar_write', 'email_send'],
@@ -89,7 +89,9 @@ export const BUILTIN_AGENTS: AgentDefinition[] = [
   def({
     id: 'operations', kind: 'builtin', name: 'Operations', role: 'Files, apps, system health, printers and drives',
     instructions: 'You inspect and organise this PC. Every change asks first; you never touch processes Pandesh does not own.',
-    tools: ['read_file', 'list_directory', 'search_files', 'find_duplicate_files', 'list_system_drives', 'system_list_*', 'system_hardware_telemetry', 'run_system_diagnostics', 'list_printers', 'print_test_page', 'list_network_drives', 'port_list_services', 'port_service_health', 'desktop_windows_list', 'desktop_screenshot', 'request_search_permission'],
+    tools: ['read_file', 'list_directory', 'search_files', 'find_duplicate_files', 'list_system_drives', 'system_list_*', 'system_hardware_telemetry', 'run_system_diagnostics', 'list_printers', 'print_test_page', 'list_network_drives', 'port_list_services', 'port_service_health', 'desktop_windows_list', 'desktop_screenshot', 'request_search_permission',
+      // Challenge T13: read-only PC facts the Operations agent was asked for but could not reach.
+      'listening_ports', 'software_updates', 'ollama_list_models', 'pc_capability_inventory', 'list_projects'],
     toolDenylist: ['system_kill_process', 'system_stop_service', 'system_start_service', 'ollama_delete_model'],
     memoryScopes: [{ scope: 'task', access: 'read_write' }, { scope: 'global', access: 'read' }],
     workspaceRoots: ['conversation'], egress: 'none',
