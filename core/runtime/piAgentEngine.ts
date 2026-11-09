@@ -10,6 +10,10 @@ import { buildGroundingRewritePrompt, problemCount, ungroundedClaims } from './r
 import { correctWeekdayDates } from './dateConsistency';
 import { asksForSingleChoice, SINGLE_CHOICE_RULE } from './choiceConstraint';
 import { delegationChangedNothing, isGitRepository, renderDelegationReport, snapshotFiles, untrackedPaths, verifyDelegation } from './delegationVerification';
+import { explicitSpecialistRequest, SPECIALIST_NAMES } from './agentRouting';
+import { createProject, listProjects } from '../domain/projects';
+import { readUpdateState } from './software/updates';
+import { collectListeningPorts } from './software/inventory';
 import { FolderReadLedger, requestedOutputFiles, requiresSourceEvidence, requiresWholeFolder, unreadFilesNotice } from './folderCompleteness';
 import * as cp from 'node:child_process';
 import { holdAwaitedApproval } from './cancellationRecovery';
@@ -1026,7 +1030,7 @@ export class PiAgentEngine implements EngineAdapter {
      * Core runs the real read_file tool (same authorization, credential refusal and redaction) on documents the model
      * skipped, recorded as tool invocations, so the completeness check is tool execution, not a model saying it checked.
      */
-    async function coreRunTool(toolName: 'read_file' | 'list_directory', args: Record<string, unknown>): Promise<{ ok: boolean; text: string }> {
+    async function coreRunTool(toolName: 'read_file' | 'list_directory' | 'run_checks' | 'delegate_to_agent', args: Record<string, unknown>, initiatedBy = 'core_evidence_completeness'): Promise<{ ok: boolean; text: string }> {
       const tool = tools.find((t) => t.name === toolName);
       if (!tool || signal?.aborted) return { ok: false, text: `the ${toolName} tool is not available` };
       let invId: string | undefined;
@@ -1036,7 +1040,7 @@ export class PiAgentEngine implements EngineAdapter {
       const text = String(result?.content?.[0]?.text ?? '');
       const ok = !result?.isError;
       if (invId) {
-        try { mutateWithBroadcast(db, broadcaster, () => completeToolInvocation(db, invId!, { actor, status: ok ? 'succeeded' : 'failed', exitCode: ok ? 0 : 1, evidence: { output: text.slice(0, 500), initiatedBy: 'core_evidence_completeness' } })); } catch {}
+        try { mutateWithBroadcast(db, broadcaster, () => completeToolInvocation(db, invId!, { actor, status: ok ? 'succeeded' : 'failed', exitCode: ok ? 0 : 1, evidence: { output: text.slice(0, 500), initiatedBy, ...(sanitizeToolActivity(result?.details?.activity) ? { activity: sanitizeToolActivity(result?.details?.activity) } : {}) } })); } catch {}
       }
       toolCallsRecorded.push({ tool: toolName, args, result, status: ok ? 'completed' : 'failed' });
       return { ok, text };
@@ -3074,6 +3078,83 @@ export class PiAgentEngine implements EngineAdapter {
         },
       },
       {
+        // Alpha e2e T2: chat had no access to Software Discovery and guessed "Up to Date". This reads the stored result
+        // of the last update check (System → Software & Services); it never contacts the internet or installs anything.
+        name: 'software_updates',
+        label: 'software_updates',
+        description: "Read the result of Pandesh's last software update check on this PC (winget, pip, npm, GitHub): installed and available versions, status and when it was checked. Read-only, offline: it never checks online and never installs. If no check was run yet, tell the user to run System → Software & Services → Check for updates.",
+        parameters: { type: 'object', properties: { onlyUpdates: { type: 'boolean', description: 'Only items with a newer version (default true).' }, nameContains: { type: 'string', description: 'Filter by name, e.g. "node".' } } },
+        execute: async (_id: string, args: any) => {
+          if (!ctx.dataDir) return { content: [{ type: 'text', text: "NOT AVAILABLE: Pandesh's data folder is not known in this run, so the stored update check cannot be read." }], isError: true };
+          const state = readUpdateState(ctx.dataDir);
+          if (!state.lastCheckedAt) return { content: [{ type: 'text', text: 'No update check has been run on this PC yet, so no versions are known. Nothing was checked now. The user can run System → Software & Services → Check for updates (read-only).' }] };
+          const onlyUpdates = args?.onlyUpdates !== false;
+          const filter = String(args?.nameContains ?? '').trim().toLowerCase();
+          const rows = state.results
+            .filter((r) => !onlyUpdates || r.status === 'update_available' || r.status === 'prerelease_available' || r.status === 'behind_development')
+            .filter((r) => !filter || r.name.toLowerCase().includes(filter) || r.itemId.toLowerCase().includes(filter))
+            .slice(0, 60);
+          const ageH = Math.round((Date.now() - Date.parse(state.lastCheckedAt)) / 3_600_000);
+          const lines = rows.map((r) => `- ${r.name} (${r.source}): installed ${r.installed ?? 'unknown'} → latest ${r.latestStable ?? r.latestPrerelease ?? 'unknown'} [${r.status}]${r.advisories.length ? ` · ${r.advisories.length} advisory(ies)` : ''}${r.notesUrl ? ` · notes ${r.notesUrl}` : ''}`);
+          return {
+            content: [{ type: 'text', text: `Stored update check from ${state.lastCheckedAt} (${ageH} h ago), ${state.results.length} items checked; ${rows.length} shown${onlyUpdates ? ' with a newer version' : ''}. Source: Pandesh Software Discovery (read-only; nothing installed).\n${lines.join('\n') || '(none matched)'}` }],
+            details: { activity: { kind: 'tool', title: `Software updates (checked ${state.lastCheckedAt.slice(0, 16).replace('T', ' ')})`, excerpt: lines.slice(0, 20).join('\n') } },
+          };
+        },
+      },
+      {
+        name: 'listening_ports',
+        label: 'listening_ports',
+        description: 'List every TCP port listening on this PC with its process, executable and Windows service (read-only). Use it for "which ports are open / what is listening".',
+        parameters: { type: 'object', properties: {} },
+        execute: async () => {
+          try {
+            const ports = await collectListeningPorts({ dataDir: ctx.dataDir });
+            const lines = ports.map((p) => `- ${p.address}:${p.port} → ${p.processName ?? 'unknown process'} (pid ${p.pid})${p.windowsService ? ` · service ${p.windowsService}` : ''}${p.pandeshService ? ` · Pandesh ${p.pandeshService}` : ''}`);
+            return { content: [{ type: 'text', text: `${ports.length} listening TCP sockets (read from Get-NetTCPConnection now):\n${lines.join('\n')}` }], details: { activity: { kind: 'tool', title: `${ports.length} listening ports`, excerpt: lines.slice(0, 40).join('\n') } } };
+          } catch (err: any) {
+            return { content: [{ type: 'text', text: `NOT AVAILABLE: listening ports could not be read: ${err?.message ?? String(err)}` }], isError: true };
+          }
+        },
+      },
+      {
+        // Alpha e2e T10: no chat tool created projects, and the reply said "I have initiated the creation…".
+        name: 'create_project',
+        label: 'create_project',
+        description: "Create a project in Pandesh's Projects workspace (stored in Core, shown under Spaces → Projects), optionally with a list of open tasks. Only this tool creates a project; report the id it returns.",
+        parameters: { type: 'object', properties: { name: { type: 'string' }, description: { type: 'string' }, tasks: { type: 'array', items: { type: 'string' }, description: 'Task titles, each saved as an open task.' } }, required: ['name'] },
+        execute: async (_id: string, args: any) => {
+          const name = String(args?.name ?? '').trim();
+          if (!name) return { content: [{ type: 'text', text: 'NOT DONE: a project needs a name.' }], isError: true };
+          const existing = listProjects(db, {}).find((p) => p.name.toLowerCase() === name.toLowerCase() && p.status === 'active');
+          if (existing) return { content: [{ type: 'text', text: `NOT CREATED: an active project named "${existing.name}" already exists (id ${existing.id}). Nothing was changed.` }], isError: true };
+          const tasks = (Array.isArray(args?.tasks) ? args.tasks : []).map((t: unknown) => String(t ?? '').trim()).filter(Boolean).slice(0, 50)
+            .map((title: string, i: number) => ({ id: `task_${i + 1}`, title, status: 'open' }));
+          let project: ReturnType<typeof createProject>;
+          try {
+            project = mutateWithBroadcast(db, broadcaster, () => createProject(db, { name, description: args?.description ? String(args.description) : null, productContext: { tasks, createdFrom: { conversationId: conversationId || null, attemptId } } }));
+          } catch (err: any) {
+            return { content: [{ type: 'text', text: `NOT DONE: Core did not create the project: ${err?.message ?? String(err)}` }], isError: true };
+          }
+          const summary = `Created project "${project.name}" (id ${project.id}, status ${project.status}) with ${tasks.length} open task(s)${tasks.length ? `: ${tasks.map((t: { title: string }) => t.title).join('; ')}` : ''}. It is shown under Spaces → Projects.`;
+          return { content: [{ type: 'text', text: summary }], details: { activity: { kind: 'tool', title: `Created project ${project.name}`, excerpt: summary } } };
+        },
+      },
+      {
+        name: 'list_projects',
+        label: 'list_projects',
+        description: "List the projects saved in Pandesh's Projects workspace with their status and tasks (read-only).",
+        parameters: { type: 'object', properties: {} },
+        execute: async () => {
+          const projects = listProjects(db, {});
+          const lines = projects.map((p) => {
+            const tasks = Array.isArray((p.productContext as any)?.tasks) ? (p.productContext as any).tasks as Array<{ title: string; status: string }> : [];
+            return `- ${p.name} (id ${p.id}, ${p.status}, created ${p.createdAt})${tasks.length ? `\n${tasks.map((t) => `  - [${t.status}] ${t.title}`).join('\n')}` : ''}`;
+          });
+          return { content: [{ type: 'text', text: projects.length ? `${projects.length} project(s):\n${lines.join('\n')}` : 'No projects are saved in Core.' }] };
+        },
+      },
+      {
         name: 'open_local_file',
         label: 'open_local_file',
         description: `Open a file from the selected folder on the user's screen in its default app: an .html page in their web browser, a .pdf, image, .txt or .md in its viewer. Use it when the user asks to open, show or see a file. Only existing files inside the selected folder (${[...OPENABLE_EXTENSIONS].join(' ')}). Nothing is changed.`,
@@ -3234,7 +3315,7 @@ ${String(args.objective ?? '').slice(0, 600)}`,
           }, actor);
 
           // Audit D12: what was untracked before, so cleanup afterwards only touches what this delegation created.
-          const untrackedBefore = untrackedPaths(targetDir);
+          const untrackedBefore = isGitRepository(targetDir) ? untrackedPaths(targetDir) : new Set(fs.existsSync(path.join(targetDir, '.opencode')) ? ['.opencode'] : []);
           // A plain folder has no git status: record its files so the real effect can still be read from disk.
           const snapshotBefore = isGitRepository(targetDir) ? undefined : snapshotFiles(targetDir);
           const result = await OpenCodeEngine.executeCodingObjective({
@@ -3866,7 +3947,11 @@ Report this to the user, saying the ${name} agent did the work. Do not add facts
     // A request about the user's own files (CV, price lists in this folder) is answered from those files first: research
     // scoping would remove every local tool, so the private file is never read (audit D2, M9).
     const requestReferencesLocalContent = referencesLocalContent(requestText);
-    const isPublicResearch = isPublicResearchTask(requestText) && !requestReferencesLocalContent;
+    // Alpha e2e: a request addressed to a specialist ("Ask your Research specialist…") is handed to it by Core, before
+    // the public-research route could strip delegate_to_agent away (T3) and without relying on the model choosing it.
+    const requestedSpecialist = tools.some((t) => t.name === 'delegate_to_agent') ? explicitSpecialistRequest(requestText) : null;
+    if (requestedSpecialist) safeRecordRuntimeEvent(db, broadcaster, attemptId, 'specialist_request_detected', { agent: requestedSpecialist }, actor);
+    const isPublicResearch = !requestedSpecialist && isPublicResearchTask(requestText) && !requestReferencesLocalContent;
     if (isPublicResearch) {
       // For public research (job/vacancy search, market prices, external news), expose ONLY relevant web research tools.
       // Do not expose filesystem, printer, phone, Gmail, calendar, memory, coding or unrelated tool schemas.
@@ -4682,9 +4767,21 @@ ${filesPromptSection}${webResearchPromptSection}${wishesPromptSection}${emailCal
       const tolerateSupersede = async (run: () => Promise<unknown>) => {
         try { await run(); } catch (err) { if (supersedeWith === null || signal?.aborted) throw err; }
       };
+      // Deterministic hand-off (alpha e2e): Core starts the named specialist itself, recorded like any tool call, and
+      // the model only reports its result. A refusal by Core (scope, egress) is the result, reported as is.
+      let firstPrompt = prompt;
+      if (requestedSpecialist && !signal?.aborted) {
+        const name = SPECIALIST_NAMES[requestedSpecialist];
+        const userWords = String(ctx.currentMessage ?? prompt).trim().slice(0, 3_000);
+        const brief = `The user asked Pandesh (their words): "${userWords}"\nYou are the ${name} agent: do this work yourself with your own tools, within your own permissions, and return the real result with its evidence (files, commands, exit codes, sources). If something is refused or not possible, say exactly what and why.`;
+        const handed = await coreRunTool('delegate_to_agent', { agent: requestedSpecialist, brief }, 'core_specialist_routing');
+        activeToolNames.delete('delegate_to_agent');
+        safeRecordRuntimeEvent(db, broadcaster, attemptId, 'specialist_routed_by_core', { agent: requestedSpecialist, ok: handed.ok }, actor);
+        firstPrompt = `${prompt}\n\n[Pandesh Core already handed this request to the ${name} agent, as the user asked. Its outcome, verbatim:]\n${handed.text.slice(0, 7_000)}\n\n[Answer the user from this outcome only. ${handed.ok ? `Say the ${name} agent did the work and report its real results (files, commands, exit codes, sources) without adding facts it does not contain.` : `The hand-off did not complete: report exactly what was refused or failed and why, and stop.`} Do not call delegate_to_agent again, and do not redo the agent's task yourself.]`;
+      }
       await tolerateSupersede(async () => {
-        if (ctx.images?.length) await agent.prompt(prompt, ctx.images as any);
-        else await agent.prompt(prompt);
+        if (ctx.images?.length) await agent.prompt(firstPrompt, ctx.images as any);
+        else await agent.prompt(firstPrompt);
         await agent.waitForIdle();
       });
       while (supersedeWith !== null && !signal?.aborted) {
@@ -5305,6 +5402,40 @@ ${filesPromptSection}${webResearchPromptSection}${wishesPromptSection}${emailCal
       safeRecordRuntimeEvent(db, broadcaster, attemptId, 'project_reply_replaced', { reason: 'reply not grounded in the active project', project: projectEvidence.name }, actor);
     }
 
+    // Alpha e2e T7: a check failed, a file was changed to fix it, and the turn ended without running the check again
+    // (the reply then said "rerun … passed"). Core re-runs that check itself, through the same tool and approval, so
+    // the answer carries the real result. Core's notes are appended after the claim guard, which judges model text only.
+    const coreNotes: string[] = [];
+    const WRITE_TOOL = /^(?:write_file|edit_file|apply_patch)$|^propose_|file_change/;
+    const isRealCheck = (t: { tool: string; result?: unknown }) => t.tool === 'run_checks' && !/^Not run:/.test(extractToolResultText(t.result));
+    const finishedCalls = () => toolCallsRecorded.filter((t) => t.status === 'completed' || t.status === 'failed');
+    const lastIndexWhere = <T,>(list: T[], pred: (t: T) => boolean): number => { for (let i = list.length - 1; i >= 0; i -= 1) if (pred(list[i])) return i; return -1; };
+    if (!signal?.aborted && finalReply) {
+      const done = finishedCalls();
+      const lastWrite = lastIndexWhere(done, (t) => t.status === 'completed' && WRITE_TOOL.test(t.tool));
+      const lastFailedCheck = lastIndexWhere(done, (t) => isRealCheck(t) && t.status === 'failed');
+      const checkedAfterWrite = done.some((t, i) => i > lastWrite && isRealCheck(t));
+      const failedArgs = (lastFailedCheck >= 0 ? done[lastFailedCheck].args : null) as Record<string, unknown> | null;
+      if (lastWrite >= 0 && lastFailedCheck >= 0 && lastFailedCheck < lastWrite && !checkedAfterWrite && typeof failedArgs?.command === 'string') {
+        const command = failedArgs.command;
+        const rerun = await coreRunTool('run_checks', { command, ...(typeof failedArgs.workspacePath === 'string' ? { workspacePath: failedArgs.workspacePath } : {}) }, 'core_verify_after_fix');
+        const tail = rerun.text.split(/\r?\n/).slice(-12).join('\n').trim();
+        coreNotes.push(rerun.ok
+          ? `**Check re-run by Pandesh after the fix:** \`${command}\` → **PASSED**\n\n\`\`\`text\n${tail}\n\`\`\``
+          : /^Not run:/.test(rerun.text)
+            ? `**Check not re-run after the fix:** Pandesh asked to run \`${command}\` again, but it was not run (${rerun.text.replace(/^Not run:\s*/, '').slice(0, 160)}). The fix is unverified.`
+            : `**Check re-run by Pandesh after the fix:** \`${command}\` → **FAILED** — the fix did not make it pass.\n\n\`\`\`text\n${tail}\n\`\`\``);
+        safeRecordRuntimeEvent(db, broadcaster, attemptId, 'core_verify_after_fix', { command, passed: rerun.ok }, actor);
+      }
+    }
+    let testsVerified = false;
+    {
+      const done = finishedCalls();
+      const lastWrite = lastIndexWhere(done, (t) => t.status === 'completed' && WRITE_TOOL.test(t.tool));
+      const lastCheck = lastIndexWhere(done, isRealCheck);
+      testsVerified = lastCheck >= 0 && lastCheck > lastWrite && done[lastCheck].status === 'completed';
+    }
+
     // No tool result, no claim (audit D1): a sentence saying a timer was paused, a reminder set, a message sent or a
     // file saved stands only if a tool of that kind completed in this turn. Applied after every follow-up prompt, so a
     // second fabricated "I have now executed the commands" is withheld too.
@@ -5366,10 +5497,9 @@ ${filesPromptSection}${webResearchPromptSection}${wishesPromptSection}${emailCal
           safeRecordRuntimeEvent(db, broadcaster, attemptId, 'research_grounding_check_failed', { error: err?.message ?? String(err) }, actor);
         }
       }
-      // Audit D12: the delegation's verified diff and test run are part of the answer, whatever the model wrote.
-      if (delegationReports.length && !signal?.aborted) {
-        finalReply = `${finalReply.trimEnd()}\n\n${delegationReports.join('\n\n')}`;
-      }
+      // Audit D12: the delegation's verified diff and test run are part of the answer, whatever the model wrote. They
+      // are Core's own text, appended after the claim guard below (which judges what the model said).
+      if (delegationReports.length && !signal?.aborted) coreNotes.unshift(...delegationReports);
       // Audit D11: a stated total that does not match its listed amounts is corrected by Core's own exact sum.
       const totals = checkStatedTotals(finalReply);
       if (totals.corrections.length) {
@@ -5401,12 +5531,13 @@ ${filesPromptSection}${webResearchPromptSection}${wishesPromptSection}${emailCal
         finalReply = `${finalReply.trimEnd()}\n\nCorrection: nothing was saved or changed in this turn — no tool carried this out, so it is not done.`;
         safeRecordRuntimeEvent(db, broadcaster, attemptId, 'unbacked_completion_corrected', {}, actor);
       }
-      const guarded = withholdUnsupportedActionClaims(finalReply, succeeded, { fileExists });
+      const guarded = withholdUnsupportedActionClaims(finalReply, succeeded, { fileExists, testsVerified });
       if (guarded.withheld.length > 0) {
         finalReply = guarded.text;
         safeRecordRuntimeEvent(db, broadcaster, attemptId, 'unsupported_action_claims_withheld', { withheld: guarded.withheld }, actor);
       }
     }
+    if (coreNotes.length && !signal?.aborted) finalReply = `${finalReply.trimEnd()}\n\n${coreNotes.join('\n\n')}`;
 
     // What actually happened, decided from the tool ledger rather than from
     // the model's own sentence. A turn that said "done" without a tool

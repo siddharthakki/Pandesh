@@ -116,6 +116,19 @@ function looksLikeDailyBrief(text: string): boolean {
   return DAILY_BRIEF_PATTERNS.some((pattern) => pattern.test(trimmed));
 }
 
+/**
+ * Alpha e2e T5: "Remember this harmless test fact: Project Firefly's review meeting is on Tuesday … Save it with source
+ * provenance. Confirm what you actually stored." became a plain host note (no Core memory, no provenance, nothing
+ * shown in v2). A message that asks for memory itself, a fact, provenance or a confirmation, or carries more than one
+ * sentence, is a request for the assistant, not a one-line jotting.
+ */
+export function wantsAssistantMemory(body: string): boolean {
+  const text = body.trim();
+  if (/^to\s+/i.test(text)) return false;
+  return /\b(?:memor(?:y|ies|i[sz]e)|provenance|facts?|save\s+(?:it|this|that)|store\s+(?:it|this|that)|confirm|verify|recall)\b/i.test(text)
+    || /[.!?;]\s+\S/.test(text);
+}
+
 /** "my home is Ulm", "about me: ...", "I live in ...", "I prefer ...", "not Karlsruhe": statements about the person themself. */
 export function isPersonalFact(body: string): boolean {
   const text = body.trim();
@@ -353,7 +366,7 @@ export function parseEverydayIntent(text: string, nowMs: number = Date.now()): E
   const remember = trimmed.match(/^(?:please\s+)?remember(?:\s+(?:that|this))?\s+(.+)$/i);
   if (remember?.[1]) {
     const body = remember[1].trim();
-    if (isPersonalFact(body)) {
+    if (isPersonalFact(body) || wantsAssistantMemory(body)) {
       return null;
     }
     return { kind: 'remember_note', body };

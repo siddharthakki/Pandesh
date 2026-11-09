@@ -76,8 +76,12 @@ export function Workspace({ space, narrow, onAskPandesh }: { space: SpaceId; nar
 }
 
 function ProjectsView({ projects }: { projects: Rec[] }) {
-  if (projects.length === 0) return <div className="notice">No projects are recorded in Core yet. Projects appear when you start coding work in a folder or create one in the Classic UI.</div>;
-  return <div style={{ display: 'grid', gap: 10, gridTemplateColumns: 'repeat(auto-fill, minmax(300px, 1fr))' }}>{projects.map((p) => <RecordCard key={str(p.id)} r={p} />)}</div>;
+  if (projects.length === 0) return <div className="notice">No projects are recorded in Core yet. Ask Pandesh to create one ("Create a project named … with tasks …"), or start coding work in a folder.</div>;
+  const tasksOf = (p: Rec): Rec[] => { const ctx = p.productContext as Rec | null | undefined; return Array.isArray(ctx?.tasks) ? (ctx!.tasks as Rec[]) : []; };
+  return <div style={{ display: 'grid', gap: 10, gridTemplateColumns: 'repeat(auto-fill, minmax(300px, 1fr))' }}>{projects.map((p) => {
+    const tasks = tasksOf(p);
+    return <RecordCard key={str(p.id)} r={p} extra={tasks.length ? <ul style={{ margin: 0, paddingLeft: 18, fontSize: 14 }}>{tasks.map((t) => <li key={str(t.id ?? t.title)}><span className="meta">{str(t.status)}</span> {str(t.title)}</li>)}</ul> : null} />;
+  })}</div>;
 }
 
 function WishView({ goals, business }: { goals: Rec[]; business: Rec | null }) {

@@ -29,8 +29,12 @@ export const TOOL_GROUPS: Record<string, ToolGroup> = {
     pattern: /\b(?:projects?|repos?|repositor(?:y|ies)|drives?|duplicates?|across (?:my|the)|outside|other folders?|whole (?:pc|computer|disk)|search (?:my|the) (?:pc|computer|disk|drive))\b|\b[a-z]:\\/i,
   },
   pc: {
-    purpose: 'this PC: disks and free space, hardware and GPU, processes, services and ports, screen and windows, installed software and what Pandesh can do',
-    pattern: /\b(?:pc|computer|machine|laptop|hardware|specs?|disks?|drives?|free space|storage|ram|cpu|gpu|vram|nvidia|processes?|services?|ports?|screen(?:shot)?|desktop|windows? (?:list|open)|installed|install|software|utilit(?:y|ies)|setup|diagnos\w*|capabilit(?:y|ies)|what can you do|which tools)\b/i,
+    purpose: 'this PC: disks and free space, hardware and GPU, processes, services and listening ports, screen and windows, installed software, available software updates and what Pandesh can do',
+    pattern: /\b(?:pc|computer|machine|laptop|hardware|specs?|disks?|drives?|free space|storage|ram|cpu|gpu|vram|nvidia|processes?|services?|ports?|screen(?:shot)?|desktop|windows? (?:list|open)|installed|install|software|utilit(?:y|ies)|setup|diagnos\w*|capabilit(?:y|ies)|what can you do|which tools|updates?|outdated|upgrades?|versions?)\b/i,
+  },
+  projects: {
+    purpose: "Pandesh's Projects workspace: create a project with tasks, list saved projects",
+    pattern: /\b(?:create|new|add|start|set up|make)\b[^.]{0,40}\bprojects?\b|\bprojects?\s+(?:workspace|named|called|with)\b|\b(?:my|saved|list|show)\s+projects\b|\bprojects workspace\b/i,
   },
   models: {
     purpose: 'local AI models in Ollama: list, pull, unload, delete',
@@ -137,6 +141,8 @@ export const NATIVE_GROUP: Record<string, string> = {
   list_printers: 'printing', print_test_page: 'printing',
   send_to_phone: 'phone',
   delegate_to_agent: 'agents',
+  software_updates: 'pc', listening_ports: 'pc',
+  create_project: 'projects', list_projects: 'projects',
 };
 
 /** Governed capability id → group. */

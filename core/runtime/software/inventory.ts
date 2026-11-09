@@ -441,6 +441,12 @@ const COLLECTORS: Array<{ id: string; label: string; run: (c: Ctx) => Promise<Co
   { id: 'git', label: 'Git repositories', run: collectRepositories },
 ];
 
+/** Every listening TCP port with its process and service (read-only; alpha e2e T1 saw only Pandesh-managed ports). */
+export async function collectListeningPorts(deps: Pick<InventoryDeps, 'exec' | 'dataDir'> = {}): Promise<ListeningPort[]> {
+  const c: Ctx = { exec: deps.exec ?? defaultExec, fetchFn: fetch, env: process.env, dataDir: deps.dataDir ?? null, ollamaUrl: '', roots: [] };
+  return (await collectPortsAndServices(c)).ports ?? [];
+}
+
 /** Runs every collector (in parallel, each isolated) and returns one read-only inventory. */
 export async function collectSoftwareInventory(deps: InventoryDeps = {}): Promise<SoftwareInventory> {
   const env = deps.env ?? process.env;

@@ -21,6 +21,8 @@ export interface ActionClaimCategory {
   label: string;
   /** Overrides the completion construction built from `verbs` (used for state reports). */
   claim?: RegExp;
+  /** A sentence matching this is not a claim of this kind (negations: "the test did not pass"). */
+  exclude?: RegExp;
 }
 
 const CATEGORIES: ActionClaimCategory[] = [
@@ -97,6 +99,37 @@ const CATEGORIES: ActionClaimCategory[] = [
     label: 'file opening',
   },
   {
+    // Alpha e2e T7: "The test was rerun after the fix, and it passed successfully" with no run after the fix. Supported
+    // only by a passing run_checks after the last file change (the engine passes `testsVerified`) or by a specialist
+    // agent whose own turn was guarded the same way.
+    kind: 'tests_passed',
+    object: /\b(?:tests?|checks?|test suite|suite|re-?runs?|re-?ran)\b/i,
+    verbs: '',
+    claim: /\b(?:tests?|checks?|suite)\b[^.!?]{0,80}?\b(?:pass(?:ed|es|ing)?|succeed(?:ed|s)?|green)\b|\bre-?r[au]n\b[^.!?]{0,80}?\b(?:pass(?:ed|es)?|succe\w+|green|ok)\b|\b(?:all|\d+)\s+(?:\w+\s+)?tests?\s+(?:now\s+)?(?:ok|pass)/i,
+    exclude: /\b(?:not|never|no longer|cannot|unable|fail(?:s|ed|ing)?|would|should|will|could|if)\b|n't\b/i,
+    tools: /^run_checks$|^delegate_to_agent$/,
+    label: 'passing test run after the last change',
+  },
+  {
+    // Alpha e2e T3/T4: "The research was conducted by the Research Specialist" with no hand-off at all.
+    kind: 'attribution',
+    object: /\b(?:research|coding|operations|personal|verification|testing|qa)\s+(?:specialists?|agents?)\b/i,
+    verbs: '',
+    claim: /\b(?:by|from|via)\s+(?:the|your|my|our|a)\s+(?:research|coding|operations|personal|verification|testing|qa)\s+(?:specialists?|agents?)\b|\b(?:research|coding|operations|personal|verification|testing|qa)\s+(?:specialists?|agents?)\s+(?:has\s+|have\s+|had\s+|then\s+|also\s+|successfully\s+)*(?:conducted|implemented|completed|created|built|wrote|written|found|researched|done|did|finished|ran|run|handled|reported|delivered|prepared|performed|verified|investigated|returned|confirmed)\b|\bdelegated\s+(?:this|it|the\s+\w+)?\s*(?:task\s+)?to\s+(?:the|your|my)\s+\w+\s+(?:specialist|agent)/i,
+    exclude: /\b(?:not|never|cannot|unable|could(?:n't| not))\b|n't\b|\b(?:would|will|can|could|should)\s+(?:ask|delegate|hand)/i,
+    tools: /^delegate_to_agent$/,
+    label: 'specialist hand-off',
+  },
+  {
+    // Alpha e2e T10: "I have initiated the creation of the Pandesh Alpha Playground project" with 0 project rows.
+    kind: 'project',
+    object: /\b(?:projects?|workspaces?)\b/i,
+    verbs: 'created|initiated|set up|added|started|registered|saved|recorded',
+    claim: /\bi(?:'ve|\s+have)?\s+(?:(?:now|just|already|successfully|also)\s+)*(?:created|initiated|set up|added|started|registered|saved|recorded)\b|\b(?:has|have)\s+(?:now\s+|already\s+|successfully\s+)*been\s+(?:successfully\s+)?(?:created|initiated|set up|added|registered|saved|recorded)\b|\b(?:is|are)\s+now\s+(?:created|set up|registered|saved)\b/i,
+    tools: /project/i,
+    label: 'project creation',
+  },
+  {
     kind: 'execution',
     object: /\b(?:commands?|actions?|steps?|tasks?|requests?|instructions?|changes?)\b/i,
     verbs: 'executed|carried out|completed|performed|applied|run|ran|done|finished',
@@ -129,9 +162,15 @@ const echo = (value: string): string => {
 };
 
 /** The first category whose completion claim in `sentence` is not supported by a succeeded tool, if any. */
-export function unsupportedActionClaim(sentence: string, succeededTools: readonly string[]): ActionClaimCategory | null {
+export function unsupportedActionClaim(sentence: string, succeededTools: readonly string[], options: Pick<ActionClaimOptions, 'testsVerified'> = {}): ActionClaimCategory | null {
   for (const category of COMPILED) {
     if (!category.claim.test(sentence) || !category.object.test(sentence)) continue;
+    if (category.exclude?.test(sentence)) continue;
+    if (category.kind === 'tests_passed' && options.testsVerified !== undefined) {
+      // The engine knows the order: a pass before the last change is not evidence for the code as it is now.
+      if (options.testsVerified || succeededTools.includes('delegate_to_agent')) continue;
+      return category;
+    }
     if (succeededTools.some((tool) => category.tools.test(tool))) continue;
     return category;
   }
@@ -149,6 +188,11 @@ export interface ActionClaimOptions {
    * whatever tools ran: a successful write of report.md is not evidence for report.pdf.
    */
   fileExists?: (reference: string) => boolean;
+  /**
+   * Whether a check really passed after the last file change of this turn. When given, a "tests pass / re-run passed"
+   * sentence stands only if it is true (a pass before a later edit, or a failed re-run, is not evidence).
+   */
+  testsVerified?: boolean;
 }
 
 const OUTPUT_FILE = /(?:[A-Za-z]:[\\/][^\s`*"'<>|]+|[\w.\\/-]+)\.(?:pdf|docx?|xlsx?|pptx?|md|txt|csv|html?|json|png|jpe?g|zip|odt|rtf)\b/gi;
@@ -179,7 +223,7 @@ export function withholdUnsupportedActionClaims(message: string, succeededTools:
           return `[Not done: ${missing.join(', ')} does not exist — it was not created.]`;
         }
       }
-      const category = unsupportedActionClaim(sentence, succeededTools);
+      const category = unsupportedActionClaim(sentence, succeededTools, options);
       if (!category) return sentence;
       changed = true;
       withheld.push({ kind: category.kind, claim: echo(sentence) });

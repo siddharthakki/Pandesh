@@ -35,6 +35,7 @@ const AGENT_NAMES: Record<string, string> = { personal: 'Personal', coding: 'Cod
 const TOOL_WORDS: Record<string, { title: string; allow: string; why?: string }> = {
   delegate_to_agent: { title: 'Let an agent use the internet', allow: 'Allow internet for this task', why: 'The agent will go online (public web only)' },
   run_checks: { title: 'Run a command in this folder', allow: 'Allow running this command', why: 'It runs code in this folder' },
+  delegate_to_opencode: { title: 'Let OpenCode work in this folder', allow: 'Allow OpenCode in this folder', why: 'OpenCode can create and change files and run commands there' },
   authorize_mission: { title: 'Change files in this folder', allow: 'Allow file changes in this folder' },
   write_file: { title: 'Write a file', allow: 'Allow writing this file' },
   run_command: { title: 'Run a command', allow: 'Allow running this command' },

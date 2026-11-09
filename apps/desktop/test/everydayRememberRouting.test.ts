@@ -14,6 +14,10 @@ describe('"remember ..." goes to durable memory when it is a fact about the pers
     expect(isPersonalFact(text.replace(/^(?:please\s+)?remember(?:\s+(?:that|this))?\s+/i, ''))).toBe(true);
   });
 
+  it('alpha e2e T5: a fact with provenance and confirmation instructions goes to Core memory', () => {
+    expect(parseEverydayIntent("Remember this harmless test fact: Project Firefly's review meeting is on Tuesday at 14:30, and the project colour is orange. Save it with source provenance. Confirm what you actually stored.")).toBeNull();
+  });
+
   it.each([
     'Remember to call Anna tomorrow',
     'Remember that the invoice is due on Friday',

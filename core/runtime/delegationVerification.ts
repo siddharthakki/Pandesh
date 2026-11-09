@@ -93,6 +93,11 @@ export function detectTestCommand(dir: string): string | null {
   if (fs.existsSync(path.join(dir, 'pyproject.toml')) || fs.existsSync(path.join(dir, 'pytest.ini')) || fs.existsSync(path.join(dir, 'setup.cfg'))) return 'python -m pytest -q';
   if (fs.existsSync(path.join(dir, 'Cargo.toml'))) return 'cargo test';
   if (fs.existsSync(path.join(dir, 'go.mod'))) return 'go test ./...';
+  // Alpha e2e T4: a plain folder with calculator.py + test_calculator.py had tests nobody ran. The standard library's
+  // unittest runs them without pytest or a manifest.
+  try {
+    if (fs.readdirSync(dir).some((f) => /^test_[^\/]*\.py$|^[^\/]*_test\.py$/i.test(f))) return 'python -m unittest discover -v -p "*test*.py"';
+  } catch { /* unreadable folder: no command */ }
   return null;
 }
 
@@ -120,7 +125,9 @@ export async function verifyDelegation(dir: string, before: Set<string>, run: Co
   if (!inGit) notes.push('the folder is not a git repository, so changes were read from the files on disk and no line diff can be shown');
 
   // Cleanup first, so the reported status is what the user is left with.
-  const after = untrackedPaths(dir);
+  // A plain folder has no untracked list: whether .opencode/ exists now is the evidence (the caller passes whether it
+  // existed before), so OpenCode's leftovers are removed there too (alpha e2e T4).
+  const after = inGit ? untrackedPaths(dir) : new Set(fs.existsSync(path.join(dir, '.opencode')) ? ['.opencode'] : []);
   if (after.has('.opencode') && !before.has('.opencode')) {
     const target = path.join(dir, '.opencode');
     try {
