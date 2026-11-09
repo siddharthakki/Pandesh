@@ -34,7 +34,8 @@ export const TOOL_GROUPS: Record<string, ToolGroup> = {
   },
   projects: {
     purpose: "Pandesh's Projects workspace: create a project with tasks, list saved projects",
-    pattern: /\b(?:create|new|add|start|set up|make)\b[^.]{0,40}\bprojects?\b|\bprojects?\s+(?:workspace|named|called|with)\b|\b(?:my|saved|list|show)\s+projects\b|\bprojects workspace\b/i,
+    // F13e: "current project tasks" did not offer list_projects, and the model went through the folder running tests.
+    pattern: /\b(?:create|new|add|start|set up|make)\b[^.]{0,40}\bprojects?\b|\bprojects?\s+(?:workspace|named|called|with|tasks?|status|list)\b|\b(?:my|saved|list|show|current|open|active|all)\s+projects\b|\bprojects workspace\b|\b(?:current|open|pending)\s+(?:project\s+)?tasks\b/i,
   },
   models: {
     purpose: 'local AI models in Ollama: list, pull, unload, delete',

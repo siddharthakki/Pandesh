@@ -100,3 +100,10 @@ describe('hand-off security preflight (T15: the model refused in words, Core nev
     expect(handoffPreflight('Ask Research to open https://nodejs.org and find the release.', research())).toBeNull();
   });
 });
+
+import { groupsForText } from '../runtime/chatToolSelection';
+describe('project tasks route to the Projects workspace (F13e)', () => {
+  it.each(['I want a dashboard with my current project tasks', 'Show my projects', 'What are my open tasks?'])('%s', (t) => {
+    expect(groupsForText(t).has('projects')).toBe(true);
+  });
+});

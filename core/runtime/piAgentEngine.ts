@@ -4555,6 +4555,9 @@ ${filesPromptSection}${webResearchPromptSection}${wishesPromptSection}${emailCal
     }
     // Alpha e2e T1/T2: the model reported 1 of 37 listening ports (port_list_services knows only Pandesh's own services)
     // and guessed update status without the stored check.
+    if (availableToolNames.has('list_projects')) {
+      systemPrompt += "\n\nPROJECTS: \"my projects\", \"project tasks\", \"current tasks\" mean Pandesh's Projects workspace → 'list_projects' (real saved projects and their task status). Never substitute files in a folder or a test run for them.";
+    }
     if (availableToolNames.has('listening_ports') || availableToolNames.has('software_updates')) {
       systemPrompt += `\n\nPC FACTS:${availableToolNames.has('listening_ports') ? " listening ports / open ports / what is listening → 'listening_ports' (every process on this PC); 'port_list_services' lists only Pandesh's own managed services, so never present it as the PC's ports." : ''}${availableToolNames.has('software_updates') ? " Updates / outdated software / versions → 'software_updates' (the stored check, offline); say when it was checked, and never state a version or 'up to date' without it." : ''}`;
     }
@@ -5531,7 +5534,10 @@ ${filesPromptSection}${webResearchPromptSection}${wishesPromptSection}${emailCal
     // Final run F13d: "…current project tasks… build the dashboard" did real work (write_file, open_local_file) and the
     // whole answer was replaced by a "how to run this project" summary. Only an answer-type turn is replaced.
     const didRealWork = toolCallsRecorded.some((t) => t.status === 'completed' && /^(?:write_file|open_local_file|run_checks|delegate_to_agent|delegate_to_opencode|create_project|memory_(?:remember|correct|forget))$|^propose_/.test(t.tool));
-    if (projectEvidence && !didRealWork && !isReplyGroundedInProject(finalReply, projectEvidence)) {
+    // F13e: a request to MAKE something that did not get done had its honest reply replaced too. Only a question about
+    // the project is answered from the project's files.
+    const asksToMakeSomething = /\b(?:build|create|make|write|generate|draft|fix|add|delete|install|organi[sz]e|save|open)\b/i.test(requestText);
+    if (projectEvidence && !didRealWork && !asksToMakeSomething && !isReplyGroundedInProject(finalReply, projectEvidence)) {
       finalReply = composeEvidenceAnswer(projectEvidence, requestText);
       projectReplyReplaced = true;
       safeRecordRuntimeEvent(db, broadcaster, attemptId, 'project_reply_replaced', { reason: 'reply not grounded in the active project', project: projectEvidence.name }, actor);
