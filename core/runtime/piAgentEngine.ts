@@ -5445,6 +5445,7 @@ ${filesPromptSection}${webResearchPromptSection}${wishesPromptSection}${emailCal
       }
     }
     let testsVerified = false;
+    const withheldKinds = new Set<string>();
     {
       const done = finishedCalls();
       const lastWrite = lastIndexWhere(done, (t) => t.status === 'completed' && WRITE_TOOL.test(t.tool));
@@ -5548,6 +5549,7 @@ ${filesPromptSection}${webResearchPromptSection}${wishesPromptSection}${emailCal
         safeRecordRuntimeEvent(db, broadcaster, attemptId, 'unbacked_completion_corrected', {}, actor);
       }
       const guarded = withholdUnsupportedActionClaims(finalReply, succeeded, { fileExists, testsVerified });
+      for (const w of guarded.withheld) withheldKinds.add(w.kind);
       if (guarded.withheld.length > 0) {
         finalReply = guarded.text;
         safeRecordRuntimeEvent(db, broadcaster, attemptId, 'unsupported_action_claims_withheld', { withheld: guarded.withheld }, actor);
@@ -5558,8 +5560,16 @@ ${filesPromptSection}${webResearchPromptSection}${wishesPromptSection}${emailCal
     // different, older fact). After any memory change Core shows what is really stored now for the scopes it touched.
     try {
       const memoryChanges = toolCallsRecorded.filter((t) => /^memory_(?:remember|forget|resolve|update|correct)/.test(t.tool) && (t.status === 'completed' || t.status === 'failed'));
-      if (memoryChanges.length && !signal?.aborted) {
+      // Re-run T6b: one memory_recall (with a typo), then an invented "update log". A withheld memory claim, or any memory
+      // tool on a request that names a stored scope, also gets the real state.
+      const memoryTouched = memoryChanges.length > 0 || withheldKinds.has('memory')
+        || (toolCallsRecorded.some((t) => t.tool.startsWith('memory_')) && /\b(?:change|correct|update|forget|remove|delete)\b/i.test(requestText));
+      if (memoryTouched && !signal?.aborted) {
         const scopes = new Map<string, { scopeType: string; scopeId: string }>();
+        const lowerRequest = requestText.toLowerCase();
+        for (const row of db.all<{ scopeType: string; scopeId: string }>("SELECT DISTINCT scopeType, scopeId FROM memory_facts WHERE state = 'active' AND length(scopeId) >= 4 LIMIT 500")) {
+          if (lowerRequest.includes(row.scopeId.toLowerCase())) scopes.set(`${row.scopeType}|${row.scopeId}`, row);
+        }
         for (const t of memoryChanges) {
           const a = (t.args ?? {}) as Record<string, unknown>;
           if (typeof a.scopeType === 'string' && typeof a.scopeId === 'string') scopes.set(`${a.scopeType}|${a.scopeId}`, { scopeType: a.scopeType, scopeId: a.scopeId });

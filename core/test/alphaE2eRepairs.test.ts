@@ -59,6 +59,12 @@ describe('alpha e2e: claims the guard now withholds', () => {
     expect(withholdUnsupportedActionClaims('I could not reach the Research agent.', []).withheld).toEqual([]);
   });
 
+  it('re-run T6b: a fact "has been removed" after only a recall', () => {
+    const r = withholdUnsupportedActionClaims('2. **Removed Color:** The "Project color: orange" fact has been removed.', ['memory_recall']);
+    expect(r.withheld.map((w) => w.kind)).toContain('memory');
+    expect(withholdUnsupportedActionClaims('The colour fact has been removed.', ['memory_forget']).withheld).toEqual([]);
+  });
+
   it('T10: "I have initiated the creation of the project" with no project tool', () => {
     const r = withholdUnsupportedActionClaims('I have initiated the creation of the Pandesh Alpha Playground project.', ['update_task_outcome']);
     expect(r.withheld.map((w) => w.kind)).toContain('project');

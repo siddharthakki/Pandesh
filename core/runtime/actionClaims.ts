@@ -72,6 +72,14 @@ const CATEGORIES: ActionClaimCategory[] = [
     label: 'memory change',
   },
   {
+    // Re-run T6b: 'The "Project color: orange" fact has been removed' after only a memory_recall.
+    kind: 'memory',
+    object: /\b(?:facts?|stored (?:details?|values?|records?))\b/i,
+    verbs: 'forgotten|deleted|removed|updated|changed|corrected|erased',
+    tools: /^memory_(?:remember|forget|resolve)/i,
+    label: 'memory change',
+  },
+  {
     // "Since pandoc was not available, I installed the utility" while every install attempt failed (re-run of audit M4).
     kind: 'install',
     object: /\b(?:utility|utilities|tools?|apps?|application|program|software|package|driver|pandoc|libreoffice|converter)\b/i,
