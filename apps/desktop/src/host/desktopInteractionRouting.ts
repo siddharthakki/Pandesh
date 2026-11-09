@@ -178,6 +178,8 @@ function stripImageInstructions(subject: string): string {
  * are: detected here, dispatched directly through the governed
  * `get_weather` capability, never left to the model's own tool-calling. */
 const WEATHER_NOUN = /\b(weather|temperature|forecast|rain(?:ing|y)?|snow(?:ing|y)?|humidity)\b/i;
+const MAKES_SOMETHING = /\b(?:create|set up|add|make|build|write|draft|organi[sz]e|plan)\b[^.?!]{0,80}\b(?:projects?|tasks?|checklist|list|dashboard|report|file|document|app|script|page|notes?)\b|\b(?:projects?|tasks?|checklist)\s*:/i;
+const ASKS_ABOUT_WEATHER = /\b(?:what(?:'s| is| will)|how(?:'s| is)|will it|is it (?:going to )?|tell me|check|show me)\b[^.?!]{0,25}\b(?:the )?(?:weather|temperature|forecast|rain|snow)\b[^.?!]{0,40}\b(?:in|for|at|today|tomorrow|tonight|now)\b/i;
 const WEATHER_LOCATION_PHRASE =
   /\b(?:weather|temperature|forecast|rain(?:ing|y)?|snow(?:ing|y)?)\b(?:\s+\w+)*?\s+(?:in|for|at)\s+([a-z\u00C0-\u024F][a-z\u00C0-\u024F\s.',-]*?)(?=\s+(?:right now|today|tonight|tomorrow|currently|now|this (?:week|morning|afternoon|evening|weekend)|for (?:today|tonight|tomorrow|now|this)|please)\b|[?.!]|$)/i;
 
@@ -185,6 +187,10 @@ export function detectWeatherIntent(text: string, lastLocation?: string | null):
   const trimmed = text.trim();
   if (!trimmed) return false;
   if (detectImageGenerationIntent(trimmed)) return false;
+  // Real-world challenge: "Set up a new project … with three tasks: buy timber, check the weather forecast, build the
+  // frame" was answered "Which location?" and never reached Core. A weather word inside an instruction to create or
+  // organise something is part of that work, unless the message also asks about the weather itself.
+  if (MAKES_SOMETHING.test(trimmed) && !ASKS_ABOUT_WEATHER.test(trimmed)) return false;
   if (WEATHER_NOUN.test(trimmed)) return true;
   // If a weather location is already established in context, relative time follow-ups are weather queries
   if (lastLocation && /\b(?:tomorrow|evening|morning|tonight|this afternoon|weekend)\b/i.test(trimmed)) {
