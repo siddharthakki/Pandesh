@@ -154,7 +154,10 @@ describe('document tools — refusals and argument handling', () => {
   });
 
   it('does not need yt-dlp to be installed to describe the download tool honestly', () => {
-    expect(typeof resolveDownloadBinary()).toBe('string');
+    // Without yt-dlp the resolver answers null (the tool then says it is not installed); it never throws.
+    const found = resolveDownloadBinary();
+    expect(found === null || typeof found === 'string').toBe(true);
+    expect(resolveDownloadBinary({ PATH: '', LOCALAPPDATA: '' })).toBeNull();
   });
 });
 

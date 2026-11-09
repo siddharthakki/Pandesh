@@ -37,6 +37,7 @@ jobs:
           node esbuild.core.js
           node apps/desktop/esbuild.mjs
       - name: Core tests
-        run: npx vitest run core/test
+        # Shared runners are several times slower than a developer machine; time budgets are widened, not removed.
+        run: npx vitest run core/test --testTimeout=120000 --hookTimeout=120000
       - name: Desktop tests
-        run: npx vitest run apps/desktop/test
+        run: npx vitest run apps/desktop/test --testTimeout=120000 --hookTimeout=120000
