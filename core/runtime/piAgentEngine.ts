@@ -5476,7 +5476,18 @@ ${filesPromptSection}${webResearchPromptSection}${wishesPromptSection}${emailCal
       const insideWorkspace = (ref: string) => !path.isAbsolute(ref) || workspaceRelative(path.resolve(ref)) !== undefined;
       // "Tasks are saved in tasks.json" / "will be created when you run it" describe the program, not a file made now.
       const describesBehaviour = /\b(?:will|would|when(?:ever)?|each time|once you|are saved|is saved|gets? (?:saved|created)|at runtime|on first run)\b/i;
-      const missing = [...new Set(finalReply.split('\n').filter((line) => !describesBehaviour.test(line)).flatMap((line) => claimedOutputFiles(line)))].filter((f) => insideWorkspace(f) && !onDisk(f)).slice(0, 3);
+      // A file the turn read is an input, and a bare name may live in a subfolder (A16 under Auto: invoices/… was
+      // reported missing because only the folder root was checked).
+      const readNames = new Set(toolCallsRecorded.filter((t) => /^(?:read_file|document_read|list_directory|search_files)$/.test(t.tool))
+        .flatMap((t) => `${JSON.stringify(t.args ?? '')} ${extractToolResultText(t.result)}`.match(/[\w.-]+\.[A-Za-z0-9]{1,6}/g) ?? []).map((n) => n.toLowerCase()));
+      let workspaceNames: Set<string> | null = null;
+      const existsSomewhere = (ref: string) => {
+        if (onDisk(ref)) return true;
+        workspaceNames ??= new Set([...snapshotFiles(selectedWorkspace).keys()].map((k) => path.basename(k).toLowerCase()));
+        return workspaceNames.has(path.basename(ref).toLowerCase());
+      };
+      const missing = [...new Set(finalReply.split('\n').filter((line) => !describesBehaviour.test(line)).flatMap((line) => claimedOutputFiles(line)))]
+        .filter((f) => insideWorkspace(f) && !readNames.has(path.basename(f).toLowerCase()) && !existsSomewhere(f)).slice(0, 3);
       if (missing.length) {
         safeRecordRuntimeEvent(db, broadcaster, attemptId, 'claimed_file_missing_recovery', { files: missing }, actor);
         try {
