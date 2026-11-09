@@ -11,7 +11,8 @@ describe('external coding agents', () => {
   it('local agents are on when installed; cloud agents stay off until the user enables them', () => {
     const none = readCodingAgentSettings(null);
     expect(isAgentEnabled(spec('aider'), none)).toBe(true);
-    expect(isAgentEnabled(spec('codex'), none)).toBe(true);
+    expect(isAgentEnabled(spec('codex'), none)).toBe(false); // experimental: local mode broken in codex-cli 0.156
+    expect(isAgentEnabled(spec('hermes'), none)).toBe(false); // uses its own configuration: opt-in
     expect(isAgentEnabled(spec('claude-code'), none)).toBe(false);
     expect(isAgentEnabled(spec('cline'), none)).toBe(false);
     const dir = tmp();

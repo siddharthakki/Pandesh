@@ -3473,7 +3473,7 @@ ${String(args.objective ?? '').slice(0, 600)}`,
         // External coding agents installed on this PC (codingAgents.ts). One governed tool; Core verifies the result.
         const agents = discoverCodingAgents(ctx.dataDir).filter((a) => a.enabled);
         if (!agents.length) return [];
-        const list = agents.map((a) => `${a.spec.id} (${a.spec.name}: ${a.spec.strengths}; ${a.spec.locality === 'local' ? 'local model, nothing leaves the PC' : 'CLOUD'})`).join('; ');
+        const list = agents.map((a) => `${a.spec.id} (${a.spec.name}: ${a.spec.strengths}; ${a.spec.locality === 'local' ? 'local model, nothing leaves the PC' : a.spec.locality === 'cloud' ? 'CLOUD' : 'uses its own configuration'})`).join('; ');
         return [{
           name: 'delegate_to_coding_agent',
           label: 'delegate_to_coding_agent',
@@ -3493,7 +3493,7 @@ ${String(args.objective ?? '').slice(0, 600)}`,
               locality: spec.locality,
               objective: objective.slice(0, 2_000),
               workspacePath: dir,
-              ...(spec.locality === 'cloud' ? { alwaysAsk: true } : {}),
+              ...(spec.locality !== 'local' ? { alwaysAsk: true } : {}),
               cardText: `Pandesh wants ${spec.name} to work in ${dir}. ${spec.name} ${spec.dataFlow}. It can create and change files there:\n${objective.slice(0, 600)}`,
             });
             if (decision.outcome !== 'approved') return { content: [{ type: 'text', text: `Not delegated: ${decision.outcome === 'rejected' ? `the user did not approve handing this to ${spec.name}` : 'no approval was recorded'}. Nothing was changed.` }], isError: true };

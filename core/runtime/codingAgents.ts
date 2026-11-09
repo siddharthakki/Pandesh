@@ -17,7 +17,8 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 
-export type AgentLocality = 'local' | 'cloud';
+/** local: this PC's models only. cloud: a vendor's service. configured: whatever the agent's own settings use (may be cloud). */
+export type AgentLocality = 'local' | 'cloud' | 'configured';
 
 export interface CodingAgentSpec {
   id: string;
@@ -33,6 +34,8 @@ export interface CodingAgentSpec {
   env?(model: string): Record<string, string>;
   /** What the agent is good at, for the model's tool description. */
   strengths: string;
+  /** Off by default even when local (works poorly here); the user can still enable it. */
+  experimental?: string;
 }
 
 const OLLAMA = process.env.KARKEDIKHA_OLLAMA_URL || 'http://127.0.0.1:11434';
@@ -64,6 +67,9 @@ export const CODING_AGENTS: CodingAgentSpec[] = [
     dataFlow: 'runs on this PC with your local Ollama model (--oss); commands run in a workspace-write sandbox',
     args: (objective, dir, model) => ['exec', '--oss', '--local-provider', 'ollama', '-m', model, '-s', 'workspace-write', '-C', dir, '--skip-git-repo-check', objective],
     strengths: 'building a small program end to end with its own shell steps, sandboxed to the folder',
+    // Live runs AG2b + probe (codex-cli 0.156.1): with qwen3.8:27b it narrated and exited 1; with gpt-oss:20b its own
+    // router rejected its file edit ('unsupported call: apply_patch'). Off until a Codex release fixes local mode.
+    experimental: 'Codex 0.156 local mode cannot edit files on this PC (unsupported call: apply_patch)',
   },
   {
     id: 'claude-code',
@@ -83,6 +89,15 @@ export const CODING_AGENTS: CodingAgentSpec[] = [
     dataFlow: "sends the task and the files it reads to Cline's default cloud provider unless configured otherwise; it auto-approves its own commands",
     args: (objective, dir) => ['--json', '-c', dir, objective],
     strengths: 'general coding tasks',
+  },
+  {
+    id: 'hermes',
+    name: 'Hermes Agent',
+    command: 'hermes',
+    locality: 'configured',
+    dataFlow: 'runs with your own Hermes configuration (its model and provider; may be a cloud provider)',
+    args: (objective, dir) => ['-z', objective, '--in', dir],
+    strengths: 'general agent work with your Hermes skills',
   },
 ];
 
@@ -112,7 +127,7 @@ export function readCodingAgentSettings(dataDir: string | undefined | null): Cod
 export function isAgentEnabled(spec: CodingAgentSpec, settings: CodingAgentSettings): boolean {
   const explicit = settings.enabled[spec.id];
   if (explicit !== undefined) return explicit === true;
-  return spec.locality === 'local';
+  return spec.locality === 'local' && !spec.experimental;
 }
 
 /** Absolute path of an executable on PATH (Windows: .exe, then .cmd), or null. Spawned without a shell. */
