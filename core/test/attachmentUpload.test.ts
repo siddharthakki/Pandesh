@@ -2,12 +2,18 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
+import { probeLocalAudioTranscriptionCapability } from '../attachments/audioProcessing';
 import { openCoreDatabase } from '../db/openCore';
 import type { CoreDatabase } from '../db/connection';
 import { startApiServer, type RunningApiServer } from '../api/server';
 import { EventBroadcaster } from '../ws/broadcaster';
 import { generateToken } from '../auth/token';
 import { buildMinimalPdf, buildMinimalDocx, buildMinimalWav } from './fixtures/documentFixtures';
+
+// The bundled Whisper model lives under the git-ignored models/ folder (scripts/fetch-whisper-model.mjs);
+// a fresh checkout does not have it, so real-transcription tests run only where it is staged.
+const WHISPER_STAGED = probeLocalAudioTranscriptionCapability({ ...process.env, KARKEDIKHA_LOCAL_ASR_COMMAND: '' }).capability === 'available';
+
 
 const TOKEN = generateToken();
 let dir: string;
@@ -220,7 +226,7 @@ describe('bounded authenticated attachment upload route', () => {
     expect(body.extraction.sections.map((s: { text: string }) => s.text)).toEqual(['One.', 'Two.']);
   });
 
-  it('uploads a real speech WAV and records a real, word-accurate local transcription with timestamped segments', async () => {
+  it.runIf(WHISPER_STAGED)('uploads a real speech WAV and records a real, word-accurate local transcription with timestamped segments', async () => {
     const conv = await createConversation();
     const bytes = fs.readFileSync(path.join(__dirname, 'fixtures', 'audio', 'quarterly-report-speech.wav'));
     const created = await createAttachment(conv.id, { originalName: 'speech.wav', declaredMimeType: 'audio/wav', kind: 'audio', byteSize: bytes.length });

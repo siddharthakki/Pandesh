@@ -4,11 +4,16 @@ import * as path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { probeLocalAudioTranscriptionCapability, runLocalTranscription } from '../attachments/audioProcessing';
 
+// The bundled Whisper model lives under the git-ignored models/ folder (scripts/fetch-whisper-model.mjs);
+// a fresh checkout does not have it, so real-transcription tests run only where it is staged.
+const WHISPER_STAGED = probeLocalAudioTranscriptionCapability({ ...process.env, KARKEDIKHA_LOCAL_ASR_COMMAND: '' }).capability === 'available';
+
+
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const REAL_SPEECH_FIXTURE = path.join(__dirname, 'fixtures', 'audio', 'quarterly-report-speech.wav');
 
 describe('local audio transcription capability probe', () => {
-  it('reports the bundled whisper-base.en engine as available when its model files are present', () => {
+  it.runIf(WHISPER_STAGED)('reports the bundled whisper-base.en engine as available when its model files are present', () => {
     // Uses the real, actually-fetched model directory (no override) — this
     // is the same check the packaged runtime performs.
     const probe = probeLocalAudioTranscriptionCapability({ ...process.env });
@@ -44,7 +49,7 @@ describe('local audio transcription capability probe', () => {
 });
 
 describe('real local transcription (whisper-base.en via @xenova/transformers)', () => {
-  it('transcribes a real speech WAV fixture with plausible word-accurate text and timestamped segments', async () => {
+  it.runIf(WHISPER_STAGED)('transcribes a real speech WAV fixture with plausible word-accurate text and timestamped segments', async () => {
     if (!fs.existsSync(REAL_SPEECH_FIXTURE)) {
       // Audio binary fixtures are omitted in public repository checkouts
       return;
