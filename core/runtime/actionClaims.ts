@@ -252,3 +252,40 @@ export function withholdUnsupportedActionClaims(message: string, succeededTools:
   out.push('', `**Not performed:** the reply above claimed an action that no tool carried out, ${consequence}. ${performed}`);
   return { text: out.join('\n'), withheld };
 }
+
+/** A first paragraph that reads as success ("I have successfully built…", "Done! All tests passed"). */
+const OPENING_SUCCESS = /\b(?:success(?:fully)?|completed?|done|finished|created|built|passed|stored|saved|remembered|ready|implemented|fixed|updated|delegated|i(?:'ve|\s+have)\s+\w+ed)\b/i;
+const OPENING_NEGATED = /\b(?:not|never|could(?:n't| not)|unable|failed|cannot|declined|refused|blocked)\b|n't\b|^\s*\[Not done/i;
+
+export interface LeadStatusInput {
+  reply: string;
+  /** evaluateTurnOutcome's verdict for the turn (from the tool ledger, never the model). */
+  verdict: string;
+  reason: string;
+  failed: readonly string[];
+  refused: readonly string[];
+  /** Claims the guard withheld in this reply. */
+  withheldCount: number;
+}
+
+/**
+ * Alpha e2e T12 / P0: Core marked the turn failed ("NOT DONE: OpenCode … no file was created"), yet the reply opened
+ * "I have successfully built the dashboard and all tests passed"; the evidence below it was right, the first line was
+ * not. When the ledger says the work did not (fully) happen and the opening reads as success, Core puts its own status
+ * line first. Returns the line to prepend, or null.
+ */
+export function leadStatusLine(input: LeadStatusInput): string | null {
+  const opening = input.reply.split(/\n\s*\n/).find((p) => p.trim()) ?? '';
+  const readsAsSuccess = OPENING_SUCCESS.test(opening) && !OPENING_NEGATED.test(opening);
+  if (input.verdict === 'unverified') {
+    return `**NOT DONE** (checked by Pandesh Core): ${input.reason}.${readsAsSuccess ? ' The model\'s draft below says otherwise; it is wrong where it claims success.' : ''}`;
+  }
+  if (!readsAsSuccess) return null;
+  if (input.verdict === 'attempted_failed') {
+    return `**NOT COMPLETE** (checked by Pandesh Core): ${input.failed.join(', ')} reported a failure. Read the evidence below before relying on the summary.`;
+  }
+  if (input.withheldCount > 0) {
+    return `**PARTLY DONE** (checked by Pandesh Core): ${input.withheldCount} claim${input.withheldCount === 1 ? '' : 's'} below had no tool behind ${input.withheldCount === 1 ? 'it and is' : 'them and are'} marked "Not done".`;
+  }
+  return null;
+}

@@ -1,4 +1,4 @@
-import { withholdUnsupportedActionClaims } from './actionClaims';
+import { leadStatusLine, withholdUnsupportedActionClaims } from './actionClaims';
 import { answerTaskStatusQuestion, isTaskStatusQuestion, listPriorTurns, renderTaskHistorySection } from '../domain/conversationTaskHistory';
 import { checkPublicQuery, derivePublicQuery, explicitlyRequestsWebSearch, referencesLocalContent } from './publicQueryGuard';
 import { checkStatedTotals, evaluateExpression } from './arithmeticCheck';
@@ -5446,6 +5446,7 @@ ${filesPromptSection}${webResearchPromptSection}${wishesPromptSection}${emailCal
     }
     let testsVerified = false;
     const withheldKinds = new Set<string>();
+    let withheldCount = 0;
     {
       const done = finishedCalls();
       const lastWrite = lastIndexWhere(done, (t) => t.status === 'completed' && WRITE_TOOL.test(t.tool));
@@ -5550,6 +5551,7 @@ ${filesPromptSection}${webResearchPromptSection}${wishesPromptSection}${emailCal
       }
       const guarded = withholdUnsupportedActionClaims(finalReply, succeeded, { fileExists, testsVerified });
       for (const w of guarded.withheld) withheldKinds.add(w.kind);
+      withheldCount += guarded.withheld.length;
       if (guarded.withheld.length > 0) {
         finalReply = guarded.text;
         safeRecordRuntimeEvent(db, broadcaster, attemptId, 'unsupported_action_claims_withheld', { withheld: guarded.withheld }, actor);
@@ -5627,6 +5629,15 @@ ${filesPromptSection}${webResearchPromptSection}${wishesPromptSection}${emailCal
     if (turnOutcome.verdict === 'unverified' && !/not (done|available|created|sent|made|run|granted)|declined|could not|was not|wasn't|untouched|nothing (?:was )?changed|denied/i.test(finalReply)) {
       // The reply must not leave the impression that the work happened.
       finalReply += `\n\nCorrection: ${turnOutcome.reason}.`;
+    }
+    // P0: the first line may not claim success the ledger does not support (T12: "successfully built… all tests passed"
+    // on a failed turn).
+    if (finalReply && !signal?.aborted) {
+      const lead = leadStatusLine({ reply: finalReply, verdict: turnOutcome.verdict, reason: turnOutcome.reason, failed: turnOutcome.failed, refused: turnOutcome.refused, withheldCount });
+      if (lead) {
+        finalReply = `${lead}\n\n${finalReply}`;
+        safeRecordRuntimeEvent(db, broadcaster, attemptId, 'reply_lead_status_added', { verdict: turnOutcome.verdict, withheldCount }, actor);
+      }
     }
 
     let assistantMessageRecord: any = null;
