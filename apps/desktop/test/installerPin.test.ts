@@ -27,7 +27,8 @@ describe('Windows installer pin', () => {
     expect(pin.productName).toBe('Pandesh');
     expect(pin.privilegesRequired).toBe('lowest');
     expect(pin.dataDirRelative.replace(/\\/g, '/')).toBe('KarkeDikha/desktop');
-    expect(pin.electronVersion).toBe('33.4.11');
+    // The installer pin and the desktop app's Electron dependency must name the same version.
+    expect(pin.electronVersion).toBe((JSON.parse(fs.readFileSync(appPackagePath, 'utf8')) as { devDependencies: Record<string, string> }).devDependencies.electron);
     expect(pin.installerUrl).toContain('innosetup-6.7.3.exe');
     expect(pin.installerSha256).toMatch(/^[A-F0-9]{64}$/i);
   });

@@ -6,10 +6,11 @@
   "productName": "Pandesh",
   "main": "out/main.js",
   "scripts": {
-    "start": "node launch.mjs"
+    "start": "node launch.mjs",
+    "postinstall": "node node_modules/electron/install.js"
   },
   "devDependencies": {
-    "electron": "33.4.11",
+    "electron": "45.2.3",
     "rcedit": "^5.0.2"
   },
   "overrides": {
