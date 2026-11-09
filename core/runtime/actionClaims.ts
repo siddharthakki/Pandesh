@@ -52,8 +52,11 @@ const CATEGORIES: ActionClaimCategory[] = [
   },
   {
     kind: 'calendar',
-    object: /\b(?:calendar|events?|appointments?|meetings?)\b/i,
+    object: /\b(?:calendar|events?|appointments?|meetings?|invites?)\b/i,
     verbs: 'added|created|scheduled|booked|moved|rescheduled|updated|cancell?ed|deleted|removed',
+    // The meeting/event must be what was changed, not a word nearby (challenge T12: "I have created the HTML summary
+    // report based on the meeting notes" was taken for a calendar change).
+    claim: /\bi(?:'ve|\s+have)?\s+(?:(?:now|just|already|successfully|also)\s+)*(?:added|created|scheduled|booked|moved|rescheduled|updated|cancell?ed|deleted|removed)\s+(?:(?:a|an|the|your|this|that|new)\s+)?(?:[\w'-]+\s+){0,3}?(?:calendar\s+)?(?:events?|appointments?|meetings?|invites?)\b|\b(?:events?|appointments?|meetings?|invites?)\b[^.!?]{0,60}?\b(?:has|have)\s+(?:now\s+|already\s+|successfully\s+)*been\s+(?:successfully\s+)?(?:added|created|scheduled|booked|moved|rescheduled|updated|cancell?ed|deleted|removed)\b|\b(?:added|put|placed)\s+(?:it|this|that|them)?\s*(?:to|on|in(?:to)?)\s+(?:your|the)\s+calendar\b/i,
     // A meeting kept as a memory fact ("the review meeting is now Wednesday", re-run T6c) is changed by memory tools.
     tools: /^calendar_(?:create|update|delete)|event|^memory_(?:remember|correct|forget|resolve)$/i,
     label: 'calendar change',
@@ -135,7 +138,9 @@ const CATEGORIES: ActionClaimCategory[] = [
     // "in your scratch workspace" is where files went, not a project record: only the word "project" counts.
     object: /\bprojects?\b/i,
     verbs: 'created|initiated|set up|added|started|registered|saved|recorded',
-    claim: /\bi(?:'ve|\s+have)?\s+(?:(?:now|just|already|successfully|also)\s+)*(?:created|initiated|set up|added|started|registered|saved|recorded)\b|\b(?:has|have)\s+(?:now\s+|already\s+|successfully\s+)*been\s+(?:successfully\s+)?(?:created|initiated|set up|added|registered|saved|recorded)\b|\b(?:is|are)\s+now\s+(?:created|set up|registered|saved)\b/i,
+    // The project must be what was created (challenge T3: "I have recorded the review meeting for Project Cedar" is a
+    // memory write, not a project).
+    claim: /\bi(?:'ve|\s+have)?\s+(?:(?:now|just|already|successfully|also)\s+)*(?:created|initiated|set up|added|started|registered)\s+(?:(?:a|an|the|your|this|that|new)\s+)?(?:[\w'-]+\s+){0,4}?projects?\b|\b(?:initiated|started|begun)\s+(?:the\s+)?creation\s+of\b[^.!?]{0,60}?\bprojects?\b|\bprojects?\b[^.!?]{0,60}?\b(?:has|have)\s+(?:now\s+|already\s+|successfully\s+)*been\s+(?:successfully\s+)?(?:created|initiated|set up|added|registered)\b|\bprojects?\b[^.!?]{0,40}?\bis\s+now\s+(?:created|set up|registered)\b/i,
     // A coding project made of files is real when files were written (alpha e2e re-run T4: "I created the calculator
     // project" after two successful write_file calls was wrongly withheld).
     tools: /project|^write_file$|^propose_|file_change|^delegate_to_(?:opencode|agent)$/i,
