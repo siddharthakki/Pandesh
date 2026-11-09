@@ -371,7 +371,11 @@ async function main(): Promise<void> {
 
   let db: CoreDatabase;
   try {
-    ({ db } = openCoreDatabase(paths.databasePath));
+    const opened = openCoreDatabase(paths.databasePath, { backupDir: paths.migrationBackupDir });
+    db = opened.db;
+    if (opened.preMigrationBackup) {
+      console.log(`[karkedikha-core ${new Date().toISOString()}] database upgraded (migrations ${opened.migrationsApplied.join(', ')}); the previous schema was backed up first to ${opened.preMigrationBackup}`);
+    }
   } catch (err) {
     if (err instanceof CoreDatabaseFailedError) {
       console.error(`[karkedikha-core ${new Date().toISOString()}] database_failed: ${err.diagnosticReason}`);

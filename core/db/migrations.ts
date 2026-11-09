@@ -1931,7 +1931,28 @@ function checksumOf(sql: string): string {
  * own transaction. Migration 1 is special-cased because `schema_migrations`
  * itself doesn't exist until it runs.
  */
+/** The newest schema version this build knows. */
+export const LATEST_SCHEMA_VERSION = MIGRATIONS[MIGRATIONS.length - 1].version;
+
+/** Highest migration recorded in the database, 0 when it has none (a new or empty database). */
+export function appliedSchemaVersion(db: CoreDatabase): number {
+  try {
+    return Number(db.get<{ v: number | null }>('SELECT MAX(version) AS v FROM schema_migrations')?.v ?? 0);
+  } catch {
+    return 0;
+  }
+}
+
 export function runMigrations(db: CoreDatabase): { applied: number[] } {
+  // Build 161 audit: an older build used to ignore migrations it did not know and run on a newer database. Refuse
+  // instead: the matching database backup belongs with this build, or the newer build with this database.
+  const recorded = appliedSchemaVersion(db);
+  if (recorded > LATEST_SCHEMA_VERSION) {
+    throw new Error(
+      `this database was upgraded by a newer Pandesh (schema ${recorded}); this build supports schema ${LATEST_SCHEMA_VERSION} at most. `
+      + 'Nothing was changed. Restore the database backup that belongs to this build, or install the newer build again.',
+    );
+  }
   db.exec(MIGRATION_1_BOOTSTRAP);
   const first = MIGRATIONS[0];
   const firstChecksum = checksumOf(first.sql);
