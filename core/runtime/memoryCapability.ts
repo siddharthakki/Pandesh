@@ -327,16 +327,16 @@ export function createMemoryCapabilityAdapter(options: MemoryCapabilityOptions):
             query: args.query === undefined ? undefined : asString(args.query),
             includeHistorical: Boolean(args.includeHistorical),
           };
-          const result = recallMemories(db, input);
-          // Live demo 2026-11-09: "our flour supplier delivers on Wednesdays" was stored in project scope "Bakery";
-          // a later user-scope recall found nothing and the answer was "I don't have that information". A keyword
-          // recall at user/global scope that finds nothing also looks at the user's project facts (task and
-          // repository scopes stay out), and says so.
-          if (result.entries.length === 0 && input.query && !input.scopeId && !input.subject
-            && (input.scopeType === 'user' || input.scopeType === 'global')) {
-            const widened = recallMemories(db, { ...input, scopeType: 'project' as never });
-            if (widened.entries.length > 0) return ok({ ...widened, widenedFrom: input.scopeType, widenedTo: 'project' }, 'memory_recall_succeeded', safeArgs);
-          }
+          // Live demo 2026-11-09: "our flour supplier delivers on Wednesdays" was stored in project scope "Bakery"; a later
+          // user-scope recall never saw it ("I don't have that information"), and a fallback that only widened on zero
+          // results still missed it when one word ("cost") matched an unrelated user fact. A keyword recall at user/global
+          // scope (no scopeId/subject) therefore includes the user's project facts, and the best-match ranking in
+          // recallMemories picks the facts that match most of the words. Task and repository scopes stay out.
+          const keywordAtUserScope = Boolean(input.query) && !input.scopeId && !input.subject
+            && (input.scopeType === 'user' || input.scopeType === 'global');
+          const result = keywordAtUserScope
+            ? { ...recallMemories(db, { ...input, scopeType: 'project' as never }), includedScopes: ['user', 'global', 'project'] }
+            : recallMemories(db, input);
           return ok(result, 'memory_recall_succeeded', safeArgs);
         }
         case 'memory_resolve_contradiction': {
