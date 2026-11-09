@@ -49,3 +49,21 @@ describe('external coding agents', () => {
     expect(spawnPlan('C:\\bin\\aider.exe', ['-m', 'x'])).toEqual({ file: 'C:\\bin\\aider.exe', args: ['-m', 'x'], shellQuoted: false });
   });
 });
+
+import { housekeepingRoot } from '../runtime/codingAgents';
+describe('agent housekeeping and Windows console (live run AG1)', () => {
+  it('recognises an agent\'s own files and folders, not the user\'s', () => {
+    expect(housekeepingRoot('.aider.chat.history.md')).toBe('.aider.chat.history.md');
+    expect(housekeepingRoot('.aider.tags.cache.v4/cache.db')).toBe('.aider.tags.cache.v4');
+    expect(housekeepingRoot('src/.codex/session.json')).toBe('src/.codex');
+    expect(housekeepingRoot('stats_tools.py')).toBeNull();
+  });
+  it('Aider writes UTF-8 and keeps its history out of the user folder', () => {
+    const a = spec('aider');
+    expect(a.env?.('m')).toMatchObject({ PYTHONIOENCODING: 'utf-8', PYTHONUTF8: '1' });
+    const args = a.args('x', 'D:\w', 'm');
+    const hist = args[args.indexOf('--chat-history-file') + 1];
+    expect(hist.startsWith('D:\w')).toBe(false);
+    expect(args).toContain('--no-restore-chat-history');
+  });
+});

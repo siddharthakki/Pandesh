@@ -14,6 +14,7 @@
  * Pure: specs, argument building, PATH discovery and settings. Spawning stays in the engine (architecture guard).
  */
 import * as fs from 'node:fs';
+import * as os from 'node:os';
 import * as path from 'node:path';
 
 export type AgentLocality = 'local' | 'cloud';
@@ -44,8 +45,15 @@ export const CODING_AGENTS: CodingAgentSpec[] = [
     locality: 'local',
     dataFlow: 'runs on this PC with your local Ollama model; nothing leaves the PC',
     // --no-git: Pandesh verifies from the files on disk; Aider must not commit in the user's folder.
-    args: (objective, _dir, model) => ['--model', `ollama_chat/${model}`, '--message', objective, '--yes-always', '--no-git', '--no-auto-commits', '--no-pretty', '--no-stream', '--map-tokens', '1024', '--no-show-model-warnings', '--no-check-update', '--analytics-disable'],
-    env: () => ({ OLLAMA_API_BASE: OLLAMA }),
+    // Live run AG1: Aider wrote the answer, then crashed printing it to a cp1252 console (UnicodeEncodeError) before
+    // saving, and its history files landed in the user's folder. UTF-8 output; history in a temp folder; no repo map.
+    args: (objective, _dir, model) => {
+      const scratch = path.join(os.tmpdir(), 'pandesh-aider');
+      return ['--model', `ollama_chat/${model}`, '--message', objective, '--yes-always', '--no-git', '--no-auto-commits', '--no-pretty', '--no-stream', '--map-tokens', '0',
+        '--no-show-model-warnings', '--no-check-update', '--analytics-disable', '--no-restore-chat-history',
+        '--chat-history-file', path.join(scratch, 'chat.history.md'), '--input-history-file', path.join(scratch, 'input.history'), '--llm-history-file', path.join(scratch, 'llm.history')];
+    },
+    env: () => ({ OLLAMA_API_BASE: OLLAMA, PYTHONIOENCODING: 'utf-8', PYTHONUTF8: '1' }),
     strengths: 'precise edits to existing files and small multi-file changes',
   },
   {
@@ -77,6 +85,16 @@ export const CODING_AGENTS: CodingAgentSpec[] = [
     strengths: 'general coding tasks',
   },
 ];
+
+/** Files agents keep for themselves (history, caches): never the user's work, never verified as output, removed when this run created them. */
+export const AGENT_HOUSEKEEPING = /(^|[\\/])\.(?:aider|codex|cline|claude)[^\\/]*/i;
+
+/** The top-level housekeeping entry (file or folder) a snapshot key lives under, or null. */
+export function housekeepingRoot(relPath: string): string | null {
+  const parts = relPath.split(/[\\/]/);
+  const i = parts.findIndex((p) => /^\.(?:aider|codex|cline|claude)/i.test(p));
+  return i < 0 ? null : parts.slice(0, i + 1).join('/');
+}
 
 export interface CodingAgentSettings { enabled: Record<string, boolean> }
 

@@ -21,7 +21,7 @@ const OPENCODE_BUDGET_MS = 6 * 60_000;
 const HANDOFF_FACT_TOOLS = /^(?:system_hardware_telemetry|run_system_diagnostics|get_system_info|software_updates|listening_ports|list_projects|ollama_list_models|pc_capability_inventory|port_list_services|calculate|resolve_time|list_reminders|memory_recall)$/;
 import { checkWrittenOutput, ungroundedValues, type OutputCheck } from './outputChecks';
 import { suggestedCommandProblems, thirdPartyImportProblems, unfinishedRequestedSteps } from './taskCompletion';
-import { discoverCodingAgents, spawnPlan } from './codingAgents';
+import { discoverCodingAgents, housekeepingRoot, spawnPlan } from './codingAgents';
 import { createProject, listProjects } from '../domain/projects';
 import { readUpdateState } from './software/updates';
 import { collectListeningPorts } from './software/inventory';
@@ -3499,12 +3499,22 @@ ${String(args.objective ?? '').slice(0, 600)}`,
             if (decision.outcome !== 'approved') return { content: [{ type: 'text', text: `Not delegated: ${decision.outcome === 'rejected' ? `the user did not approve handing this to ${spec.name}` : 'no approval was recorded'}. Nothing was changed.` }], isError: true };
             const untrackedBefore = isGitRepository(dir) ? untrackedPaths(dir) : new Set<string>();
             const snapshotBefore = isGitRepository(dir) ? undefined : snapshotFiles(dir);
+            const housekeepingBefore = new Set([...snapshotFiles(dir).keys()].map((k) => housekeepingRoot(k)).filter((r): r is string => r !== null));
             const plan = spawnPlan(executable, spec.args(objective, dir, selectedModel));
             safeRecordRuntimeEvent(db, broadcaster, attemptId, 'coding_agent_started', { agent: spec.id, locality: spec.locality, model: spec.locality === 'local' ? selectedModel : null }, actor);
             const t0 = Date.now();
             const run = await runArgvCommand(plan.file, plan.args, dir, spec.env?.(selectedModel) ?? {}, OPENCODE_BUDGET_MS, signal);
             const secs = Math.round((Date.now() - t0) / 1000);
+            // The agent's own history/cache files are not the user's work (AG1: only .aider history appeared and counted as
+            // "changed"). Those this run created are removed before Core reads what changed.
+            const removedHousekeeping: string[] = [];
+            for (const key of snapshotFiles(dir).keys()) {
+              const root = housekeepingRoot(key);
+              if (!root || removedHousekeeping.includes(root) || housekeepingBefore.has(root)) continue;
+              try { fs.rmSync(path.join(dir, root), { recursive: true, force: true }); removedHousekeeping.push(root); } catch { /* left */ }
+            }
             const verification = await verifyDelegation(dir, untrackedBefore, runShellCommand, signal, snapshotBefore);
+            if (removedHousekeeping.length) verification.removed.push(...removedHousekeeping.map((r) => `${r} (${spec.name}'s own files)`));
             const report = redactCredentialShapes(renderDelegationReport(verification)).replace(/OpenCode/g, spec.name);
             delegationReports.push(report);
             if (verification.test && verification.test.coversChanges) {
