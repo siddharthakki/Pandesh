@@ -48,7 +48,8 @@ import type { GovernedCapabilityRegistry } from '../runtime/governedCapability';
 import { LocalAutonomySecurityKernel } from '../security/kernel';
 import type { ExecutionGrant } from '../security/types';
 import { decidePermission, recordPermissionDecision, STANDING_AUTHORIZATION_ACTOR } from './permissionModes';
-import { agentScopeForAttempt, checkEgress, checkMemoryArguments, checkPathArguments, isToolAllowed, recordScopeRefusal } from './agents';
+import { agentScopeForAttempt, allowedMemoryScopes, checkEgress, checkMemoryArguments, checkPathArguments, isToolAllowed, recordScopeRefusal } from './agents';
+import { MEMORY_SCOPE_FILTER_ARG } from './memory';
 import { parseBaselineIdentity, type WriteBaselineIdentity, type WriteProposalPresentation } from '../runtime/writeProposal';
 import {
   CORE_POLICY_ACTOR,
@@ -773,6 +774,13 @@ export async function dispatchCapability(db: CoreDatabase, registry: GovernedCap
       return { outcome: 'denied', attemptId: input.correlationId, reason: `agent_scope_denied: ${memory.reason}` };
     }
     if (memory.args !== input.arguments) input = { ...input, arguments: memory.args };
+    // Release blocker 2026-11-09: a recall at one scope type also returns user/global facts (and a user-scope keyword
+    // recall includes project facts), so checking the requested scopeType alone let a specialist read memories outside
+    // its scopes. Reads carry the agent's exact readable scope types; the memory capability filters its results to them.
+    if (input.toolName === 'memory_recall') {
+      const readable = allowedMemoryScopes(agentScope, 'read');
+      if (readable) input = { ...input, arguments: { ...(input.arguments ?? {}), [MEMORY_SCOPE_FILTER_ARG]: readable } };
+    }
   }
   const attemptId = ensureCapabilityAttempt(db, input);
   const classification = registry.classify(input.toolName);
