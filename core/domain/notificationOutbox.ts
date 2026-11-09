@@ -14,7 +14,7 @@ import { CoreError } from './errors';
 import { recordRuntimeEvent } from './runtimeEvents';
 
 export type NotificationStatus = 'pending' | 'delivered' | 'failed';
-export type NotificationKind = 'task_completed' | 'task_blocked' | 'task_failed' | 'test';
+export type NotificationKind = 'task_completed' | 'task_blocked' | 'task_failed' | 'test' | 'routine_report';
 
 export interface NotificationRecord {
   id: string;
