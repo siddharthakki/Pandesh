@@ -1,5 +1,7 @@
 # Pandesh v2: hands-on alpha acceptance (12 scenarios)
 
+> **Update 2026-11-09:** a repair pass (2c2fdcd … c629eb2) and a re-run of every failed or partial scenario are in [`rerun/README.md`](rerun/README.md). Result: 8 PASS, 3 PARTIAL, 1 not tested (voice); 7 of 7 real specialist hand-offs. The verdicts below are the first run on 25a9fa0 and are kept unchanged.
+
 **Date:** 2026-11-08/09 (run 22:48–23:20 UTC).
 
 **Build:** `feat/pandesh-ui-v2` at **25a9fa0**. This is the alpha closure commit 29f3b78 plus the alpha-review truthfulness fix: OpenCode snapshot check, `open_local_file`, and claim-guard gaps. That fix was committed *before* the run. Per the run rules, nothing was repaired during the run.
