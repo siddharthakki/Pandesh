@@ -503,6 +503,20 @@ export function resolveOpenableFile(requested: string, workspaceRoot: string | n
   return { ok: true, file };
 }
 
+const CODE_OR_TEXT_FILE = /\.(?:py|[cm]?[jt]sx?|json|html?|css|md|txt|ya?ml|toml|ini|cfg|sh|ps1|bat|cmd|java|cs|go|rs|rb|php|sql|xml|csv)$/i;
+
+/**
+ * Content whose every double quote arrived escaped (\" with no bare " anywhere) was escaped twice by the tool call:
+ * written as is, `\"\"\"docstring\"\"\"` is a SyntaxError (challenge T11). Returns the content with \" turned into ".
+ * In the one legitimate shape this also matches (a \" inside a single-quoted string), both spellings are the same
+ * value in Python and JavaScript, so nothing changes in meaning. Anything with a bare quote is left untouched.
+ */
+export function undoOverEscapedQuotes(filePath: string, content: string): string {
+  if (!CODE_OR_TEXT_FILE.test(filePath) || !content.includes('\\"')) return content;
+  if (/(^|[^\\])"/.test(content)) return content;
+  return content.replace(/\\"/g, '"');
+}
+
 /** A command that only hands a file to the desktop (start, explorer, open) — it belongs to open_local_file, not run_checks. */
 export function isDesktopOpenCommand(command: string): boolean {
   return /^\s*(?:cmd(?:\.exe)?\s+\/c\s+)?(?:start|explorer(?:\.exe)?|open|xdg-open|invoke-item|ii)\b/i.test(command)
@@ -3006,6 +3020,17 @@ export class PiAgentEngine implements EngineAdapter {
             return { content: [{ type: 'text', text }], isError: true };
           };
           if (typeof args.content !== 'string') return refuse('Error: write_file needs the full text content to write. Nothing was written.', 'no text content');
+          // Challenge T11: the model's tool call carried every quote of a Python file escaped (\"\"\"), so a correct fix
+          // was saved as a SyntaxError. Undone before authorization, so the approval covers what is really written.
+          let unescapeNote = '';
+          {
+            const repaired = undoOverEscapedQuotes(full, args.content);
+            if (repaired !== args.content) {
+              args.content = repaired;
+              unescapeNote = ' (Pandesh removed backslashes the tool call had put before every quote; the file has normal quotes.)';
+              safeRecordRuntimeEvent(db, broadcaster, attemptId, 'write_content_unescaped', { path: full }, actor);
+            }
+          }
           if (/\.csv$/i.test(full)) {
             const csvProblem = csvShapeProblem(args.content);
             if (csvProblem) return refuse(`NOT WRITTEN: ${path.basename(full)} would not open as one table: ${csvProblem}. Write one header row and give every row the same columns, with no separator, blank or title lines (put a total on its own row with the same columns). Nothing was written; call write_file again with the corrected content.`, 'csv not one table');
@@ -3071,7 +3096,7 @@ export class PiAgentEngine implements EngineAdapter {
                 actor,
               });
             } catch {}
-            return { content: [{ type: 'text', text: `Successfully wrote file: ${args.filePath}` }], details: { success: true, activity: { ...changeView, kind: 'code' } } };
+            return { content: [{ type: 'text', text: `Successfully wrote file: ${args.filePath}${unescapeNote}` }], details: { success: true, activity: { ...changeView, kind: 'code' } } };
           } catch (err: any) {
             return { content: [{ type: 'text', text: `Error writing file: ${err.message}` }], isError: true };
           }
@@ -3122,21 +3147,21 @@ export class PiAgentEngine implements EngineAdapter {
         name: 'create_project',
         label: 'create_project',
         description: "Create a project in Pandesh's Projects workspace (stored in Core, shown under Spaces → Projects), optionally with a list of open tasks. Only this tool creates a project; report the id it returns.",
-        parameters: { type: 'object', properties: { name: { type: 'string' }, description: { type: 'string' }, tasks: { type: 'array', items: { type: 'string' }, description: 'Task titles, each saved as an open task.' } }, required: ['name'] },
+        parameters: { type: 'object', properties: { name: { type: 'string' }, description: { type: 'string' }, tasks: { type: 'array', items: { type: 'string' }, description: 'Task titles.' }, taskStatus: { type: 'string', enum: ['pending', 'in_progress', 'done'], description: 'Status for every listed task (default pending). Use only what the user said; never mark work done that was not done.' } }, required: ['name'] },
         execute: async (_id: string, args: any) => {
           const name = String(args?.name ?? '').trim();
           if (!name) return { content: [{ type: 'text', text: 'NOT DONE: a project needs a name.' }], isError: true };
           const existing = listProjects(db, {}).find((p) => p.name.toLowerCase() === name.toLowerCase() && p.status === 'active');
           if (existing) return { content: [{ type: 'text', text: `NOT CREATED: an active project named "${existing.name}" already exists (id ${existing.id}). Nothing was changed.` }], isError: true };
           const tasks = (Array.isArray(args?.tasks) ? args.tasks : []).map((t: unknown) => String(t ?? '').trim()).filter(Boolean).slice(0, 50)
-            .map((title: string, i: number) => ({ id: `task_${i + 1}`, title, status: 'open' }));
+            .map((title: string, i: number) => ({ id: `task_${i + 1}`, title, status: ['pending', 'in_progress', 'done'].includes(String(args?.taskStatus)) ? String(args.taskStatus) : 'pending' }));
           let project: ReturnType<typeof createProject>;
           try {
             project = mutateWithBroadcast(db, broadcaster, () => createProject(db, { name, description: args?.description ? String(args.description) : null, productContext: { tasks, createdFrom: { conversationId: conversationId || null, attemptId } } }));
           } catch (err: any) {
             return { content: [{ type: 'text', text: `NOT DONE: Core did not create the project: ${err?.message ?? String(err)}` }], isError: true };
           }
-          const summary = `Created project "${project.name}" (id ${project.id}, status ${project.status}) with ${tasks.length} open task(s)${tasks.length ? `: ${tasks.map((t: { title: string }) => t.title).join('; ')}` : ''}. It is shown under Spaces → Projects.`;
+          const summary = `Created project "${project.name}" (id ${project.id}, status ${project.status}) with ${tasks.length} task(s)${tasks.length ? `: ${tasks.map((t: { title: string; status: string }) => `${t.title} [${t.status}]`).join('; ')}` : ''}. It is shown under Spaces → Projects.`;
           return { content: [{ type: 'text', text: summary }], details: { activity: { kind: 'tool', title: `Created project ${project.name}`, excerpt: summary } } };
         },
       },
@@ -3919,7 +3944,11 @@ Report this to the user, saying the ${name} agent did the work. Do not add facts
       // These tools ask the user themselves before going online; every other network tool asks here once per run.
       const SELF_APPROVING = new Set(['web_research', 'governed_research', 'inspect_page', 'browser_open_site', 'browser_submit', 'advance_wish']);
       const removed: string[] = [];
-      const kept = tools.filter((t) => { const ok = isToolAllowed(agentScope, t.name).allowed; if (!ok) removed.push(t.name); return ok; });
+      // Challenge T7: after the user OK'd the hand-off's internet use, governed_research (a governed capability with its
+      // own consent card) asked a second time inside the child, and that card was only reachable from the Board. With
+      // the egress already approved, the child searches with web_research, which honours that approval.
+      const coveredByHandoff = (name: string) => preapprovedEgress && name === 'governed_research' && tools.some((t) => t.name === 'web_research');
+      const kept = tools.filter((t) => { const ok = isToolAllowed(agentScope, t.name).allowed && !coveredByHandoff(t.name); if (!ok) removed.push(t.name); return ok; });
       for (const t of kept) {
         const run = t.execute;
         t.execute = async (id: string, args: any) => {

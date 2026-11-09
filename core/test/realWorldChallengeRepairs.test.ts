@@ -61,3 +61,18 @@ describe('delegation verification: tests about other work do not verify this cha
     expect(testsCoverChanges(dir, ['templates/index.html'])).toBe(false);
   });
 });
+
+import { undoOverEscapedQuotes } from '../runtime/piAgentEngine';
+
+describe('write_file: quotes escaped twice by the tool call (baseline T11)', () => {
+  it('restores a Python file whose every quote arrived escaped', () => {
+    const sent = 'def f(c):\n    \\"\\"\\"Convert.\\"\\"\\"\n    return c * 9 / 5 + 32\n';
+    expect(undoOverEscapedQuotes('temperature.py', sent)).toBe('def f(c):\n    """Convert."""\n    return c * 9 / 5 + 32\n');
+  });
+  it('leaves content with any bare quote, and non-code files, untouched', () => {
+    const legit = 'print("say \\"hi\\"")\n';
+    expect(undoOverEscapedQuotes('a.py', legit)).toBe(legit);
+    expect(undoOverEscapedQuotes('photo.bin', 'x \\" y')).toBe('x \\" y');
+    expect(undoOverEscapedQuotes('a.py', 'x = 1\n')).toBe('x = 1\n');
+  });
+});
