@@ -9,6 +9,9 @@ describe('"remember ..." goes to durable memory when it is a fact about the pers
     "Remember that I'm vegetarian",
     'Remember my timezone is Europe/Berlin',
     'Remember that I prefer short answers',
+    // live demo 2026-11-09: business facts were saved as notes that memory recall could not find
+    'Remember this for the bakery: our flour supplier is Muehle Sonnenhof, they deliver on Tuesdays',
+    'Remember that we open the stall at 07:30 on Saturdays',
   ])('is left for the assistant memory, not saved as a note: %s', (text) => {
     expect(parseEverydayIntent(text)).toBeNull();
     expect(isPersonalFact(text.replace(/^(?:please\s+)?remember(?:\s+(?:that|this))?\s+/i, ''))).toBe(true);
