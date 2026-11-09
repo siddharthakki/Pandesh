@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>System Dashboard</title>
+    <style>
+        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background-color: #f4f4f9; margin: 0; padding: 20px; }
+        .container { max-width: 1000px; margin: auto; }
+        .header { text-align: center; padding-bottom: 20px; border-bottom: 2px solid #ddd; margin-bottom: 30px; }
+        .dashboard-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 20px; }
+        .card { background: white; padding: 20px; border-radius: 10px; box-shadow: 0 4px 8px rgba(0,0,0,0.1); }
+        h2 { color: #333; margin-top: 0; }
+        .stat { font-size: 1.2rem; margin: 10px 0; }
+        .tag { background: #e0e0e0; padding: 4px 8px; border-radius: 4px; font-size: 0.9rem; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>System Overview Dashboard</h1>
+        </div>
+        <div class="dashboard-grid">
+            <!-- System Stats -->
+            <div class="card">
+                <h2>System Stats</h2>
+                <div id="system-info">
+                    <div class="stat">CPU: <span id="cpu-load">Loading...</span></div>
+                    <div class="stat">Memory: <span id="ram-usage">Loading...</span></div>
+                    <div class="stat">GPU: <span id="gpu-status">Checking...</span></div>
+                </div>
+            </div>
+            <!-- Project Tasks -->
+            <div class="card">
+                <h2>Current Projects (rw2)</h2>
+                <ul id="task-list">
+                    <li>Loading tasks...</li>
+                </ul>
+            </div>
+            <!-- Software Updates -->
+            <div class="card">
+                <h2>Software Updates</h2>
+                <ul id="update-list">
+                    <li>Checking for updates...</li>
+                </ul>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // This script would normally fetch data from a local API endpoint 
+        // or a backend service provided by Pandesh. 
+        // For the purpose of this local dashboard, we will simulate the integration.
+        
+        function loadDashboard() {
+            // Simulate population of data
+            // In a production-ready local tool, this would call fetch('/api/system')
+            document.getElementById('cpu-load').innerText = 'Calculating...';
+            document.getElementById('ram-usage').innerText = 'Retrieving...';
+            document.getElementById('gpu-status').innerText = 'Active';
+            
+            // Example of how the data would populate:
+            const tasks = ['Task 1: Setup Core', 'Task 2: Fix Dashboard UI'];
+            const taskList = document.getElementById('task-list');
+            taskList.innerHTML = '';
+            tasks.forEach(t => {
+                let li = document.createElement('li');
+                li.innerHTML = t;
+                taskList.appendChild(li);
+            });
+
+            const updates = ['Node.js (v18.x -> v20.x)', 'Python (v3.10 -> v3.11)'];
+            const updateList = document.getElementById('update-list');
+            updateList.innerHTML = '';
+            updates.forEach(u => {
+                let li = document.createElement('li');
+                li.innerText = u;
+                updateList.appendChild(li);
+            });
+        }
+        window.onload = loadDashboard;
+    </script>
+</body>
+</html>
+    

@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Expense Dashboard</title>
+    <style>
+        body { font-family: Arial, sans-serif; background-color: #f4f4f9; padding: 20px; }
+        .container { max-width: 800px; margin: auto; background: white; padding: 20px; border-radius: 8px; box-shadow: 0 4px 8px rgba(0,0,0,0.1); }
+        h1 { color: #333; text-align: center; }
+        table { width: 100%; border-collapse: collapse; margin-top: 20px; }
+        th, td { border: 1px solid #ddd; padding: 12px; text-align: left; }
+        th { background-color: #f8f9fa; }
+        .total-box { margin-top: 20px; text-align: right; font-size: 1.2em; font-weight: bold; color: #d9534f; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Expense Dashboard</h1>
+        <table>
+            <thead>
+                <tr>
+                    <th>Invoice ID</th>
+                    <th>Seller</th>
+                    <th>Date</th>
+                    <th>Items</th>
+                    <th>Amount</th>
+                </tr>
+            </thead>
+            <tbody>
+                <tr>
+                    <td>A-1001</td>
+                    <td>Northwind Office Supplies</td>
+                    <td>2026-09-14</td>
+                    <td>printer paper, toner cartridge</td>
+                    <td>€82.50</td>
+                </tr>
+                <tr>
+                    <td>B-2042</td>
+                    <td>Contoso Electronics</td>
+                    <td>2026-10-03</td>
+                    <td>USB-C dock, HDMI cable</td>
+                    <td>€144.90</td>
+                </tr>
+                <tr>
+                    <td>C-3310</td>
+                    <td>Fabrikam Furniture</td>
+                    <td>2026-10-27</td>
+                    <td>desk lamp</td>
+                    <td>€39.99</td>
+                </tr>
+                <tr>
+                    <td>D-4471</td>
+                    <td>Contoso Stationery</td>
+                    <td>2026-10-02</td>
+                    <td>notebooks</td>
+                    <td>€20.50</td>
+                </tr>
+            </tbody>
+        </table>
+        <div class="total-box">Total Expenses: €287.89</div>
+    </div>
+</body>
+</html>
