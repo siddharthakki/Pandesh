@@ -635,7 +635,7 @@ async function ensureMainWindow(): Promise<BrowserWindow> {
     return { action: 'deny' };
   });
   window.webContents.on('will-navigate', (event, url) => {
-    if (url === window.webContents.getURL()) return;
+    if (url === window?.webContents.getURL()) return;
     event.preventDefault();
     try {
       void shell.openExternal(normalizeSafeBrowserUrl(url));

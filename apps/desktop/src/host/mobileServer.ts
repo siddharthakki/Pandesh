@@ -4,7 +4,7 @@ import * as path from 'node:path';
 import * as os from 'node:os';
 import * as crypto from 'node:crypto';
 import type { DesktopSession } from './desktopSession';
-import type { RuntimeEventRecord } from '../../../../core/shared/wireTypes';
+import type { DesktopActivityEvent } from '../ipc';
 
 export interface MobileServerOptions {
   port?: number;
@@ -178,7 +178,7 @@ export class MobileServer {
     });
 
     // Subscribe to session events to push to mobile SSE clients
-    this.unsubscribeSession = this.session.onEvent((event: RuntimeEventRecord) => {
+    this.unsubscribeSession = this.session.onEvent((event: DesktopActivityEvent) => {
       this.broadcastSse('session_event', event);
     });
 
@@ -367,9 +367,9 @@ export class MobileServer {
         brand: 'KarkeDikha',
         assistant: 'Pandesh',
         ready: true,
-        model: snap.selectedModel,
-        workspace: snap.workspaceRoot || 'No workspace selected',
-        coreState: snap.coreConnected ? 'connected' : 'connecting',
+        model: snap.modelIsAuto ? 'Auto' : snap.model,
+        workspace: snap.folder || 'No workspace selected',
+        coreState: snap.coreState === 'connected' ? 'connected' : 'connecting',
       }));
       return;
     }
@@ -1633,9 +1633,9 @@ export class MobileServer {
       function renderSnapshot(snap) {
         if (!snap) return;
         var wEl = document.getElementById('m-workspace');
-        if (wEl) wEl.textContent = snap.workspaceRoot || 'None';
+        if (wEl) wEl.textContent = snap.folder || 'None';
         var mEl = document.getElementById('m-model');
-        if (mEl) mEl.textContent = snap.selectedModel || 'Auto';
+        if (mEl) mEl.textContent = (snap.modelIsAuto ? 'Auto' : snap.model) || 'Auto';
 
         if (snap.pendingApproval) {
           currentApproval = snap.pendingApproval;

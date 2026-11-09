@@ -21,9 +21,10 @@ function createTempDir(): string {
 function createMockSession() {
   return {
     snapshot: vi.fn(() => ({
-      coreConnected: true,
-      selectedModel: 'qwen3.8:27b-mtp-q4_K_M',
-      workspaceRoot: 'C:\\Projects\\ollama-agent',
+      coreState: 'connected',
+      model: 'qwen3.8:27b-mtp-q4_K_M',
+      modelIsAuto: false,
+      folder: 'C:\\Projects\\ollama-agent',
       pendingApproval: null,
       telemetry: {
         cpu: { percent: 12 },
@@ -181,7 +182,7 @@ describe('KarkeDikha Mobile Server (Unified Session Protocol)', () => {
       });
       expect(snapRes.status).toBe(200);
       const snapData = await snapRes.json();
-      expect(snapData.workspaceRoot).toBe('C:\\Projects\\ollama-agent');
+      expect(snapData.folder).toBe('C:\\Projects\\ollama-agent');
 
       // 10a. Unauthenticated artifact content request returns 401
       const unauthArtifactRes = await fetch('http://127.0.0.1:3039/api/artifacts/art-image-1/content');
