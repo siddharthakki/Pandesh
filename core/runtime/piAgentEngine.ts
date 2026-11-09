@@ -387,6 +387,15 @@ export function describeUnansweredTurn(calls: Array<{ tool: string; status?: str
   return `${lead} Nothing is confirmed as done — the steps are listed under Details. Ask me to continue and I will pick up from there.`;
 }
 
+/** Folders a command really ran in this turn (run_checks workspacePath), for the suggested-command check. */
+export function commandRunDirs(calls: ReadonlyArray<{ tool: string; args?: unknown; status?: string }>, workspaceRoot: string): string[] {
+  return calls
+    .filter((t) => t.tool === 'run_checks' && t.status === 'completed')
+    .map((t) => String((t.args as { workspacePath?: unknown } | undefined)?.workspacePath ?? '').trim())
+    .filter(Boolean)
+    .map((p) => (path.isAbsolute(p) ? p : path.join(workspaceRoot, p)));
+}
+
 /** Consecutive calls to tools that do not exist this turn before the turn is stopped. */
 export const UNKNOWN_TOOL_STREAK_LIMIT = 6;
 
@@ -5745,7 +5754,7 @@ ${filesPromptSection}${webResearchPromptSection}${wishesPromptSection}${emailCal
     if (!signal?.aborted && finalReply && selectedWorkspace) {
       const missingSteps = unfinishedRequestedSteps(requestText, finalReply, toolCallsRecorded.filter((t) => t.status === 'completed').map((t) => t.tool), tools.some((t) => t.name === 'write_file'));
       // Gap 4 (T14: "python -m board.cli" could not work): commands the reply tells the user to run are checked too.
-      const commandProblems = suggestedCommandProblems(finalReply, selectedWorkspace);
+      const commandProblems = suggestedCommandProblems(finalReply, selectedWorkspace, commandRunDirs(toolCallsRecorded, selectedWorkspace));
       if (commandProblems.length) missingSteps.push(`the reply suggests commands that cannot work as written (${commandProblems.join('; ')}); give commands that do work, checked against the files`);
       if (missingSteps.length) {
         safeRecordRuntimeEvent(db, broadcaster, attemptId, 'requested_steps_completion', { missing: missingSteps }, actor);
@@ -6006,7 +6015,7 @@ ${filesPromptSection}${webResearchPromptSection}${wishesPromptSection}${emailCal
       }
     } catch { /* the memory tables are absent in some test databases */ }
     if (selectedWorkspace && finalReply && !signal?.aborted) {
-      const stillBroken = suggestedCommandProblems(finalReply, selectedWorkspace);
+      const stillBroken = suggestedCommandProblems(finalReply, selectedWorkspace, commandRunDirs(toolCallsRecorded, selectedWorkspace));
       if (stillBroken.length) coreNotes.push(`**Checked by Pandesh — commands:** ${stillBroken.join('; ')}.`);
     }
     if (coreNotes.length && !signal?.aborted) finalReply = `${finalReply.trimEnd()}\n\n${coreNotes.join('\n\n')}`;

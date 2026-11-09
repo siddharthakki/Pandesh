@@ -42,47 +42,76 @@ export function suggestedCommands(reply: string): string[] {
   return [...out].filter((c) => /^(?:python3?|py|node|npm\s+run|npm\s+start)\b/i.test(c));
 }
 
-/** Problems with commands that can be decided statically against the workspace (nothing is run). */
-export function suggestedCommandProblems(reply: string, workspaceRoot: string): string[] {
+/** Workspace folders the reply names by absolute path ("run it from D:\ws\tip-calc"). */
+export function namedWorkspaceDirs(reply: string, workspaceRoot: string): string[] {
+  const root = path.resolve(workspaceRoot).toLowerCase();
+  const out = new Set<string>();
+  for (const m of reply.matchAll(/[A-Za-z]:[\\/][^\s`'"*<>|?]+/g)) {
+    let p = m[0].replace(/[.,:;)\]]+$/, '');
+    try {
+      if (fs.existsSync(p) && fs.statSync(p).isFile()) p = path.dirname(p);
+      const full = path.resolve(p);
+      if (full.toLowerCase().startsWith(root) && fs.existsSync(full) && fs.statSync(full).isDirectory()) out.add(full);
+    } catch { /* not a usable folder */ }
+  }
+  return [...out];
+}
+
+/**
+ * Problems with commands that can be decided statically against the workspace (nothing is run). A command counts as
+ * broken only when it fails from every candidate folder: the workspace root, folders a command really ran in this turn
+ * (`runDirs`) and workspace folders the reply names. Live demo 2026-11-09: `python tip.py 84.50 15 3` had just exited 0
+ * in tip-calc/, yet Core appended "tip.py does not exist in the folder" because it only looked in the workspace root.
+ */
+export function suggestedCommandProblems(reply: string, workspaceRoot: string, runDirs: readonly string[] = []): string[] {
+  const candidates = [...new Set([path.resolve(workspaceRoot), ...runDirs.map((d) => path.resolve(d)), ...namedWorkspaceDirs(reply, workspaceRoot)])];
   const problems: string[] = [];
   for (const cmd of suggestedCommands(reply).slice(0, 8)) {
-    if (/&&|\bcd\b|[|;]/.test(cmd)) continue; // a working directory change makes the check unreliable
-    const moduleRun = /^(?:python3?|py)\s+-m\s+([A-Za-z_][\w.]*)/i.exec(cmd);
-    if (moduleRun) {
-      // rwRun2 G4: `python -m unittest test_tracker.py` on pytest-style functions runs 0 tests ("NO TESTS RAN").
-      if (moduleRun[1] === 'unittest') {
-        for (const target of cmd.slice(moduleRun[0].length).trim().split(/\s+/).filter((a) => a && !a.startsWith('-') && a !== 'discover')) {
-          const file = path.join(workspaceRoot, /\.py$/i.test(target) ? target : `${target.replace(/\./g, path.sep)}.py`);
-          let text = '';
-          try { text = fs.readFileSync(file, 'utf8'); } catch { continue; }
-          if (!/\bTestCase\b/.test(text)) problems.push(`\`${cmd}\` runs 0 tests: ${path.basename(file)} has no unittest.TestCase class${/^def test_/m.test(text) && /__main__/.test(text) ? ` (its test functions are pytest-style and its own main block runs them: \`python ${path.basename(file)}\`)` : ''}`);
-        }
-        continue;
+    const perDir = candidates.map((dir) => commandProblemsIn(cmd, dir));
+    if (perDir.some((p) => p.length === 0)) continue;
+    problems.push(...perDir[0]);
+  }
+  return problems;
+}
+
+function commandProblemsIn(cmd: string, workspaceRoot: string): string[] {
+  const problems: string[] = [];
+  if (/&&|\bcd\b|[|;]/.test(cmd)) return problems; // a working directory change makes the check unreliable
+  const moduleRun = /^(?:python3?|py)\s+-m\s+([A-Za-z_][\w.]*)/i.exec(cmd);
+  if (moduleRun) {
+    // rwRun2 G4: `python -m unittest test_tracker.py` on pytest-style functions runs 0 tests ("NO TESTS RAN").
+    if (moduleRun[1] === 'unittest') {
+      for (const target of cmd.slice(moduleRun[0].length).trim().split(/\s+/).filter((a) => a && !a.startsWith('-') && a !== 'discover')) {
+        const file = path.join(workspaceRoot, /\.py$/i.test(target) ? target : `${target.replace(/\./g, path.sep)}.py`);
+        let text = '';
+        try { text = fs.readFileSync(file, 'utf8'); } catch { continue; }
+        if (!/\bTestCase\b/.test(text)) problems.push(`\`${cmd}\` runs 0 tests: ${path.basename(file)} has no unittest.TestCase class${/^def test_/m.test(text) && /__main__/.test(text) ? ` (its test functions are pytest-style and its own main block runs them: \`python ${path.basename(file)}\`)` : ''}`);
       }
-      const parts = moduleRun[1].split('.');
-      if (parts.length > 1) {
-        const pkgDir = path.join(workspaceRoot, parts[0]);
-        const asModule = path.join(workspaceRoot, `${parts[0]}.py`);
-        if (!fs.existsSync(pkgDir) && fs.existsSync(asModule)) problems.push(`\`${cmd}\` will not work: ${parts[0]}.py is a module, not a package, so ${moduleRun[1]} cannot be found`);
-        else if (fs.existsSync(pkgDir) && !fs.existsSync(path.join(pkgDir, ...parts.slice(1)) + '.py') && !fs.existsSync(path.join(pkgDir, ...parts.slice(1)))) problems.push(`\`${cmd}\` will not work: ${parts.slice(1).join('/')} does not exist in ${parts[0]}/`);
-      }
-      continue;
+      return problems;
     }
-    const scriptRun = /^(?:python3?|py|node)\s+(?!-)([^\s]+\.(?:py|js|mjs|cjs))\b/i.exec(cmd);
-    if (scriptRun) {
-      const file = scriptRun[1].replace(/^["']|["']$/g, '');
-      const full = path.isAbsolute(file) ? file : path.join(workspaceRoot, file);
-      if (!fs.existsSync(full)) problems.push(`\`${cmd}\` will not work: ${file} does not exist in the folder`);
-      continue;
+    const parts = moduleRun[1].split('.');
+    if (parts.length > 1) {
+      const pkgDir = path.join(workspaceRoot, parts[0]);
+      const asModule = path.join(workspaceRoot, `${parts[0]}.py`);
+      if (!fs.existsSync(pkgDir) && fs.existsSync(asModule)) problems.push(`\`${cmd}\` will not work: ${parts[0]}.py is a module, not a package, so ${moduleRun[1]} cannot be found`);
+      else if (fs.existsSync(pkgDir) && !fs.existsSync(path.join(pkgDir, ...parts.slice(1)) + '.py') && !fs.existsSync(path.join(pkgDir, ...parts.slice(1)))) problems.push(`\`${cmd}\` will not work: ${parts.slice(1).join('/')} does not exist in ${parts[0]}/`);
     }
-    const npmRun = /^npm\s+run\s+([\w:-]+)/i.exec(cmd);
-    if (npmRun) {
-      const pkgPath = path.join(workspaceRoot, 'package.json');
-      try {
-        const scripts = (JSON.parse(fs.readFileSync(pkgPath, 'utf8')) as { scripts?: Record<string, string> }).scripts ?? {};
-        if (!scripts[npmRun[1]]) problems.push(`\`${cmd}\` will not work: package.json has no "${npmRun[1]}" script`);
-      } catch { problems.push(`\`${cmd}\` will not work: there is no readable package.json in the folder`); }
-    }
+    return problems;
+  }
+  const scriptRun = /^(?:python3?|py|node)\s+(?!-)([^\s]+\.(?:py|js|mjs|cjs))\b/i.exec(cmd);
+  if (scriptRun) {
+    const file = scriptRun[1].replace(/^["']|["']$/g, '');
+    const full = path.isAbsolute(file) ? file : path.join(workspaceRoot, file);
+    if (!fs.existsSync(full)) problems.push(`\`${cmd}\` will not work: ${file} does not exist in the folder`);
+    return problems;
+  }
+  const npmRun = /^npm\s+run\s+([\w:-]+)/i.exec(cmd);
+  if (npmRun) {
+    const pkgPath = path.join(workspaceRoot, 'package.json');
+    try {
+      const scripts = (JSON.parse(fs.readFileSync(pkgPath, 'utf8')) as { scripts?: Record<string, string> }).scripts ?? {};
+      if (!scripts[npmRun[1]]) problems.push(`\`${cmd}\` will not work: package.json has no "${npmRun[1]}" script`);
+    } catch { problems.push(`\`${cmd}\` will not work: there is no readable package.json in the folder`); }
   }
   return problems;
 }
