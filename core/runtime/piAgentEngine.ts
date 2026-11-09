@@ -5530,6 +5530,27 @@ ${filesPromptSection}${webResearchPromptSection}${wishesPromptSection}${emailCal
       safeRecordRuntimeEvent(db, broadcaster, attemptId, 'project_reply_replaced', { reason: 'reply not grounded in the active project', project: projectEvidence.name }, actor);
     }
 
+    // Final run F13b: with all the real data gathered, the reply ended "Let me build the dashboard with all of it
+    // embedded, then verify it" and the turn stopped — nothing was built. A reply whose last words announce the next
+    // step is not an answer: the model is asked once to carry the step out now.
+    if (!signal?.aborted && finalReply) {
+      const tail = finalReply.trim().split(/\n\s*\n/).pop() ?? '';
+      const announcesNextStep = /\b(?:let me|i'll|i will|now i(?:'ll| will)|next,? i(?:'ll| will)|i am going to|i'm going to)\s+(?:now\s+|then\s+|go ahead and\s+)?(?:build|create|write|generate|make|run|verify|open|fix|update|save|put|assemble|render|draft)\b/i.test(tail)
+        && !/\?\s*$/.test(tail);
+      if (announcesNextStep) {
+        safeRecordRuntimeEvent(db, broadcaster, attemptId, 'announced_step_continued', { tail: tail.slice(0, 200) }, actor);
+        try {
+          const floor = agent.state.messages.length;
+          await agent.prompt('Continue now: you said what you would do next but stopped before doing it. Carry out that step with your tools in this turn (write the file, run the check, open it), then give the final answer with what really happened.');
+          await agent.waitForIdle();
+          const continued = lastAssistantTextFrom(floor);
+          if (continued && !isTruncationArtifact(continued)) finalReply = continued;
+        } catch (err: any) {
+          safeRecordRuntimeEvent(db, broadcaster, attemptId, 'announced_step_continue_failed', { error: err?.message ?? String(err) }, actor);
+        }
+      }
+    }
+
     // Challenge T13: the Coding agent replied "The file has been verified as created" without ever calling write_file.
     // When the reply presents a file that is not on disk, the model gets one chance to really write it (same tool, same
     // approval) or to say it was not created; the claim guard below still judges whatever it says.
