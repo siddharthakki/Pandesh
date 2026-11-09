@@ -807,6 +807,8 @@ export interface CapabilityActionRestoreEntry {
   presentation: Record<string, unknown> | null;
   outcome: 'pending' | 'approved' | 'rejected' | 'succeeded' | 'failed' | 'cancelled';
   invocation: { id: string; status: ToolInvocationStatus; evidence: Record<string, unknown>; exitCode: number | null } | null;
+  /** The specialist agent that asked, or null when Pandesh itself asked. Absent from Cores before Build 161. */
+  requestedBy?: { agentId: string; agentName: string } | null;
 }
 
 export interface CapabilityActionsSnapshot {

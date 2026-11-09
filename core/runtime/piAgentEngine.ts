@@ -4256,6 +4256,8 @@ Report this to the user, saying the ${name} agent did the work. Do not add facts
       }
       const allNames = tools.map((t) => t.name).concat('request_tools');
       const selection = selectChatTools(allNames, { requestText, previousUserText, recentToolNames, capabilities: capabilityMarks });
+      // Diagnostic switch (default off): offer the whole catalog, to measure task-aware selection against it.
+      if (process.env.PANDESH_TOOL_SELECTION === 'all') for (const t of tools) activeToolNames.add(t.name);
       for (const name of selection.offered) activeToolNames.add(name);
       const addable = hiddenGroups(allNames, activeToolNames, capabilityMarks);
       if (addable.length > 0) {
@@ -4293,7 +4295,9 @@ Report this to the user, saying the ${name} agent did the work. Do not add facts
       try {
         const offeredChars = JSON.stringify(tools.filter((t) => activeToolNames.has(t.name)).map((t) => ({ n: t.name, d: t.description, p: t.parameters }))).length;
         const allChars = JSON.stringify(tools.map((t) => ({ n: t.name, d: t.description, p: t.parameters }))).length;
-        safeRecordRuntimeEvent(db, broadcaster, attemptId, 'tool_selection', { offered: activeToolNames.size, total: tools.length, offeredChars, allChars, groups: selection.groups, addable }, actor);
+        // The offered names make an exposure failure (the right tool was never shown) distinguishable from a model
+        // failure (shown, not chosen) when a turn goes wrong (Build 161 audit, stage attribution).
+        safeRecordRuntimeEvent(db, broadcaster, attemptId, 'tool_selection', { offered: activeToolNames.size, total: tools.length, offeredChars, allChars, groups: selection.groups, addable, offeredTools: [...activeToolNames].sort() }, actor);
       } catch { /* telemetry only */ }
     }
     const availableToolNames = new Set<string>(activeToolNames);
