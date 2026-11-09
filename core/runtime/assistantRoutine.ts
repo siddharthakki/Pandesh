@@ -24,6 +24,7 @@ import { nowIso } from '../domain/ids';
 import type { ScheduledTaskRecord } from '../domain/scheduledTasks';
 import { buildAssistantBrief, readConnector } from './assistantBrief';
 import { buildDailyBriefing, renderDailyBriefing, type BriefingReader } from './dailyBriefing';
+import { renderOperationsSection } from './operationsBriefing';
 import type { ConnectorAdapter } from './connectors/connectorCapability';
 import type { ConnectorId } from '../shared/wireTypes';
 import { SCHEDULER_CLIENT_ID } from '../domain/processTerminationPolicy';
@@ -99,6 +100,8 @@ export async function runDailyBriefRoutine(
         return result.ok ? { ok: true, data: result.data } : { ok: false, reason: result.reason ?? 'the service could not be read' };
       };
       markdown = renderDailyBriefing(await buildDailyBriefing(db, { nowMs, timeZone: brief.timezone, read }));
+      // Pandesh's own background work (watchdog, AI Radar, revenue team): only what changed since the last brief.
+      if (input.cwd) markdown += renderOperationsSection(db, input.cwd, task.lastRunAt ?? new Date(nowMs - 86_400_000).toISOString());
     } finally {
       clearTimeout(timer);
     }
