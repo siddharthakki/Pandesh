@@ -14,6 +14,8 @@ import { explicitSpecialistRequest, handoffPreflight, SPECIALIST_NAMES } from '.
 
 /** Facts a delegating turn got from Pandesh's own local tools, keyed by the child attempt that receives them. */
 const HANDOFF_FACTS = new Map<string, string>();
+/** Wall-clock budget for one OpenCode delegation (Core then verifies whatever it changed). */
+const OPENCODE_BUDGET_MS = 6 * 60_000;
 const HANDOFF_FACT_TOOLS = /^(?:system_hardware_telemetry|run_system_diagnostics|get_system_info|software_updates|listening_ports|list_projects|ollama_list_models|pc_capability_inventory|port_list_services|calculate|resolve_time|list_reminders|memory_recall)$/;
 import { checkWrittenOutput, type OutputCheck } from './outputChecks';
 import { createProject, listProjects } from '../domain/projects';
@@ -3312,7 +3314,9 @@ export class PiAgentEngine implements EngineAdapter {
       {
         name: 'delegate_to_opencode',
         label: 'delegate_to_opencode',
-        description: 'Delegate an autonomous coding, implementation, bugfix, or refactoring task to OpenCode in the authorized workspace.',
+        // Final run F13: given the complete data for ONE html file, OpenCode spent 15+ minutes reading unrelated files and
+        // tried to ask an interactive question. A file whose content is known is written with write_file.
+        description: "Delegate a multi-file coding, implementation, bugfix or refactoring task in an existing project to OpenCode (runs up to 6 minutes). Do NOT use it to create a single file whose content you can write yourself (an HTML page, report, small script): use write_file for that, it is faster and checked by Pandesh.",
         parameters: {
           type: 'object',
           properties: {
@@ -3362,6 +3366,9 @@ ${String(args.objective ?? '').slice(0, 600)}`,
           const untrackedBefore = isGitRepository(targetDir) ? untrackedPaths(targetDir) : new Set(fs.existsSync(path.join(targetDir, '.opencode')) ? ['.opencode'] : []);
           // A plain folder has no git status: record its files so the real effect can still be read from disk.
           const snapshotBefore = isGitRepository(targetDir) ? undefined : snapshotFiles(targetDir);
+          // A bounded run: OpenCode stops after OPENCODE_BUDGET_MS and Core reports what really changed (F13 ran 15+ min).
+          const budget = AbortSignal.timeout(OPENCODE_BUDGET_MS);
+          const opencodeSignal = signal ? AbortSignal.any([signal, budget]) : budget;
           const result = await OpenCodeEngine.executeCodingObjective({
             db,
             broadcaster,
@@ -3372,9 +3379,12 @@ ${String(args.objective ?? '').slice(0, 600)}`,
             prompt: args.objective,
             model: selectedModel,
             fenceToken,
-            signal,
+            signal: opencodeSignal,
             manageAttemptLifecycle: false,
           });
+          if (budget.aborted && !signal?.aborted) {
+            safeRecordRuntimeEvent(db, broadcaster, attemptId, 'opencode_budget_exceeded', { budgetMs: OPENCODE_BUDGET_MS }, actor);
+          }
 
           // Audit D12: Core verifies the delegation itself — git status/diff, OpenCode's leftovers, a real test run.
           const verification = await verifyDelegation(targetDir, untrackedBefore, runShellCommand, signal, snapshotBefore);
