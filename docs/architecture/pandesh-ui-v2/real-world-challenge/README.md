@@ -1,5 +1,7 @@
 # Pandesh v2: real-world capability challenge (16 tests)
 
+> **Update (production pass):** Core now checks every file it writes, hand-offs carry real data and are security-checked before they start, Auto routes real work to the 27B model, and the output cap no longer cuts off files. T15 is now enforced by Core and T14/T16 pass live; see [`production-pass/README.md`](production-pass/README.md).
+
 **Date:** 2026-11-09, 07:17–08:21 UTC.
 
 **Branch:** `feat/pandesh-ui-v2`, local only and not pushed.
