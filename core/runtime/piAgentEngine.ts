@@ -4460,6 +4460,11 @@ ${filesPromptSection}${webResearchPromptSection}${wishesPromptSection}${emailCal
     if (availableToolNames.has('export_document_pdf')) {
       systemPrompt += '\n\nPDF FILES: when the user wants a PDF, write the content (or a .md file) and call export_document_pdf; it prints a real, verified PDF locally. Do not use pandoc, LibreOffice or run_checks for this, and do not install a converter. Report the PDF only after export_document_pdf succeeds, using the path it returns.';
     }
+    // Alpha e2e T1/T2: the model reported 1 of 37 listening ports (port_list_services knows only Pandesh's own services)
+    // and guessed update status without the stored check.
+    if (availableToolNames.has('listening_ports') || availableToolNames.has('software_updates')) {
+      systemPrompt += `\n\nPC FACTS:${availableToolNames.has('listening_ports') ? " listening ports / open ports / what is listening → 'listening_ports' (every process on this PC); 'port_list_services' lists only Pandesh's own managed services, so never present it as the PC's ports." : ''}${availableToolNames.has('software_updates') ? " Updates / outdated software / versions → 'software_updates' (the stored check, offline); say when it was checked, and never state a version or 'up to date' without it." : ''}`;
+    }
     // Audit D11: totals are computed by the calculate tool, not by the model.
     if (availableToolNames.has('calculate')) {
       systemPrompt += '\n\nNUMBERS: for every total, sum, difference, price for a quantity (including delivery fees) or percentage, call calculate with the exact expression and report its result. Never add or multiply numbers yourself, and include every fee that applies instead of saying "if applicable". When an amount could be counted in more than one way (for example a charge that might be passed on to a customer or paid by the user), choose one, and say in the reply in one sentence which way you counted it, so the totals can be checked.';
