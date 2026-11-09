@@ -57,3 +57,17 @@
 - **Voice:** the human test is still pending.
 - **Real-user approvals:** all approvals here were by the test operator.
 - **Notification delivery:** untested.
+
+## Round 2 (2026-11-09 afternoon): gaps 1, 4, 5 and external coding agents
+| Change | Evidence | Commit |
+|---|---|---|
+| **Finish what was asked:** if the request asked to open or verify the result, or the reply hands a fix back to the user, Core asks once to finish | Unit tests; covers the F13g pattern | 4c488d3 |
+| **Suggested commands are checked** (missing script, `python -m` on a plain module, undefined npm script); the model is asked to fix them, and anything still broken is listed | Unit tests (T14's `python -m board.cli`); G5's `python hello_app.py` correctly passed | 4c488d3 |
+| **A program's third-party imports must load on this PC** (installed packages only; generated code is never run) | **Live G5:** Core flagged Flask (broken against jinja2); the model diagnosed Flask 0.12.2 vs Jinja2 3.1.6 and gave the fix without installing anything | 4c488d3 |
+| **External coding agents** behind one governed tool: Aider (local, on), Codex (experimental, off), Claude Code / Cline / Hermes (opt-in) | Live AG1b: Aider built a module with tests, Pandesh's run 5/5 OK; AG2b: Codex failed honestly, Aider fallback 3/3 OK. See [`../../coding-agents/README.md`](../../coding-agents/README.md) | eabdbe6, dffe2e4, 88ded10 |
+| Aider: UTF-8 console and temp history; agent housekeeping never counts as work | AG1 crash, then AG1b clean | dffe2e4 |
+| An empty model answer is retried once before synthesis | AG2 | 8540ebc |
+| Only edits to *existing* tests raise the "tests changed" warning | AG1b | f055ef3 |
+| **Real cause of the batch-only test failures:** three tests rebuilt the shared Core bundle in parallel; now one locked build | Full suite green 3 runs in a row | eabdbe6 |
+
+**Tests:** Core 2,592 passed. A timing benchmark (`m54SecurityKernel` performance) can still fail only under full-suite CPU load; it passes alone.
