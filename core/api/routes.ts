@@ -22,6 +22,7 @@ import { registerSecondBrainRoutes } from './secondBrainRoutes';
 import { registerProcessRoutes } from './processRoutes';
 import { registerWorkspaceRoutes } from './workspaceRoutes';
 import { agentScopeForAttempt, assignAgentRun } from '../domain/agents';
+import { sameDataDir } from '../env/dataDir';
 
 const kandevClient = new KandevClient();
 import * as dependencies from '../domain/dependencies';
@@ -290,13 +291,29 @@ export function buildRouter(
     activeAttempts: executor?.activeCount() ?? 0,
     capabilityInFlight: hasInFlightCapabilityExecutions(),
   });
+  // Lifecycle calls may name the Core they are meant for. A caller holding a copied profile's token and discovery record
+  // reaches the right port of the WRONG Core; the named instance or data directory lets this Core refuse instead of
+  // stopping or pausing the original profile.
+  const assertAddressedToThisCore = (body: unknown) => {
+    const record = (body && typeof body === 'object' ? body : {}) as { expectedInstanceId?: unknown; expectedDataDir?: unknown };
+    const info = coreInfo();
+    if (typeof record.expectedInstanceId === 'string' && record.expectedInstanceId !== info.instanceId) {
+      throw new CoreError('conflict', 'This request was addressed to a different Core instance; nothing was changed.', { reason: 'instance_mismatch' });
+    }
+    if (typeof record.expectedDataDir === 'string' && !sameDataDir(record.expectedDataDir, info.dataDir)) {
+      throw new CoreError('conflict', 'This request came from a different Pandesh profile; nothing was changed.', { reason: 'data_dir_mismatch' });
+    }
+  };
+
   router.get('/v1/core/update-readiness', () => ({ status: 200, body: updateReadiness() }));
   router.post('/v1/core/update-gate', (ctx) => {
+    assertAddressedToThisCore(ctx.body);
     setQuiescing(asRecord(ctx.body).quiesce === true);
     return { status: 200, body: updateReadiness() };
   });
 
   router.post('/v1/core/shutdown', (ctx) => {
+    assertAddressedToThisCore(ctx.body);
     const key = requireIdempotencyKey(ctx);
     return withIdempotency(ctx.db, { key, clientId: ctx.clientId, routeId: 'core.shutdown' }, ctx.body, () => {
       setImmediate(() => onShutdown());

@@ -39,6 +39,7 @@ import * as crypto from 'node:crypto';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { createSanitizedChildEnvironment } from '../security/childEnvironment';
+import { sameDataDir } from '../env/dataDir';
 
 /** What the OS can tell us about a live process. */
 export interface ProcessIdentitySnapshot {
@@ -70,6 +71,13 @@ export interface OwnershipProvenance {
   recordedAt: string;
   /** Which internal component recorded it. */
   source: string;
+  /**
+   * The profile (data directory) whose ledger recorded the launch. A ledger
+   * copied along with a profile still carries the original owner token, so
+   * the token alone cannot tell "Pandesh started it" from "the profile I was
+   * copied from started it". Absent on records written by Build 160 and earlier.
+   */
+  dataDir?: string;
 }
 
 /** What the caller believes about the process it wants to terminate. */
@@ -132,6 +140,12 @@ export function verifyProcessOwnership(input: {
   provenance: OwnershipProvenance | null;
   /** The owner token of the verifier; a provenance record from another owner is not ours. */
   currentOwnerToken: string;
+  /**
+   * The verifier's data directory. When given, the provenance must have been
+   * recorded for this same profile: a record without a profile binding, or
+   * from another profile's (copied) ledger, is refused.
+   */
+  currentDataDir?: string;
   creationTimeToleranceMs?: number;
   spawnWindowBeforeMs?: number;
   spawnWindowAfterMs?: number;
@@ -153,6 +167,14 @@ export function verifyProcessOwnership(input: {
   }
   if (provenance.pid !== expectation.pid) {
     return refuse('provenance_mismatch', `ownership provenance for pid ${expectation.pid} records a different pid (${provenance.pid})`);
+  }
+  if (input.currentDataDir !== undefined) {
+    if (!provenance.dataDir) {
+      return refuse('provenance_mismatch', `ownership provenance for pid ${expectation.pid} names no profile (recorded by an older build); it cannot prove this profile started the process`);
+    }
+    if (!sameDataDir(provenance.dataDir, input.currentDataDir)) {
+      return refuse('provenance_mismatch', `ownership provenance for pid ${expectation.pid} was recorded by another profile (a copied ledger); this profile did not start it`);
+    }
   }
   if (!identity) {
     return refuse('identity_unavailable', `could not read the identity of pid ${expectation.pid}; missing identity information is a refusal`);
@@ -470,6 +492,7 @@ export function createProcessOwnershipBoundary(
         executablePath: input.executablePath ?? null,
         recordedAt: new Date(now()).toISOString(),
         source: input.source,
+        dataDir: options.dataDir,
       };
       return ledger.record(provenance);
     },
@@ -487,6 +510,7 @@ export function createProcessOwnershipBoundary(
         identity,
         provenance,
         currentOwnerToken: options.ownerToken,
+        currentDataDir: options.dataDir,
       });
     },
 
@@ -503,6 +527,7 @@ export function createProcessOwnershipBoundary(
         identity,
         provenance,
         currentOwnerToken: options.ownerToken,
+        currentDataDir: options.dataDir,
       });
       if (!verdict.verified) {
         return { terminated: false, reason: verdict.reason, verdict };

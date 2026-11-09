@@ -31,6 +31,7 @@ import { createComputerUseCapabilityAdapter } from './runtime/computerUseCapabil
 import { createHermesSkillCapabilityAdapter } from './runtime/hermesSkillCapability';
 import { createPortProcessManager } from './runtime/portManager';
 import { acquireSingleton } from './singleton/acquireSingleton';
+import { findForeignLiveOwners } from './singleton/foreignOwners';
 import { writeDiscoveryRecord, removeDiscoveryRecord } from './discovery/record';
 import { startApiServer } from './api/server';
 import { attachWsServer } from './ws/server';
@@ -466,6 +467,20 @@ async function main(): Promise<void> {
     },
   });
 
+  // A profile copied while its Core ran carries that Core's lock, discovery
+  // record and database claim. They name a live process that serves ANOTHER
+  // directory; it must neither block this Core nor be mistaken for its owner.
+  const foreignInstanceIds = await findForeignLiveOwners({
+    lockFilePath: paths.lockFilePath,
+    discoveryRecordPath: paths.discoveryRecordPath,
+    db,
+    token: token as string,
+    dataDir,
+  }).catch(() => new Set<string>());
+  if (foreignInstanceIds.size > 0) {
+    redactedLog(`ignoring ${foreignInstanceIds.size} lock/claim record(s) copied from another profile's running Core`);
+  }
+
   const singleton = acquireSingleton({
     lockFilePath: paths.lockFilePath,
     db,
@@ -473,6 +488,8 @@ async function main(): Promise<void> {
     apiVersion: CORE_API_VERSION,
     coreVersion,
     instanceId,
+    dataDir,
+    foreignInstanceIds,
   });
 
   if (!singleton.acquired) {

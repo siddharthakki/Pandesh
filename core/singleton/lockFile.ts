@@ -9,6 +9,12 @@ export interface LockRecord {
   apiVersion: number;
   coreVersion: string;
   heartbeatAt: string;
+  /**
+   * The data directory this lock was created for. A lock that names another
+   * directory was copied along with a profile and says nothing about who owns
+   * this one. Absent on locks written by Build 160 and earlier.
+   */
+  dataDir?: string;
 }
 
 /**

@@ -1,5 +1,33 @@
+import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
+
+/**
+ * The comparable form of a data directory: absolute, symlinks and 8.3 short
+ * names resolved where the directory exists, no trailing separator, and
+ * case-folded on Windows (whose file system is case-insensitive).
+ */
+export function canonicalDataDir(dir: string): string {
+  let resolved = path.resolve(dir);
+  try {
+    resolved = fs.realpathSync.native(resolved);
+  } catch {
+    // A directory that does not exist (yet) is compared by its resolved path.
+  }
+  resolved = resolved.replace(/[\\/]+$/, '');
+  return process.platform === 'win32' ? resolved.toLowerCase() : resolved;
+}
+
+/**
+ * True when both paths name the same Pandesh profile. A Core, its lock file,
+ * its database claim and its process records all belong to one data
+ * directory: a copied profile has the same files in a different directory, so
+ * it is a different profile and must never act on the original's Core.
+ */
+export function sameDataDir(a: string | null | undefined, b: string | null | undefined): boolean {
+  if (!a || !b) return false;
+  return canonicalDataDir(a) === canonicalDataDir(b);
+}
 
 /**
  * Resolves the OS-appropriate global data directory for the KarkeDikha Core.

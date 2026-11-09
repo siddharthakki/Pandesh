@@ -5,6 +5,7 @@ import { resolveDataDir, resolvePaths } from '../../core/env/dataDir';
 import { readDiscoveryRecord, type DiscoveryRecord } from '../../core/discovery/record';
 import { CORE_API_VERSION, type CoreInfo } from '../../core/shared/wireTypes';
 import { hashCoreBundle } from '../../core/runtime/coreBundle';
+import { coreServesDataDir, discardForeignDiscoveryRecord, lifecycleAddress, probeCoreInfo } from './coreOwnership';
 
 const STARTUP_TIMEOUT_MS = 10_000;
 /** D6: boot reconciliation can take longer than 10 s on a large profile; while the spawned Core is still alive the launcher keeps waiting up to this long instead of reporting "unavailable" for a Core that is about to come up. */
@@ -47,31 +48,7 @@ export interface CoreLauncherOptions {
 function probeCore(port: number, token: string, timeoutMs: number): Promise<
   { ok: true; info: CoreInfo } | { ok: false; reason: 'unreachable' | 'unauthenticated' | 'error' }
 > {
-  return new Promise((resolve) => {
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), timeoutMs);
-    fetch(`http://127.0.0.1:${port}/v1/core/info`, {
-      headers: { Authorization: `Bearer ${token}` },
-      signal: controller.signal,
-    })
-      .then(async (res) => {
-        clearTimeout(timer);
-        if (res.status === 401 || res.status === 403) {
-          resolve({ ok: false, reason: 'unauthenticated' });
-          return;
-        }
-        if (!res.ok) {
-          resolve({ ok: false, reason: 'error' });
-          return;
-        }
-        const info = (await res.json()) as CoreInfo;
-        resolve({ ok: true, info });
-      })
-      .catch(() => {
-        clearTimeout(timer);
-        resolve({ ok: false, reason: 'unreachable' });
-      });
-  });
+  return probeCoreInfo(port, token, timeoutMs);
 }
 
 export type ExistingCoreDecision =
@@ -145,8 +122,11 @@ export class CoreLauncher {
     const existing = readDiscoveryRecord(this.paths.discoveryRecordPath);
     if (existing) {
       const probe = await probeCore(existing.port, this.options.token, PROBE_TIMEOUT_MS);
-      if (probe.ok) {
-        const replaced = await this.authorizedReplace(existing);
+      if (probe.ok && !coreServesDataDir(probe.info, this.dataDir)) {
+        // The record was copied from another profile: that Core is not ours to restart.
+        this.forgetForeignRecord(existing, probe.info);
+      } else if (probe.ok) {
+        const replaced = await this.authorizedReplace(existing, probe.info);
         if (!replaced) {
           return { state: 'unavailable', detail: 'Core did not shut down in time for restart' };
         }
@@ -172,6 +152,15 @@ export class CoreLauncher {
   /** Returns a terminal outcome, or undefined if it replaced the Core and the caller should spawn fresh. */
   private async evaluateExisting(record: DiscoveryRecord): Promise<LauncherOutcome | undefined> {
     const probe = await probeCore(record.port, this.options.token, PROBE_TIMEOUT_MS);
+
+    if (probe.ok && !coreServesDataDir(probe.info, this.dataDir)) {
+      // A copied profile (backup, restore, upgrade rehearsal) still names the
+      // original profile's live Core, and the copied token opens it. Attaching
+      // would read and write the ORIGINAL profile's data; this profile needs
+      // its own Core instead.
+      this.forgetForeignRecord(record, probe.info);
+      return undefined;
+    }
 
     if (probe.ok) {
       const decision = decideExistingCoreReuse({
@@ -201,7 +190,7 @@ export class CoreLauncher {
         };
       }
       this.log(`replacing outdated Core ${probe.info.coreVersion} hash=${probe.info.bundleHash ?? 'unknown'} with bundled ${this.options.bundledCoreVersion} hash=${hashCoreBundle(this.options.corePath) ?? 'unknown'}`);
-      const replaced = await this.authorizedReplace(record);
+      const replaced = await this.authorizedReplace(record, probe.info);
       if (!replaced) {
         return { state: 'unavailable', detail: 'failed to replace an older, incompatible Core' };
       }
@@ -221,8 +210,17 @@ export class CoreLauncher {
     return undefined;
   }
 
+  /** Logs and drops a discovery record proven to describe another profile's Core. That Core is left untouched. */
+  private forgetForeignRecord(record: DiscoveryRecord, info: CoreInfo): void {
+    this.log(
+      `discovery record names Core ${info.instanceId} on port ${record.port}, which serves a different profile; `
+      + 'not attaching to it and leaving it running (the record was copied with this profile)',
+    );
+    discardForeignDiscoveryRecord(this.dataDir, record);
+  }
+
   /** Authenticated shutdown of a *confirmed* Core instance, then waits for it to actually exit. Never sends an OS signal. */
-  private async authorizedReplace(record: DiscoveryRecord): Promise<boolean> {
+  private async authorizedReplace(record: DiscoveryRecord, info: CoreInfo): Promise<boolean> {
     try {
       const res = await fetch(`http://127.0.0.1:${record.port}/v1/core/shutdown`, {
         method: 'POST',
@@ -232,7 +230,8 @@ export class CoreLauncher {
           'Idempotency-Key': `upgrade-replace-${record.instanceId}`,
           'X-Client-Id': 'core-launcher',
         },
-        body: '{}',
+        // The Core refuses (409) a shutdown that names another instance or profile.
+        body: JSON.stringify(lifecycleAddress(info, this.dataDir)),
       });
       if (!res.ok && res.status !== 202) return false;
     } catch {
@@ -329,7 +328,9 @@ export class CoreLauncher {
       const record = readDiscoveryRecord(this.paths.discoveryRecordPath);
       if (record) {
         const probe = await probeCore(record.port, this.options.token, PROBE_TIMEOUT_MS);
-        if (probe.ok) {
+        // Only a Core serving THIS directory counts: a record still copied from
+        // another profile is not the Core we just started.
+        if (probe.ok && coreServesDataDir(probe.info, this.dataDir)) {
           return { state: 'connected', baseUrl: `http://127.0.0.1:${record.port}`, info: probe.info };
         }
       }

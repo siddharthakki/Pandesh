@@ -15,8 +15,8 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { spawn, spawnSync } from 'node:child_process';
 import {
-  FINGERPRINT_FILE, checkCompat, extractPackage, managedFor, readDbSchema, readInstalled,
-  regenerateFingerprint, sha256File, verifyStaged,
+  FINGERPRINT_FILE, checkCompat, extractPackage, managedFor, mayForceStop, readDbSchema, readInstalled,
+  readProcessIdentity, regenerateFingerprint, sha256File, verifyStaged,
 } from './update-lib.mjs';
 
 const HEALTH_TIMEOUT_MS = Number(process.env.PANDESH_UPDATE_HEALTH_TIMEOUT_MS) || 120_000;
@@ -125,7 +125,17 @@ async function apply(args, installRoot, dataDir, p) {
     child.unref();
     return { pid: child.pid, at: Date.now() };
   };
-  const killTree = (pid) => { if (alive(pid)) spawnSync('taskkill', ['/PID', String(pid), '/T', '/F'], { windowsHide: true, stdio: 'ignore', timeout: 10_000 }); };
+  // Force-stop only a process this update started: the expected executable, created after this update launched it.
+  // A recycled PID, a stale core.json or one copied from another profile is left alone (and logged).
+  const killTree = (pid, expectedExecutable, label) => {
+    if (!alive(pid)) return;
+    const identity = readProcessIdentity(pid);
+    if (!mayForceStop(identity, expectedExecutable, launched?.at ?? Number.POSITIVE_INFINITY)) {
+      log(`not force-stopping ${label} pid ${pid}: it is not the process this update started (${identity?.executablePath ?? 'identity unavailable'})`);
+      return;
+    }
+    spawnSync('taskkill', ['/PID', String(pid), '/T', '/F'], { windowsHide: true, stdio: 'ignore', timeout: 10_000 });
+  };
   const coreCall = async (route, method = 'GET', body) => {
     const record = readJson(coreRecordFile);
     const token = fs.existsSync(path.join(dataDir, 'core.token')) ? fs.readFileSync(path.join(dataDir, 'core.token'), 'utf8').trim() : '';
@@ -142,9 +152,10 @@ async function apply(args, installRoot, dataDir, p) {
   const stopCore = async () => {
     const record = readJson(coreRecordFile);
     if (!record?.pid) return;
-    try { await coreCall('/v1/core/shutdown', 'POST', {}); } catch { /* fall through */ }
+    // The address makes Core refuse (409) when core.json names another profile's Core.
+    try { await coreCall('/v1/core/shutdown', 'POST', { expectedDataDir: dataDir }); } catch { /* fall through */ }
     for (let i = 0; i < 50 && alive(record.pid); i += 1) await sleep(200);
-    killTree(record.pid);
+    killTree(record.pid, path.join(installRoot, 'runtime', 'node.exe'), 'Core');
   };
 
   try {
@@ -269,7 +280,7 @@ async function apply(args, installRoot, dataDir, p) {
       return;
     }
     // Roll back: stop what we started, restore the files and, if it was due to migrate, the database.
-    killTree(launched?.pid);
+    killTree(launched?.pid, path.join(installRoot, 'electron', 'Pandesh.exe'), 'Pandesh');
     await stopCore();
     try {
       for (const f of journal.files) {
