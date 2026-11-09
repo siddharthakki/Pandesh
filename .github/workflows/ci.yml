@@ -1,0 +1,42 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: windows-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - name: Install
+        run: |
+          npm ci
+          npm ci --prefix apps/desktop
+      - name: Typecheck
+        run: |
+          npx tsc -p tsconfig.core.json --noEmit
+          npx tsc -p ./ --noEmit
+          npx tsc -p apps/desktop/renderer-v2/tsconfig.json --noEmit
+      - name: Build bundles
+        run: |
+          node esbuild.core.js
+          node apps/desktop/esbuild.mjs
+      - name: Core tests
+        run: npx vitest run core/test
+      - name: Desktop tests
+        run: npx vitest run apps/desktop/test

@@ -1,57 +1,40 @@
 # Pandesh roadmap
 
-Pandesh is a **local-first AI personal assistant**: useful everyday outcomes first, powerful extensibility second. This public roadmap is intentionally concise. It distinguishes what has shipped, what is being fixed and what is exploratory.
-
 ## Release status
 
-| Stage | State | Real user outcome |
-| --- | --- | --- |
-| **v0.1.1 Alpha · Build 142** | **Public download available** | Install on Windows, talk to local Ollama, use supported governed workflows |
-| **v0.1.2 Alpha · Build 143** | **Public download available** | More reliable New Conversation actions, direct Tasks/Results navigation |
-| **v0.1.3 Alpha · Build 144** | **Public download available** | Non-blocking background task delegation with verified recovery, durable Gmail extraction |
-| **Next stabilization release** | **Planned, no committed date** | Correct model self-awareness, trustworthy task outcomes, reliable day-to-day routines |
-| **Broader open-source source distribution** | **Blocked by publication checks** | Reproducible build of reviewed Core, Desktop and supporting code |
+| Use | Status (2026-11-09) |
+|---|---|
+| **Supervised daily use** (you approve each consequential action) | Ready for alpha users who run from source |
+| **Unattended low-risk work** (read-only checks, scheduled reports) | Not yet. Needs the regression watchdog and a packaged release on a supported Electron. |
+| **Unattended consequential work** (writing, running, sending, spending) | Not safe yet |
 
-## Priority 0 — everyday reliability
+The last published installers (Build 144 and earlier) predate v2. No v2 installer has been released.
 
-- [ ] New conversation always opens a genuinely blank conversation; older completions never bleed into new context.
-- [ ] Both **New** buttons work in the installed Windows build; background tasks retain their own IDs.
-- [ ] Results are reachable in one click, with approvals still actionable.
-- [ ] Pandesh correctly identifies its **active model** and lists **available Ollama models** through the runtime rather than guessing or telling users to run commands.
-- [ ] Improve Gmail and Calendar permission states: no misleading claims if a search or follow-up is blocked.
-- [ ] Prevent duplicate briefings, stale reminders, phantom running tasks, and incomplete recovery after restart.
-- [ ] Verify no unrelated Windows process is stopped by Pandesh.
+## Done in v2
 
-## Priority 1 — publish trustworthy open source
+- New React interface with a Classic fallback, switchable at runtime
+- Chief Agent with real specialist delegation (Coding, Research, Personal, Operations), scoped tools and folders
+- Visual execution: live activity with commands, exit codes and test output; Board from Core records
+- Second Brain: remember, recall, correct and forget with provenance, history and search
+- Projects, Automations, Tools & Skills hub, Software & Services inventory (read-only)
+- Coding engines: Aider (local) and OpenCode (optional), with output checks and re-run-after-fix
+- Core egress default-deny, fail-closed approvals, permission modes (Ask / Auto / Plan Only)
+- Security parser fixes (pdfjs-dist 6.2.108, xmldom 0.8.15)
 
-- [x] Publish public MIT license, security policy, contribution guidelines and releases.
-- [x] Replace the self-hosted PR CI dependency with GitHub-hosted checks.
-- [ ] Replace static development service credentials; scan reviewed files and history privately.
-- [ ] Review artwork, icons, models and bundled dependency licenses.
-- [ ] Publish a fresh, sanitized **buildable** source snapshot for Core, Desktop and extension with reproducible build instructions.
-- [ ] Verify packaged behavior against source and preserve version/build provenance.
-- [ ] Establish public issue triage, labels, onboarding docs and redacted bug-report examples.
+## Next
 
-## Priority 2 — usable personal AI assistant
+1. **Release blockers:** upgrade Electron 33 to a supported major; restore bundled fonts; clean packaged build and
+   startup test; migration and backup check.
+2. **Regression watchdog:** a scheduled run of the real-world scenarios against an isolated profile, compared with the
+   previous run.
+3. **AI Radar:** native tracking of local models, inference engines and agent tools, compared against what is installed
+   and what Pandesh already does.
+4. **Revenue team pilot:** activate the Sales, Marketing and Social Media agents for drafting and research only. Every
+   outreach or publish needs approval.
+5. **One daily briefing** covering reliability, radar findings and business work.
 
-- [ ] Dependable daily briefing, calendar, email and follow-up workflows with correct authorization.
-- [ ] Scheduling and commitment follow-ups that survive restarts and clearly state when external access is unavailable.
-- [ ] Faster model routing based on locally installed hardware and actual capabilities; avoid unnecessary capability refusals.
-- [ ] One consistent context and task history across supported desktop and VS Code experiences.
-- [ ] Accessible compact Panda interface with on-demand panels rather than a large dashboard.
+## Later
 
-## Exploratory / longer-term
-
-- Securely paired mobile use outside the home network
-- Better voice interaction and interruption/recovery
-- Multimodal tools, document understanding and image generation through supported local tooling
-- Reusable skill/capability plugins and optional specialist agent engines
-- Community-supported platforms and installers beyond Windows
-
-Exploratory items are **not promised features or release dates**.
-
-## What counts as complete?
-
-A task is complete when its observable outcome works in an installed application on representative hardware. A green unit test, mock screenshot or model-generated "Done!" message is insufficient by itself.
-
-[Report a real-world problem](https://github.com/siddharthakki/Pandesh_Releases/issues) · [Download alpha](https://github.com/siddharthakki/Pandesh_Releases/releases/tag/v0.1.1-pandesh-alpha) · [Architecture](ARCHITECTURE.md)
+- Human-tested voice and wake word in v2
+- MCP server registry and embedded terminals
+- Enforce agent memory scopes on recall

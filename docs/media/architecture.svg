@@ -1,0 +1,85 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 560" width="1200" height="560" font-family="Segoe UI, -apple-system, Helvetica, Arial, sans-serif">
+  <defs>
+    <marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#5b6b66"/>
+    </marker>
+  </defs>
+  <rect x="0" y="0" width="1200" height="560" rx="18" fill="#f7f6f2"/>
+
+  <!-- User -->
+  <rect x="30" y="215" width="150" height="110" rx="14" fill="#ffffff" stroke="#d8d6cf"/>
+  <text x="105" y="262" text-anchor="middle" font-size="20" font-weight="600" fill="#1f2a2a">You</text>
+  <text x="105" y="290" text-anchor="middle" font-size="14" fill="#5b6b66">type, talk,</text>
+  <text x="105" y="308" text-anchor="middle" font-size="14" fill="#5b6b66">approve</text>
+
+  <!-- Desktop -->
+  <rect x="225" y="170" width="200" height="200" rx="14" fill="#ffffff" stroke="#d8d6cf"/>
+  <text x="325" y="208" text-anchor="middle" font-size="19" font-weight="600" fill="#1f2a2a">Pandesh Desktop</text>
+  <text x="325" y="234" text-anchor="middle" font-size="13.5" fill="#5b6b66">Electron · Windows</text>
+  <text x="325" y="268" text-anchor="middle" font-size="14" fill="#1f2a2a">v2 UI (React) or Classic</text>
+  <text x="325" y="292" text-anchor="middle" font-size="14" fill="#1f2a2a">Chat · Activity · Board</text>
+  <text x="325" y="316" text-anchor="middle" font-size="14" fill="#1f2a2a">Team · Second Brain</text>
+  <text x="325" y="340" text-anchor="middle" font-size="14" fill="#1f2a2a">Approval cards</text>
+
+  <!-- Core -->
+  <rect x="470" y="60" width="330" height="440" rx="16" fill="#e7f1ee" stroke="#2f8f7c" stroke-width="2"/>
+  <text x="635" y="98" text-anchor="middle" font-size="21" font-weight="700" fill="#1f2a2a">Pandesh Core</text>
+  <text x="635" y="122" text-anchor="middle" font-size="13.5" fill="#3d5752">local Node service · 127.0.0.1 only · SQLite</text>
+  <g font-size="14.5" fill="#1f2a2a">
+    <rect x="495" y="142" width="280" height="44" rx="10" fill="#ffffff" stroke="#bcd8d0"/>
+    <text x="635" y="169" text-anchor="middle">Chief Agent: routes and delegates</text>
+    <rect x="495" y="196" width="280" height="44" rx="10" fill="#ffffff" stroke="#bcd8d0"/>
+    <text x="635" y="223" text-anchor="middle">Permission modes · approvals</text>
+    <rect x="495" y="250" width="280" height="44" rx="10" fill="#ffffff" stroke="#bcd8d0"/>
+    <text x="635" y="277" text-anchor="middle">Agent scopes · egress default-deny</text>
+    <rect x="495" y="304" width="280" height="44" rx="10" fill="#ffffff" stroke="#bcd8d0"/>
+    <text x="635" y="331" text-anchor="middle">Tool ledger · output checks</text>
+    <rect x="495" y="358" width="280" height="44" rx="10" fill="#ffffff" stroke="#bcd8d0"/>
+    <text x="635" y="385" text-anchor="middle">Claim guards · verdict per turn</text>
+    <rect x="495" y="412" width="280" height="44" rx="10" fill="#ffffff" stroke="#bcd8d0"/>
+    <text x="635" y="439" text-anchor="middle">Memory · projects · automations</text>
+  </g>
+  <text x="635" y="484" text-anchor="middle" font-size="12.5" fill="#3d5752">Core, not the model, decides every action</text>
+
+  <!-- Right column -->
+  <g font-size="14" fill="#1f2a2a">
+    <rect x="845" y="60" width="160" height="96" rx="12" fill="#ffffff" stroke="#d8d6cf"/>
+    <text x="925" y="92" text-anchor="middle" font-weight="600" font-size="15.5">Specialists</text>
+    <text x="925" y="116" text-anchor="middle" fill="#5b6b66">Coding · Research</text>
+    <text x="925" y="136" text-anchor="middle" fill="#5b6b66">Personal · Operations</text>
+
+    <rect x="845" y="176" width="160" height="96" rx="12" fill="#ffffff" stroke="#d8d6cf"/>
+    <text x="925" y="208" text-anchor="middle" font-weight="600" font-size="15.5">Local models</text>
+    <text x="925" y="232" text-anchor="middle" fill="#5b6b66">Ollama</text>
+    <text x="925" y="252" text-anchor="middle" fill="#5b6b66">gemma4 · qwen3.8</text>
+
+    <rect x="845" y="292" width="160" height="96" rx="12" fill="#ffffff" stroke="#d8d6cf"/>
+    <text x="925" y="324" text-anchor="middle" font-weight="600" font-size="15.5">Tools</text>
+    <text x="925" y="348" text-anchor="middle" fill="#5b6b66">files · tests · web</text>
+    <text x="925" y="368" text-anchor="middle" fill="#5b6b66">Aider · OpenCode</text>
+
+    <rect x="845" y="408" width="160" height="92" rx="12" fill="#ffffff" stroke="#d8d6cf"/>
+    <text x="925" y="440" text-anchor="middle" font-weight="600" font-size="15.5">Internet</text>
+    <text x="925" y="464" text-anchor="middle" fill="#5b6b66">only with consent,</text>
+    <text x="925" y="484" text-anchor="middle" fill="#5b6b66">public queries only</text>
+  </g>
+
+  <!-- Result -->
+  <rect x="1040" y="200" width="135" height="140" rx="14" fill="#ffffff" stroke="#2f8f7c" stroke-width="2"/>
+  <text x="1107" y="240" text-anchor="middle" font-size="17" font-weight="600" fill="#1f2a2a">Verified</text>
+  <text x="1107" y="262" text-anchor="middle" font-size="17" font-weight="600" fill="#1f2a2a">result</text>
+  <text x="1107" y="290" text-anchor="middle" font-size="13" fill="#5b6b66">files, test output,</text>
+  <text x="1107" y="308" text-anchor="middle" font-size="13" fill="#5b6b66">sources, honest</text>
+  <text x="1107" y="326" text-anchor="middle" font-size="13" fill="#5b6b66">failure</text>
+
+  <!-- Arrows -->
+  <g stroke="#5b6b66" stroke-width="2" fill="none" marker-end="url(#arr)">
+    <path d="M180 270 L222 270"/>
+    <path d="M425 270 L467 270"/>
+    <path d="M800 108 L842 108"/>
+    <path d="M800 224 L842 224"/>
+    <path d="M800 340 L842 340"/>
+    <path d="M800 454 L842 454"/>
+    <path d="M1005 270 L1037 270"/>
+  </g>
+</svg>

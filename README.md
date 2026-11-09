@@ -1,111 +1,128 @@
-# Pandesh 🐼 — Local AI Personal Assistant for Windows
+<div align="center">
 
-**An open-source, local-first AI assistant inspired by the idea of a Jarvis-style desktop companion — powered by Ollama, with explicit controls for real-world actions.**
+# Pandesh
 
-Looking for a **personal AI assistant for Windows**, an **Ollama desktop assistant**, or a **self-hosted alternative to cloud-only AI assistants**? Pandesh aims to combine local AI conversations, reusable tools, tasks, reminders, and governed automation in one approachable Panda interface.
+**A local-first AI operator for Windows.**
 
-[**⬇ Download Windows Alpha (Build 144)**](https://github.com/siddharthakki/Pandesh_Releases/releases/tag/v0.1.3-pandesh-alpha) • [**📖 Start here**](https://github.com/siddharthakki/Pandesh_Releases/blob/main/docs/GETTING_STARTED.md) • [**🏗️ Architecture**](docs/ARCHITECTURE.md) • [**🗺️ Roadmap**](docs/ROADMAP.md) • [**🐞 Report an issue**](https://github.com/siddharthakki/Pandesh_Releases/issues)
+Talk to your computer. Hand work to specialist agents. Build, research, remember and organise with local models,
+and keep explicit control over every file, command and web request.
 
-![Pandesh v0.1.2 Build 143 Panda desktop assistant — updated conversation interface](assets/screenshots/01-welcome-chat.png)
+[![CI](https://github.com/siddharthakki/Pandesh/actions/workflows/ci.yml/badge.svg)](https://github.com/siddharthakki/Pandesh/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-2f8f7c.svg)](LICENSE)
+![Status: supervised alpha](https://img.shields.io/badge/status-supervised%20alpha-c27b1a.svg)
 
-<sub>Actual Pandesh desktop interface from v0.1.2 Build 143.</sub>
+[Install](#run-it-from-source) · [Architecture](docs/ARCHITECTURE.md) · [Demos](docs/media/README.md) · [Roadmap](docs/ROADMAP.md) · [Security](SECURITY.md)
 
-## What is Pandesh?
+<img src="docs/media/pandesh-demo.gif" width="860" alt="Pandesh v2: the Coding specialist runs failing tests, asks before running them, fixes the bug and re-runs them until they pass">
 
-Pandesh is an experimental **local AI agent and personal assistant** for Windows. Rather than being only a chatbot, its goal is to help with everyday work and show what was actually accomplished. It runs local LLMs through [Ollama](https://ollama.com/) and can integrate additional tools when installed and permitted.
+<sub>Real run, sped up: Pandesh asks the Coding specialist to fix a failing project. It asks before running the tests, shows the real failure, fixes the bug and re-runs the tests to green. Local <code>gemma4:12b</code>, isolated demo profile.</sub>
 
-| Experience | What you can expect |
-| --- | --- |
-| **Chat with local AI** | Use models installed on your own Windows computer |
-| **Tasks and results** | Organize work and review outcomes rather than accept unsupported "Done!" claims |
-| **Human-approved actions** | Review sensitive/mutating operations before execution |
-| **Reminders and briefings** | Scheduled assistant workflows, depending on configured services and permissions |
-| **Models and integrations** | Ollama first; other compatible providers and agent integrations are optional |
-| **Developer workflows** | VS Code / coding-related capabilities in the evolving shared platform |
+</div>
 
-**Important:** The public release is an alpha. Not all workflows are reliable or supported on every machine. Gmail, Calendar, external models and web access require their own permissions. Local-first does not mean all configured integrations are offline.
+## What Pandesh is
 
-## How to get Pandesh running
+Pandesh is a desktop assistant that does work on your PC rather than only chatting about it. A **Chief Agent** reads your
+request and either answers it or hands it to a specialist (**Coding**, **Research**, **Personal**, **Operations**), each
+limited to its own tools and folders. Everything runs through **Pandesh Core**, a local service that decides what may
+happen, asks you before anything consequential and records what really happened, so a reply can't claim success that
+the tool ledger doesn't show.
 
-1. Download and start [Ollama for Windows](https://ollama.com/download).
-2. Open PowerShell, then choose a model:
+Models run locally through [Ollama](https://ollama.com). Nothing goes to the internet unless you approve it, and then
+only a public query, never your files.
 
-   ```powershell
-   ollama pull qwen2.5-coder:3b
-   ollama list
-   ```
+## What works today
 
-3. Install [Pandesh v0.1.3 Alpha (Build 144)](https://github.com/siddharthakki/Pandesh_Releases/releases/tag/v0.1.3-pandesh-alpha) or extract the portable ZIP and run its launcher.
-4. Start with **"Hi Pandesh. What can you do?"**, then try a specific read-only request.
+These run in the current build and are covered by recorded runs or screenshots in [`docs/media`](docs/media/README.md).
 
-For verified download checksums, permissions, troubleshooting and the full installation flow, use the [getting-started guide](https://github.com/siddharthakki/Pandesh_Releases/blob/main/docs/GETTING_STARTED.md).
+| | |
+|---|---|
+| **Specialist delegation** | "Ask the Coding specialist to…" is routed by Core to the Coding agent, which works with its own tool set and reports back. Its approval requests show up in your chat. |
+| **Coding with real verification** | Writes files, runs your tests (after you approve the exact command), fixes failures and re-runs them. Core checks written files, attributes results, and flags suggested commands that can't work. Aider is available as a local coding engine; OpenCode is optional. |
+| **Research with sources** | The Research agent asks once for internet access, searches public sources and returns citations. Private text is stripped from public queries. |
+| **Second Brain** | Remember, recall in another chat, correct, and forget a single detail. Every fact keeps its source and history, and you can search it all in one place. |
+| **Board and Activity** | Task status read from Core records (needs you / running / completed / failed), plus a live activity panel with commands, exit codes and test output. |
+| **Team and permissions** | Each agent's tools, folders, network access and "always asks" actions, read from the same rules Core enforces. |
+| **Tools & Skills** | 169 tools and 25 governed capabilities, each with its risk level, which agents may use it, and a capability self-test. |
+| **Software & Services** | Read-only inventory of installed tools, ports, local repositories and available updates. It never installs anything. |
+| **Classic UI** | The previous interface is still there; switch from the tray or the System menu. |
 
-## Building from Source
+### Experimental or not yet verified
 
-Pandesh Core is fully buildable independently:
+- **Voice**: the microphone opens and local speech engines (Whisper, Piper, Pocket TTS) are wired up, but speaking to Pandesh hasn't been tested by a human yet. The wake word only works in the Classic UI.
+- **Sales, Marketing, Social Media and Support agents** appear in Team as placeholders. They aren't active yet.
+- **Unattended work**: approvals stay on by default. See [release status](docs/ROADMAP.md#release-status).
+- Models vary from run to run. In the recorded demos the build-an-app task succeeded in 2 of 3 attempts with `gemma4:12b`, and the failed attempt was reported as a failure ([notes](docs/media/README.md)).
+
+## Screenshots
+
+<table>
+<tr>
+<td width="50%"><img src="docs/media/screenshots/01-coding-delegation-result.png" alt="Coding specialist built a tip calculator; activity panel shows the real command and exit code"><br><sub><b>Coding delegation:</b> files written, tests run, program executed. Exit code from Core's ledger.</sub></td>
+<td width="50%"><img src="docs/media/screenshots/02-approval-card.png" alt="Approval card for running python -m unittest in the project folder"><br><sub><b>Approval cards:</b> nothing runs until you choose, and Core records the decision.</sub></td>
+</tr>
+<tr>
+<td><img src="docs/media/screenshots/04-research-with-citation.png" alt="Research specialist result with version, date and source link"><br><sub><b>Research:</b> latest Ollama release with its source (checked independently: correct).</sub></td>
+<td><img src="docs/media/screenshots/05-second-brain-provenance.png" alt="Second Brain memory detail with source and history including forgotten values"><br><sub><b>Second Brain:</b> source, history and forgotten values, with correct and forget actions.</sub></td>
+</tr>
+<tr>
+<td><img src="docs/media/screenshots/06-team-agent-permissions.png" alt="Team view showing the Coding agent's tools, never-allowed tools, folders and network policy"><br><sub><b>Team:</b> what each agent may do, never do, and always has to ask.</sub></td>
+<td><img src="docs/media/screenshots/07-board-real-status.png" alt="Board with completed and failed tasks from Core records"><br><sub><b>Board:</b> real task status, failures included.</sub></td>
+</tr>
+</table>
+
+More: [all screenshots and recorded demos](docs/media/README.md).
+
+## Architecture
+
+<img src="docs/media/architecture.svg" alt="You → Pandesh Desktop → Pandesh Core (Chief Agent, approvals, agent scopes, tool ledger, claim guards, memory) → specialists, local models, tools and consented internet → verified result" width="100%">
+
+The model proposes and Core decides. Core is a local Node service bound to `127.0.0.1` with a SQLite database. It owns
+permission modes and approvals, each agent's scope (tools, folders, network), the tool ledger, output checks on written
+files, and the final verdict for each turn. The desktop app is a client of Core: the v2 interface (React) and the
+Classic interface both read the same records. More in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+
+**Privacy:** conversations, memory, projects and task records stay in your profile folder. Network access is denied
+by default per agent. Web research needs your consent and sends only a derived public query. There's no silent
+fallback to paid cloud models; cloud providers are opt-in and off by default.
+
+## Run it from source
+
+Tested on Windows 11 with Node.js 24 from a fresh clone (2026-11-09).
+
+**Prerequisites:** Windows 10/11 · [Node.js 24](https://nodejs.org) · [Git](https://git-scm.com) · [Ollama](https://ollama.com/download) · Python 3 (optional, for the coding demos)
 
 ```powershell
-# 1. Clone the repository
 git clone https://github.com/siddharthakki/Pandesh.git
 cd Pandesh
-
-# 2. Install dependencies
 npm ci
+cd apps\desktop; npm ci; cd ..\..
+node esbuild.core.js
 
-# 3. Build Core bundle
-npm run bundle:core
+ollama pull gemma4:12b          # fast default; qwen3.8:27b is used for heavier work when installed
 
-# 4. Run tests
-npm test
+# Use a separate data folder. Without it Pandesh uses (and migrates) your normal profile.
+$env:KARKEDIKHA_DESKTOP_DATA_DIR = "$env:USERPROFILE\PandeshDev"
+$env:PANDESH_UI_V2 = "1"        # 1 = new interface, 0 = Classic
+node apps\desktop\launch.mjs
 ```
 
-## Explore the interface
+Run the tests:
 
-[**See all six screenshots**](docs/SCREENSHOTS.md) • [**View release gallery**](https://github.com/siddharthakki/Pandesh_Releases/blob/main/docs/SHOWCASE.md)
+```powershell
+npx vitest run core/test          # Core: about 2,600 tests
+npx vitest run apps/desktop/test  # Desktop: about 620 tests
+```
 
-[![Pandesh Tasks and Results — direct Results view, Build 143](assets/screenshots/06-completed-tasks-and-results.png)](docs/SCREENSHOTS.md)
+Real-speech and local-TTS tests are skipped unless their models are staged (`node scripts/fetch-whisper-model.mjs`,
+`node scripts/fetch-piper.mjs`).
 
-<sub>Build 143 fixes New Conversation navigation and introduces direct Tasks / Results tabs.</sub>
+**Hardware:** the demos ran on an RTX 3090 (24 GB). `gemma4:12b` needs about 10 GB of VRAM; `qwen3.8:27b` about 20 GB.
 
-## Architecture and principles
+**Known limitations:** Electron 33 is end-of-life, and upgrading it is the next release blocker. Packaged v2 installers
+aren't published yet. See [docs/ROADMAP.md](docs/ROADMAP.md).
 
-[**Architecture diagram ➔**](docs/ARCHITECTURE.md) • [**Privacy and safety ➔**](docs/PRIVACY.md)
+## Project
 
-- **Local-first AI:** choose a reachable local Ollama model rather than requiring a paid model subscription for basic chat.
-- **Real tool evidence:** explicit tool invocation, observed outcome, and recovery status.
-- **Governed execution:** only approved consequential actions; never indiscriminately stop unrelated host processes.
-- **Durable continuity:** task, memory and conversation state should survive restarts.
-- **Small, purposeful UI:** Panda front and center; show panels when a task requires them.
-
-## Roadmap
-
-Our immediate focus is **reliable conversations, correct model detection, approvals, task results, and useful daily workflows**, not a feature checklist.
-
-[Read the short, prioritized roadmap](docs/ROADMAP.md).
-
-## Source Code & Licensing
-
-**Pandesh Core is published under the MIT License.**
-
-[MIT LICENSE](LICENSE) • [CONTRIBUTING](CONTRIBUTING.md) • [SECURITY](SECURITY.md)
-
-## Trust and contribution safety
-
-Outside developers are welcome to fork and propose improvements. Pull requests are validated in GitHub-hosted CI runners.
-
-[Security policy](SECURITY.md) • [Maintainer protection checklist](docs/MAINTAINER_SECURITY_SETUP.md) • [How contributions work](CONTRIBUTING.md)
-
-## Help build Pandesh
-
-- **[Start contributing](docs/CONTRIBUTOR_START_HERE.md):** fork the project, improve public guides or report real Windows/Ollama behavior.
-- **[Good first issue #2](https://github.com/siddharthakki/Pandesh/issues/2):** make first-run Ollama instructions clearer and reproducible.
-- **[Good first issue #3](https://github.com/siddharthakki/Pandesh/issues/3):** document actual model compatibility, including what fails.
-- **[Support and community](SUPPORT.md):** know where to ask questions, report bugs or help test.
-
-## Community and credits
-
-Found a bug or got Pandesh working with your favorite local model? [Open an issue](https://github.com/siddharthakki/Pandesh_Releases/issues) with the app build and reproducible behavior—never raw private logs.
-
-Built with and/or integrated with independent upstream projects including **Ollama, Pi, Electron, OpenCode and Hermes Agent**. [See acknowledgements and license notes](https://github.com/siddharthakki/Pandesh_Releases/blob/main/THIRD_PARTY_NOTICES.md). No affiliation with the fictional J.A.R.V.I.S. character, Marvel, or those upstream maintainers is implied.
-
-**Downloads:** [Pandesh_Releases](https://github.com/siddharthakki/Pandesh_Releases) • **Public Source:** [Pandesh](https://github.com/siddharthakki/Pandesh).
+- [Contributing](CONTRIBUTING.md) · [Security policy](SECURITY.md) (report vulnerabilities privately) · [Support](SUPPORT.md) · [Code of conduct](CODE_OF_CONDUCT.md)
+- License: [MIT](LICENSE)
+- Built with Ollama, Electron, React, the Pi agent core, Aider and OpenCode. No affiliation with those projects is implied.
