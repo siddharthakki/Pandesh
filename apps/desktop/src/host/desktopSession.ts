@@ -88,6 +88,7 @@ import {
   extractVideoPrompt,
   composeEditPrompt,
   extractWeatherLocation,
+  extractWeatherComparison,
   planDesktopInteraction,
   isStopIntent,
   type DesktopInteractionMode,
@@ -102,6 +103,7 @@ import {
   parseEverydayIntent,
 } from './everydayToolsIntent';
 import { EverydayReminderScheduler } from './everydayReminderScheduler';
+import { EverydayTimerManager } from './everydayTimerManager';
 import { everydayToolCatalog } from './everydayToolCatalog';
 import { listWorkerOptions, findWorkerOption, resolveWorkerProfile } from '../../../../core/runtime/localCoreQuestion';
 import { probeDesktopLocalSpeech, transcribeDesktopUtterance } from './desktopLocalSpeech';
@@ -162,6 +164,7 @@ import { collectDesktopHostTelemetry, type DesktopHostTelemetry } from './deskto
 import { buildConversationContextView, conversationWorkspaceIdentity } from './desktopConversationContext';
 import {
   ensureImageStudioServices,
+  optimizeImagePrompt,
   probeImageStudioServices,
   IMAGE_STUDIO_APP_URL,
   type ImageStudioServiceStatus,
@@ -201,6 +204,8 @@ export interface DesktopSessionOptions {
   /** What this host can honestly say about its notification channel. */
   notificationChannel?: () => { supported: boolean; detail: string };
   ensureImageStudio?: (onStatus?: (text: string) => void) => Promise<ImageStudioServiceStatus>;
+  /** Test seam for the Studio's local prompt optimizer. */
+  optimizeImagePrompt?: (prompt: string) => Promise<{ prompt: string; negativePrompt: string | null; optimized: boolean }>;
   probeImageStudio?: () => Promise<ImageStudioServiceStatus>;
   /** How long a Stop waits for Core to confirm the attempt reached a terminal
    * state before the desktop reports that the stop was not confirmed. */
@@ -272,6 +277,8 @@ export class DesktopSession {
   private readonly workspaceActivity: WorkspaceActivityLog;
   private missionStartedAt: string | null = null;
   private selectedWorker = 'local-core';
+  /** Phase 2b: the specialist agent the next turns are addressed to (null = Pandesh itself). */
+  private selectedAgentId: string | null = null;
   private selectedInferenceProvider: 'ollama' | 'openrouter' | 'cloud' = 'ollama';
   private cloudCatalogCache: DesktopCloudCatalog | null = null;
   private cloudListings = new Map<string, DesktopCloudModelListing>();
@@ -310,6 +317,8 @@ export class DesktopSession {
    * keeps working unchanged for the two call sites that never touch the
    * rail. `submitTask` prefers this one when set. */
   private selectedConversationId: string | null = null;
+  /** D8: whether the local model server answered the last probe (null = not probed yet). */
+  private modelServerReachable: boolean | null = null;
   private interactionMode: DesktopInteractionMode = 'chat';
   private lastTurnOutcome: DesktopTurnOutcome | null = null;
   /** Truthful "what actually happened" label, independent of the coarser
@@ -324,6 +333,7 @@ export class DesktopSession {
   private everydayTools: EverydayToolsSnapshot = emptyEverydayToolsSnapshot();
   private commandQueue: CommandQueueSnapshot = emptyCommandQueueSnapshot();
   private reminderScheduler: EverydayReminderScheduler | null = null;
+  private readonly timerManager: EverydayTimerManager;
   /** Serialize wake PCM into the worker so frames stay ordered without IPC storms. */
   private wakePushTail: Promise<unknown> = Promise.resolve();
   private queueOfferTimer: NodeJS.Timeout | null = null;
@@ -387,6 +397,28 @@ export class DesktopSession {
       },
     });
     this.gmailStatusCache = this.gmailTokenManager.getStatus();
+    this.timerManager = new EverydayTimerManager({
+      dataDir: this.dataDir,
+      notify: async (input) => {
+        if (this.options.notifyReminder) {
+          try {
+            await this.options.notifyReminder(input);
+          } catch { /* ignore notification errors */ }
+        }
+        this.emit({
+          kind: 'activity',
+          at: nowIso(),
+          summary: input.title,
+          eventType: 'everyday_timer_alert',
+          text: input.id,
+        });
+        await this.refreshEverydayTools();
+      },
+      onTimerChange: async () => {
+        await this.refreshEverydayTools();
+      },
+      log: this.options.log,
+    });
   }
 
   /** Host-only local ASR probe (Whisper WASM or configured external command). */
@@ -787,7 +819,11 @@ export class DesktopSession {
         ? (openRouter.model ?? null)
         : displayProvider === 'cloud' && cloudSelection
           ? cloudSelection.modelId
-          : (this.provider?.model ?? null);
+          // D9: under Auto the configured label (gemma4:12b) is not what ran; show the model Core
+          // last actually chose, or nothing until it has chosen one.
+          : modelIsAuto
+            ? (this.activeModel && this.activeModel !== AUTO_MODEL ? this.activeModel : null)
+            : (this.provider?.model ?? null);
     const displayApiBase = displayProvider === 'openrouter'
       ? OPENROUTER_OFFICIAL_API_BASE
       : (this.provider?.apiBase ?? 'http://127.0.0.1:11434');
@@ -798,6 +834,7 @@ export class DesktopSession {
       model: displayModel,
       modelIsAuto,
       modelAvailable: displayProvider === 'openrouter' ? null : this.modelAvailable,
+      modelServerReachable: displayProvider === 'openrouter' ? null : this.modelServerReachable,
       installedModels: [...this.installedModels],
       cloud: this.getCloudState(),
       selectedInferenceProvider: inference,
@@ -834,6 +871,7 @@ export class DesktopSession {
       coreBuild: this.coreBuild,
       workers: listWorkerOptions().map((option) => ({ ...option })),
       selectedWorker: this.selectedWorker,
+      selectedAgentId: this.selectedAgentId,
       activeWorker: this.activeWorker,
       openRouter: this.openRouterStatus(),
       localSpeech: this.getLocalSpeechStatus(),
@@ -1242,7 +1280,7 @@ export class DesktopSession {
     let migrated: string | null = null;
     if (legacy) {
       try {
-        const installed = await listInstalledOllamaModels('http://127.0.0.1:11434');
+        const installed = await listInstalledOllamaModels(this.provider?.apiBase ?? 'http://127.0.0.1:11434');
         const isInstalled = installed.includes(legacy.model)
           || installed.some((name) => name === legacy.model || name.startsWith(`${legacy.model}:`));
         if (isInstalled) migrated = legacy.model;
@@ -1549,13 +1587,15 @@ export class DesktopSession {
     const apiBase = this.provider?.apiBase ?? 'http://127.0.0.1:11434';
     try {
       this.installedModels = await listInstalledOllamaModels(apiBase);
+      this.modelServerReachable = true;
       if (!this.operatorSelectedModel && this.installedModels.length === 1) {
         this.operatorSelectedModel = this.installedModels[0];
         writeSelectedModel(this.dataDir, this.operatorSelectedModel);
       }
     } catch (err) {
       this.installedModels = [];
-      this.coreDetail = (err as Error).message;
+      this.modelServerReachable = !/unreachable|ECONNREFUSED|fetch failed/i.test((err as Error).message);
+      this.coreDetail = this.modelServerReachable ? (err as Error).message : this.modelServerUnreachableMessage(apiBase);
       this.emit({ kind: 'error', at: nowIso(), summary: (err as Error).message });
     }
     return [...this.installedModels];
@@ -1875,6 +1915,7 @@ export class DesktopSession {
     writeSelectedConversation(this.dataDir, conversationId);
     const submission = await client.submit({
       currentMessage: text,
+      ...(this.selectedAgentId ? { agentId: this.selectedAgentId } : {}),
       requestedMode: 'baat_kar',
       conversationId,
       requestedProvider: selection.providerId,
@@ -1965,6 +2006,18 @@ export class DesktopSession {
     const staged = preStaged ?? this.attachmentStaging.take();
 
     if (this.active && !this.active.terminal) {
+      if (staged.length === 0) {
+        const everyday = parseEverydayIntent(text);
+        if (everyday && (
+          everyday.kind === 'start_timer' ||
+          everyday.kind === 'stop_timer' ||
+          everyday.kind === 'pause_timer' ||
+          everyday.kind === 'resume_timer' ||
+          everyday.kind === 'query_timer'
+        )) {
+          return this.handleTimerIntentDirect(text, everyday, clientOrigin);
+        }
+      }
       return new Promise((resolve, reject) => {
         this.submissionQueue.push({
           goal: text,
@@ -2061,13 +2114,16 @@ export class DesktopSession {
       openRouterSelection = requireOpenRouterSelection(config, openRouterApiKeyPresent(this.dataDir));
     } else if (isAutoModel) {
       await this.refreshInstalledModels();
+      if (this.installedModels.length === 0 && this.modelServerReachable === false) {
+        throw new Error(this.modelServerUnreachableMessage(this.provider?.apiBase ?? 'http://127.0.0.1:11434'));
+      }
       if (this.installedModels.length === 0) {
         throw new Error('No models found in Ollama. Install a model (e.g. ollama pull gemma4:12b) before submitting.');
       }
     } else {
       await this.refreshModelAvailability();
       if (this.modelAvailable !== true) {
-        throw new Error(`configured local model '${this.provider!.model}' is not installed in Ollama`);
+        throw new Error(this.localModelUnavailableMessage());
       }
     }
 
@@ -2168,6 +2224,7 @@ export class DesktopSession {
       : null;
     const submission = await client.submit({
       currentMessage: text,
+      ...(this.selectedAgentId ? { agentId: this.selectedAgentId } : {}),
       requestedMode,
       conversationId,
       ...(attachmentIds.length > 0 ? { attachmentIds } : {}),
@@ -2305,7 +2362,7 @@ export class DesktopSession {
     this.refreshProvider();
     await this.refreshModelAvailability();
     if (this.modelAvailable !== true) {
-      throw new Error(`configured local model '${this.provider!.model}' is not installed in Ollama`);
+      throw new Error(this.localModelUnavailableMessage());
     }
     const scope = describeDesktopTaskScope(this.folder);
     if (!scope) throw new Error('select a repository before continuing');
@@ -2366,6 +2423,19 @@ export class DesktopSession {
     const active = this.active;
     if (!active || active.terminal) throw new Error('no running task to cancel');
     this.pending = undefined;
+    // Re-run M11: a chat image turn has a host-side id that Core does not know; stop it here (and any running
+    // capability action), so Stop always ends it.
+    if (active.attemptId.startsWith('image_att_')) {
+      this.pendingImageApproval = null;
+      try { await this.cancelImageGeneration(); } catch { /* nothing running in Core yet */ }
+      this.activeImageAttemptId = null;
+      active.terminal = true;
+      this.lastTurnOutcome = 'cancelled';
+      this.turnOutcomeKind = null;
+      this.emit({ kind: 'result', at: nowIso(), attemptId: active.attemptId, summary: 'Image Generation Studio', text: 'Image request stopped — nothing was generated.' });
+      this.drainSubmissionQueue();
+      return;
+    }
     await this.requireClient().cancelAttempt(active.attemptId);
     this.recordEvidence({ type: 'cancel-requested', attemptId: active.attemptId, requestId: active.requestId });
     this.emit({
@@ -2506,6 +2576,7 @@ export class DesktopSession {
     const model = this.activeModel as string;
     const submission = await client.submit({
       currentMessage: text,
+      ...(this.selectedAgentId ? { agentId: this.selectedAgentId } : {}),
       requestedMode: 'baat_kar',
       conversationId: active.conversationId,
       requestedProvider: 'ollama',
@@ -2633,7 +2704,41 @@ export class DesktopSession {
       sendBriefing: { path: '/v1/household/companion/briefing', method: 'POST', body: {} },
       allowDocumentReading: { path: '/v1/household/document-reading', method: 'POST', body: { folder: args.folder } },
       revokeDocumentReading: { path: `/v1/household/document-reading/${id}/revoke`, method: 'POST', body: {} },
+      // Software & Services (read-only): inventory, update discovery, check settings.
+      softwareInventory: { path: `/v1/software/inventory${args.refresh ? '?refresh=1' : ''}` },
+      softwareUpdates: { path: '/v1/software/updates' },
+      softwareCheckUpdates: { path: '/v1/software/updates/check', method: 'POST', body: {} },
+      toolHub: { path: '/v1/tools/hub' },
+      processes: { path: '/v1/processes' },
+      projects: { path: '/v1/projects' },
+      project: { path: `/v1/projects/${id}` },
+      wishes: { path: '/v1/wishes' },
+      wish: { path: `/v1/wishes/${id}` },
+      wishBusiness: { path: '/v1/wishes/business' },
+      socialDrafts: { path: '/v1/social/drafts' },
+      socialCreate: { path: '/v1/social/drafts', method: 'POST', body: { channel: args.channel, text: args.text } },
+      socialDecide: { path: `/v1/social/drafts/${id}/decide`, method: 'POST', body: { decision: args.decision, note: args.note, text: args.text } },
+      brainStatus: { path: '/v1/knowledge/status' },
+      brainReindex: { path: '/v1/knowledge/reindex', method: 'POST', body: {} },
+      brainSearch: { path: `/v1/knowledge/search?q=${encodeURIComponent(String(args.q ?? ''))}${args.types ? `&types=${encodeURIComponent(String(args.types))}` : ''}` },
+      brainItem: { path: `/v1/knowledge/items/${encodeURIComponent(String(args.type ?? ''))}/${id}` },
+      brainTimeline: { path: `/v1/knowledge/timeline${args.types ? `?types=${encodeURIComponent(String(args.types))}` : ''}` },
+      brainGraph: { path: `/v1/knowledge/graph${args.focusType ? `?focusType=${encodeURIComponent(String(args.focusType))}&focusId=${id}&hops=${Number(args.hops) || 1}` : ''}` },
+      brainImpact: { path: `/v1/knowledge/facts/${id}/impact` },
+      brainForget: { path: `/v1/knowledge/facts/${id}/forget`, method: 'POST', body: {} },
+      brainCorrect: { path: `/v1/knowledge/facts/${id}/correct`, method: 'POST', body: { value: args.value } },
+      connectors: { path: '/v1/connectors' },
+      toolTest: { path: '/v1/tools/test', method: 'POST', body: {} },
+      agents: { path: '/v1/agents' },
+      agent: { path: `/v1/agents/${id}` },
+      agentUpdate: { path: `/v1/agents/${id}/update`, method: 'POST', body: { enabled: args.enabled, modelPolicy: args.modelPolicy, toolDenylist: args.toolDenylist, alwaysAsk: args.alwaysAsk } },
+      agentDelegate: { path: '/v1/agents/delegate', method: 'POST', body: { parentAttemptId: args.parentAttemptId, toAgentId: args.toAgentId, brief: args.brief, grant: args.grant, workspaceRoot: this.folder ?? null } },
+      softwareSettings: { path: '/v1/software/settings', method: 'POST', body: { periodicEnabled: args.periodicEnabled, intervalHours: args.intervalHours } },
     };
+    if (action === 'selectAgent') {
+      this.selectedAgentId = typeof args.agentId === 'string' && args.agentId && args.agentId !== 'chief' ? args.agentId : null;
+      return { selectedAgentId: this.selectedAgentId };
+    }
     const route = routes[action];
     if (!route) throw new Error(`unknown household action ${action}`);
     return client.requestAsHost(route.path, route.method ? { method: route.method, body: route.body } : {});
@@ -2896,6 +3001,7 @@ export class DesktopSession {
     }
     this.reminderScheduler?.dispose();
     this.reminderScheduler = null;
+    this.timerManager?.dispose();
     void this.pocketTts?.dispose();
     this.pocketTts = null;
     this.client?.dispose();
@@ -2979,6 +3085,7 @@ export class DesktopSession {
       })),
       reminders: reminders.map(mapReminderView),
       dueReminders: due.map(mapReminderView),
+      activeTimers: this.timerManager ? this.timerManager.listActiveTimers() : [],
     };
     this.reminderScheduler?.sync(
       this.everydayTools.reminders
@@ -3697,14 +3804,30 @@ export class DesktopSession {
     if (!held || held.approval.id !== approvalId) throw new Error('no matching pending image approval');
     this.pendingImageApproval = null;
     const client = this.requireClient();
-    await client.resolveCapabilityApproval(approvalId, {
-      resolution,
-      attemptId: held.approval.attemptId,
-      expectedAttemptRevision: held.approval.expectedAttemptRevision,
-      expectedAttemptStatus: held.approval.expectedAttemptStatus,
-      requestedActionDigest: held.approval.requestedActionDigest,
-      frozenContextHash: held.approval.frozenContextHash,
-    });
+    try {
+      await client.resolveCapabilityApproval(approvalId, {
+        resolution,
+        attemptId: held.approval.attemptId,
+        expectedAttemptRevision: held.approval.expectedAttemptRevision,
+        expectedAttemptStatus: held.approval.expectedAttemptStatus,
+        requestedActionDigest: held.approval.requestedActionDigest,
+        frozenContextHash: held.approval.frozenContextHash,
+      });
+    } catch (error) {
+      // Re-run M11: the approval could not be recorded (e.g. it had expired). Nothing was generated; end the image turn
+      // truthfully instead of leaving the window on "Waiting for your approval" with no card.
+      const reason = compactCapabilityFailure(error);
+      this.activeImageAttemptId = null;
+      await this.recordConversationMessage(held.correlationId, 'assistant', `Image not generated: your answer could not be recorded (${reason}). Ask again to retry.`);
+      if (this.isImageTurnFor(held.approval.attemptId)) {
+        this.active!.terminal = true;
+        this.lastTurnOutcome = 'failed';
+        this.turnOutcomeKind = 'failed';
+        this.drainSubmissionQueue();
+      }
+      this.emit({ kind: 'status', at: nowIso(), summary: reason, eventType: 'image_generation_failed' });
+      return { outcome: 'failed', attemptId: held.approval.attemptId, reason };
+    }
     if (resolution === 'rejected') {
       this.activeImageAttemptId = null;
       await this.recordConversationMessage(held.correlationId, 'assistant', 'Image request cancelled — nothing was generated.');
@@ -4127,7 +4250,15 @@ export class DesktopSession {
 
     let reply = '';
     try {
-      if (intent.kind === 'remember_note') {
+      if (
+        intent.kind === 'start_timer' ||
+        intent.kind === 'stop_timer' ||
+        intent.kind === 'pause_timer' ||
+        intent.kind === 'resume_timer' ||
+        intent.kind === 'query_timer'
+      ) {
+        reply = this.processTimerIntent(intent, conversationId);
+      } else if (intent.kind === 'remember_note') {
         const note = await client.createEverydayNote({ body: intent.body });
         reply = `Saved note: ${note.body}`;
       } else if (intent.kind === 'find_notes') {
@@ -4207,6 +4338,84 @@ export class DesktopSession {
       this.drainSubmissionQueue();
       throw err;
     }
+  }
+
+  private processTimerIntent(
+    intent: NonNullable<ReturnType<typeof parseEverydayIntent>>,
+    conversationId?: string | null,
+  ): string {
+    if (intent.kind === 'start_timer') {
+      const durationMs = 'durationMs' in intent && typeof intent.durationMs === 'number'
+        ? intent.durationMs
+        : (intent as any).durationSeconds
+        ? (intent as any).durationSeconds * 1000
+        : 0;
+      const res = this.timerManager.startTimer(
+        durationMs,
+        intent.label || '',
+        conversationId,
+      );
+      if ('secondary' in intent && intent.secondary) {
+        const secRes = this.timerManager.startTimer(
+          intent.secondary.durationMs,
+          intent.secondary.label,
+          conversationId,
+        );
+        return `${res.message} ${secRes.message}`;
+      }
+      return res.message;
+    }
+    // Compound commands ("pause the tea timer and cancel the pasta timer") run every action in order;
+    // each reply line is the timer manager's own result, so nothing is claimed that did not happen.
+    const actions = [intent, ...(('also' in intent && intent.also) ? intent.also : [])];
+    return actions.map((action) => this.processTimerAction(action)).join('\n');
+  }
+
+  private processTimerAction(action: { kind: string; target?: string; query?: string }): string {
+    const target = action.target ?? action.query;
+    if (action.kind === 'stop_timer') return this.timerManager.stopTimer(target).message;
+    if (action.kind === 'pause_timer') return this.timerManager.pauseTimer(target).message;
+    if (action.kind === 'resume_timer') return this.timerManager.resumeTimer(target).message;
+    if (action.kind === 'query_timer') {
+      const active = this.timerManager.listActiveTimers();
+      // No specific timer named and several are active: report each one, not just the latest.
+      if (!target && active.length > 1) return active.map((timer) => this.timerManager.queryTimer(`id:${timer.id}`).message).join('\n');
+      return this.timerManager.queryTimer(target).message;
+    }
+    return 'Timer command not recognized.';
+  }
+
+  private async handleTimerIntentDirect(
+    text: string,
+    intent: NonNullable<ReturnType<typeof parseEverydayIntent>>,
+    clientOrigin: 'desktop' | 'mobile' = 'desktop',
+  ): Promise<{ requestId: string; attemptId: string; model: string }> {
+    const requestId = `timer_req_${Date.now()}`;
+    const attemptId = `timer_att_${Date.now()}`;
+    let conversationId = this.selectedConversationId;
+    if (!conversationId) {
+      try {
+        conversationId = await this.ensureCapabilityConversation('Everyday');
+      } catch { /* use fallback or null */ }
+    }
+    if (conversationId) {
+      await this.recordConversationMessage(conversationId, 'user', text);
+    }
+    const reply = this.processTimerIntent(intent, conversationId);
+    if (conversationId) {
+      await this.recordConversationMessage(conversationId, 'assistant', reply);
+    }
+    await this.refreshEverydayTools();
+    this.emit({
+      kind: 'result',
+      at: nowIso(),
+      requestId,
+      attemptId,
+      summary: 'Timer',
+      text: reply,
+      clientOrigin,
+    });
+    return { requestId, attemptId, model: 'everyday-timer' };
   }
 
   /** A chat message phrased as an image request ("generate an image of…")
@@ -4314,13 +4523,23 @@ export class DesktopSession {
           ? 'Image Studio is running but reports no image model (checkpoint). Add a checkpoint in ComfyUI\'s models/checkpoints folder, then ask again.'
           : `Image Studio could not be started: ${status.detail}.`);
       }
+      // A still image gets a concrete visual description from the Studio's local optimizer before the card is raised.
+      const optimized = isVideo || media.arguments.referenceArtifactId
+        ? { prompt, negativePrompt: null, optimized: false }
+        : this.options.optimizeImagePrompt
+          ? await this.options.optimizeImagePrompt(prompt)
+          // A stubbed Studio (tests) has no real optimizer behind it.
+          : this.options.probeImageStudio ? { prompt, negativePrompt: null, optimized: false } : await optimizeImagePrompt(prompt);
+      const drawPrompt = optimized.prompt;
       const result = await this.generateImage(isVideo
         ? { prompt, ...media.arguments }
-        : { prompt, checkpoint, width: 1024, height: 1024, steps: 20, ...media.arguments }, media.toolName);
+        : { prompt: drawPrompt, ...(optimized.negativePrompt ? { negativePrompt: optimized.negativePrompt } : {}), checkpoint, width: 1024, height: 1024, steps: 20, ...media.arguments }, media.toolName);
       if (result.outcome === 'approval_required') {
         reply = isVideo
           ? `I've prepared ${media.label} — prompt: "${prompt}" (about ${Number(media.arguments.seconds ?? 4)} s, LTX-Video). Approve it in the card below; it runs on this PC's GPU and takes a few minutes.`
-          : `I've prepared ${media.label} — prompt: "${prompt}", checkpoint: ${checkpoint}. Approve it in the card below to start; it runs on this PC's GPU.`;
+          : optimized.optimized
+            ? `I've prepared ${media.label} of "${prompt}". To get a faithful picture I described it in detail for the image model (written on this PC): "${drawPrompt}". Checkpoint: ${checkpoint}. Approve it in the card below to start; it runs on this PC's GPU.`
+            : `I've prepared ${media.label} — prompt: "${prompt}", checkpoint: ${checkpoint}. Approve it in the card below to start; it runs on this PC's GPU.`;
         await this.recordConversationMessage(conversationId, 'assistant', reply);
         // Keep active.terminal = false while awaiting approval so the task is truthfully represented
         this.emit({ kind: 'approval', at: nowIso(), requestId, attemptId, summary: reply, text: reply, clientOrigin });
@@ -4390,6 +4609,32 @@ export class DesktopSession {
 
     let reply = '';
     try {
+      const comp = extractWeatherComparison(text);
+      if (comp) {
+        this.emit({ kind: 'status', at: nowIso(), requestId, attemptId, summary: `Looking up weather for ${comp.locationA} and ${comp.locationB}`, clientOrigin });
+        const [resA, resB] = await Promise.all([
+          this.getWeather(comp.locationA),
+          this.getWeather(comp.locationB),
+        ]);
+        if (resA.outcome === 'approval_required' || resB.outcome === 'approval_required') {
+          reply = `I've prepared weather lookups for "${comp.locationA}" and "${comp.locationB}". Approve below to view the comparison.`;
+          await this.recordConversationMessage(this.active.conversationId, 'assistant', reply);
+          this.emit({ kind: 'approval', at: nowIso(), requestId, attemptId, summary: reply, text: reply, clientOrigin });
+          return { requestId, attemptId: resA.attemptId ?? resB.attemptId ?? attemptId, model: 'weather' };
+        }
+        const textA = resA.outcome === 'executed' ? resA.message : (resA.reason || 'Failed to fetch weather');
+        const textB = resB.outcome === 'executed' ? resB.message : (resB.reason || 'Failed to fetch weather');
+        reply = `**Weather Comparison:**\n\n• **${comp.locationA}**:\n${textA}\n\n• **${comp.locationB}**:\n${textB}`;
+        await this.recordConversationMessage(conversationId, 'assistant', reply);
+        this.active.terminal = true;
+        const failed = resA.outcome === 'failed' && resB.outcome === 'failed';
+        this.lastTurnOutcome = failed ? 'failed' : 'completed';
+        this.turnOutcomeKind = failed ? 'failed' : 'answered';
+        this.emit({ kind: 'result', at: nowIso(), requestId, attemptId, summary: 'Weather comparison', text: reply, clientOrigin });
+        this.drainSubmissionQueue();
+        return { requestId, attemptId: resA.attemptId ?? resB.attemptId ?? attemptId, model: 'weather' };
+      }
+
       // A bare follow-up ("will it rain?" right after "weather in Ulm?")
       // has no place name of its own — reuse the last location resolved
       // in this conversation rather than making the user repeat it, the
@@ -4497,12 +4742,21 @@ export class DesktopSession {
     } catch {
       this.provider = {
         providerType: 'ollama',
-        apiBase: 'http://127.0.0.1:11434',
+        apiBase: (process.env.KARKEDIKHA_OLLAMA_URL?.trim() || 'http://127.0.0.1:11434').replace(/\/$/, ''),
         model: this.operatorSelectedModel === AUTO_MODEL ? '' : this.operatorSelectedModel ?? '',
         routingPolicy: 'local-only',
         source: 'unset',
       };
     }
+  }
+
+  private modelServerUnreachableMessage(apiBase: string): string {
+    return `Ollama is not reachable at ${apiBase}. Start Ollama, then send again — your message was not sent.`;
+  }
+
+  private localModelUnavailableMessage(): string {
+    if (this.modelServerReachable === false) return this.modelServerUnreachableMessage(this.provider?.apiBase ?? 'http://127.0.0.1:11434');
+    return `configured local model '${this.provider?.model ?? 'unset'}' is not installed in Ollama`;
   }
 
   private async refreshModelAvailability(): Promise<void> {
@@ -4526,8 +4780,18 @@ export class DesktopSession {
     try {
       await assertLocalModelInstalled(this.provider.apiBase, this.provider.model);
       this.modelAvailable = true;
+      this.modelServerReachable = true;
     } catch (err) {
       this.modelAvailable = false;
+      if (/Ollama is unreachable/i.test((err as Error).message)) {
+        // D8: an unreachable server is not a missing model.
+        this.modelServerReachable = false;
+        const detail = this.modelServerUnreachableMessage(this.provider.apiBase);
+        this.coreDetail = detail;
+        this.emit({ kind: 'error', at: nowIso(), summary: detail });
+        return;
+      }
+      this.modelServerReachable = true;
       // Fail closed, never silently substitute another model — the operator's
       // explicit selection was removed from Ollama since it was chosen.
       const detail = `Selected model '${this.provider.model}' is not installed. Select an installed model.`;
@@ -4593,6 +4857,9 @@ export class DesktopSession {
       // operator must be told that nothing was approved. Only when there is no
       // live turn is there nothing else to do.
       if (!this.active || this.active.terminal) return;
+      // A specialist agent this turn delegated to asks inside its own task; its card belongs here, where the
+      // delegating turn is waiting (Core lists delegated children's approvals under this conversation).
+      if (event.eventType === 'approval_requested' && !this.pending) void this.loadPendingApproval();
     }
     // The worker that was waiting for this turn's answer is gone (Core restarted). The turn is interrupted, not
     // running: it must stop holding the active slot, or every later message would queue behind a ghost.
@@ -4829,6 +5096,9 @@ export class DesktopSession {
     if (!active || active.terminal) return;
     active.terminal = true;
     this.lastTurnOutcome = outcome;
+    // D8: a failed local turn may mean Ollama went away; re-probe so the header
+    // stops saying "Connected" when it is not (best effort, never blocks).
+    if (outcome !== 'completed' && this.selectedInferenceProvider !== 'cloud') void this.refreshInstalledModels().catch(() => undefined);
     this.turnOutcomeKind = classifyTurnOutcomeKind({ outcome, mode: this.interactionMode });
     // "Repository updated" only with evidence that files changed in this
     // attempt (cockpit-observed paths or file artifacts) — a Q&A answered by
@@ -5091,6 +5361,7 @@ function emptyEverydayToolsSnapshot(): EverydayToolsSnapshot {
     notes: [],
     reminders: [],
     dueReminders: [],
+    activeTimers: [],
   };
 }
 

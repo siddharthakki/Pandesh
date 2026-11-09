@@ -37,3 +37,6 @@ Thumbs.db
 /models/
 /runtime/
 .tools/
+
+# Phase 2 UI bundle (built by apps/desktop/esbuild.mjs)
+apps/desktop/renderer/v2/app.js

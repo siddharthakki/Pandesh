@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>System Dashboard</title>
+    <style>
+        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background-color: #f0f2f5; margin: 0; padding: 20px; }
+        .container { max-width: 1000px; margin: auto; }
+        h1 { color: #1a73e8; text-align: center; }
+        .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 20px; }
+        .card { background: white; padding: 20px; border-radius: 12px; box-shadow: 0 4px 12px rgba(0,0,0,0.1); }
+        h2 { border-bottom: 2px solid #eee; padding-bottom: 10px; color: #5f6368; }
+        ul { list-style: none; padding: 0; }
+        li { padding: 8px 0; border-bottom: 1px solid #f9f9f9; font-size: 0.9em; }
+        .status-tag { background: #e6f4ea; color: #1e8e3e; padding: 2px 8px; border-radius: 4px; font-size: 0.8em; }
+        .update-tag { color: #d93025; font-weight: bold; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>PC Dashboard</h1>
+        <div class="grid">
+            <!-- System Info -->
+            <div class="card">
+                <h2>System Status</h2>
+                <p><strong>OS:</strong> Windows 11 Pro</p>
+                <p><strong>CPU:</strong> AMD Ryzen 9 5900X (12 Cores)</p>
+                <p><strong>RAM:</strong> 63.9 GB (21.1 GB Free)</p>
+                <p><strong>GPU:</strong> NVIDIA GeForce RTX 3090</p>
+                <p><strong>VRAM:</strong> 24.5 GB (13.9 GB Used)</p>
+            </div>
+
+            <!-- Project Tasks -->
+            <div class="card">
+                <h2>Active Project: Home Office Improvements</h2>
+                <ul>
+                    <li>[pending] review my PC storage</li>
+                    <li>[pending] check software updates</li>
+                    <li>[pending] organize test documents</li>
+                    <li>[pending] prepare a backup plan</li>
+                </ul>
+            </div>
+
+            <!-- Software Updates -->
+            <div class="card">
+                <h2>Available Updates (Samples)</h2>
+                <ul>
+                    <li>7zip: 26.04.0 &rarr; 26.06 <span class="update-tag">Update Available</span></li>
+                    <li>OpenAI.ChatGPT: 26.1029 &rarr; 26.1103</li>
+                    <li>Ollama: 0.40.12 &rarr; 0.40.15</li>
+                    <li>Nvidia.CUDA: 13.3 &rarr; 13.5</li>
+                    <li>Microsoft.WindowsTerminal: 1.24 &rarr; 1.25</li>
+                    <li>Python Package: alchemy (3.14.3 &rarr; 3.14.5)</li>
+                </ul>
+            </div>
+        </div>
+    </div>
+</body>
+</html>

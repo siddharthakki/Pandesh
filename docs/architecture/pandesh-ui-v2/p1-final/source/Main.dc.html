@@ -1,0 +1,721 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Pandesh P1 idle chat</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600&amp;family=Geist+Mono:wght@400;500&amp;family=Newsreader:opsz,wght@6..72,300;6..72,400&amp;display=swap">
+<style>body{margin:0}</style>
+</helmet>
+<div onKeyDown="{{rootKey}}" style="width: {{rootW}}; height: {{rootH}}; zoom: {{zoom}}; overflow: hidden; display: flex; flex-direction: column; font-family: Geist, system-ui, sans-serif; font-size: 15px; line-height: 1.5; background: {{t.canvas}}; color: {{t.ink}}; box-sizing: border-box">
+
+  <div role="note" style="flex: 0 0 auto; height: 32px; display: flex; align-items: center; justify-content: center; background: {{t.ink}}; color: {{t.canvas}}; font-family: 'Geist Mono', ui-monospace, monospace; font-size: 13px; font-weight: 500">
+    <span>Prototype — sample data, nothing ran</span>
+  </div>
+
+  <div style="flex: 0 0 auto; display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; padding: {{stripPad}}; background: {{t.surface}}; border-bottom: 1px solid {{t.line}}">
+    <sc-if value="{{wide}}" hint-placeholder-val="{{ true }}">
+      <span style="font-family: 'Geist Mono', ui-monospace, monospace; font-size: 12px; font-weight: 500; letter-spacing: 0.08em; color: {{t.muted}}">SIMULATION</span>
+    </sc-if>
+    <span aria-live="polite" aria-label="{{stageAria}}" style="font-size: 14px; color: {{t.ink}}; min-width: 0">{{stageText}}</span>
+    <sc-if value="{{wide}}" hint-placeholder-val="{{ true }}">
+      <div style="display: flex; gap: 4px; flex-wrap: wrap">
+        <sc-for list="{{pills}}" as="p" hint-placeholder-count="10">
+          <button type="button" aria-pressed="{{p.pressed}}" aria-label="{{p.aria}}" title="{{p.aria}}" onClick="{{p.go}}" style="{{p.style}}">{{p.short}}</button>
+        </sc-for>
+      </div>
+    </sc-if>
+    <div style="display: flex; gap: 4px; margin-left: auto">
+      <button type="button" onClick="{{prev}}" aria-label="Previous state" style="{{ctl}}">Prev</button>
+      <button type="button" onClick="{{togglePlay}}" style="{{ctl}}">{{playLabel}}</button>
+      <button type="button" onClick="{{next}}" aria-label="Next state" style="{{ctl}}">Next</button>
+      <button type="button" onClick="{{toggleTheme}}" style="{{ctl}}">{{themeLabel}}</button>
+    </div>
+  </div>
+
+  <div style="flex: 1 1 auto; min-height: 0; display: flex; flex-direction: {{appDir}}; position: relative">
+
+    <sc-if value="{{wide}}" hint-placeholder-val="{{ true }}">
+      <nav aria-label="Main" style="flex: 0 0 {{railW}}; width: {{railW}}; display: flex; flex-direction: column; align-items: stretch; gap: 4px; padding: 12px 8px; background: {{t.surface}}; border-right: 1px solid {{t.line}}; box-sizing: border-box">
+        <sc-for list="{{rail}}" as="r" hint-placeholder-count="4">
+          <button type="button" aria-label="{{r.label}}" title="{{r.label}}" aria-current="{{r.current}}" onClick="{{r.go}}" style="{{r.style}}">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" aria-hidden="true" style="flex: 0 0 auto; stroke-width: 1.6px; stroke-linecap: round; stroke-linejoin: round"><path d="{{r.icon}}"></path></svg>
+            <sc-if value="{{labels}}" hint-placeholder-val="{{ false }}">
+              <span style="flex: 1 1 auto; text-align: left; font-size: 14px">{{r.text}}</span>
+            </sc-if>
+            <sc-if value="{{r.hasBadge}}" hint-placeholder-val="{{ false }}">
+              <span aria-hidden="true" style="{{r.badgeStyle}}">{{r.badge}}</span>
+            </sc-if>
+          </button>
+        </sc-for>
+        <div style="flex: 1 1 auto"></div>
+        <button type="button" aria-label="System: tools, automations, settings, diagnostics" title="System: tools, automations, settings, diagnostics" aria-expanded="{{systemOpen}}" onClick="{{openSystem}}" style="{{systemBtn}}">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" aria-hidden="true" style="flex: 0 0 auto; stroke-width: 1.6px; stroke-linecap: round; stroke-linejoin: round"><path d="M4 7h10M18 7h2M4 17h4M12 17h8"></path><circle cx="16" cy="7" r="2"></circle><circle cx="10" cy="17" r="2"></circle></svg>
+          <sc-if value="{{labels}}" hint-placeholder-val="{{ false }}">
+            <span style="flex: 1 1 auto; text-align: left; font-size: 14px">System</span>
+          </sc-if>
+        </button>
+        <button type="button" aria-pressed="{{labels}}" title="{{labelsTitle}}" aria-label="{{labelsTitle}}" onClick="{{toggleLabels}}" style="{{labelsBtn}}">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" aria-hidden="true" style="flex: 0 0 auto; stroke-width: 1.6px; stroke-linecap: round; stroke-linejoin: round"><path d="{{labelsIcon}}"></path></svg>
+          <sc-if value="{{labels}}" hint-placeholder-val="{{ false }}">
+            <span style="flex: 1 1 auto; text-align: left; font-size: 13px">Hide labels</span>
+          </sc-if>
+        </button>
+      </nav>
+    </sc-if>
+
+    <main style="flex: 1 1 auto; min-width: 0; min-height: 0; display: flex; flex-direction: column">
+      <div style="flex: 0 0 auto; height: {{headerH}}; display: flex; align-items: center; gap: 8px; padding: 0 {{gutter}}; box-sizing: border-box">
+        <button type="button" aria-label="Show past chats" title="Show past chats" style="{{ghostIcon}}">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" aria-hidden="true" style="stroke-width: 1.6px; stroke-linecap: round; stroke-linejoin: round"><path d="M4 5h16v14H4zM9 5v14"></path></svg>
+        </button>
+        <span style="font-size: 14px; color: {{t.muted}}">{{chatTitle}}</span>
+        <div style="flex: 1 1 auto"></div>
+        <button type="button" onClick="{{openPalette}}" aria-expanded="{{paletteOpen}}" title="Search everything (Ctrl K)" style="{{searchBtn}}">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" aria-hidden="true" style="stroke-width: 1.8px; stroke-linecap: round"><circle cx="11" cy="11" r="6.5"></circle><path d="M16 16l4 4"></path></svg>
+          <span>Search</span>
+          <sc-if value="{{wide}}" hint-placeholder-val="{{ true }}">
+            <span style="font-family: 'Geist Mono', ui-monospace, monospace; font-size: 12px; color: {{t.muted}}; border: 1px solid {{t.line}}; border-radius: 4px; padding: 0 5px">Ctrl K</span>
+          </sc-if>
+        </button>
+      </div>
+
+      <div style="flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; overflow-y: {{bodyOverflow}}">
+      <div style="flex: {{spacerFlex}}; min-height: 0"></div>
+
+      <sc-if value="{{showHero}}" hint-placeholder-val="{{ true }}">
+        <div style="flex: {{heroFlex}}; min-height: 0; overflow-y: {{heroOverflow}}; padding: 0 {{gutter}}; box-sizing: border-box">
+          <div style="max-width: 680px; margin: 0 auto; display: flex; flex-direction: column; gap: 16px; padding: {{heroPad}}">
+            <div style="display: flex; align-items: center; gap: 12px">
+              <svg width="28" height="28" viewBox="0 0 28 28" role="img" aria-label="Pandesh" style="flex: 0 0 auto"><circle cx="14" cy="14" r="12" fill="none" stroke="{{t.pulse}}" style="stroke-width: 1.5px"></circle><circle cx="14" cy="14" r="4.5" fill="{{t.pulse}}"></circle></svg>
+              <span style="font-size: 14px; color: {{t.muted}}">{{dateLine}}</span>
+            </div>
+            <sc-if value="{{isA}}" hint-placeholder-val="{{ false }}">
+              <p style="margin: 0; font-family: Newsreader, Georgia, serif; font-weight: 300; font-size: {{heroSize}}; line-height: 1.15; color: {{t.ink}}">Hello. I'm Pandesh — I live on this PC.</p>
+              <p style="margin: 0; font-size: 16px; color: {{t.muted}}">Ask me anything, or tell me what to keep an eye on. I use local models by default; you decide what else is allowed.</p>
+            </sc-if>
+            <sc-if value="{{isMorning}}" hint-placeholder-val="{{ true }}">
+              <p style="margin: 0; font-family: Newsreader, Georgia, serif; font-weight: 300; font-size: {{heroSize}}; line-height: 1.15; color: {{t.ink}}">{{greeting}}</p>
+              <sc-if value="{{hasNeeds}}" hint-placeholder-val="{{ true }}">
+                <button type="button" aria-expanded="{{briefOpen}}" onClick="{{toggleBrief}}" style="{{briefBtn}}">
+                  <span aria-hidden="true" style="width: 8px; height: 8px; border-radius: 4px; background: {{t.attention}}"></span>
+                  <span>{{needsText}}</span>
+                  <span aria-hidden="true" style="color: {{t.muted}}; font-size: 14px">{{briefChevron}}</span>
+                </button>
+              </sc-if>
+              <sc-if value="{{briefOpen}}" hint-placeholder-val="{{ false }}">
+                <ul style="list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; border: 1px solid {{t.line}}; border-radius: 12px; background: {{t.surface}}">
+                  <sc-for list="{{needs}}" as="n" hint-placeholder-count="3">
+                    <li style="{{n.rowStyle}}">
+                      <span aria-hidden="true" style="{{n.dotStyle}}"></span>
+                      <div style="flex: 1 1 200px; min-width: 0; display: flex; flex-direction: column">
+                        <span style="font-weight: 500">{{n.title}}</span>
+                        <span style="font-size: 13.5px; color: {{t.muted}}">{{n.detail}}</span>
+                        <sc-if value="{{n.showWhy}}" hint-placeholder-val="{{ false }}">
+                          <span style="margin-top: 4px; font-size: 14px; color: {{t.ink}}">{{n.why}}</span>
+                        </sc-if>
+                      </div>
+                      <div style="display: flex; gap: 6px">
+                        <button type="button" onClick="{{n.act}}" aria-expanded="{{n.expanded}}" style="{{smallBtn}}">{{n.actLabel}}</button>
+                        <button type="button" onClick="{{n.dismiss}}" style="{{smallBtn}}">{{n.dismissLabel}}</button>
+                      </div>
+                    </li>
+                  </sc-for>
+                </ul>
+              </sc-if>
+              <sc-if value="{{allHandled}}" hint-placeholder-val="{{ false }}">
+                <p style="margin: 0; font-size: 15px; color: {{t.muted}}">Nothing needs you right now.</p>
+              </sc-if>
+              <p role="status" aria-live="polite" style="margin: 0; min-height: 1px; font-size: 14px; color: {{t.muted}}">{{briefNote}}</p>
+            </sc-if>
+          </div>
+        </div>
+      </sc-if>
+
+      <sc-if value="{{showTranscript}}" hint-placeholder-val="{{ false }}">
+        <div style="flex: 1 1 auto; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; padding: 0 {{gutter}}; box-sizing: border-box">
+          <div style="width: 100%; max-width: 720px; margin: 0 auto; flex: 1 1 auto; display: flex; flex-direction: column; gap: 20px; padding-bottom: 16px; box-sizing: border-box">
+            <div style="margin-top: auto"></div>
+            <div style="{{userBubble}}">What's on my calendar tomorrow?</div>
+
+            <sc-if value="{{isD}}" hint-placeholder-val="{{ false }}">
+              <div style="display: flex; gap: 12px">
+                <svg width="22" height="22" viewBox="0 0 28 28" role="img" aria-label="Pandesh" style="flex: 0 0 auto; margin-top: 1px"><circle cx="14" cy="14" r="12" fill="none" stroke="{{t.pulse}}" style="stroke-width: 1.5px"></circle><circle cx="14" cy="14" r="4.5" fill="{{t.pulse}}"></circle></svg>
+                <div style="flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: 6px">
+                  <div style="display: flex; align-items: center; gap: 10px; flex-wrap: wrap">
+                    <span style="font-weight: 500">Reading your calendar</span>
+                    <span style="font-family: 'Geist Mono', ui-monospace, monospace; font-size: 13px; color: {{t.muted}}">4 s</span>
+                    <button type="button" onClick="{{goB}}" style="{{smallBtn}}">Stop</button>
+                  </div>
+                  <span style="font-size: 13.5px; color: {{t.muted}}">Step reported by Core (tool: calendar.read). Before a step is known, this line says “Thinking” with elapsed time — never a percentage.</span>
+                </div>
+              </div>
+            </sc-if>
+
+            <sc-if value="{{showAnswer1}}" hint-placeholder-val="{{ false }}">
+              <div style="display: flex; gap: 12px">
+                <svg width="22" height="22" viewBox="0 0 28 28" role="img" aria-label="Pandesh" style="flex: 0 0 auto; margin-top: 2px"><circle cx="14" cy="14" r="12" fill="none" stroke="{{t.pulse}}" style="stroke-width: 1.5px"></circle><circle cx="14" cy="14" r="4.5" fill="{{t.pulse}}"></circle></svg>
+                <div style="flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: 8px">
+                  <p style="margin: 0; font-size: 16px; line-height: 1.55; color: {{t.ink}}">Two things tomorrow: the dentist at 09:30 (Praxis am Markt) and your call with Anna at 15:00.</p>
+                  <div style="display: flex; align-items: center; gap: 6px; flex-wrap: wrap; font-family: 'Geist Mono', ui-monospace, monospace; font-size: 13px; color: {{t.muted}}">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="{{t.verified}}" aria-hidden="true" style="stroke-width: 2.2px; stroke-linecap: round; stroke-linejoin: round"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg>
+                    <span>Example evidence format · Calendar · read 08:12 · 2 events</span>
+                  </div>
+                </div>
+              </div>
+            </sc-if>
+
+            <sc-if value="{{isApproval}}" hint-placeholder-val="{{ false }}">
+              <div style="{{userBubble}}">{{approvalAsk}}</div>
+              <div style="display: flex; gap: 12px; align-items: center">
+                <svg width="22" height="22" viewBox="0 0 28 28" role="img" aria-label="Pandesh" style="flex: 0 0 auto"><circle cx="14" cy="14" r="12" fill="none" stroke="{{t.pulse}}" style="stroke-width: 1.5px"></circle><circle cx="14" cy="14" r="4.5" fill="{{t.pulse}}"></circle></svg>
+                <p style="margin: 0; font-size: 16px; color: {{t.ink}}">Here's the draft. Nothing is sent until you choose.</p>
+              </div>
+              <section aria-label="Approval needed: send email" style="border: 1px solid {{t.attention}}; border-radius: 14px; background: {{t.surface}}; overflow: hidden">
+                <div style="display: flex; align-items: center; flex-wrap: wrap; gap: 6px 10px; padding: 12px 16px; background: {{t.attentionWash}}; border-bottom: 1px solid {{t.line}}">
+                  <span aria-hidden="true" style="width: 8px; height: 8px; border-radius: 4px; background: {{t.attention}}"></span>
+                  <span style="font-weight: 600">Needs your OK · Send email</span>
+                  <span style="margin-left: auto; font-size: 13.5px; color: {{t.muted}}">{{expiry}}</span>
+                </div>
+                <dl style="margin: 0; padding: 14px 16px 4px; display: grid; grid-template-columns: {{dlCols}}; gap: {{dlGap}}; font-size: 14.5px">
+                  <dt style="color: {{t.muted}}">To</dt>
+                  <dd style="margin: 0; display: flex; flex-wrap: wrap; gap: 6px">
+                    <sc-for list="{{recipients}}" as="rc" hint-placeholder-count="1">
+                      <span style="max-width: 100%; box-sizing: border-box; overflow-wrap: anywhere; padding: 1px 8px; border-radius: 6px; background: {{t.raised}}">{{rc}}</span>
+                    </sc-for>
+                  </dd>
+                  <dt style="color: {{t.muted}}">Subject</dt><dd style="margin: 0">{{subject}}</dd>
+                  <sc-if value="{{hasAttachment}}" hint-placeholder-val="{{ false }}">
+                    <dt style="color: {{t.muted}}">Attached</dt>
+                    <dd style="margin: 0; display: flex; align-items: center; gap: 8px; flex-wrap: wrap">
+                      <span style="font-family: 'Geist Mono', ui-monospace, monospace; font-size: 13.5px">inventory-notes.pdf · 84 KB</span>
+                      <button type="button" style="{{smallBtn}}">Open file</button>
+                    </dd>
+                  </sc-if>
+                </dl>
+                <div style="margin: 8px 16px 14px; border-radius: 10px; background: {{t.raised}}">
+                  <p style="margin: 0; padding: 12px 14px; font-size: 15px; line-height: 1.55; white-space: pre-line; max-height: {{bodyMax}}; overflow: hidden">{{body}}</p>
+                  <sc-if value="{{bodyLong}}" hint-placeholder-val="{{ false }}">
+                    <div style="padding: 0 14px 10px">
+                      <button type="button" aria-expanded="{{fullMsg}}" onClick="{{toggleFull}}" style="{{linkBtn}}">{{fullLabel}}</button>
+                    </div>
+                  </sc-if>
+                </div>
+                <sc-if value="{{inlineActions}}" hint-placeholder-val="{{ true }}">
+                  <div style="display: flex; flex-wrap: wrap; gap: 8px; padding: 0 16px 14px">
+                    <button type="button" onClick="{{approve}}" style="{{primaryBtn}}">{{sendLabel}}</button>
+                    <button type="button" style="{{secondaryBtn}}">Edit draft</button>
+                    <button type="button" onClick="{{decline}}" style="{{secondaryBtn}}">Don't send</button>
+                  </div>
+                </sc-if>
+                <sc-if value="{{showDecisionBar}}" hint-placeholder-val="{{ false }}">
+                  <div style="padding: 0 16px 12px; display: flex; flex-direction: column; gap: 4px">
+                    <span style="font-size: 14px; color: {{t.muted}}">Send, edit or decline with the buttons at the bottom.</span>
+                    <button type="button" onClick="{{replyInstead}}" style="{{linkBtn}}">Reply in chat instead</button>
+                  </div>
+                </sc-if>
+                <sc-if value="{{approved}}" hint-placeholder-val="{{ false }}">
+                  <p role="status" style="margin: 0 16px 14px; font-size: 14.5px">Prototype: your choice was noted on this page only. Nothing was sent — this page has no connection.</p>
+                </sc-if>
+                <sc-if value="{{declined}}" hint-placeholder-val="{{ false }}">
+                  <p role="status" style="margin: 0 16px 14px; font-size: 14.5px">Not sent. Pandesh would record that you declined.</p>
+                </sc-if>
+                <div style="padding: 10px 16px; border-top: 1px solid {{t.line}}; font-size: 13.5px; color: {{t.muted}}">Personal Gmail · outward message · always asks</div>
+              </section>
+            </sc-if>
+
+            <sc-if value="{{isVoiceTalk}}" hint-placeholder-val="{{ false }}">
+              <div style="{{userBubbleVoice}}">
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" aria-label="Spoken" role="img" style="stroke-width: 1.8px; stroke-linecap: round"><path d="M12 4a3 3 0 013 3v5a3 3 0 01-6 0V7a3 3 0 013-3zM6 11a6 6 0 0012 0M12 17v3"></path></svg>
+                <span>Read me tomorrow's first appointment.</span>
+              </div>
+              <div style="display: flex; gap: 12px">
+                <svg width="22" height="22" viewBox="0 0 28 28" role="img" aria-label="Pandesh" style="flex: 0 0 auto; margin-top: 2px"><circle cx="14" cy="14" r="12" fill="none" stroke="{{t.pulse}}" style="stroke-width: 1.5px"></circle><circle cx="14" cy="14" r="4.5" fill="{{t.pulse}}"></circle></svg>
+                <p style="margin: 0; font-size: 16px; line-height: 1.55; color: {{t.ink}}">
+                  <span>Your first appointment tomorrow is the dentist at 09:30, at Praxis am Markt.</span>
+                  <span style="color: {{spokenRestColor}}"> After that, you have a call with Anna at three.</span>
+                </p>
+              </div>
+            </sc-if>
+          </div>
+        </div>
+      </sc-if>
+
+      <div style="flex: 0 0 auto; padding: 0 {{gutter}} 14px; box-sizing: border-box">
+        <div style="max-width: {{composerMax}}; margin: 0 auto; display: flex; flex-direction: column; gap: 8px">
+          <sc-if value="{{showAgentChip}}" hint-placeholder-val="{{ false }}">
+            <button type="button" title="Opens the task workspace (shown in P2)" style="{{agentChip}}">
+              <span aria-hidden="true" style="width: 8px; height: 8px; border-radius: 4px; background: {{t.pulse}}"></span>
+              <span style="font-weight: 500">Coding</span>
+              <span style="color: {{t.muted}}">kitchen-inventory · 2 of 4 checks</span>
+              <span style="margin-left: auto; color: {{t.muted}}">Open</span>
+            </button>
+          </sc-if>
+
+          <sc-if value="{{isG3}}" hint-placeholder-val="{{ false }}">
+            <div role="status" style="align-self: flex-start; display: flex; align-items: center; gap: 8px; padding: 4px 12px; border-radius: 999px; background: {{t.raised}}; font-size: 14px">
+              <span aria-hidden="true" style="width: 8px; height: 8px; border-radius: 1px; background: {{t.muted}}"></span>
+              <span>Stopped speaking — you said “wait”.</span>
+            </div>
+          </sc-if>
+
+          <sc-if value="{{isG1}}" hint-placeholder-val="{{ false }}">
+            <div style="display: flex; align-items: center; flex-wrap: wrap; gap: 12px 14px; padding: 14px 16px; border: 1px solid {{t.pulse}}; border-radius: 16px; background: {{t.surface}}">
+              <div aria-hidden="true" style="display: flex; align-items: center; gap: 3px; height: 24px">
+                <span style="width: 3px; height: 8px; border-radius: 2px; background: {{t.pulse}}"></span>
+                <span style="width: 3px; height: 18px; border-radius: 2px; background: {{t.pulse}}"></span>
+                <span style="width: 3px; height: 12px; border-radius: 2px; background: {{t.pulse}}"></span>
+                <span style="width: 3px; height: 22px; border-radius: 2px; background: {{t.pulse}}"></span>
+                <span style="width: 3px; height: 10px; border-radius: 2px; background: {{t.pulse}}"></span>
+              </div>
+              <div style="flex: 1 1 160px; min-width: 0; display: flex; flex-direction: column">
+                <span style="font-weight: 500">Listening…</span>
+                <span style="font-size: 14px; color: {{t.muted}}; font-style: italic">read me tomorrow's first…</span>
+              </div>
+              <div style="display: flex; gap: 8px">
+                <button type="button" onClick="{{goE}}" style="{{secondaryBtn}}">Type instead</button>
+                <button type="button" onClick="{{goE}}" style="{{secondaryBtn}}">Stop listening</button>
+              </div>
+            </div>
+          </sc-if>
+
+          <sc-if value="{{isG2}}" hint-placeholder-val="{{ false }}">
+            <div style="display: flex; align-items: center; flex-wrap: wrap; gap: 12px 14px; padding: 14px 16px; border: 1px solid {{t.line}}; border-radius: 16px; background: {{t.surface}}">
+              <span aria-hidden="true" style="width: 10px; height: 10px; border-radius: 5px; background: {{t.pulse}}"></span>
+              <div style="flex: 1 1 160px; min-width: 0; display: flex; flex-direction: column">
+                <span style="font-weight: 500">Speaking</span>
+                <span style="font-size: 14px; color: {{t.muted}}">Talk over me or press Stop to interrupt.</span>
+              </div>
+              <button type="button" onClick="{{goG3}}" style="{{secondaryBtn}}">Stop speaking</button>
+            </div>
+          </sc-if>
+
+          <sc-if value="{{showDecisionBar}}" hint-placeholder-val="{{ false }}">
+            <div role="group" aria-label="Decide on the email" style="display: flex; flex-direction: column; gap: 8px; padding: 10px 12px; border: 1px solid {{t.attention}}; border-radius: 16px; background: {{t.surface}}">
+              <sc-if value="{{roomy}}" hint-placeholder-val="{{ true }}">
+                <span style="font-size: 14px; color: {{t.ink}}; overflow-wrap: anywhere">{{decisionPrompt}}</span>
+              </sc-if>
+              <button type="button" onClick="{{approve}}" style="{{primaryBtnFull}}">{{sendLabel}}</button>
+              <div style="display: flex; gap: 8px">
+                <button type="button" style="{{secondaryBtnHalf}}">Edit draft</button>
+                <button type="button" onClick="{{decline}}" style="{{secondaryBtnHalf}}">Don't send</button>
+              </div>
+            </div>
+          </sc-if>
+
+          <sc-if value="{{showComposer}}" hint-placeholder-val="{{ true }}">
+            <div style="display: flex; align-items: center; gap: 8px; padding: 8px 8px 8px 16px; border: 1px solid {{composerBorder}}; border-radius: 16px; background: {{t.surface}}">
+              <label for="p1-ask" style="position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0)">Message Pandesh</label>
+              <input id="p1-ask" type="text" value="{{text}}" onChange="{{onType}}" placeholder="Ask Pandesh…" style="flex: 1 1 auto; min-width: 0; height: 40px; border: 0; outline-offset: 4px; background: transparent; color: {{t.ink}}; font-family: Geist, system-ui, sans-serif; font-size: 16px">
+              <button type="button" aria-label="Talk to Pandesh" title="Talk to Pandesh" onClick="{{goG1}}" style="{{iconBtn}}">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" aria-hidden="true" style="stroke-width: 1.7px; stroke-linecap: round"><path d="M12 4a3 3 0 013 3v5a3 3 0 01-6 0V7a3 3 0 013-3zM6 11a6 6 0 0012 0M12 17v3"></path></svg>
+              </button>
+              <button type="button" aria-label="Send" title="Send" onClick="{{send}}" style="{{sendBtn}}">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" aria-hidden="true" style="stroke-width: 2px; stroke-linecap: round; stroke-linejoin: round"><path d="M12 19V5M6 11l6-6 6 6"></path></svg>
+              </button>
+            </div>
+          </sc-if>
+
+          <sc-if value="{{showRoute}}" hint-placeholder-val="{{ true }}">
+          <div style="display: flex; justify-content: center; position: relative">
+            <button type="button" aria-expanded="{{routeOpen}}" onClick="{{openRoute}}" title="How this chat is routed" style="{{routeBtn}}">
+              <span aria-hidden="true" style="width: 6px; height: 6px; border-radius: 3px; background: {{t.pulse}}"></span>
+              <span>Local · qwen3:14b</span>
+            </button>
+            <sc-if value="{{routeOpen}}" hint-placeholder-val="{{ false }}">
+              <div role="dialog" aria-label="How this chat is routed" style="{{routePos}}">
+                <sc-for list="{{route}}" as="rr" hint-placeholder-count="4">
+                  <div style="display: flex; gap: 12px; padding: 6px 0; font-size: 14px">
+                    <span style="flex: 0 0 104px; color: {{t.muted}}">{{rr.k}}</span>
+                    <span style="flex: 1 1 auto; min-width: 0">{{rr.v}}</span>
+                  </div>
+                </sc-for>
+              </div>
+            </sc-if>
+          </div>
+          </sc-if>
+        </div>
+      </div>
+
+      <div style="flex: {{spacerFlex}}; min-height: 0"></div>
+      </div>
+    </main>
+
+    <sc-if value="{{narrow}}" hint-placeholder-val="{{ false }}">
+      <nav aria-label="Main" style="flex: 0 0 56px; height: 56px; display: flex; align-items: stretch; background: {{t.surface}}; border-top: 1px solid {{t.line}}">
+        <sc-for list="{{bottom}}" as="r" hint-placeholder-count="4">
+          <button type="button" aria-label="{{r.label}}" aria-current="{{r.current}}" onClick="{{r.go}}" style="{{r.style}}">
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" aria-hidden="true" style="stroke-width: 1.6px; stroke-linecap: round; stroke-linejoin: round"><path d="{{r.icon}}"></path></svg>
+            <span style="font-size: 12px">{{r.text}}</span>
+          </button>
+        </sc-for>
+      </nav>
+    </sc-if>
+
+    <sc-if value="{{spacesOpen}}" hint-placeholder-val="{{ false }}">
+      <div role="dialog" aria-label="Spaces" style="{{spacesPos}}">
+        <div style="padding: 10px 14px 6px; font-size: 13px; font-weight: 600; color: {{t.muted}}; letter-spacing: 0.04em">SPACES</div>
+        <sc-for list="{{spaces}}" as="s" hint-placeholder-count="5">
+          <button type="button" autoFocus="{{s.first}}" style="{{menuItem}}">
+            <span style="font-weight: 500">{{s.name}}</span>
+            <span style="font-size: 13.5px; color: {{t.muted}}">{{s.status}}</span>
+          </button>
+        </sc-for>
+        <div style="padding: 8px 14px 10px; font-size: 13px; color: {{t.muted}}">Sample statuses. Pin up to 2 spaces to the rail.</div>
+      </div>
+    </sc-if>
+
+    <sc-if value="{{systemOpen}}" hint-placeholder-val="{{ false }}">
+      <div role="dialog" aria-label="System" style="{{systemPos}}">
+        <div style="padding: 10px 14px 6px; font-size: 13px; font-weight: 600; color: {{t.muted}}; letter-spacing: 0.04em">SYSTEM</div>
+        <sc-for list="{{system}}" as="s" hint-placeholder-count="4">
+          <button type="button" autoFocus="{{s.first}}" style="{{menuItem}}">
+            <span style="font-weight: 500">{{s.name}}</span>
+            <span style="font-size: 13.5px; color: {{t.muted}}">{{s.status}}</span>
+          </button>
+        </sc-for>
+      </div>
+    </sc-if>
+
+    <sc-if value="{{paletteOpen}}" hint-placeholder-val="{{ false }}">
+      <div style="position: absolute; inset: 0; z-index: 6; background: {{t.scrim}}; display: flex; justify-content: center; align-items: flex-start; padding-top: 72px; box-sizing: border-box">
+        <div role="dialog" aria-label="Command palette" style="width: 560px; max-width: calc(100% - 32px); border: 1px solid {{t.line}}; border-radius: 14px; background: {{t.surface}}; overflow: hidden">
+          <div style="display: flex; align-items: center; gap: 10px; padding: 0 14px; border-bottom: 1px solid {{t.line}}">
+            <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="{{t.muted}}" aria-hidden="true" style="stroke-width: 1.8px; stroke-linecap: round"><circle cx="11" cy="11" r="6.5"></circle><path d="M16 16l4 4"></path></svg>
+            <label for="p1-cmd" style="position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0)">Search commands</label>
+            <input id="p1-cmd" type="text" autoFocus="{{yes}}" placeholder="Go to, ask an agent, or run an action…" onKeyDown="{{paletteKey}}" style="flex: 1 1 auto; min-width: 0; height: 50px; border: 0; background: transparent; color: {{t.ink}}; font-family: Geist, system-ui, sans-serif; font-size: 16px">
+            <button type="button" onClick="{{closePop}}" style="{{smallBtn}}">Close</button>
+          </div>
+          <sc-for list="{{palette}}" as="g" hint-placeholder-count="4">
+            <div style="padding: 8px 0 4px">
+              <div style="padding: 2px 16px 4px; font-size: 12.5px; font-weight: 600; letter-spacing: 0.04em; color: {{t.muted}}">{{g.group}}</div>
+              <sc-for list="{{g.items}}" as="i" hint-placeholder-count="2">
+                <button type="button" style="{{paletteItem}}">{{i}}</button>
+              </sc-for>
+            </div>
+          </sc-for>
+        </div>
+      </div>
+    </sc-if>
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"stage":{"editor":"enum","options":["a","b","c","d","e","f","f2","g1","g2","g3"],"default":"b"},"theme":{"editor":"enum","options":["dark","light"],"default":"dark"},"narrow":{"editor":"boolean","default":false},"labels":{"editor":"boolean","default":false},"briefOpen":{"editor":"boolean","default":false},"width":{"editor":"int","default":1280,"min":320,"max":1600},"height":{"editor":"int","default":800,"min":480,"max":1200},"zoom":{"editor":"float","default":1,"min":1,"max":2,"step":0.25},"$preview":{"width":1280,"height":800}}'>
+class Component extends DCLogic {
+  constructor(props) {
+    super(props);
+    this.state = { stage: null, theme: null, pop: null, playing: false, briefOpen: null, decision: null, text: null, labels: null, handled: {}, why: {}, note: '', fullMsg: false, reply: false };
+    this.timer = null;
+    this.opener = null;
+  }
+
+  openPop(name) {
+    if (this.state.pop === name) { this.closePop(); return; }
+    if (!this.state.pop && typeof document !== 'undefined') this.opener = document.activeElement;
+    this.setState({ pop: name });
+  }
+
+  closePop() {
+    const back = this.opener;
+    this.opener = null;
+    this.setState({ pop: null });
+    if (back && back.focus) setTimeout(() => back.focus(), 0);
+  }
+
+  componentWillUnmount() {
+    if (this.timer) clearInterval(this.timer);
+  }
+
+  order() { return ['a', 'b', 'c', 'd', 'e', 'f', 'f2', 'g1', 'g2', 'g3']; }
+
+  current() { return this.state.stage || this.props.stage || 'b'; }
+
+  go(id) {
+    this.setState({ stage: id, pop: null, decision: null, text: null, briefOpen: null, fullMsg: false, reply: false, handled: {}, why: {}, note: '' });
+  }
+
+  step(delta) {
+    const o = this.order();
+    const i = o.indexOf(this.current());
+    this.go(o[(i + delta + o.length) % o.length]);
+  }
+
+  renderVals() {
+    const order = this.order();
+    const labelsMap = { a: 'First run', b: 'Morning brief', c: 'Typing', d: 'Waiting — known step', e: 'Short answer', f: 'Inline approval', f2: 'Approval — long, several recipients', g1: 'Voice — listening', g2: 'Voice — speaking', g3: 'Voice — interrupted' };
+    const shorts = { a: 'a', b: 'b', c: 'c', d: 'd', e: 'e', f: 'f', f2: 'f·long', g1: 'g·listen', g2: 'g·speak', g3: 'g·stop' };
+    const stage = this.current();
+    const theme = this.state.theme || this.props.theme || 'dark';
+    const narrowProp = this.props.narrow === true || this.props.narrow === 'true';
+    const W = Number(this.props.width) || (narrowProp ? 390 : 1280);
+    const H = Number(this.props.height) || (narrowProp ? 844 : 800);
+    const zoom = Number(this.props.zoom) || 1;
+    const narrow = W / zoom < 900;
+    const labels = !narrow && (this.state.labels !== null ? this.state.labels : (this.props.labels === true || this.props.labels === 'true'));
+    const dark = theme !== 'light';
+    const t = dark
+      ? { canvas: '#0E1013', surface: '#15181C', raised: '#1F242A', ink: '#E8EAED', muted: '#A5ABB3', faint: '#6B727B', pulse: '#3DD6C6', attention: '#F0B44C', verified: '#6AA8FF', line: 'rgba(255,255,255,0.10)', attentionWash: 'rgba(240,180,76,0.10)', scrim: 'rgba(5,6,8,0.55)', onPulse: '#0E1013', shadow: '0 14px 36px rgba(0,0,0,0.45)' }
+      : { canvas: '#F7F7F5', surface: '#FFFFFF', raised: '#EFEFEA', ink: '#16181B', muted: '#50565E', faint: '#8A9097', pulse: '#0E9E90', attention: '#B9770E', verified: '#2F6FD6', line: 'rgba(22,24,27,0.13)', attentionWash: 'rgba(185,119,14,0.08)', scrim: 'rgba(22,24,27,0.28)', onPulse: '#0E1013', shadow: '0 14px 36px rgba(22,24,27,0.16)' };
+
+    const is = (id) => stage === id;
+    const pop = this.state.pop;
+    const idle = is('a') || is('b') || is('c');
+    const approvalStage = is('f') || is('f2');
+    const long = is('f2');
+    const undecided = this.state.decision === null;
+
+    const handled = this.state.handled || {};
+    const why = this.state.why || {};
+    const resolve = (id, note) => this.setState({ handled: { ...(this.state.handled || {}), [id]: true }, note });
+    const needsAll = [
+      { id: 'draft', kind: 'attention', title: 'Reply to Anna is waiting for your OK', detail: 'Email draft · created 07:40', actLabel: 'Review', act: () => this.go('f'), dismissLabel: 'Later', dismissNote: 'Draft moved to later — it stays on the Board.' },
+      { id: 'failed', kind: 'danger', title: 'Job-search digest failed', detail: 'Research · source unreachable at 06:00 · nothing was sent', why: 'The job site did not answer (HTTP 503). The next scheduled run is 12:00; nothing else is affected.', actLabel: why.failed ? 'Hide reason' : 'See why', expanded: !!why.failed, act: () => this.setState({ why: { ...why, failed: !why.failed } }), dismissLabel: 'Dismiss', dismissNote: 'Failure dismissed — still listed under Diagnostics.' },
+      { id: 'reminder', kind: 'plain', title: 'Renew parking permit', detail: 'Reminder · due Friday', actLabel: 'Done', act: () => resolve('reminder', 'Reminder marked done.'), dismissLabel: 'Snooze', dismissNote: 'Reminder snoozed until tomorrow 09:00.' }
+    ];
+    const needs = needsAll.filter((n) => !handled[n.id]).map((n, i, arr) => ({
+      ...n,
+      expanded: n.id === 'failed' ? !!why.failed : 'false',
+      showWhy: n.id === 'failed' && !!why.failed,
+      dismiss: () => resolve(n.id, n.dismissNote),
+      rowStyle: 'display: flex; align-items: center; flex-wrap: wrap; gap: 10px 12px; padding: 12px 14px;' + (i < arr.length - 1 ? ' border-bottom: 1px solid ' + t.line + ';' : ''),
+      dotStyle: 'flex: 0 0 auto; width: 8px; height: 8px; border-radius: ' + (n.kind === 'danger' ? '1px' : '4px') + '; background: ' + (n.kind === 'attention' ? t.attention : n.kind === 'danger' ? '#E0605F' : t.muted)
+    }));
+    const needCount = needs.length;
+    const briefOpenRaw = this.state.briefOpen !== null ? this.state.briefOpen : (this.props.briefOpen === true || this.props.briefOpen === 'true');
+    const briefOpen = briefOpenRaw && needCount > 0;
+    const badge = idle && needCount > 0 && !is('a') ? String(needCount) : (approvalStage && undecided ? '1' : '');
+
+    const typed = this.state.text !== null ? this.state.text : (is('c') ? "What's on my calendar tomorrow?" : '');
+    const btnBase = 'font-family: Geist, system-ui, sans-serif; cursor: pointer; box-sizing: border-box;';
+    const ctl = btnBase + ' height: 30px; padding: 0 ' + (narrow ? '8px' : '12px') + '; border-radius: 7px; border: 1px solid ' + t.line + '; background: ' + t.canvas + '; color: ' + t.ink + '; font-size: 13.5px';
+
+    const pills = order.map((id) => ({
+      short: shorts[id],
+      aria: 'State ' + (order.indexOf(id) + 1) + ': ' + labelsMap[id],
+      pressed: id === stage,
+      go: () => this.go(id),
+      style: btnBase + ' height: 28px; padding: 0 10px; border-radius: 14px; font-size: 13px; border: 1px solid ' + (id === stage ? t.pulse : t.line) + '; background: ' + (id === stage ? t.pulse : 'transparent') + '; color: ' + (id === stage ? t.onPulse : t.muted) + '; font-weight: ' + (id === stage ? '600' : '400')
+    }));
+
+    const icons = {
+      home: 'M12 3.5a8.5 8.5 0 100 17 8.5 8.5 0 000-17zM12 9.5a2.5 2.5 0 100 5 2.5 2.5 0 000-5z',
+      board: 'M4 5h4v14H4zM10 5h4v9h-4zM16 5h4v6h-4z',
+      team: 'M9 11a3 3 0 100-6 3 3 0 000 6zM3.5 19a5.5 5.5 0 0111 0M16 11a2.5 2.5 0 100-5M17 14.5a4.5 4.5 0 013.5 4.5',
+      spaces: 'M4 4h6v6H4zM14 4h6v6h-6zM4 14h6v6H4zM14 14h6v6h-6z',
+      more: 'M5 12h.01M12 12h.01M19 12h.01',
+      expand: 'M9 6l6 6-6 6',
+      collapse: 'M15 6l-6 6 6 6'
+    };
+    const railStyle = (active) => btnBase + ' position: relative; height: 40px; width: ' + (labels ? '100%' : '40px') + '; align-self: center; display: flex; align-items: center; justify-content: ' + (labels ? 'flex-start' : 'center') + '; gap: 12px; padding: 0 ' + (labels ? '10px' : '0') + '; border: 0; border-radius: 10px; background: ' + (active ? t.raised : 'transparent') + '; color: ' + (active ? t.ink : t.muted);
+    const badgeStyle = labels
+      ? 'min-width: 20px; height: 20px; padding: 0 6px; box-sizing: border-box; border-radius: 10px; background: ' + t.attention + '; color: #16181B; font-size: 12px; font-weight: 600; line-height: 20px; text-align: center'
+      : 'position: absolute; top: 3px; right: 3px; min-width: 17px; height: 17px; padding: 0 4px; box-sizing: border-box; border-radius: 9px; background: ' + t.attention + '; color: #16181B; font-size: 11px; font-weight: 600; line-height: 17px; text-align: center';
+    const togglePop = (name) => () => this.openPop(name);
+    const rail = [
+      { label: 'Pandesh — home and chats', text: 'Pandesh', icon: icons.home, current: 'page', active: true, go: () => this.setState({ pop: null }) },
+      { label: badge ? 'Board — ' + badge + ' need you' : 'Board', text: 'Board', icon: icons.board, current: 'false', active: false, badge, go: () => {} },
+      { label: 'Team — your agents', text: 'Team', icon: icons.team, current: 'false', active: false, go: () => {} },
+      { label: 'Spaces — Second Brain, Projects, Studios', text: 'Spaces', icon: icons.spaces, current: 'false', active: pop === 'spaces', go: togglePop('spaces') }
+    ].map((r) => ({ ...r, hasBadge: !!r.badge, badgeStyle, style: railStyle(r.active) }));
+    const bottomStyle = (active) => btnBase + ' flex: 1 1 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px; border: 0; background: transparent; color: ' + (active ? t.ink : t.muted);
+    const bottom = [
+      { label: 'Pandesh — home and chats', text: 'Pandesh', icon: icons.home, current: 'page', go: () => this.setState({ pop: null }), style: bottomStyle(true) },
+      { label: badge ? 'Board — ' + badge + ' need you' : 'Board', text: badge ? 'Board · ' + badge : 'Board', icon: icons.board, current: 'false', go: () => {}, style: bottomStyle(false) },
+      { label: 'Team', text: 'Team', icon: icons.team, current: 'false', go: () => {}, style: bottomStyle(false) },
+      { label: 'More: spaces and system', text: 'More', icon: icons.more, current: 'false', go: togglePop('spaces'), style: bottomStyle(pop === 'spaces') }
+    ];
+
+    const railW = labels ? '184px' : '56px';
+    const popLeft = labels ? '192px' : '64px';
+    const popBase = 'position: absolute; z-index: 5; width: 320px; display: flex; flex-direction: column; padding-bottom: 4px; border: 1px solid ' + t.line + '; border-radius: 14px; background: ' + t.surface + '; box-shadow: ' + t.shadow + ';';
+    const menuItem = btnBase + ' width: 100%; display: flex; flex-direction: column; align-items: flex-start; gap: 1px; padding: 9px 14px; border: 0; background: transparent; color: ' + t.ink + '; text-align: left; font-size: 15px';
+
+    const primaryBtn = btnBase + ' height: 40px; padding: 0 18px; border-radius: 10px; border: 1px solid ' + t.pulse + '; background: ' + t.pulse + '; color: ' + t.onPulse + '; font-size: 15px; font-weight: 600';
+    const secondaryBtn = btnBase + ' height: 40px; padding: 0 16px; border-radius: 10px; border: 1px solid ' + t.line + '; background: transparent; color: ' + t.ink + '; font-size: 15px';
+    const smallBtn = btnBase + ' height: 32px; padding: 0 12px; border-radius: 8px; border: 1px solid ' + t.line + '; background: transparent; color: ' + t.ink + '; font-size: 14px; white-space: nowrap';
+    const linkBtn = btnBase + ' align-self: flex-start; min-height: 32px; padding: 4px 0; border: 0; background: transparent; color: ' + t.ink + '; font-size: 14px; text-decoration: underline; text-underline-offset: 3px';
+
+    const shortBody = "Hi Anna, I'll join our 15:00 call about 10 minutes late. Sorry about that!";
+    const longBody = "Hi Anna, Jonas,\n\nAttached are my notes from this week's kitchen-inventory review. Short version: the barcode import works for most items, but anything bought loose (vegetables, bakery) still needs manual entry, and the expiry reminders fire a day too early for frozen food.\n\nI'd suggest we keep manual entry for loose items for now and fix the frozen-food rule first, since that is the one people actually notice.\n\nCould you both look before Friday? If nothing comes up I'll mark the review done.\n\nThanks!";
+    const fullMsg = this.state.fullMsg;
+    const showDecisionBar = narrow && approvalStage && undecided && !this.state.reply;
+    const voiceBar = is('g1') || is('g2');
+
+    const route = [
+      { k: 'Provider', v: 'Local · Ollama on this PC (the one in use now)' },
+      { k: 'Model', v: 'qwen3:14b · 32K context' },
+      { k: 'Web tools', v: 'Off for this chat' },
+      { k: 'Outward actions', v: 'Emails, posts and purchases ask you first' }
+    ];
+    const wideIdle = idle && !narrow;
+
+    return {
+      t,
+      rootW: (W / zoom) + 'px',
+      rootH: (H / zoom) + 'px',
+      zoom: String(zoom),
+      yes: true,
+      rootKey: (e) => {
+        const k = (e.key || '').toLowerCase();
+        if ((e.ctrlKey || e.metaKey) && k === 'k') { e.preventDefault(); this.openPop('palette'); }
+        else if (k === 'escape' && this.state.pop) { e.preventDefault(); this.closePop(); }
+      },
+      bodyOverflow: wideIdle ? 'auto' : 'hidden',
+      heroFlex: wideIdle ? '0 0 auto' : '1 1 auto',
+      heroOverflow: wideIdle ? 'visible' : 'auto',
+      heroPad: narrow ? '8px 0 16px' : '0 0 20px',
+      briefNote: this.state.note || '',
+      stripPad: narrow ? '6px 12px' : '8px 16px',
+      stageText: narrow ? 'State ' + (order.indexOf(stage) + 1) + ' of 10' : 'State ' + (order.indexOf(stage) + 1) + ' of 10 · ' + labelsMap[stage],
+      stageAria: 'Simulation state ' + (order.indexOf(stage) + 1) + ' of 10: ' + labelsMap[stage],
+      headerH: narrow ? '44px' : '52px',
+      roomy: H / zoom >= 640,
+      dlCols: narrow ? 'minmax(0, 1fr)' : '76px minmax(0, 1fr)',
+      dlGap: narrow ? '2px 0' : '8px 12px',
+      showRoute: !showDecisionBar,
+      wide: !narrow,
+      narrow,
+      labels,
+      railW,
+      appDir: narrow ? 'column' : 'row',
+      gutter: narrow ? '16px' : '40px',
+      stageNo: order.indexOf(stage) + 1,
+      stageLabel: labelsMap[stage],
+      pills,
+      ctl,
+      prev: () => this.step(-1),
+      next: () => this.step(1),
+      playLabel: this.state.playing ? 'Pause' : 'Play',
+      togglePlay: () => {
+        if (this.state.playing) {
+          clearInterval(this.timer);
+          this.timer = null;
+          this.setState({ playing: false });
+        } else {
+          this.timer = setInterval(() => this.step(1), 2800);
+          this.setState({ playing: true });
+        }
+      },
+      themeLabel: dark ? 'Light' : 'Dark',
+      toggleTheme: () => this.setState({ theme: dark ? 'light' : 'dark' }),
+      rail,
+      bottom,
+      labelsTitle: labels ? 'Hide labels' : 'Show labels',
+      labelsIcon: labels ? icons.collapse : icons.expand,
+      toggleLabels: () => this.setState({ labels: !labels }),
+      labelsBtn: railStyle(false),
+      systemOpen: pop === 'system',
+      spacesOpen: pop === 'spaces',
+      paletteOpen: pop === 'palette',
+      routeOpen: pop === 'route',
+      openSystem: togglePop('system'),
+      openPalette: togglePop('palette'),
+      openRoute: togglePop('route'),
+      closePop: () => this.closePop(),
+      paletteKey: () => {},
+      systemBtn: railStyle(pop === 'system'),
+      spacesPos: popBase + (narrow ? ' left: 16px; right: 16px; width: auto; bottom: 68px;' : ' left: ' + popLeft + '; top: 150px;'),
+      systemPos: popBase + ' left: ' + popLeft + '; bottom: 56px;',
+      routePos: popBase + ' bottom: 34px; left: 50%; transform: translateX(-50%); padding: 10px 16px; width: 340px; max-width: calc(100vw - 32px);',
+      route,
+      routeBtn: btnBase + ' display: flex; align-items: center; gap: 8px; height: 28px; padding: 0 10px; border: 0; border-radius: 14px; background: transparent; color: ' + t.muted + '; font-family: \'Geist Mono\', ui-monospace, monospace; font-size: 13px',
+      menuItem,
+      spaces: [
+        { name: 'Second Brain', status: 'Search notes, files and memories', first: true },
+        { name: 'Projects', status: 'kitchen-inventory · Coding is working' },
+        { name: 'Wish to Reality', status: 'No open deliverables' },
+        { name: 'Social Studio', status: '3 drafts await you' },
+        { name: 'Media Studio', status: 'Queue empty' }
+      ],
+      system: [
+        { name: 'Tools & Skills', status: 'Installed tools, MCP, skills, capability tests', first: true },
+        { name: 'Automations', status: 'Routines, schedules, watches' },
+        { name: 'Settings', status: 'Models, voice, privacy, appearance' },
+        { name: 'Diagnostics', status: 'Core health, failures, local-only proof' }
+      ],
+      palette: [
+        { group: 'GO TO', items: ['Board', 'Team', 'Second Brain'] },
+        { group: 'AGENTS', items: ['Message Coding', 'Message Research'] },
+        { group: 'RECENT CHATS', items: ["What's on my calendar tomorrow?"] },
+        { group: 'ACTIONS', items: ['New chat', 'Start voice'] }
+      ],
+      paletteItem: btnBase + ' width: 100%; display: block; padding: 8px 16px; border: 0; background: transparent; color: ' + t.ink + '; text-align: left; font-size: 15px',
+      ghostIcon: btnBase + ' width: 34px; height: 34px; display: flex; align-items: center; justify-content: center; border: 0; border-radius: 8px; background: transparent; color: ' + t.muted,
+      searchBtn: btnBase + ' height: 34px; display: flex; align-items: center; gap: 8px; padding: 0 8px 0 12px; border: 1px solid ' + t.line + '; border-radius: 9px; background: transparent; color: ' + t.muted + '; font-size: 14px',
+      chatTitle: idle ? 'New chat' : 'Today',
+      spacerFlex: wideIdle ? '1 0 0' : '0 0 0',
+      composerMax: idle ? '680px' : '720px',
+      heroSize: narrow ? '30px' : '38px',
+      dateLine: 'Thursday, 12 November · sample',
+      greeting: 'Good morning. It looks like a calm day.',
+      isA: is('a'),
+      isMorning: is('b') || is('c'),
+      showHero: idle,
+      showTranscript: !idle,
+      hasNeeds: needCount > 0,
+      allHandled: (is('b') || is('c')) && needCount === 0,
+      needs,
+      needsText: needCount === 1 ? '1 thing needs you' : needCount + ' things need you',
+      briefOpen,
+      briefChevron: briefOpen ? 'Hide' : 'Show',
+      toggleBrief: () => this.setState({ briefOpen: !briefOpen }),
+      briefBtn: btnBase + ' align-self: flex-start; display: flex; align-items: center; gap: 10px; height: 38px; padding: 0 14px; border: 1px solid ' + t.line + '; border-radius: 19px; background: ' + t.surface + '; color: ' + t.ink + '; font-size: 15px',
+      showAgentChip: is('b') || is('c'),
+      agentChip: btnBase + ' display: flex; align-items: center; gap: 10px; flex-wrap: wrap; width: 100%; padding: 9px 14px; border: 1px solid ' + t.line + '; border-radius: 12px; background: transparent; color: ' + t.ink + '; font-size: 14px; text-align: left',
+      userBubble: 'align-self: flex-end; max-width: 80%; padding: 10px 16px; border-radius: 16px; background: ' + t.raised + '; color: ' + t.ink + '; font-size: 15px',
+      userBubbleVoice: 'align-self: flex-end; max-width: 80%; display: flex; align-items: center; gap: 8px; padding: 10px 16px; border-radius: 16px; background: ' + t.raised + '; color: ' + t.ink + '; font-size: 15px',
+      goB: () => this.go('b'),
+      goE: () => this.go('e'),
+      goG1: () => this.go('g1'),
+      goG3: () => this.go('g3'),
+      isD: is('d'),
+      showAnswer1: is('e') || is('f') || is('f2') || is('g1'),
+      isApproval: approvalStage,
+      approvalAsk: long ? 'Send Anna and Jonas my inventory review notes, with the PDF, and copy the team.' : "Tell Anna I'll be 10 minutes late to our call.",
+      expiry: long ? 'Expires in 1 h 52 min · then nothing is sent' : 'Expires in 2 h',
+      recipients: long ? ['Anna Schmidt <anna@example.com>', 'Jonas Weber <jonas@example.com>', 'Cc: team@example.com'] : ['Anna Schmidt <anna@example.com>'],
+      subject: long ? 'Kitchen-inventory review — my notes' : 'Running 10 minutes late',
+      hasAttachment: long,
+      body: long ? longBody : shortBody,
+      bodyLong: long,
+      bodyMax: long && !fullMsg ? '118px' : 'none',
+      fullMsg,
+      fullLabel: fullMsg ? 'Show less' : 'Show full message (8 lines more)',
+      toggleFull: () => this.setState({ fullMsg: !fullMsg }),
+      sendLabel: long ? 'Send to 3 recipients' : 'Send to Anna Schmidt',
+      decisionPrompt: long ? 'Email to Anna Schmidt, Jonas Weber, Cc team@example.com · 1 attachment' : 'Email to Anna Schmidt <anna@example.com>',
+      inlineActions: undecided && !narrow,
+      showDecisionBar,
+      replyInstead: () => this.setState({ reply: true }),
+      isVoiceTalk: is('g2') || is('g3'),
+      isG1: is('g1'),
+      isG2: is('g2'),
+      isG3: is('g3'),
+      spokenRestColor: is('g3') ? t.faint : t.ink,
+      showComposer: !voiceBar && !showDecisionBar,
+      text: typed,
+      onType: (e) => this.setState({ text: e.target.value }),
+      send: () => { if (typed.trim()) this.go('d'); },
+      composerBorder: typed ? t.pulse : t.line,
+      iconBtn: btnBase + ' width: 40px; height: 40px; display: flex; align-items: center; justify-content: center; border: 0; border-radius: 10px; background: transparent; color: ' + t.muted,
+      sendBtn: btnBase + ' width: 40px; height: 40px; display: flex; align-items: center; justify-content: center; border: 0; border-radius: 10px; background: ' + (typed ? t.pulse : t.raised) + '; color: ' + (typed ? t.onPulse : t.muted),
+      approved: this.state.decision === 'send',
+      declined: this.state.decision === 'decline',
+      approve: () => this.setState({ decision: 'send' }),
+      decline: () => this.setState({ decision: 'decline' }),
+      primaryBtn,
+      primaryBtnFull: primaryBtn + '; width: 100%; height: 44px',
+      secondaryBtn,
+      secondaryBtnHalf: secondaryBtn + '; flex: 1 1 0; height: 44px',
+      smallBtn,
+      linkBtn
+    };
+  }
+}
+</script>
+</body>
+</html>

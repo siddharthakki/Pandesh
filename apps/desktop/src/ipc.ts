@@ -164,6 +164,9 @@ export const DESKTOP_CHANNELS = {
   closePopoutWorkbench: 'desktop:closePopoutWorkbench',
   copyToClipboard: 'desktop:copyToClipboard',
   quitApp: 'desktop:quitApp',
+  /** Phase 2: which renderer is loaded (`classic` | `v2`) and switching between them. */
+  getUiVariant: 'desktop:getUiVariant',
+  setUiVariant: 'desktop:setUiVariant',
   /** Update & Restart: verify a user-chosen local package, make Core safe to stop, then hand over to the updater. */
   startUpdate: 'desktop:startUpdate',
   getUpdateStatus: 'desktop:getUpdateStatus',
@@ -553,6 +556,8 @@ export interface DesktopSnapshot {
   /** True when the next local submit delegates model choice to Core. */
   modelIsAuto: boolean;
   modelAvailable: boolean | null;
+  /** D8: false when the local model server (Ollama) did not answer the last probe; null when unknown or cloud. */
+  modelServerReachable?: boolean | null;
   /** Installed Ollama model names for the picker. */
   installedModels: string[];
   /** Free cloud providers, verified free model pools and selection. Off by default. */
@@ -583,6 +588,8 @@ export interface DesktopSnapshot {
   workspaceActivities: DesktopWorkspaceActivity[];
   workers: DesktopWorkerOption[];
   selectedWorker: string;
+  /** Phase 2b: the specialist agent the next turns go to; null = Pandesh. */
+  selectedAgentId?: string | null;
   /** Recorded on the request that ran, so the answer is attributable. */
   activeWorker: string | null;
   /** Gate 0: non-secret OpenRouter configuration status only. */
@@ -751,7 +758,7 @@ export interface DesktopArtifactPreview {
   fileUrl?: string;
 }
 
-export interface DesktopImageStudioStatus { studio: boolean; comfyui: boolean; ollama: boolean; detail: string; checkpoints: Array<{ name: string; category: string }> }
+export interface DesktopImageStudioStatus { studio: boolean; comfyui: boolean; ollama: boolean; ollamaVersion?: string | null; detail: string; checkpoints: Array<{ name: string; category: string }> }
 export type DesktopImageGenerationResult =
   | { outcome: 'approval_required'; approvalId: string; attemptId: string; presentation: Record<string, unknown> | null }
   | { outcome: 'executed'; attemptId: string; artifactIds: string[]; message: string }
@@ -968,6 +975,17 @@ export interface EverydayReminderView {
   overdueExplanation: string | null;
 }
 
+export interface ActiveTimerView {
+  id: string;
+  label: string;
+  durationMs: number;
+  startedAt: string;
+  deadlineMs: number;
+  remainingMs: number;
+  state: 'running' | 'paused' | 'completed' | 'cancelled';
+  conversationId?: string | null;
+}
+
 export interface EverydayToolsSnapshot {
   timezone: string;
   /** Always false until a verified closed-app mechanism exists. */
@@ -977,6 +995,7 @@ export interface EverydayToolsSnapshot {
   notes: EverydayNoteView[];
   reminders: EverydayReminderView[];
   dueReminders: EverydayReminderView[];
+  activeTimers?: ActiveTimerView[];
 }
 
 export type DesktopActivityKind =

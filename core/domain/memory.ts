@@ -710,6 +710,16 @@ export function recallMemories(db: CoreDatabase, input: RecallMemoriesInput = {}
     `SELECT * FROM memory_facts ${clauses.length ? `WHERE ${clauses.join(' AND ')}` : ''} ORDER BY createdAt DESC, id DESC LIMIT ?`,
     [...params, limit],
   ).map(asFact).reverse();
+  // Words match with OR, so "Project Cedar" also returned every other project's facts (and their contradictions) ahead
+  // of the Cedar fact (real-world challenge). When some facts match more of the query's words than others, only the
+  // best-matching ones are returned; a single-word query is unchanged.
+  if (words.length >= 2 && rows.length > 1) {
+    const score = (f: MemoryFactRecord) => words.filter((w) => `${f.subject} ${f.predicate} ${f.normalizedValue} ${f.displayValue}`.toLowerCase().includes(w)).length;
+    const best = Math.max(...rows.map(score));
+    if (best >= 2) {
+      for (let i = rows.length - 1; i >= 0; i -= 1) if (score(rows[i]) < best) rows.splice(i, 1);
+    }
+  }
 
   const entries: MemoryRecallEntry[] = [];
   for (const fact of rows) {
@@ -911,6 +921,65 @@ export function forgetMemory(db: CoreDatabase, input: ForgetMemoryInput): Forget
       deactivatedRelationships: Number(deactivated.changes ?? 0),
       alreadyForgotten: false,
     };
+  });
+}
+
+export interface CorrectMemoryInput {
+  /** The active fact being corrected. */
+  memoryId: string;
+  /** The complete corrected value (a part the user asked to forget is simply left out). */
+  value: string;
+  sourceConversationId: string;
+  sourceMessageId: string;
+  consentApprovalId?: string | null;
+  toolInvocationId?: string | null;
+  attemptId?: string | null;
+  actor: string;
+  clientId?: string | null;
+}
+
+export interface CorrectMemoryResult {
+  /** The fact as it was before the correction (its value is kept here, in the result only). */
+  previous: { id: string; displayValue: string };
+  memory: MemoryFactRecord;
+  evidence: MemoryEvidenceRecord[];
+  /** False when the stored value already equals the correction: nothing was written or forgotten. */
+  changed: boolean;
+}
+
+/**
+ * Alpha e2e re-run T6: a correction done by the model as remember + forget left the old fact active (R6), tried to
+ * forget the corrected fact instead (R6), or was never written at all (R6b). Core owns the correction: one consented
+ * step writes the corrected fact with fresh provenance (same type, scope, subject, predicate and sensitivity), resolves
+ * the contradiction in favour of it, and tombstones the old fact, in one transaction. "Forget the colour" on a fact
+ * that also holds the meeting time is a correction whose new value leaves the colour out.
+ */
+export function correctMemory(db: CoreDatabase, input: CorrectMemoryInput): CorrectMemoryResult {
+  const value = String(input.value ?? '').trim();
+  if (!value) throw new CoreError('invalid_request', 'a correction needs the complete new value; to remove a whole fact use memory_forget');
+  return db.transaction(() => {
+    const old = getMemoryFact(db, input.memoryId);
+    if (old.state !== 'active') throw new CoreError('invalid_request', `memory '${old.id}' is ${old.state}; only an active fact can be corrected (recall the current one first)`);
+    const previous = { id: old.id, displayValue: old.displayValue };
+    if (normalizeMemoryText(value) === old.normalizedValue) {
+      return { previous, memory: old, evidence: listMemoryEvidence(db, old.id), changed: false };
+    }
+    const written = rememberMemory(db, {
+      memoryType: old.memoryType, scopeType: old.scopeType, scopeId: old.scopeId, subject: old.subject, predicate: old.predicate,
+      value, sensitivity: old.sensitivity, sourceConversationId: input.sourceConversationId, sourceMessageId: input.sourceMessageId,
+      consentApprovalId: input.consentApprovalId ?? null, toolInvocationId: input.toolInvocationId ?? null, attemptId: input.attemptId ?? null,
+      actor: input.actor, clientId: input.clientId ?? null,
+    });
+    for (const c of written.contradictions.filter((x) => x.earlierMemoryId === old.id && x.state === 'unresolved')) {
+      resolveMemoryContradiction(db, { contradictionId: c.id, policy: 'prefer_later', approvalId: input.consentApprovalId ?? null, toolInvocationId: input.toolInvocationId ?? null, actor: input.actor, clientId: input.clientId ?? null });
+    }
+    forgetMemory(db, { memoryId: old.id, approvalId: input.consentApprovalId ?? null, toolInvocationId: input.toolInvocationId ?? null, actor: input.actor, clientId: input.clientId ?? null });
+    recordRuntimeEvent(db, {
+      domain: 'memory', entityId: written.memory.id, eventType: 'memory_corrected', actor: input.actor, clientId: input.clientId,
+      metadata: { previousMemoryId: old.id, approvalId: input.consentApprovalId ?? null, scopeType: old.scopeType, scopeId: old.scopeId },
+      resultingRevision: null,
+    });
+    return { previous, memory: getMemoryFact(db, written.memory.id), evidence: written.evidence, changed: true };
   });
 }
 

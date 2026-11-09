@@ -75,6 +75,39 @@ export function failDeadExecutorAttemptsOnBoot(
   return settled;
 }
 
+/**
+ * D6: a conversation's shared governed-capability anchor ("M38 governed
+ * capability dispatch anchor for conv_…") is opened once and was never closed,
+ * so every conversation that ever used a capability left a `running` attempt
+ * behind, and they piled up across restarts. After a restart no adapter can
+ * still be executing on one, so an anchor with no pending approval and no saved
+ * continuation is settled as completed (its tool ledger stays the record). The
+ * conversation's next governed call gets a fresh anchor
+ * (`ensureCapabilityAttempt`). Anchors still waiting on a human are untouched.
+ */
+export function settleIdleCapabilityAnchorsOnBoot(db: CoreDatabase): string[] {
+  const settled: string[] = [];
+  const anchors = db.all<{ id: string; status: string }>(
+    `SELECT a.id AS id, a.status AS status
+       FROM attempts a JOIN requests r ON r.id = a.requestId
+      WHERE r.routeReason = 'm38_capability_dispatch' AND a.parentAttemptId IS NULL
+        AND a.status IN ('created', 'running')`,
+  );
+  for (const anchor of anchors) {
+    if (listApprovalsForAttempt(db, anchor.id).some((approval) => approval.status === 'pending')) continue;
+    if (loadLoopContinuation(db, anchor.id)?.pendingApprovalId) continue;
+    const actor = 'core:boot-reconciliation';
+    try {
+      if (anchor.status === 'created') transitionAttempt(db, anchor.id, { toStatus: 'running', actor });
+      transitionAttempt(db, anchor.id, { toStatus: 'completed', actor, reason: 'idle capability anchor closed at Core start' });
+      settled.push(anchor.id);
+    } catch {
+      // An anchor in a state this walk cannot settle stays as it is; the scan below still reports it.
+    }
+  }
+  return settled;
+}
+
 export interface BootReconciliationSummary {
   scanned: number;
   byClassification: Record<RecoveryClassification, number>;

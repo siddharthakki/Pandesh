@@ -200,13 +200,13 @@ export class OpenCodeEngine {
               name: 'qwen3-coder:swift-27b',
               tool_call: true,
               reasoning: false,
-              limit: { context: 65536, output: 4096 },
+              limit: { context: 65536, output: 12288 },
             },
             'qwen3.8:27b-mtp-q4_K_M': {
               name: 'qwen3.8:27b-mtp-q4_K_M',
               tool_call: true,
               reasoning: false,
-              limit: { context: 65536, output: 4096 },
+              limit: { context: 65536, output: 12288 },
             },
           },
         },
@@ -331,19 +331,19 @@ export class OpenCodeEngine {
                 name: 'qwen3-coder:swift-27b',
                 tool_call: true,
                 reasoning: false,
-                limit: { context: 32768, output: 4096 },
+                limit: { context: 32768, output: 12288 },
               },
               'qwen3.8:27b-mtp-q4_K_M': {
                 name: 'qwen3.8:27b-mtp-q4_K_M',
                 tool_call: true,
                 reasoning: false,
-                limit: { context: 32768, output: 4096 },
+                limit: { context: 32768, output: 12288 },
               },
               [effectiveModel]: {
                 name: effectiveModel,
                 tool_call: true,
                 reasoning: false,
-                limit: { context: 32768, output: 4096 },
+                limit: { context: 32768, output: 12288 },
               },
             },
           },
@@ -583,8 +583,10 @@ export class OpenCodeEngine {
       } catch {}
     }
 
-    // Append final message to conversation
-    if (reply && conversationId) {
+    // Append final message to conversation — only when this engine owns the turn. Delegated from the chat engine
+    // (manageAttemptLifecycle: false), the chat engine writes the one reply, with Core's verified report (D12: M8 showed
+    // a second, unverified assistant message and the attempt completed underneath the chat engine).
+    if (reply && conversationId && manageLifecycle) {
       try {
         appendMessage(db, conversationId, {
           role: 'assistant',
@@ -657,12 +659,14 @@ export class OpenCodeEngine {
       : null;
 
     if (exitCode === 0 && !unverifiedReason) {
-      try {
-        mutateWithBroadcast(db, broadcaster, () => {
-          transitionAttempt(db, attemptId, { toStatus: 'completed', fenceToken, actor });
-        });
-      } catch (e) {
-        console.error('[opencodeEngine] transitionAttempt error:', e);
+      if (manageLifecycle) {
+        try {
+          mutateWithBroadcast(db, broadcaster, () => {
+            transitionAttempt(db, attemptId, { toStatus: 'completed', fenceToken, actor });
+          });
+        } catch (e) {
+          console.error('[opencodeEngine] transitionAttempt error:', e);
+        }
       }
       safeRecordRuntimeEvent(db, broadcaster, attemptId, 'step_finish', {
         step: 1,
@@ -680,16 +684,18 @@ export class OpenCodeEngine {
       };
     } else {
       const errMessage = spawnError ?? unverifiedReason ?? (stderr.slice(-300) || `OpenCode exited with code ${exitCode}, and printed nothing on its error stream (last output: ${stdout.slice(-160).replace(/\s+/g, ' ') || 'none'})`);
-      try {
-        mutateWithBroadcast(db, broadcaster, () => {
-          failAttempt(db, attemptId, {
-            failureReason: errMessage,
-            fenceToken,
-            actor,
+      if (manageLifecycle) {
+        try {
+          mutateWithBroadcast(db, broadcaster, () => {
+            failAttempt(db, attemptId, {
+              failureReason: errMessage,
+              fenceToken,
+              actor,
+            });
           });
-        });
-      } catch (e) {
-        console.error('[opencodeEngine] failAttempt error:', e);
+        } catch (e) {
+          console.error('[opencodeEngine] failAttempt error:', e);
+        }
       }
       safeRecordRuntimeEvent(db, broadcaster, attemptId, 'step_finish', {
         step: 1,

@@ -129,8 +129,10 @@ describe('document tools — refusals and argument handling', () => {
   });
 
   it('reports an honest health state when no document tool is installed', () => {
-    const adapter = createDocumentToolsAdapter({ tools: { tesseract: null, pdftoppm: null, pdftotext: null, pdfinfo: null } });
-    expect(adapter.health().state).toBe('unavailable');
+    const none = { tesseract: null, pdftoppm: null, pdftotext: null, pdfinfo: null };
+    expect(createDocumentToolsAdapter({ tools: none, browserBin: null }).health().state).toBe('unavailable');
+    // PDF export (D5) only needs the browser, so without OCR tools the adapter is degraded, not unavailable.
+    expect(createDocumentToolsAdapter({ tools: none, browserBin: 'C:/msedge.exe' }).health().state).toBe('degraded');
     const partial = createDocumentToolsAdapter({ tools: { tesseract: null, pdftoppm: null, pdftotext: 'C:/pdftotext.exe', pdfinfo: null } });
     expect(partial.health().state).toBe('degraded');
     const full = createDocumentToolsAdapter({ tools: { tesseract: 'C:/tesseract.exe', pdftoppm: 'C:/pdftoppm.exe', pdftotext: 'C:/pdftotext.exe', pdfinfo: 'C:/pdfinfo.exe' } });
@@ -140,7 +142,7 @@ describe('document tools — refusals and argument handling', () => {
   it('classifies every tool as consequential and names it honestly', () => {
     const adapter = createDocumentToolsAdapter({ tools });
     const names = adapter.definitions().map((definition) => definition.name);
-    expect(names).toEqual(['document_read', 'document_ocr', 'media_download']);
+    expect(names).toEqual(['document_read', 'document_ocr', 'media_download', 'export_document_pdf']);
     for (const name of names) expect(adapter.classify(name)).toBe('consequential');
   });
 

@@ -4,7 +4,7 @@ import * as path from 'node:path';
 import * as os from 'node:os';
 import * as crypto from 'node:crypto';
 import type { DesktopSession } from './desktopSession';
-import type { RuntimeEventRecord } from '../../../../core/shared/wireTypes';
+import type { DesktopActivityEvent } from '../ipc';
 
 export interface MobileServerOptions {
   port?: number;
@@ -32,6 +32,20 @@ function stripKandevInternals(story: any): any {
   if (!story || typeof story !== 'object') return story;
   const { kandevTaskId: _omit, ...rest } = story;
   return rest;
+}
+
+/**
+ * Which address the phone server listens on. The real install (its own profile under %LOCALAPPDATA%\KarkeDikha\desktop)
+ * listens on the LAN so a phone can pair. Every other instance — smoke tests, the audit harness, a build run from a
+ * scratch folder with its own profile — listens on loopback only. A LAN listener from a new program path makes Windows
+ * Firewall ask "allow access?" again for every test build (2026-11-07: one prompt per remediation build), and a test
+ * instance has no business being reachable from the network.
+ */
+export function defaultMobileHost(env: NodeJS.ProcessEnv, dataDir: string, realDesktopDataDir: string): string {
+  if (env.KARKEDIKHA_MOBILE_HOST?.trim()) return env.KARKEDIKHA_MOBILE_HOST.trim();
+  if (env.KARKEDIKHA_DESKTOP_SMOKE_MODE === '1') return '127.0.0.1';
+  const norm = (p: string) => path.resolve(p).replace(/[\\/]+$/, '').toLowerCase();
+  return norm(dataDir) === norm(realDesktopDataDir) ? '0.0.0.0' : '127.0.0.1';
 }
 
 export class MobileServer {
@@ -134,7 +148,8 @@ export class MobileServer {
   }
 
   public getPairingInfo(): MobilePairingInfo {
-    const ip = this.getPrimaryIp();
+    // A loopback-only instance is not reachable from a phone; do not advertise a LAN address it does not listen on.
+    const ip = this.host === '0.0.0.0' || this.host === '::' ? this.getPrimaryIp() : this.host;
     const liveSockets = this.sseClients.size;
     return {
       code: this.pairingCode,
@@ -163,7 +178,7 @@ export class MobileServer {
     });
 
     // Subscribe to session events to push to mobile SSE clients
-    this.unsubscribeSession = this.session.onEvent((event: RuntimeEventRecord) => {
+    this.unsubscribeSession = this.session.onEvent((event: DesktopActivityEvent) => {
       this.broadcastSse('session_event', event);
     });
 
@@ -352,9 +367,9 @@ export class MobileServer {
         brand: 'KarkeDikha',
         assistant: 'Pandesh',
         ready: true,
-        model: snap.selectedModel,
-        workspace: snap.workspaceRoot || 'No workspace selected',
-        coreState: snap.coreConnected ? 'connected' : 'connecting',
+        model: snap.modelIsAuto ? 'Auto' : snap.model,
+        workspace: snap.folder || 'No workspace selected',
+        coreState: snap.coreState === 'connected' ? 'connected' : 'connecting',
       }));
       return;
     }
@@ -1618,9 +1633,9 @@ export class MobileServer {
       function renderSnapshot(snap) {
         if (!snap) return;
         var wEl = document.getElementById('m-workspace');
-        if (wEl) wEl.textContent = snap.workspaceRoot || 'None';
+        if (wEl) wEl.textContent = snap.folder || 'None';
         var mEl = document.getElementById('m-model');
-        if (mEl) mEl.textContent = snap.selectedModel || 'Auto';
+        if (mEl) mEl.textContent = (snap.modelIsAuto ? 'Auto' : snap.model) || 'Auto';
 
         if (snap.pendingApproval) {
           currentApproval = snap.pendingApproval;

@@ -81,11 +81,15 @@ export const CONSEQUENTIAL_PI_TOOLS: ReadonlySet<string> = new Set([
   'update_commitment',
   'memory_remember',
   'memory_forget',
+  'memory_correct',
   'memory_resolve_contradiction',
   'schedule_task',
   'cancel_scheduled_task',
   'send_to_phone',
   'delegate_to_opencode',
+  'delegate_to_coding_agent',
+  'delegate_to_agent',
+  'create_project',
   'dev_stories_dispatch',
   'dev_story_approve_review',
   // Sending a web form is the browser's one outward action; a declined send must never read as "submitted".
@@ -163,6 +167,28 @@ export function evaluateTurnOutcome(calls: readonly TurnToolCall[]): TurnOutcome
   for (const tool of started) {
     if (completed.has(tool)) continue;
     if (!refused.includes(tool)) refused.push(tool);
+  }
+
+  // Real-world challenge T13: OpenCode produced nothing (NOT DONE), then the turn wrote and opened the file itself, and
+  // the reply still ended "the requested work did not happen". A producing step that did not work, followed later by a
+  // producing step that did, is a recovery. A declined approval is never "recovered": the person said no.
+  const PRODUCING = /^(?:write_file|propose_file_change|propose_text_edit|delegate_to_opencode|delegate_to_coding_agent|delegate_to_agent)$/;
+  const lastIndex = (tool: string) => { for (let i = calls.length - 1; i >= 0; i -= 1) if (calls[i].tool === tool && calls[i].status !== 'running') return i; return -1; };
+  const unrecovered = (list: string[]) => list.filter((tool) => {
+    if (!PRODUCING.test(tool)) return true;
+    if (/declin|did not approve|didn't approve|not approved/i.test(resultText(completed.get(tool)?.result))) return true;
+    const at = lastIndex(tool);
+    return !performed.some((p) => PRODUCING.test(p) && lastIndex(p) > at);
+  });
+  const recovered = [...refused, ...failed].filter((t) => !unrecovered([t]).length);
+  if (recovered.length > 0 && unrecovered(refused).length === 0 && unrecovered(failed).length === 0) {
+    return {
+      verdict: 'verified',
+      reason: `${recovered.join(', ')} did not work, then ${performed.filter((p) => PRODUCING.test(p)).join(', ')} completed the work (recovered)`,
+      performed,
+      refused,
+      failed,
+    };
   }
 
   if (refused.length > 0) {

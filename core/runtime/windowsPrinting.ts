@@ -1,11 +1,13 @@
 /**
- * Narrow, governed Windows printing: enumerate installed printers and submit the Windows test page.
+ * Narrow, governed Windows printing: enumerate installed printers and print a one-page Pandesh test document.
  *
  * (Process spawning lives in the host-reviewed runner passed in; this module imports no child_process.)
  *
  * No shell command from the model is involved. Fixed PowerShell scripts run with the printer name passed through an
- * environment variable (never interpolated), so a printer name cannot inject a command. No file is generated: the
- * test page is Windows' own (Win32_Printer.PrintTestPage).
+ * environment variable (never interpolated), so a printer name cannot inject a command. The test document is plain
+ * text built by Core (buildTestDocument), passed the same way, and sent through the normal spooler with Out-Printer.
+ * (Win32_Printer.PrintTestPage was used before; on Windows 11 it returned 5 = access denied for a normal user, so an
+ * approved print never reached the queue — printer mission P1, 2026-11-07.)
  *
  * Outcomes are kept honest. Windows can prove the spooler accepted a job and later that the job left the queue
  * without an error; it cannot prove paper came out. So:
@@ -50,9 +52,30 @@ export const VERIFY_MAX_POLLS = 6;
 
 const LIST_SCRIPT = `$ErrorActionPreference='Stop'; $d=(Get-CimInstance Win32_Printer | Where-Object { $_.Name -ne $null }); @($d | ForEach-Object { [pscustomobject]@{ Name=$_.Name; Driver=$_.DriverName; Port=$_.PortName; Status=[string]$_.PrinterStatus; WorkOffline=$_.WorkOffline; Default=$_.Default } }) | ConvertTo-Json -Compress`;
 
-const SUBMIT_SCRIPT = `$ErrorActionPreference='Stop'; $n=$env:PANDESH_PRINTER; $p=Get-CimInstance Win32_Printer -Filter ("Name='" + $n.Replace("'","''") + "'"); if(-not $p){ Write-Output 'NOT_FOUND'; exit 3 }; $r=Invoke-CimMethod -InputObject $p -MethodName PrintTestPage; Write-Output ('RETURN=' + $r.ReturnValue); if($r.ReturnValue -ne 0){ exit 4 }`;
+const SUBMIT_SCRIPT = `$ErrorActionPreference='Stop'; $n=$env:PANDESH_PRINTER; $p=Get-CimInstance Win32_Printer -Filter ("Name='" + $n.Replace("'","''") + "'"); if(-not $p){ Write-Output 'NOT_FOUND'; exit 3 }; $env:PANDESH_PAGE | Out-Printer -Name $n; Write-Output 'SUBMITTED'`;
 
-const JOBS_SCRIPT = `$ErrorActionPreference='Stop'; $n=$env:PANDESH_PRINTER; $j=@(Get-PrintJob -PrinterName $n -ErrorAction Stop | ForEach-Object { [pscustomobject]@{ Id=$_.Id; Status=[string]$_.JobStatus } }); $s=(Get-CimInstance Win32_Printer -Filter ("Name='" + $n.Replace("'","''") + "'")); [pscustomobject]@{ Jobs=$j; PrinterStatus=[string]$s.PrinterStatus; Offline=[bool]$s.WorkOffline } | ConvertTo-Json -Compress -Depth 4`;
+/** The one-page test document Core prepares: shown on the approval card, then printed. Fits one page on any driver. */
+export function buildTestDocument(printer: string, now: Date = new Date()): string {
+  return [
+    'PANDESH PRINTER TEST',
+    '====================',
+    '',
+    `Printer : ${printer}`,
+    `Sent at : ${now.toISOString().replace('T', ' ').slice(0, 19)} UTC`,
+    'Sent by : Pandesh, through the Windows print spooler',
+    '',
+    'If you can read this page, the printer received and printed the job.',
+    '',
+    'Alignment check:',
+    '0123456789 ABCDEFGHIJKLMNOPQRSTUVWXYZ abcdefghijklmnopqrstuvwxyz',
+    '----------+----------+----------+----------+----------+----------',
+    '',
+    'Windows can confirm that the job reached and left the print queue;',
+    'only a person at the printer can confirm that paper came out.',
+  ].join('\r\n');
+}
+
+const JOBS_SCRIPT = `$ErrorActionPreference='Stop'; $n=$env:PANDESH_PRINTER; $j=@(Get-PrintJob -PrinterName $n -ErrorAction Stop | ForEach-Object { [pscustomobject]@{ Id=$_.Id; Status=[string]$_.JobStatus } }); $s=(Get-CimInstance Win32_Printer -Filter ("Name='" + $n.Replace("'","''") + "'")); $c=$null; try { $c=Get-CimInstance Win32_PerfRawData_Spooler_PrintQueue -Filter ("Name='" + $n.Replace("'","''") + "'") -ErrorAction Stop } catch {}; [pscustomobject]@{ Jobs=$j; PrinterStatus=[string]$s.PrinterStatus; Offline=[bool]$s.WorkOffline; Printed=$(if($c){[int64]$c.TotalJobsPrinted}else{$null}); JobErrors=$(if($c){[int64]$c.JobErrors}else{$null}) } | ConvertTo-Json -Compress -Depth 4`;
 
 /** Win32_Printer.PrinterStatus: 1 other, 2 unknown, 3 idle, 4 printing, 5 warmup, 6 stopped printing, 7 offline. */
 const PRINTER_STATUS: Record<string, string> = { '1': 'other', '2': 'unknown', '3': 'idle', '4': 'printing', '5': 'warming up', '6': 'stopped printing', '7': 'offline' };
@@ -124,19 +147,24 @@ export function resolvePrinter(printers: readonly InstalledPrinter[], requestTex
   return { error: 'The request does not identify which installed printer to use.', candidates: names };
 }
 
-interface QueueSnapshot { ids: number[]; hasError: boolean; printerStatus: string; offline: boolean }
+/** `printed`/`jobErrors`: the spooler's own cumulative counters for this queue (null when Windows does not expose them). */
+interface QueueSnapshot { ids: number[]; hasError: boolean; printerStatus: string; offline: boolean; printed: number | null; jobErrors: number | null }
+
+const counter = (value: unknown): number | null => (typeof value === 'number' && Number.isFinite(value) ? value : null);
 
 async function readQueue(printer: string, run: PowerShellRunner, signal?: AbortSignal): Promise<QueueSnapshot | null> {
   const r = await run(JOBS_SCRIPT, { PANDESH_PRINTER: printer }, VERIFY_TIMEOUT_MS, signal);
   if (r.timedOut || r.code !== 0 || !r.stdout.trim()) return null;
   try {
-    const parsed = JSON.parse(r.stdout.trim()) as { Jobs?: unknown; PrinterStatus?: unknown; Offline?: unknown };
+    const parsed = JSON.parse(r.stdout.trim()) as { Jobs?: unknown; PrinterStatus?: unknown; Offline?: unknown; Printed?: unknown; JobErrors?: unknown };
     const jobs = asArray<{ Id: number; Status: string }>(parsed.Jobs);
     return {
       ids: jobs.map((j) => Number(j.Id)),
       hasError: jobs.some((j) => /error|offline|paper|userintervention|blocked/i.test(String(j.Status))),
       printerStatus: PRINTER_STATUS[String(parsed.PrinterStatus)] ?? String(parsed.PrinterStatus ?? 'unknown'),
       offline: parsed.Offline === true,
+      printed: counter(parsed.Printed),
+      jobErrors: counter(parsed.JobErrors),
     };
   } catch {
     return null;
@@ -150,19 +178,18 @@ async function readQueue(printer: string, run: PowerShellRunner, signal?: AbortS
 export async function submitTestPage(
   printer: string,
   run: PowerShellRunner,
-  opts: { signal?: AbortSignal; sleep?: (ms: number) => Promise<void> } = {},
+  opts: { signal?: AbortSignal; sleep?: (ms: number) => Promise<void>; document?: string } = {},
 ): Promise<PrintTestPageResult> {
   const sleep = opts.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
   const before = await readQueue(printer, run, opts.signal);
   const baseline = new Set(before?.ids ?? []);
 
-  const sub = await run(SUBMIT_SCRIPT, { PANDESH_PRINTER: printer }, SUBMIT_TIMEOUT_MS, opts.signal);
+  const sub = await run(SUBMIT_SCRIPT, { PANDESH_PRINTER: printer, PANDESH_PAGE: opts.document ?? buildTestDocument(printer) }, SUBMIT_TIMEOUT_MS, opts.signal);
   if (opts.signal?.aborted) return { outcome: 'unknown', printer, detail: 'Cancelled while submitting; the test page may or may not have been queued.', jobIds: [] };
   if (sub.timedOut) return { outcome: 'unknown', printer, detail: `Submission timed out after ${SUBMIT_TIMEOUT_MS / 1000}s; the test page may or may not have been queued.`, jobIds: [] };
   if (/NOT_FOUND/.test(sub.stdout)) return { outcome: 'failed', printer, detail: `Windows no longer lists a printer named "${printer}". Nothing was printed.`, jobIds: [] };
   if (sub.code !== 0) {
-    const ret = /RETURN=(\d+)/.exec(sub.stdout)?.[1];
-    return { outcome: 'failed', printer, detail: `Windows rejected the test page${ret ? ` (PrintTestPage returned ${ret})` : ''}: ${(sub.stderr || sub.stdout).trim().slice(0, 300) || `exit ${sub.code}`}`, jobIds: [] };
+    return { outcome: 'failed', printer, detail: `Windows rejected the print job: ${(sub.stderr || sub.stdout).trim().slice(0, 300) || `exit ${sub.code}`}. Nothing was printed.`, jobIds: [] };
   }
 
   let seen: number[] = [];
@@ -175,6 +202,16 @@ export async function submitTestPage(
     const fresh = last.ids.filter((id) => !baseline.has(id));
     for (const id of fresh) if (!seen.includes(id)) seen = [...seen, id];
     if (last.hasError) return { outcome: 'failed', printer, detail: `The spooler job reported an error (printer ${last.printerStatus}).`, jobIds: seen };
+    // The spooler's own counters: a job that printed and cleared between two polls still moves them (printer mission
+    // P1: the job left the queue before the first check and the outcome was reported as unknown).
+    if (before && before.jobErrors !== null && last.jobErrors !== null && last.jobErrors > before.jobErrors) {
+      return { outcome: 'failed', printer, detail: `The spooler recorded a job error for this printer (errors ${before.jobErrors} → ${last.jobErrors}).`, jobIds: seen };
+    }
+    if (before && before.printed !== null && last.printed !== null && last.printed > before.printed && fresh.length === 0) {
+      return last.offline || last.printerStatus === 'stopped printing'
+        ? { outcome: 'failed', printer, detail: `The spooler counted the job as sent but the printer is ${last.offline ? 'offline' : last.printerStatus}.`, jobIds: seen }
+        : { outcome: 'completed', printer, detail: `The spooler sent the job to the printer: its jobs-printed counter for this printer rose from ${before.printed} to ${last.printed} with no job error. (Windows cannot confirm paper output.)`, jobIds: seen };
+    }
     if (seen.length > 0 && fresh.length === 0) {
       return last.offline || last.printerStatus === 'stopped printing'
         ? { outcome: 'failed', printer, detail: `The job left the queue but the printer is ${last.offline ? 'offline' : last.printerStatus}.`, jobIds: seen }

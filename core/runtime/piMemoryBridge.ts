@@ -37,6 +37,8 @@ export interface BuildPiMemoryBridgeOptions {
   cwd: string;
   actor: string;
   signal?: AbortSignal;
+  /** The chat attempt, so an agent run's memory scope applies at dispatch. */
+  actingAttemptId?: string;
 }
 
 /**
@@ -56,6 +58,7 @@ export function buildPiMemoryBridge(options: BuildPiMemoryBridgeOptions): PiMemo
     })),
     dispatch: (toolName, args) => dispatchCapability(options.db, registry, {
       correlationId: options.correlationId,
+      ...(options.actingAttemptId ? { actingAttemptId: options.actingAttemptId } : {}),
       toolName,
       arguments: args,
       cwd: options.cwd,

@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeAll, afterEach } from 'vitest';
+import { ensureCoreBundle } from './support/coreBundle';
 import { execFileSync, spawn, type ChildProcess } from 'node:child_process';
 import * as http from 'node:http';
 import * as fs from 'node:fs';
@@ -20,7 +21,7 @@ const TOKEN = 'survival-test-token';
  * persisted the assistant message. This is execution ownership, not a shadow.
  */
 beforeAll(() => {
-  execFileSync(process.execPath, [path.join(repoRoot, 'esbuild.core.js')], { cwd: repoRoot, stdio: 'inherit' });
+  ensureCoreBundle(repoRoot); // one shared, locked build per run (parallel rebuilds raced)
 }, 60_000);
 
 const children: ChildProcess[] = [];
@@ -131,7 +132,7 @@ function spawnCore(dataDir: string): ChildProcess {
   return child;
 }
 
-async function waitForDiscovery(dataDir: string, timeoutMs = 8000): Promise<{ port: number }> {
+async function waitForDiscovery(dataDir: string, timeoutMs = 45_000): Promise<{ port: number }> {
   const discoveryPath = path.join(dataDir, 'core.json');
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
@@ -183,7 +184,7 @@ describe('M32 Priority 2: Core-owned execution survives the Extension Host going
 
     // Wait until execution is actually in-flight (attempt running), then simulate
     // VS Code closing: hard-destroy the WS. The Core process is separate and keeps going.
-    const deadline = Date.now() + 4000;
+    const deadline = Date.now() + 15_000;
     for (;;) {
       const a = await fetch(`${base}/v1/attempts/${attempt.id}`, { headers: H() }).then((r) => r.json());
       if (a.status === 'running') break;
@@ -194,7 +195,7 @@ describe('M32 Priority 2: Core-owned execution survives the Extension Host going
 
     // A brand-new client (as if VS Code was reopened) observes the completed attempt.
     let final: any;
-    const d2 = Date.now() + 5000;
+    const d2 = Date.now() + 15_000;
     for (;;) {
       final = await fetch(`${base}/v1/attempts/${attempt.id}`, { headers: H() }).then((r) => r.json());
       if (final.status === 'completed') break;
@@ -210,5 +211,5 @@ describe('M32 Priority 2: Core-owned execution survives the Extension Host going
 
     const invocations = await fetch(`${base}/v1/attempts/${attempt.id}/model-invocations`, { headers: H() }).then((r) => r.json());
     expect(invocations.modelInvocations[0].status).toBe('succeeded');
-  }, 30_000);
+  }, 120_000);
 });

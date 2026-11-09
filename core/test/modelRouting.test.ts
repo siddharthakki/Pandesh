@@ -29,16 +29,16 @@ describe('Core-owned local model routing', () => {
     expect(result.candidates.find((candidate) => candidate.model === AUTO_RECOVERY_MODEL)).toMatchObject({ available: true });
   });
 
-  it('fails closed when Ollama is reachable but no preference-chain model is installed', () => {
-    expect(() => routeModel('karke_dikha', AUTONOMOUS_MISSION_PROFILE, reachable(['unrelated:model'])))
+  // D9: an installed model serves when no chain tag is installed; only a catalog with no generative model fails closed.
+  it('fails closed when Ollama is reachable but no generative model is installed', () => {
+    expect(() => routeModel('karke_dikha', AUTONOMOUS_MISSION_PROFILE, reachable(['nomic-embed-text:latest'])))
       .toThrow(CoreError);
+    expect(routeModel('karke_dikha', AUTONOMOUS_MISSION_PROFILE, reachable(['unrelated:model'])).selectedModel).toBe('unrelated:model');
   });
 
-  it('retains the historic fallback when catalog discovery is temporarily unreachable', () => {
-    const result = routeModel('saath_kar', LOCAL_CORE_QUESTION_PROFILE, { reachable: false, models: [] });
-    expect(result.selectedModel).toBe(AUTO_FALLBACK_MODEL);
-    expect(result.candidates.every((candidate) => !candidate.available)).toBe(true);
-    expect(result.escalationCandidates).toEqual([]);
+  // D9: an unreachable catalog never "selects" a model it cannot see installed.
+  it('refuses to select a model when catalog discovery is unreachable', () => {
+    expect(() => routeModel('saath_kar', LOCAL_CORE_QUESTION_PROFILE, { reachable: false, models: [] })).toThrow(/not reachable/);
   });
 
   it('freezes the introspected window of the selected model with its provenance', () => {

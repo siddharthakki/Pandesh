@@ -6,7 +6,7 @@ export default defineConfig({
   test: {
     environment: 'node',
     include: ['core/test/platform/**/*.platform.test.ts'],
-    setupFiles: ['src/test/setup/agentPanelHydration.ts'],
+    setupFiles: ['src/test/setup/isolatedProfile.ts', 'src/test/setup/agentPanelHydration.ts'],
     fileParallelism: false,
     testTimeout: 20_000,
   },

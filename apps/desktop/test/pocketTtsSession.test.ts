@@ -44,7 +44,7 @@ describe('speakText with Pocket TTS selected', () => {
     expect(synthesize).toHaveBeenCalledTimes(1);
   }, 60_000);
 
-  it('returns a cancelled result when Stop supersedes synthesis', async () => {
+  it.runIf(havePocket)('returns a cancelled result when Stop supersedes synthesis', async () => {
     let release: (v: unknown) => void = () => undefined;
     const synthesize = vi.fn().mockImplementation(() => new Promise((resolve) => { release = resolve; }));
     (host as unknown as Internals).pocketTts = { synthesize, cancel: () => undefined, dispose: async () => undefined };

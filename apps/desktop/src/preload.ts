@@ -249,6 +249,9 @@ const desktopApi = {
   copyToClipboard: (text: string): Promise<{ copied: boolean }> =>
     ipcRenderer.invoke(DESKTOP_CHANNELS.copyToClipboard, text),
   quitApp: (): Promise<void> => ipcRenderer.invoke(DESKTOP_CHANNELS.quitApp),
+  getUiVariant: (): Promise<{ variant: 'classic' | 'v2'; forcedByEnv: boolean }> => ipcRenderer.invoke(DESKTOP_CHANNELS.getUiVariant),
+  setUiVariant: (variant: 'classic' | 'v2'): Promise<{ variant: 'classic' | 'v2'; forcedByEnv: boolean }> =>
+    ipcRenderer.invoke(DESKTOP_CHANNELS.setUiVariant, variant),
   getUpdateStatus: (): Promise<DesktopUpdateStatus> => ipcRenderer.invoke(DESKTOP_CHANNELS.getUpdateStatus),
   startUpdate: (testPackagePath?: string): Promise<DesktopUpdateStartResult> =>
     ipcRenderer.invoke(DESKTOP_CHANNELS.startUpdate, testPackagePath),

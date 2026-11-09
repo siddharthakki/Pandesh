@@ -30,6 +30,8 @@ import { isCredentialFilePath, redactSecrets } from '../platform/credentialStore
 import { OcrError, ocrFile, resolveOcrTools, runLocalTool, type OcrTools } from './documentOcr';
 import { isNonPublicAddress } from './browserHostPolicy';
 import { startEgressProxy, vetHost, type EgressProxy } from './browserEgressProxy';
+import { EXPORTABLE_SOURCE_EXTENSIONS, PdfExportError, printHtmlToPdf, renderReportHtml } from './documentExport';
+import { resolveHostBrowserBin } from './hostBrowserBin';
 
 const MAX_OCR_CHARS = 120_000;
 const MAX_DOWNLOAD_BYTES = 512 * 1024 * 1024;
@@ -56,6 +58,9 @@ export function isProtectedDocumentPath(filePath: string): boolean {
 function resolveDocumentPath(raw: unknown): { path?: string; error?: ToolExecutionResult } {
   const trimmed = typeof raw === 'string' ? raw.trim() : '';
   if (!trimmed) return { error: failure('path is required', 'invalid_arguments') };
+  // Audit D10: a relative path used to resolve against the install folder. The chat engine resolves it against the
+  // selected workspace before dispatch; anything still relative here has no base to resolve against.
+  if (!path.isAbsolute(trimmed)) return { error: failure(`"${trimmed}" is a relative path and no folder is selected to resolve it against; give the full path`, 'invalid_arguments') };
   const resolved = path.resolve(trimmed);
   let stat: fs.Stats;
   try {
@@ -151,6 +156,8 @@ export interface DocumentToolsOptions {
   tools?: OcrTools;
   /** Test seam: the yt-dlp binary. */
   ytdlp?: string | null;
+  /** Test seam: the headless browser that prints PDFs. */
+  browserBin?: string | null;
 }
 
 export interface DocumentReadResult {
@@ -376,11 +383,69 @@ export function createDocumentToolsAdapter(options: DocumentToolsOptions = {}): 
     }
   }
 
+  /** Audit D5: Markdown or a text report becomes a verified PDF, printed locally by the browser Windows ships. */
+  async function runExport(call: ModelToolCall, signal?: AbortSignal): Promise<ToolExecutionResult> {
+    const args = call.arguments ?? {};
+    const markdownArg = typeof args.markdown === 'string' ? args.markdown : '';
+    const sourceArg = typeof args.source === 'string' ? args.source.trim() : '';
+    if (!!markdownArg.trim() === !!sourceArg) {
+      return failure('give exactly one of "source" (a .md or .txt file) or "markdown" (the report text)', 'invalid_arguments');
+    }
+    let content = markdownArg;
+    let sourcePath: string | null = null;
+    if (sourceArg) {
+      const resolved = resolveDocumentPath(sourceArg);
+      if (resolved.error) return resolved.error;
+      sourcePath = resolved.path!;
+      const extension = path.extname(sourcePath).toLowerCase();
+      if (!EXPORTABLE_SOURCE_EXTENSIONS.has(extension)) {
+        return failure(`only Markdown or plain-text files can be exported to PDF; "${path.basename(sourcePath)}" is ${extension || 'unknown'}`, 'pdf_export_unsupported_source');
+      }
+      if (fs.statSync(sourcePath).size > 2 * 1024 * 1024) return failure('the source file is larger than 2 MB', 'pdf_export_source_too_large');
+      content = fs.readFileSync(sourcePath, 'utf8');
+    }
+    if (!content.trim()) return failure('there is no text to put in the PDF', 'invalid_arguments');
+
+    const outputArg = typeof args.output === 'string' ? args.output.trim() : '';
+    const outputRaw = outputArg || (sourcePath ? sourcePath.replace(/\.[^.\\/]+$/, '.pdf') : '');
+    if (!outputRaw) return failure('"output" is required when exporting text: the full path of the .pdf to write', 'invalid_arguments');
+    if (!path.isAbsolute(outputRaw)) return failure(`"${outputRaw}" is a relative path and no folder is selected to resolve it against; give the full path`, 'invalid_arguments');
+    const outputPath = path.resolve(outputRaw);
+    if (path.extname(outputPath).toLowerCase() !== '.pdf') return failure('the output file must end in .pdf', 'invalid_arguments');
+    if (isProtectedDocumentPath(outputPath)) return failure('that location holds credentials or protected application data; PDFs are never written there', 'pdf_export_refused');
+    if (!fs.existsSync(path.dirname(outputPath))) return failure(`the folder "${path.dirname(outputPath)}" does not exist`, 'pdf_export_no_folder');
+    if (fs.existsSync(outputPath) && args.overwrite !== true) {
+      return failure(`"${path.basename(outputPath)}" already exists and was left unchanged; pass overwrite=true only if the person asked to replace it`, 'pdf_export_exists');
+    }
+    const browserBin = options.browserBin === undefined ? resolveHostBrowserBin() : options.browserBin;
+    if (!browserBin) return failure('no Edge or Chrome browser was found on this PC, so a PDF cannot be printed', 'pdf_export_unavailable');
+
+    const title = typeof args.title === 'string' && args.title.trim() ? args.title.trim() : path.basename(outputPath, '.pdf');
+    const plainText = sourcePath ? path.extname(sourcePath).toLowerCase() === '.txt' : false;
+    const ocr = toolsFor();
+    try {
+      const verified = await printHtmlToPdf(renderReportHtml(content, title, plainText), outputPath, {
+        browserBin, pdftotext: ocr.pdftotext, pdfinfo: ocr.pdfinfo, signal,
+      });
+      const facts = [`${verified.bytes} bytes`, verified.pages !== null ? `${verified.pages} page(s)` : null, verified.textChars !== null ? `${verified.textChars} characters of text verified` : null].filter(Boolean).join(', ');
+      return {
+        status: 'succeeded', exitCode: 0,
+        output: `Saved PDF: ${outputPath} (${facts}). Printed locally${sourcePath ? ` from ${path.basename(sourcePath)}` : ''}; nothing was sent off this PC.`,
+        resultCategory: 'pdf_export_completed',
+        normalizedArguments: { source: sourcePath, output: outputPath },
+      };
+    } catch (error) {
+      if (error instanceof PdfExportError) return failure(`NOT SAVED: ${error.message}`, `pdf_export_${error.reason}`);
+      return failure(`NOT SAVED: ${error instanceof Error ? error.message : String(error)}`, 'pdf_export_failed');
+    }
+  }
+
   async function run(call: ModelToolCall, ctx?: { signal?: AbortSignal }): Promise<ToolExecutionResult> {
     const signal = ctx?.signal;
     if (call.name === 'document_ocr') return runOcr(call, signal);
     if (call.name === 'document_read') return runRead(call, signal);
     if (call.name === 'media_download') return runDownload(call, signal);
+    if (call.name === 'export_document_pdf') return runExport(call, signal);
     return failure(`unknown tool '${call.name}'`, 'invalid_arguments');
   }
 
@@ -419,8 +484,22 @@ export function createDocumentToolsAdapter(options: DocumentToolsOptions = {}): 
           required: ['url'],
         },
       },
+      {
+        name: 'export_document_pdf',
+        description: 'Turn a report into a real PDF file on this PC. Give either "source" (a .md or .txt file, e.g. one you just wrote with write_file) or "markdown" (the report text, with headings, lists and tables) plus "output" (the .pdf path). Markdown formatting is kept; the PDF is printed locally and verified before success is reported. Use this instead of pandoc, LibreOffice or installing a converter. Consequential: the person approves the output file first.',
+        parameters: {
+          type: 'object',
+          properties: {
+            source: { type: 'string', description: 'Path of the .md or .txt file to convert.' },
+            markdown: { type: 'string', description: 'The report as Markdown, when there is no source file.' },
+            output: { type: 'string', description: 'Path of the .pdf to write. Defaults to the source path with .pdf.' },
+            title: { type: 'string', description: 'Optional document title.' },
+            overwrite: { type: 'boolean', description: 'Replace an existing PDF; only when the person asked to.' },
+          },
+        },
+      },
     ],
-    classify: (toolName) => (toolName === 'document_read' || toolName === 'document_ocr' || toolName === 'media_download' ? 'consequential' : 'read_only'),
+    classify: (toolName) => (toolName === 'document_read' || toolName === 'document_ocr' || toolName === 'media_download' || toolName === 'export_document_pdf' ? 'consequential' : 'read_only'),
     health: () => {
       const resolved = toolsFor();
       const missing = [
@@ -428,6 +507,10 @@ export function createDocumentToolsAdapter(options: DocumentToolsOptions = {}): 
         resolved.pdftoppm ? null : 'Poppler (pdftoppm)',
         resolved.pdftotext ? null : 'Poppler (pdftotext)',
       ].filter(Boolean) as string[];
+      const browser = options.browserBin === undefined ? resolveHostBrowserBin() : options.browserBin;
+      if (missing.length === 3 && browser) {
+        return { state: 'degraded', reason: `no OCR tool is installed (missing ${missing.join(', ')}); PDF export still works`, checkedAt: nowIso() };
+      }
       if (missing.length === 3) {
         return { state: 'unavailable', reason: `no document tool is installed (missing ${missing.join(', ')})`, checkedAt: nowIso() };
       }
@@ -436,7 +519,7 @@ export function createDocumentToolsAdapter(options: DocumentToolsOptions = {}): 
       }
       return { state: 'available', checkedAt: nowIso() };
     },
-    redactArguments: (_toolName, args) => ({ ...args, path: typeof args.path === 'string' ? path.resolve(args.path) : args.path }),
+    redactArguments: (_toolName, args) => ({ ...args, ...(typeof args.markdown === 'string' && args.markdown.length > 400 ? { markdown: `${args.markdown.slice(0, 400)}… (${args.markdown.length} characters)` } : {}) }),
     run,
   };
 }

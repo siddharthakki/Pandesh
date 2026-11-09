@@ -14,6 +14,13 @@ import { KandevClient } from '../runtime/kandev/kandevClient';
 import { registerBridgeRoutes } from './bridgeRoutes';
 import { registerOperatorRoutes } from './operatorRoutes';
 import { registerHouseholdRoutes } from './householdRoutes';
+import { registerSoftwareRoutes } from './softwareRoutes';
+import { registerAgentRoutes } from './agentRoutes';
+import { registerToolHubRoutes } from './toolHubRoutes';
+import { registerSecondBrainRoutes } from './secondBrainRoutes';
+import { registerProcessRoutes } from './processRoutes';
+import { registerWorkspaceRoutes } from './workspaceRoutes';
+import { agentScopeForAttempt, assignAgentRun } from '../domain/agents';
 
 const kandevClient = new KandevClient();
 import * as dependencies from '../domain/dependencies';
@@ -486,6 +493,18 @@ export function buildRouter(
   if (bridge) registerOperatorRoutes(router, { dataDir: bridge.dataDir, executor, kandev: kandevClient });
   // --- Household OS: PC organization, routines, obligations, JUGAAD phone (core/api/householdRoutes.ts) ---
   if (bridge) registerHouseholdRoutes(router, { dataDir: bridge.dataDir, connectors, broadcaster });
+  // --- Software & Services, read-only inventory and update discovery (core/api/softwareRoutes.ts) ---
+  if (bridge) registerSoftwareRoutes(router, { dataDir: bridge.dataDir });
+  // --- Specialist agents: definitions, status, history, delegation (core/api/agentRoutes.ts) ---
+  registerAgentRoutes(router, { executor });
+  // --- Tools, Skills & MCP hub (core/api/toolHubRoutes.ts) ---
+  registerToolHubRoutes(router, { registry: capabilities, connectors, dataDir: bridge?.dataDir ?? null });
+  // --- Second Brain: search, inspector, timeline, graph, correct/forget (core/api/secondBrainRoutes.ts) ---
+  registerSecondBrainRoutes(router);
+  // --- Visual Execution: processes Pandesh started, live-verified (core/api/processRoutes.ts) ---
+  if (bridge) registerProcessRoutes(router, { dataDir: bridge.dataDir });
+  // --- User workspaces: Social Studio drafts (core/api/workspaceRoutes.ts) ---
+  registerWorkspaceRoutes(router);
 
   // --- Stories ---
   router.get('/v1/stories', (ctx) => {
@@ -1132,7 +1151,9 @@ export function buildRouter(
         const gitCapable = body.gitCapable === undefined ? true : Boolean(body.gitCapable);
         const selection = body.modelSelection as ModelSelectionEvidence | undefined;
         const defaults = executor?.contextDefaults();
-        const result = submitRequest(ctx.db, {
+        // Phase 2b: an optional specialist agent; its effective scope is frozen with the request, atomically.
+        const agentId = typeof body.agentId === 'string' && body.agentId.trim() ? body.agentId.trim() : null;
+        const result = ctx.db.transaction(() => { const submitted = submitRequest(ctx.db, {
           clientId: ctx.clientId,
           currentMessage: requireString(body, 'currentMessage'),
           requestedMode: requireString(body, 'requestedMode') as RequestedMode,
@@ -1159,6 +1180,10 @@ export function buildRouter(
           idempotencyKey: key,
           attachmentIds: Array.isArray(body.attachmentIds) ? (body.attachmentIds as string[]) : undefined,
         });
+        if (agentId && !submitted.duplicateOfActiveAttempt && !agentScopeForAttempt(ctx.db, submitted.attempt.id)) {
+          assignAgentRun(ctx.db, { requestId: submitted.request.id, agentId, conversationRoot: (body.workspaceRoot as string) ?? null });
+        }
+        return submitted; });
         return { status: 201, body: result };
       }),
     );

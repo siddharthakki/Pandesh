@@ -34,6 +34,7 @@ import { sanitizeToolActivity } from '../shared/toolActivity';
 import { withIdempotency, lookupIdempotencyResult } from './idempotency';
 import { CoreError } from './errors';
 import { getAttemptContext } from './attemptContext';
+import { recordResearchProvenance } from './researchProvenance';
 import { evaluateMachineControlAuthorization, isUnattendedClientId } from './processTerminationPolicy';
 import type {
   ApprovalRecord,
@@ -47,6 +48,7 @@ import type { GovernedCapabilityRegistry } from '../runtime/governedCapability';
 import { LocalAutonomySecurityKernel } from '../security/kernel';
 import type { ExecutionGrant } from '../security/types';
 import { decidePermission, recordPermissionDecision, STANDING_AUTHORIZATION_ACTOR } from './permissionModes';
+import { agentScopeForAttempt, checkEgress, checkMemoryArguments, checkPathArguments, isToolAllowed, recordScopeRefusal } from './agents';
 import { parseBaselineIdentity, type WriteBaselineIdentity, type WriteProposalPresentation } from '../runtime/writeProposal';
 import {
   CORE_POLICY_ACTOR,
@@ -129,9 +131,22 @@ export function ensureCapabilityAttempt(
   db: CoreDatabase,
   input: { correlationId: string; actor: string; clientId: string; ownerAttemptId?: string },
 ): string {
+  // D6: a shared (unowned) conversation anchor settled at Core boot is never
+  // reopened either; the conversation's next governed call gets a fresh anchor
+  // under the next generation key. Approvals never carry over to it.
+  let key = input.correlationId;
+  if (!input.ownerAttemptId) {
+    for (let generation = 1; ; generation += 1) {
+      const existing = lookupIdempotencyResult<string>(db, { key, clientId: input.clientId, routeId: 'm38.capabilityAttempt.ensure' });
+      if (!existing) break;
+      const anchor = getAttempt(db, existing);
+      if (!isTerminalAttemptStatus(anchor.status) || anchor.parentAttemptId) break;
+      key = `${input.correlationId}#${generation}`;
+    }
+  }
   const attemptId = withIdempotency(
     db,
-    { key: input.correlationId, clientId: input.clientId, routeId: 'm38.capabilityAttempt.ensure' },
+    { key, clientId: input.clientId, routeId: 'm38.capabilityAttempt.ensure' },
     { correlationId: input.correlationId },
     () => {
       const request = createRequest(db, {
@@ -199,8 +214,15 @@ export function settleCapabilityAttempt(
  * attempt already created for this correlationId, if any, WITHOUT ever
  * creating one — a restoration query must never mint a new attempt/approval/
  * idempotency row just by asking whether one exists. */
-function findExistingCapabilityAttemptId(db: CoreDatabase, correlationId: string, clientId: string): string | undefined {
-  return lookupIdempotencyResult<string>(db, { key: correlationId, clientId, routeId: 'm38.capabilityAttempt.ensure' });
+function findExistingCapabilityAttemptIds(db: CoreDatabase, correlationId: string, clientId: string): string[] {
+  const ids: string[] = [];
+  for (let generation = 0; ; generation += 1) {
+    const key = generation === 0 ? correlationId : `${correlationId}#${generation}`;
+    const id = lookupIdempotencyResult<string>(db, { key, clientId, routeId: 'm38.capabilityAttempt.ensure' });
+    if (!id) break;
+    ids.push(id);
+  }
+  return ids;
 }
 
 /**
@@ -213,8 +235,8 @@ function findExistingCapabilityAttemptId(db: CoreDatabase, correlationId: string
  * resolved through their owning attempt's conversation, keeping discovery
  * unchanged for the caller while ownership stays per mission.
  */
-function findCapabilityAttemptIds(db: CoreDatabase, correlationId: string, clientId: string): string[] {
-  const direct = findExistingCapabilityAttemptId(db, correlationId, clientId);
+export function findCapabilityAttemptIds(db: CoreDatabase, correlationId: string, clientId: string): string[] {
+  const direct = findExistingCapabilityAttemptIds(db, correlationId, clientId);
   const owned = db.all<{ id: string }>(
     `SELECT anchor.id AS id
        FROM attempts anchor
@@ -232,7 +254,27 @@ function findCapabilityAttemptIds(db: CoreDatabase, correlationId: string, clien
       ORDER BY a.createdAt`,
     [correlationId],
   ).map((row) => row.id);
-  return [...new Set([...(direct ? [direct] : []), ...owned, ...directAttempts])];
+  // A specialist agent's task delegated from a turn in this conversation runs in its own conversation, but its
+  // approvals belong to the person in THIS conversation, where the delegating turn is waiting for it.
+  const delegated = db.all<{ id: string }>(
+    `SELECT child.id AS id
+       FROM agent_handoffs h
+       JOIN attempts parent ON parent.id = h.parentAttemptId
+       JOIN requests pr ON pr.id = parent.requestId
+       JOIN attempts child ON child.requestId = h.childRequestId
+      WHERE pr.conversationId = ?
+      ORDER BY child.createdAt`,
+    [correlationId],
+  ).map((row) => row.id);
+  // Real-world challenge T7: a governed capability inside a specialist (governed_research) anchors its approval on an
+  // attempt owned by the child, so the card was only reachable from the Board. Those belong here too.
+  const delegatedAnchors = delegated.length
+    ? db.all<{ id: string }>(
+      `SELECT anchor.id AS id FROM attempts anchor WHERE anchor.parentAttemptId IN (${delegated.map(() => '?').join(',')}) ORDER BY anchor.createdAt`,
+      delegated,
+    ).map((row) => row.id)
+    : [];
+  return [...new Set([...direct.reverse(), ...owned, ...directAttempts, ...delegated, ...delegatedAnchors])];
 }
 
 /**
@@ -322,6 +364,8 @@ export interface DispatchCapabilityInput {
   /** Core-owned identity of the attempt whose frozen permission mode governs this action, when it is not the
    * scopeIdentity (the chat engine's connector bridge). Never part of the approval summary; HTTP callers never set it. */
   permissionScope?: string;
+  /** Phase 2b: the attempt whose agent scope governs this call when no other identity names it (memory bridge). Never part of approvals. */
+  actingAttemptId?: string;
   toolName: string;
   arguments: Record<string, unknown>;
   cwd: string;
@@ -657,6 +701,20 @@ async function executeAndRecord(
   const attemptAfter = getAttempt(db, attemptId);
   const cancelled = Boolean(attemptAfter.cancelRequestedAt);
   const activity = sanitizeToolActivity(result.activity);
+  // Re-run M9: a research call's fetched sources are kept (redacted, with an expiry) so its citations can be checked.
+  if (!cancelled && result.status === 'succeeded' && result.researchProvenance) {
+    try {
+      recordResearchProvenance(db, {
+        attemptId,
+        conversationId: input.correlationId?.startsWith('conv_') ? input.correlationId : null,
+        invocationId: started.id,
+        toolName: input.toolName,
+        provenance: result.researchProvenance,
+      });
+    } catch (err) {
+      console.warn('[capabilityDispatch] research provenance not recorded:', err instanceof Error ? err.message : err);
+    }
+  }
   return completeToolInvocation(db, started.id, {
     status: cancelled ? 'cancelled' : result.status === 'succeeded' ? 'succeeded' : 'failed',
     exitCode: cancelled ? null : result.exitCode,
@@ -699,6 +757,22 @@ export async function dispatchCapability(db: CoreDatabase, registry: GovernedCap
   const kernel = LocalAutonomySecurityKernel.getInstance(db);
   if (kernel.isSafeModeActive()) {
     return { outcome: 'denied', attemptId: input.correlationId, reason: 'Security violation: SAFE_MODE / EXECUTION_DISABLED is currently active.' };
+  }
+  // Phase 2b scope gate: a call made for an agent run must fit that run's frozen
+  // effective scope (tool allowlist ∩ every delegating parent, path roots).
+  // Enforced here, at dispatch, whatever the model was shown.
+  const actingAttemptId = input.actingAttemptId ?? input.ownerAttemptId ?? input.permissionScope ?? input.scopeIdentity;
+  const agentScope = actingAttemptId ? agentScopeForAttempt(db, actingAttemptId) : null;
+  if (agentScope) {
+    const toolCheck = isToolAllowed(agentScope, input.toolName);
+    const verdict = toolCheck.allowed ? checkPathArguments(agentScope, input.arguments ?? {}) : toolCheck;
+    const egressVerdict = verdict.allowed ? checkEgress(agentScope, input.toolName, input.arguments ?? {}) : verdict;
+    const memory = egressVerdict.allowed ? checkMemoryArguments(db, agentScope, input.toolName, input.arguments ?? {}) : egressVerdict;
+    if (!memory.allowed) {
+      recordScopeRefusal(db, actingAttemptId!, agentScope.agentId, input.toolName, memory.reason);
+      return { outcome: 'denied', attemptId: input.correlationId, reason: `agent_scope_denied: ${memory.reason}` };
+    }
+    if (memory.args !== input.arguments) input = { ...input, arguments: memory.args };
   }
   const attemptId = ensureCapabilityAttempt(db, input);
   const classification = registry.classify(input.toolName);

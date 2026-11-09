@@ -111,7 +111,9 @@ export function composeStatusAnswer(db: CoreDatabase, topics: StatusTopic[], now
 }
 
 const FUTURE_WORK = /\b(?:i(?:'ll|\s+will|'m\s+going\s+to|\s+am\s+going\s+to)|i(?:'m|\s+am)\s+(?:currently\s+|now\s+)?(?:processing|retrying|working\s+on)|stand(?:ing)?\s+by)\b[^.\n]{0,80}\b(?:retry|try\s+again|continue|process|complete|finish|work|monitor|proceed|batch|wait)\w*|\bin\s+the\s+background\b|\bin\s+a\s+few\s+minutes\b/i;
-const NOTIFY_PROMISE = /\b(?:notify\s+you|let\s+you\s+know|update\s+you|message\s+you|send\s+you\s+(?:a\s+)?(?:notification|update)|tell\s+you\s+when|ping\s+you|alert\s+you)\b/i;
+// D13: only a first-person promise counts ("I'll let you know…"); "this lets you know", "I can't notify you" and
+// "would you like me to let you know" no longer trigger a stray correction.
+const NOTIFY_PROMISE = /\b(?:i(?:'ll|\s+will)|i(?:'m|\s+am)\s+going\s+to)\s+(?:\w+\s+){0,3}?(?:notify\s+you|let\s+you\s+know|update\s+you|message\s+you|send\s+you\s+(?:a\s+)?(?:notification|update)|tell\s+you\s+when|ping\s+you|alert\s+you)\b/i;
 
 /**
  * A reply may promise future work or a notification only if something real will do it. Returns the correction to
@@ -132,8 +134,17 @@ export function auditPromises(reply: string, facts: { activeWorker: boolean; can
 }
 
 /** True while a persisted background worker task owns work for this conversation. */
-export function hasActiveWorker(db: CoreDatabase, conversationId: string): boolean {
+export function hasActiveWorker(db: CoreDatabase, conversationId: string, excludeAttemptId?: string): boolean {
   if (!conversationId) return false;
   const row = db.get<{ n: number }>("SELECT COUNT(*) AS n FROM background_tasks WHERE conversationId = ? AND status IN ('queued','in_progress')", [conversationId]);
-  return Number(row?.n ?? 0) > 0;
+  if (Number(row?.n ?? 0) > 0) return true;
+  // Challenge F14: while a Coding hand-off from this chat was still running, a quick question's reply got "nothing is
+  // running in the background" appended. Another unfinished attempt in the same conversation is active work.
+  if (!excludeAttemptId) return false;
+  const other = db.get<{ n: number }>(
+    `SELECT COUNT(*) AS n FROM attempts a JOIN requests q ON q.id = a.requestId
+      WHERE q.conversationId = ? AND a.id <> ? AND a.status IN ('created','queued','running','waiting_for_approval','validating','paused','blocked','cancelling')`,
+    [conversationId, excludeAttemptId],
+  );
+  return Number(other?.n ?? 0) > 0;
 }

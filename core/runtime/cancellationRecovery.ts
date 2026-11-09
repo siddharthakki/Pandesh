@@ -142,6 +142,14 @@ export function retireOrphanedApprovals(
     if (isExecuting(attempt.id)) continue;
     const leaseLive = Boolean(attempt.claimExpiresAt) && new Date(attempt.claimExpiresAt as string).getTime() > now.getTime();
     if (leaseLive) continue;
+    // Re-run M11: a conversation's shared capability anchor (image generation and other client-driven calls) never
+    // has a Core worker lease — the client that raised the card waits for the person and re-dispatches after the
+    // answer, and restores the card after a restart. Retiring it killed the image card ~1 s after it appeared.
+    const anchor = db.get<{ routeReason: string | null }>(
+      'SELECT r.routeReason AS routeReason FROM requests r WHERE r.id = ?',
+      [attempt.requestId],
+    );
+    if (anchor?.routeReason === 'm38_capability_dispatch' && !attempt.parentAttemptId) continue;
     // A Saath loop suspended on a governed approval keeps a durable continuation and resumes after the answer: its
     // approval is still actionable and is never retired here.
     const continuation = loadLoopContinuation(db, attempt.id);

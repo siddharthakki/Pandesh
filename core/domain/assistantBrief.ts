@@ -148,6 +148,7 @@ const APPROVAL_TOOL_PHRASE: Record<string, string> = {
   gmail_undo_plan: 'undo a Gmail change',
   memory_remember: 'remember something',
   memory_forget: 'forget something',
+  memory_correct: 'correct a remembered fact',
   image_generate: 'generate an image',
   video_generate: 'generate a video',
 };

@@ -19,7 +19,7 @@ import {
   resolveBuildIdentity,
   type DesktopBuildIdentity,
 } from './host/desktopBuildIdentity';
-import { readHostPreferences, writeHostPreferences } from './host/desktopHostPreferences';
+import { readHostPreferences, resolveUiVariant, writeHostPreferences } from './host/desktopHostPreferences';
 import { DESKTOP_CHANNELS, type DesktopAppMetadata, type DesktopUpdateStartResult, type DesktopUpdateStatus } from './ipc';
 import {
   acknowledgeUpdateResult, inspectPackage, launchUpdater, quiesceCore, readCoreReadiness, readUpdateResult,
@@ -28,7 +28,7 @@ import {
 import { JarvisTrayController } from './host/jarvisTray';
 import { createAppIcon } from './host/appIcon';
 import { normalizeSafeExternalUrl, normalizeSafeBrowserUrl } from './host/desktopSafeOpen';
-import { MobileServer } from './host/mobileServer';
+import { MobileServer, defaultMobileHost } from './host/mobileServer';
 
 /**
  * Dev: repo root. Portable / installed: directory that contains `app/` + `runtime/core.js`
@@ -283,6 +283,8 @@ function syncTrayFromSession(): void {
     openAtLogin: prefs.openAtLogin,
     windowHidden,
     mobileServerStatus: mobileStatus,
+    uiVariant: resolveUiVariant(prefs),
+    uiVariantForced: Boolean(process.env.PANDESH_UI_V2?.trim()),
   });
 }
 
@@ -633,7 +635,7 @@ async function ensureMainWindow(): Promise<BrowserWindow> {
     return { action: 'deny' };
   });
   window.webContents.on('will-navigate', (event, url) => {
-    if (url === window.webContents.getURL()) return;
+    if (url === window?.webContents.getURL()) return;
     event.preventDefault();
     try {
       void shell.openExternal(normalizeSafeBrowserUrl(url));
@@ -669,8 +671,15 @@ async function ensureMainWindow(): Promise<BrowserWindow> {
     callback(permission === 'media');
   });
   window.webContents.session.setPermissionCheckHandler((_wc, permission) => permission === 'media');
-  await window.loadFile(path.join(__dirname, '..', 'renderer', 'index.html'));
+  await window.loadFile(rendererEntry());
   return window;
+}
+
+/** Classic renderer unless the Phase 2 UI is selected (PANDESH_UI_V2 or the saved preference). */
+function rendererEntry(): string {
+  return resolveUiVariant(prefs) === 'v2'
+    ? path.join(__dirname, '..', 'renderer', 'v2', 'index.html')
+    : path.join(__dirname, '..', 'renderer', 'index.html');
 }
 
 async function createWindow(): Promise<void> {
@@ -703,6 +712,11 @@ async function createWindow(): Promise<void> {
         const info = mobileServer.getPairingInfo();
         void shell.openExternal(info.url);
       }
+    },
+    setUiVariant: (variant) => {
+      prefs = writeHostPreferences(dataDir, { uiVariant: variant });
+      if (window && !window.isDestroyed()) void window.loadFile(rendererEntry());
+      syncTrayFromSession();
     },
   }, hostLog);
   const trayInstance = tray.ensure();
@@ -763,7 +777,8 @@ async function createWindow(): Promise<void> {
       session,
       // Overrides exist so an isolated test instance can run beside the live app (loopback, another port).
       port: Number(process.env.KARKEDIKHA_MOBILE_PORT) || 3030,
-      ...(process.env.KARKEDIKHA_MOBILE_HOST ? { host: process.env.KARKEDIKHA_MOBILE_HOST } : {}),
+      // Test and scratch instances stay on loopback (no firewall prompt per build, not reachable from the LAN).
+      host: defaultMobileHost(process.env, dataDir, defaultDesktopDataDir()),
       log: (message) => hostLog(message),
       onClientsChanged: (count) => {
         sendSnapshot();
@@ -1581,6 +1596,17 @@ function registerIpc(): void {
   });
   ipcMain.handle(DESKTOP_CHANNELS.quitApp, () => {
     void shutdownAndQuit();
+  });
+  ipcMain.handle(DESKTOP_CHANNELS.getUiVariant, () => ({
+    variant: resolveUiVariant(prefs),
+    forcedByEnv: Boolean(process.env.PANDESH_UI_V2?.trim()),
+  }));
+  ipcMain.handle(DESKTOP_CHANNELS.setUiVariant, (event, variant: unknown) => {
+    prefs = writeHostPreferences(dataDir, { uiVariant: variant === 'v2' ? 'v2' : 'classic' });
+    // Reload only the window that asked, after the reply is delivered.
+    const target = BrowserWindow.fromWebContents(event.sender);
+    if (target && !target.isDestroyed()) setTimeout(() => { void target.loadFile(rendererEntry()); }, 50);
+    return { variant: resolveUiVariant(prefs), forcedByEnv: Boolean(process.env.PANDESH_UI_V2?.trim()) };
   });
   ipcMain.handle(DESKTOP_CHANNELS.getUpdateStatus, (): DesktopUpdateStatus => {
     const identity = currentBuildIdentity();

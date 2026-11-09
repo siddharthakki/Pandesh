@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { listInstalledPrinters, resolvePrinter, submitTestPage, hasPriorPrintSubmission, isShellPrintCommand, type PowerShellRunner, type InstalledPrinter } from '../runtime/windowsPrinting';
+import { listInstalledPrinters, resolvePrinter, submitTestPage, buildTestDocument, hasPriorPrintSubmission, isShellPrintCommand, type PowerShellRunner, type InstalledPrinter } from '../runtime/windowsPrinting';
 
 const ok = (stdout: string) => ({ code: 0, stdout, stderr: '', timedOut: false });
 const printers: InstalledPrinter[] = [
@@ -13,8 +13,8 @@ function queueRunner(opts: { submit?: { code: number; stdout: string; stderr?: s
   let q = 0;
   const run: PowerShellRunner = async (script, env) => {
     seen.push({ script, env });
-    if (script.includes('PrintTestPage')) {
-      const s = opts.submit ?? { code: 0, stdout: 'RETURN=0' };
+    if (script.includes('Out-Printer')) {
+      const s = opts.submit ?? { code: 0, stdout: 'SUBMITTED' };
       return { stderr: '', timedOut: false, ...s };
     }
     const next = opts.queues[Math.min(q++, opts.queues.length - 1)];
@@ -81,6 +81,30 @@ describe('submitTestPage outcomes', () => {
     await submitTestPage(evil, run, { sleep: noSleep });
     expect(seen.every((c) => !c.script.includes('Remove-Item'))).toBe(true);
     expect(seen.some((c) => c.env.PANDESH_PRINTER === evil)).toBe(true);
+  });
+  // Printer mission P1: Win32_Printer.PrintTestPage returned 5 (access denied) on Windows 11, so the approved page never
+  // reached the queue. The page is now Core's own document, printed with Out-Printer, its text passed only via env.
+  // Printer mission P1 (second attempt): the job printed and cleared before the first poll; the spooler counter shows it.
+  it('uses the spooler counters when the job cleared before the first check', async () => {
+    const at = (printed: number, errors = 0) => ({ Jobs: [], PrinterStatus: 3, Offline: false, Printed: printed, JobErrors: errors });
+    const done = await submitTestPage('B', queueRunner({ queues: [at(2), at(3)] }).run, { sleep: noSleep });
+    expect(done).toMatchObject({ outcome: 'completed' });
+    expect(done.detail).toMatch(/rose from 2 to 3/);
+    expect((await submitTestPage('B', queueRunner({ queues: [at(2), at(2, 1)] }).run, { sleep: noSleep })).outcome).toBe('failed');
+    // No counters exposed: unchanged, honest "unknown".
+    expect((await submitTestPage('B', queueRunner({ queues: [jobs([])] }).run, { sleep: noSleep })).outcome).toBe('unknown');
+  });
+
+  it('prints the prepared one-page document through the spooler, never via PrintTestPage', async () => {
+    const { run, seen } = queueRunner({ queues: [jobs([]), jobs([{ Id: 7, Status: 'Printing' }]), jobs([])] });
+    const page = buildTestDocument('Brother', new Date('2026-11-07T13:30:00Z'));
+    expect(page).toContain('Printer : Brother');
+    expect(page.split('\r\n').length).toBeLessThan(40);
+    expect(await submitTestPage('Brother', run, { sleep: noSleep, document: page })).toMatchObject({ outcome: 'completed', jobIds: [7] });
+    const submit = seen.find((c) => c.script.includes('Out-Printer'))!;
+    expect(submit.script).not.toContain('PrintTestPage');
+    expect(submit.script).not.toContain('PANDESH PRINTER TEST');
+    expect(submit.env.PANDESH_PAGE).toBe(page);
   });
   it('stops polling when cancelled', async () => {
     const ac = new AbortController();

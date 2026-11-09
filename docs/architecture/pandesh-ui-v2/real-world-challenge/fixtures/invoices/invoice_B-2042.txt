@@ -1,0 +1,5 @@
+INVOICE B-2042 (fictional test fixture)
+Seller: Contoso Electronics
+Date: 2026-10-03
+Items: USB-C dock (EUR 129.00), HDMI cable (EUR 15.90)
+Total: EUR 144.90

@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
+import { probeLocalAudioTranscriptionCapability } from '../attachments/audioProcessing';
 import { openCoreDatabase } from '../db/openCore';
 import type { CoreDatabase } from '../db/connection';
 import { startApiServer, type RunningApiServer } from '../api/server';
@@ -9,6 +10,11 @@ import { EventBroadcaster } from '../ws/broadcaster';
 import { generateToken } from '../auth/token';
 import type { ModelBackend, ModelChatRequest, ModelChatResult } from '../runtime/modelBackend';
 import { buildMinimalPdf, buildMinimalWav } from './fixtures/documentFixtures';
+
+// The bundled Whisper model lives under the git-ignored models/ folder (scripts/fetch-whisper-model.mjs);
+// a fresh checkout does not have it, so real-transcription tests run only where it is staged.
+const WHISPER_STAGED = probeLocalAudioTranscriptionCapability({ ...process.env, KARKEDIKHA_LOCAL_ASR_COMMAND: '' }).capability === 'available';
+
 
 const TOKEN = generateToken();
 let dir: string;
@@ -261,7 +267,7 @@ describe('M36 pass 2: document extraction and audio transcription reach the mode
     expect(lastUser.images ?? []).toHaveLength(0); // never sent as an image
   });
 
-  it('appends the real transcribed text (with timestamp provenance) to the prompt for a real speech recording', async () => {
+  it.runIf(WHISPER_STAGED)('appends the real transcribed text (with timestamp provenance) to the prompt for a real speech recording', async () => {
     const conv = await jsonOf(await authedFetch('/v1/conversations', { method: 'POST', idempotencyKey: nextIdemp(), body: JSON.stringify({ mode: 'baat_kar' }) }));
     const wavBytes = fs.readFileSync(path.join(__dirname, 'fixtures', 'audio', 'quarterly-report-speech.wav'));
     const created = await jsonOf(

@@ -1,0 +1,10 @@
+qwen3.8:27b-mtp-q4_K_M calls 73 prompt median 11784 max output 6935
+approvals [('delegate_to_opencode', 'approved'), ('authorize_mission', 'approved'), ('run_checks', 'rejected'), ('run_checks', 'rejected'), ('authorize_mission', 'approved'), ('authorize_mission', 'approved'), ('authorize_mission', 'approved'), ('request_search_permission', 'rejected'), ('run_checks', 'approved'), ('run_checks', 'approved'), ('authorize_mission', 'approved')]
+scope refusals [('coding', 'read_file'), ('coding', 'browser_open_site')]
+output_checked 9
+announced_step_continued 1
+handoff_facts_received 0
+handoff_output_missing 0
+opencode_budget_exceeded 0
+failed_call_memory_cleared 0
+reply_lead_status_added 4

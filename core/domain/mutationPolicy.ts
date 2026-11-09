@@ -159,7 +159,7 @@ export interface MutationPolicyVerdict {
 const STATE_CHANGING_TOOL_NAMES = new Set([
   'system_kill_process', 'system_start_service', 'system_stop_service', 'system_set_scheduled_task_enabled',
   'connect_network_drive', 'disconnect_network_drive', 'github_comment_on_issue',
-  'memory_remember', 'memory_forget', 'memory_resolve_contradiction', 'image_generate',
+  'memory_remember', 'memory_correct', 'memory_forget', 'memory_resolve_contradiction', 'image_generate',
 ]);
 
 /** Informational tools that adapters conservatively classify `consequential`

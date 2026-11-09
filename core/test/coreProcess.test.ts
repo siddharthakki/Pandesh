@@ -1,4 +1,7 @@
-import { describe, it, expect, beforeAll, afterEach } from 'vitest';
+import { describe, it, expect, beforeAll, afterEach, vi } from 'vitest';
+import { ensureCoreBundle } from './support/coreBundle';
+// Real Core processes start slower when the whole suite runs in parallel; the assertions are unchanged.
+vi.setConfig({ testTimeout: 60_000 });
 import { execFileSync, spawn, type ChildProcess } from 'node:child_process';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
@@ -17,7 +20,7 @@ const bundlePath = path.join(repoRoot, 'out-core', 'core.js');
  * Core's own startup/shutdown/database_failed behavior regardless of host.
  */
 beforeAll(() => {
-  execFileSync(process.execPath, [path.join(repoRoot, 'esbuild.core.js')], { cwd: repoRoot, stdio: 'inherit' });
+  ensureCoreBundle(repoRoot); // one shared, locked build per run (parallel rebuilds raced)
 });
 
 const children: ChildProcess[] = [];
@@ -38,7 +41,7 @@ function spawnCore(dataDir: string, token: string, extraEnv: Record<string, stri
   return child;
 }
 
-async function waitForDiscoveryRecord(dataDir: string, timeoutMs = 5000): Promise<{ port: number; pid: number; instanceId: string }> {
+async function waitForDiscoveryRecord(dataDir: string, timeoutMs = 20_000): Promise<{ port: number; pid: number; instanceId: string }> {
   const discoveryPath = path.join(dataDir, 'core.json');
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {

@@ -46,6 +46,17 @@ import { ModelBackendError, OllamaModelBackend, describeInlineToolCallFailure, i
 import { inlineToolCallCorrection, validateNativeToolCalls, type StructuralRepairRecord } from './inlineToolCalls';
 import { cloudProviderLabel, isCloudAttemptProvider, isFreeCloudPublicTextAttempt, isSupportedAttemptProvider, resolveAttemptModelBackend } from './attemptModelBackend';
 import { decideCloudPublicText } from './cloudPublicText';
+import { createResearchEvidenceRunner } from './researchCapability';
+import { redactSecrets } from '../platform/credentialStore';
+import {
+  isCloudPublicResearchRequest,
+  derivePublicResearchQueries,
+  sanitizePublicResearchObjective,
+  buildCloudPublicResearchMessages,
+  isStubReply,
+  synthesizePublicResearchReport,
+} from './cloudPublicResearch';
+import type { ToolExecutionResult } from './toolRunner';
 import type { CloudCredentialStore } from './cloudCredentials';
 import { finalizeOpenRouterCall, prepareOpenRouterCall } from './openRouterExecution';
 import type { ToolRunner } from './toolRunner';
@@ -57,6 +68,7 @@ import { buildWriteFileProposal, isSuspiciousWholeFileReplacement, readBaselineI
 import { buildTextEditProposal } from './textEditProposal';
 import { projectEventArguments } from '../domain/eventArguments';
 import { reconcileExecutionClaims, withholdUnexecutedChangeClaims } from './executionClaims';
+import { withholdUnsupportedActionClaims } from './actionClaims';
 import {
   discoverSyntaxGates,
   discoverValidationGates,
@@ -692,6 +704,7 @@ export class RuntimeExecutor {
       // conversation history, memory, files or task context, and its failure stops there (no local fallback).
       if (isFreeCloudPublicTextAttempt(frozenContext)) {
         const publicTextRequest = getRequest(this.db, attempt.requestId);
+        const text = publicTextRequest?.currentMessage ?? '';
         const publicText = decideCloudPublicText({
           approved: frozenContext.modelSelection?.cloudPublicTextApproved === true,
           freeness: frozenContext.modelSelection?.cloudSpend?.modelFreeness,
@@ -701,7 +714,7 @@ export class RuntimeExecutor {
           memoryContext: false,
           autonomousContext: attempt.kind === 'karke_dikha',
           historyTurns: 0,
-          text: publicTextRequest?.currentMessage ?? '',
+          text,
         });
         if (!publicText.allowed) {
           this.mutate(() => failAttempt(this.db, attemptId, {
@@ -709,6 +722,10 @@ export class RuntimeExecutor {
             fenceToken: fence.token,
             actor: CORE_ACTOR,
           }));
+          return;
+        }
+        if (isCloudPublicResearchRequest(text)) {
+          await this.runCloudPublicResearch(attemptId, fence.token, controller.signal, text);
           return;
         }
         await this.runCloudPublicText(attemptId, fence.token, controller.signal, publicText.messages);
@@ -826,8 +843,10 @@ export class RuntimeExecutor {
       this.completeInvocationSucceeded(invocation.id, result);
       // No tools ran, so a claimed edit/validation is narration, not evidence: derive the text from what actually happened.
       const guarded = withholdUnexecutedChangeClaims(projected.text);
-      this.appendAssistant(request.conversationId, guarded.text, invocation.id, attemptId);
-      this.recordQuality(attemptId, 'final_verification_recorded', { kind: 'conversation_response', model: result.model, ...(guarded.withheld.length > 0 ? { withheldUnexecutedClaims: guarded.withheld } : {}) }, 'final-conversation');
+      // Nor can it have paused a timer, set a reminder or sent anything: no tool ran (audit D1).
+      const actionGuarded = withholdUnsupportedActionClaims(guarded.text, []);
+      this.appendAssistant(request.conversationId, actionGuarded.text, invocation.id, attemptId);
+      this.recordQuality(attemptId, 'final_verification_recorded', { kind: 'conversation_response', model: result.model, ...(guarded.withheld.length > 0 ? { withheldUnexecutedClaims: guarded.withheld } : {}), ...(actionGuarded.withheld.length > 0 ? { withheldActionClaims: actionGuarded.withheld } : {}) }, 'final-conversation');
       this.mutate(() => transitionAttempt(this.db, attemptId, { toStatus: 'completed', fenceToken, actor: CORE_ACTOR }));
     } catch (err) {
       this.recordChatFailure(attemptId, invocation.id, fenceToken, err);
@@ -879,6 +898,183 @@ export class RuntimeExecutor {
         kind: 'cloud_public_text_response',
         model: result.model,
         provider: context.selectedProvider,
+      }, 'final-conversation');
+      this.mutate(() => transitionAttempt(this.db, attemptId, { toStatus: 'completed', fenceToken, actor: CORE_ACTOR }));
+    } catch (err) {
+      this.recordChatFailure(attemptId, invocation.id, fenceToken, err);
+    }
+  }
+
+  /**
+   * Public research workflow for explicitly approved cloud requests requiring external evidence.
+   * Pandesh Core executes the public web research using the governed research capability.
+   * The cloud model receives ONLY the approved public query + bounded untrusted web excerpts and URLs.
+   * No filesystem, workspace, memory, tools or personal history are exposed to the cloud model.
+   */
+  private async runCloudPublicResearch(
+    attemptId: string,
+    fenceToken: string,
+    signal: AbortSignal,
+    requestText: string,
+  ): Promise<void> {
+    const attempt = getAttempt(this.db, attemptId);
+    const request = getRequest(this.db, attempt.requestId);
+    const context = getAttemptContext(this.db, attemptId);
+    if (this.startOrShortCircuitCancel(attempt, fenceToken)) return;
+
+    const queries = derivePublicResearchQueries(requestText).filter(
+      (q) => redactSecrets(q) === q && !/(?:PRIVATE|CANARY)_[A-Z0-9_]+/i.test(q),
+    );
+    const runResearch = createResearchEvidenceRunner();
+    const evidenceItems: Array<{ query: string; output: string; sourceUrls: string[] }> = [];
+
+    for (const query of queries) {
+      if (signal.aborted) break;
+
+      const toolInvocation = this.mutate(() =>
+        startToolInvocation(this.db, {
+          attemptId,
+          toolName: 'web_research',
+          argsSummary: { query },
+          actor: CORE_ACTOR,
+        }),
+      );
+
+      this.mutate(() =>
+        recordRuntimeEvent(this.db, {
+          domain: 'attempt',
+          entityId: attemptId,
+          eventType: 'tool_call',
+          actor: CORE_ACTOR,
+          metadata: {
+            toolName: 'web_research',
+            args: { query },
+            invocationId: toolInvocation.id,
+          },
+          resultingRevision: null,
+        }),
+      );
+
+      let result: ToolExecutionResult;
+      try {
+        result = await runResearch(query);
+      } catch (err) {
+        result = {
+          status: 'failed',
+          exitCode: null,
+          output: err instanceof Error ? err.message : String(err),
+          resultCategory: 'research_failed',
+        };
+      }
+
+      const urls = [...new Set([...String(result.output ?? '').matchAll(/^URL: (\S+)/gm)].map((m) => m[1]))].slice(0, 20);
+
+      this.mutate(() =>
+        completeToolInvocation(this.db, toolInvocation.id, {
+          actor: CORE_ACTOR,
+          status: signal.aborted ? 'cancelled' : result.status,
+          exitCode: result.exitCode ?? (result.status === 'succeeded' ? 0 : 1),
+          evidence: {
+            output: result.output?.slice(0, 500),
+            ...(urls.length ? { sourceUrls: urls } : {}),
+          },
+        }),
+      );
+
+      this.mutate(() =>
+        recordRuntimeEvent(this.db, {
+          domain: 'attempt',
+          entityId: attemptId,
+          eventType: 'tool_result',
+          actor: CORE_ACTOR,
+          metadata: {
+            toolName: 'web_research',
+            invocationId: toolInvocation.id,
+            status: result.status,
+            urlsCount: urls.length,
+          },
+          resultingRevision: null,
+        }),
+      );
+
+      if (result.status === 'succeeded' && result.output && !result.output.startsWith('No accessible research results')) {
+        evidenceItems.push({
+          query,
+          output: result.output,
+          sourceUrls: urls,
+        });
+      }
+    }
+
+    if (signal.aborted) {
+      this.throwIfCancellationRequested(attemptId, signal);
+      return;
+    }
+
+    // If research capability failed or produced no accessible evidence, explain exact blocker
+    if (evidenceItems.length === 0) {
+      const failureExplanation = `Pandesh Core attempted public web research for this request across queries (${queries.map((q: string) => `"${q}"`).join(', ')}), but no accessible live listings could be retrieved from search providers or source pages. Because strict privacy and anti-hallucination policies are enforced, cloud models are never allowed to invent unverified vacancies or links without evidence.`;
+      this.appendAssistant(request.conversationId, failureExplanation, null, attemptId);
+      this.recordQuality(attemptId, 'final_verification_recorded', {
+        kind: 'cloud_public_research_failure',
+        reason: 'no_evidence_retrieved',
+        provider: context.selectedProvider,
+        model: context.selectedModel,
+      }, 'final-conversation');
+      this.mutate(() => failAttempt(this.db, attemptId, {
+        failureReason: 'Public web research capability failed to retrieve live sources',
+        fenceToken,
+        actor: CORE_ACTOR,
+      }));
+      return;
+    }
+
+    const combinedEvidence = evidenceItems
+      .map((e, idx) => `=== Research Query ${idx + 1}: "${e.query}" ===\n${e.output}`)
+      .join('\n\n');
+    const sanitizedObjective = sanitizePublicResearchObjective(requestText);
+    const messages = buildCloudPublicResearchMessages(sanitizedObjective, combinedEvidence);
+
+    for (const msg of messages) {
+      if (redactSecrets(msg.content) !== msg.content || /(?:PRIVATE|CANARY)_[A-Z0-9_]+/i.test(msg.content)) {
+        throw new Error('Safety boundary violation: private marker or secret detected in outbound cloud public research message.');
+      }
+    }
+
+    const invocation = this.mutate(() =>
+      startModelInvocation(this.db, {
+        attemptId,
+        requestedProvider: context.selectedProvider,
+        requestedModel: context.selectedModel,
+        policyProvider: context.selectedProvider,
+        policyModel: context.selectedModel,
+        actor: CORE_ACTOR,
+      }),
+    );
+
+    try {
+      const result = await this.streamModelChat(
+        context,
+        attemptId,
+        invocation.id,
+        { model: context.selectedModel, messages: messages as never, tools: [], signal },
+        (delta) => this.broadcaster.publishRuntimeToken({ attemptId, invocationId: invocation.id, delta }),
+      );
+      this.throwIfCancellationRequested(attemptId, signal);
+
+      let finalAnswer = result.content?.trim() ?? '';
+      // Reject stubs like "Found", "Two", or answers missing links when evidence had URLs
+      if (isStubReply(finalAnswer, true)) {
+        finalAnswer = synthesizePublicResearchReport(requestText, evidenceItems, finalAnswer);
+      }
+
+      this.completeInvocationSucceeded(invocation.id, result);
+      this.appendAssistant(request.conversationId, finalAnswer, invocation.id, attemptId);
+      this.recordQuality(attemptId, 'final_verification_recorded', {
+        kind: 'cloud_public_research_response',
+        model: result.model,
+        provider: context.selectedProvider,
+        evidenceQueriesCount: evidenceItems.length,
       }, 'final-conversation');
       this.mutate(() => transitionAttempt(this.db, attemptId, { toStatus: 'completed', fenceToken, actor: CORE_ACTOR }));
     } catch (err) {
@@ -2125,12 +2321,17 @@ export class RuntimeExecutor {
             .filter((message) => message.role === 'tool' && /^\[(validation|run_command|run_check)\]/.test(message.content))
             .map((message) => message.content));
           if (reconciled.withheld.length > 0) finalContent = reconciled.text;
+          // An action claim ("I've paused the tea timer") stands only if a matching tool succeeded in this attempt (audit D1).
+          // Governed calls (approved writes included) run on the capability anchor attempt and are linked by the relay event.
+          const succeededTools = this.succeededToolNames(attemptId);
+          const actionGuarded = withholdUnsupportedActionClaims(finalContent, succeededTools);
+          if (actionGuarded.withheld.length > 0) finalContent = actionGuarded.text;
           if (conditionalVerdictNote) finalContent = `${finalContent.trim()}\n\n${conditionalVerdictNote}`;
           closeLoopContinuation(this.db, attemptId);
           this.appendAssistant(request.conversationId, finalContent, invocation.id, attemptId);
           // Grounded only by a tool that actually executed: a denied/failed invocation is not evidence for the answer.
           const toolGrounded = Boolean(this.db.get("SELECT id FROM tool_invocations WHERE attemptId = ? AND status = 'succeeded' LIMIT 1", [attemptId]));
-          this.recordQuality(attemptId, 'final_verification_recorded', { kind: toolGrounded ? 'tool_grounded_response' : 'ungrounded_response', model, ...(reconciled.withheld.length > 0 ? { withheldExecutionClaims: reconciled.withheld } : {}) }, 'final-tool-grounded');
+          this.recordQuality(attemptId, 'final_verification_recorded', { kind: toolGrounded ? 'tool_grounded_response' : 'ungrounded_response', model, ...(reconciled.withheld.length > 0 ? { withheldExecutionClaims: reconciled.withheld } : {}), ...(actionGuarded.withheld.length > 0 ? { withheldActionClaims: actionGuarded.withheld } : {}) }, 'final-tool-grounded');
           this.mutate(() => transitionAttempt(this.db, attemptId, { toStatus: 'completed', fenceToken, actor: CORE_ACTOR }));
           return;
         }
@@ -2883,6 +3084,16 @@ export class RuntimeExecutor {
    * outcome count: a refused, denied, timed-out or never-executed call (no exit code) establishes nothing. A governed
    * call's invocation lives on its capability anchor attempt and is linked here by the relay event the loop records.
    */
+  /** Names of tools that actually succeeded for this attempt, including governed calls relayed from the anchor attempt. */
+  private succeededToolNames(attemptId: string): string[] {
+    return this.db.all<{ toolName: string }>(
+      `SELECT toolName FROM tool_invocations
+       WHERE status = 'succeeded' AND (attemptId = ? OR id IN (
+         SELECT entityId FROM runtime_events WHERE eventType = 'capability_tool_invocation_completed' AND json_extract(metadata, '$.attemptId') = ?))`,
+      [attemptId, attemptId],
+    ).map((row) => row.toolName);
+  }
+
   private conditionalEvidence(attemptId: string): ConditionalEvidenceStep[] {
     const rows = this.db.all<{ toolName: string; status: string; exitCode: number | null; argsSummary: string }>(
       `SELECT toolName, status, exitCode, argsSummary FROM tool_invocations
@@ -4854,8 +5065,14 @@ export class RuntimeExecutor {
       fenceToken,
       signal,
       connectors: this.buildPiConnectorBridge(request.conversationId || attemptId, request.clientId, workspaceRoot, signal, request.currentMessage, attemptId),
-      memory: this.buildPiMemoryBridge(request.conversationId || attemptId, request.clientId, workspaceRoot, signal),
+      memory: this.buildPiMemoryBridge(request.conversationId || attemptId, request.clientId, workspaceRoot, signal, attemptId),
       capabilities: this.buildPiCapabilityBridge(request.conversationId || attemptId, request.clientId, workspaceRoot, signal, attemptId, request.currentMessage),
+      delegation: {
+        clientId: request.clientId,
+        defaults: { selectedProvider: context.selectedProvider, selectedModel: context.selectedModel },
+        run: (childAttemptId: string) => this.execute(childAttemptId),
+        cancel: (childAttemptId: string) => { this.active.get(childAttemptId)?.abort(); },
+      },
     });
   }
 
@@ -4913,7 +5130,7 @@ export class RuntimeExecutor {
    * redacted durable evidence. It creates no second approval authority, no
    * second memory store and no parallel runtime.
    */
-  private buildPiMemoryBridge(correlationId: string, clientId: string, workspaceRoot: string | undefined, signal: AbortSignal): PiMemoryBridge | undefined {
+  private buildPiMemoryBridge(correlationId: string, clientId: string, workspaceRoot: string | undefined, signal: AbortSignal, actingAttemptId?: string): PiMemoryBridge | undefined {
     const registry = this.governedCapabilities;
     if (!registry) return undefined;
     return buildPiMemoryBridge({
@@ -4924,6 +5141,7 @@ export class RuntimeExecutor {
       cwd: workspaceRoot || process.cwd(),
       actor: CORE_ACTOR,
       signal,
+      ...(actingAttemptId ? { actingAttemptId } : {}),
     });
   }
 

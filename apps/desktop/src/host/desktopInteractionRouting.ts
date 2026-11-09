@@ -152,12 +152,24 @@ export function selectImageCheckpoint(prompt: string, checkpoints: Array<{ name:
 export function extractImageGenerationPrompt(text: string): string {
   const trimmed = text.trim();
   const match = IMAGE_GENERATION_LEADING_PHRASE.exec(trimmed);
-  if (!match) return trimmed;
+  if (!match) return stripImageInstructions(trimmed) || trimmed;
   // Keep style words that sat before the noun ("photorealistic image of …").
   const style = (match[1] ?? '').trim();
-  const subject = trimmed.slice(match[0].length).trim();
+  const subject = stripImageInstructions(trimmed.slice(match[0].length).trim());
   if (!subject) return trimmed;
   return style ? `${style}, ${subject}` : subject;
+}
+
+/** "using my local image-generation tools", "with ComfyUI", … — how to make it, not what to draw. */
+const IMAGE_TOOL_PHRASE = /\s*,?\s*\b(?:using|with|via|through|on)\s+(?:my|the|your|a|our)?\s*(?:local\s+|own\s+)?(?:image[- ]generation|image|comfy\s*ui|comfyui|stable\s+diffusion|sdxl|flux|ai|diffusion)\s*(?:tools?|models?|setup|studio|generator|pipeline)?\b/gi;
+/** A following sentence that tells Pandesh what to do with the result (save, name, show, open…). */
+const IMAGE_FOLLOW_UP_SENTENCE = /(?:[.;!]\s+|\s+(?:and|then)\s+)(?:then\s+|also\s+|please\s+|and\s+)?(?:save|store|put|name|call|show|tell|open|send|keep|write|place|export|copy|move|give|let)\b[\s\S]*$/i;
+
+/** D14: instruction text ("using my local image-generation tools. Save the resulting image…") is not part of the picture. */
+function stripImageInstructions(subject: string): string {
+  const stripped = subject.replace(IMAGE_FOLLOW_UP_SENTENCE, '').replace(IMAGE_TOOL_PHRASE, '');
+  if (stripped === subject) return subject;
+  return stripped.replace(/\s{2,}/g, ' ').replace(/[\s,;:.]+$/, '').trim();
 }
 
 /** A request asking about weather/temperature/forecast conditions. Plain
@@ -166,13 +178,19 @@ export function extractImageGenerationPrompt(text: string): string {
  * are: detected here, dispatched directly through the governed
  * `get_weather` capability, never left to the model's own tool-calling. */
 const WEATHER_NOUN = /\b(weather|temperature|forecast|rain(?:ing|y)?|snow(?:ing|y)?|humidity)\b/i;
+const MAKES_SOMETHING = /\b(?:create|set up|add|make|build|write|draft|organi[sz]e|plan)\b[^.?!]{0,80}\b(?:projects?|tasks?|checklist|list|dashboard|report|file|document|app|script|page|notes?)\b|\b(?:projects?|tasks?|checklist)\s*:/i;
+const ASKS_ABOUT_WEATHER = /\b(?:what(?:'s| is| will)|how(?:'s| is)|will it|is it (?:going to )?|tell me|check|show me)\b[^.?!]{0,25}\b(?:the )?(?:weather|temperature|forecast|rain|snow)\b[^.?!]{0,40}\b(?:in|for|at|today|tomorrow|tonight|now)\b/i;
 const WEATHER_LOCATION_PHRASE =
-  /\b(?:weather|temperature|forecast)\b(?:\s+\w+)*?\s+(?:in|for|at)\s+([a-z][a-z\s.',-]*?)(?=\s+(?:right now|today|tonight|tomorrow|currently|now|this (?:week|morning|afternoon|evening|weekend)|for (?:today|tonight|tomorrow|now|this)|please)\b|[?.!]|$)/i;
+  /\b(?:weather|temperature|forecast|rain(?:ing|y)?|snow(?:ing|y)?)\b(?:\s+\w+)*?\s+(?:in|for|at)\s+([a-z\u00C0-\u024F][a-z\u00C0-\u024F\s.',-]*?)(?=\s+(?:right now|today|tonight|tomorrow|currently|now|this (?:week|morning|afternoon|evening|weekend)|for (?:today|tonight|tomorrow|now|this)|please)\b|[?.!]|$)/i;
 
 export function detectWeatherIntent(text: string, lastLocation?: string | null): boolean {
   const trimmed = text.trim();
   if (!trimmed) return false;
   if (detectImageGenerationIntent(trimmed)) return false;
+  // Real-world challenge: "Set up a new project … with three tasks: buy timber, check the weather forecast, build the
+  // frame" was answered "Which location?" and never reached Core. A weather word inside an instruction to create or
+  // organise something is part of that work, unless the message also asks about the weather itself.
+  if (MAKES_SOMETHING.test(trimmed) && !ASKS_ABOUT_WEATHER.test(trimmed)) return false;
   if (WEATHER_NOUN.test(trimmed)) return true;
   // If a weather location is already established in context, relative time follow-ups are weather queries
   if (lastLocation && /\b(?:tomorrow|evening|morning|tonight|this afternoon|weekend)\b/i.test(trimmed)) {
@@ -190,6 +208,19 @@ export function extractWeatherLocation(text: string): string | null {
   if (location) {
     location = location.replace(/,\s*$/, '').trim();
     return location.length <= 200 ? location : null;
+  }
+  return null;
+}
+
+export function extractWeatherComparison(text: string): { locationA: string; locationB: string } | null {
+  const match = text.match(/\bcompare\s+(?:the\s+)?(?:today'?s\s+)?weather\s+(?:between|in|for)?\s+([A-Za-z\u00C0-\u024F\s.,-]+?)\s+(?:and|vs\.?|versus)\s+([A-Za-z\u00C0-\u024F\s.,-]+?)(?=[.?!\n]|$)/i)
+    || text.match(/\bweather\s+in\s+([A-Za-z\u00C0-\u024F\s.,-]+?)\s+(?:and|vs\.?|versus)\s+(?:in\s+)?([A-Za-z\u00C0-\u024F\s.,-]+?)(?=[.?!\n]|$)/i);
+  if (match) {
+    const a = match[1].trim().replace(/,\s*$/, '');
+    const b = match[2].trim().replace(/,\s*$/, '');
+    if (a && b && a.toLowerCase() !== b.toLowerCase()) {
+      return { locationA: a, locationB: b };
+    }
   }
   return null;
 }

@@ -1,0 +1,39 @@
+
+ RUN  v4.1.9 D:/Projects/Pandesh-ui-v2-implementation
+
+warning: in the working copy of 'src/cart.js', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'test/cart.test.js', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'src/cart.js', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'test/cart.test.js', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'src/cart.js', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'test/cart.test.js', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'src/cart.js', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'test/cart.test.js', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'note.txt', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'package.json', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'templates/base.html', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of '.gitignore', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'src/a.ts', LF will be replaced by CRLF the next time Git touches it
+ ❯ core/test/taskCompletion.test.ts (12 tests | 1 failed) 222ms
+     × rwRun2 G4: `python -m unittest` on pytest-style tests runs nothing 4ms
+
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 1 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  core/test/taskCompletion.test.ts > gap 4: suggested commands are checked against the folder > rwRun2 G4: `python -m unittest` on pytest-style tests runs nothing
+TypeError: .toMatch() expects to receive a string, but got undefined
+ ❯ core/test/taskCompletion.test.ts:45:91
+     43|     fs.writeFileSync(path.join(dir, 'test_tracker.py'), 'def test_tota…
+     44|     fs.writeFileSync(path.join(dir, 'test_board.py'), 'import unittest…
+     45|     expect(suggestedCommandProblems('Run `python -m unittest test_trac…
+       |                                                                                           ^
+     46|     expect(suggestedCommandProblems('Run `python -m unittest test_boar…
+     47|   });
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/1]⎯
+
+
+ Test Files  1 failed | 251 passed | 8 skipped (260)
+      Tests  1 failed | 2597 passed | 16 skipped (2614)
+   Start at  14:34:13
+   Duration  124.56s (transform 9.03s, setup 64.32s, import 54.96s, tests 324.27s, environment 25ms)
+

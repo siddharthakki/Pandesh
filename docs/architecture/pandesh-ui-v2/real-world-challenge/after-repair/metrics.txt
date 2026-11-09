@@ -1,0 +1,32 @@
+att_2efc1c68 completed 59.6s gemma4:12b calls 11 prompt 72356 out 722 tools 7 / 8 | Find the broken Python project in my test workspace. Run its
+att_2b6e5144 completed 45.9s gemma4:12b calls 10 prompt 57361 out 762 tools 6 / 7 | The code in buggy_project has a failing unit test. Please ru
+att_a9ac128d completed 40.6s gemma4:12b calls 8 prompt 55166 out 552 tools 6 / 7 | Find the broken Python project in my test workspace. Run its
+att_ba32dcfb completed 43.7s gemma4:12b calls 9 prompt 57151 out 881 tools 7 / 8 | The code in buggy_project has a failing unit test. Please ru
+att_0f78317b completed 17.8s gemma4:12b calls 2 prompt 16131 out 125 tools 1 / 1 | Please keep in mind: my fictional Project Birch review is on
+att_0c36d922 completed 10.5s gemma4:12b calls 9 prompt 56706 out 355 tools 7 / 7 | When and where is the Project Birch review?
+att_5ace2e30 completed 11.9s gemma4:12b calls 3 prompt 26603 out 85 tools 2 / 2 | When and where is the Project Birch review?
+att_862d0f59 completed 9.0s gemma4:12b calls 2 prompt 18478 out 62 tools 1 / 1 | What do you remember about Project Cedar?
+att_39a71d64 completed 35.6s gemma4:12b calls 1 prompt 10013 out 144 tools 1 / 1 | Ask your Research agent to find the current stable Node.js r
+att_e80451b5 completed 20.7s gemma4:12b calls 2 prompt 13893 out 160 tools 1 / 1 | The user asked Pandesh (their words): "Ask your Research age
+att_09456c37 completed 23.0s gemma4:12b calls 3 prompt 21470 out 224 tools 1 / 1 | Set up a new project called Garden Shed Plan with three task
+att_d70cc73c completed 11.0s gemma4:12b calls 3 prompt 19722 out 200 tools 1 / 1 | Set up a new project called Balcony Garden with three tasks:
+att_f0eff1c8 completed 32.3s gemma4:12b calls 6 prompt 68091 out 1241 tools 9 / 9 | Use the sample meeting notes and invoices in my authorized f
+att_2534b0be failed 91.7s gemma4:12b calls 4 prompt 36724 out 2603 tools 3 / 3 | I want a small local dashboard showing my PC's actual system
+att_d81316c3 completed 16.4s gemma4:12b calls 2 prompt 16530 out 717 tools 3 / 3 | Gather current system hardware telemetry (CPU, RAM, GPU, Dis
+att_e043712f completed 30.6s gemma4:12b calls 3 prompt 13012 out 1947 tools 1 / 1 | Build a single-page HTML dashboard at D:\\PandeshAlpha\\real
+att_96bed04c failed 128.6s gemma4:12b calls 6 prompt 81133 out 1919 tools 5 / 6 | I want a small local dashboard showing my PC's actual system
+att_e9a99af9 completed 71.9s qwen3.8:27b-mtp-q4_K_M calls 8 prompt 72090 out 1407 tools 10 / 11 | Find the broken Python project in my test workspace. Run its
+att_cd71c3b6 completed 24.5s qwen3.8:27b-mtp-q4_K_M calls 3 prompt 34513 out 243 tools 2 / 2 | Project Birch's review has moved to Friday at 2 PM. Update w
+att_444c0a67 completed 86.1s qwen3.8:27b-mtp-q4_K_M calls 11 prompt 133313 out 5126 tools 20 / 20 | Create a small local HTML expense dashboard using my sample 
+att_75014367 completed 85.3s qwen3.8:27b-mtp-q4_K_M calls 11 prompt 132743 out 4272 tools 14 / 14 | Create a small local HTML expense dashboard using my sample 
+att_8196f323 completed 48.5s gemma4:12b calls 10 prompt 76930 out 1563 tools 9 / 9 | Create a small local HTML expense dashboard using my sample 
+TOTAL {'calls': 127, 'pt': 1090129, 'ot': 25310, 'tools': 123, 'ok': 117} model calls by model {'gemma4:12b': 94, 'qwen3.8:27b-mtp-q4_K_M': 33}
+approvals [('run_checks', 'approved'), ('run_checks', 'approved'), ('authorize_mission', 'approved'), ('run_checks', 'approved'), ('run_checks', 'approved'), ('authorize_mission', 'approved'), ('run_checks', 'approved'), ('run_checks', 'approved'), ('authorize_mission', 'approved'), ('run_checks', 'approved'), ('run_checks', 'approved'), ('authorize_mission', 'approved'), ('run_checks', 'approved'), ('memory_remember', 'approved'), ('delegate_to_agent', 'approved'), ('web_research', 'rejected'), ('authorize_mission', 'approved'), ('delegate_to_opencode', 'approved'), ('authorize_mission', 'approved'), ('run_checks', 'approved'), ('authorize_mission', 'approved'), ('run_checks', 'approved'), ('memory_correct', 'approved'), ('authorize_mission', 'approved'), ('authorize_mission', 'approved'), ('authorize_mission', 'approved')]
+handoffs [('research', 'returned'), ('operations', 'returned'), ('coding', 'returned')]
+failed_call_memory_cleared 4
+write_content_unescaped 4
+core_verify_after_fix 2
+claimed_file_missing_recovery 1
+reply_lead_status_added 2
+unsupported_action_claims_withheld 1
+repeated_failed_call_refused 6

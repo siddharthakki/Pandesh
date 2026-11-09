@@ -29,6 +29,51 @@ export interface ToolActivity {
   excerpt?: string;
   /** A unified diff of the change, when the tool changed a file. */
   diff?: string;
+  /** For a command: what ran, how it ended and how long it took (as measured by the runner). */
+  command?: string;
+  exitCode?: number | null;
+  timedOut?: boolean;
+  durationMs?: number;
+  /** Test counts parsed from the command's own summary line; absent when the output has none. */
+  tests?: TestSummary;
+}
+
+export interface TestSummary { passed?: number; failed?: number; skipped?: number; total?: number; line: string }
+
+const num = (re: RegExp, s: string): number | undefined => { const m = re.exec(s); const v = m ? Number(m.slice(1).find((x) => x !== undefined)) : NaN; return Number.isFinite(v) ? v : undefined; };
+
+/**
+ * The test summary a runner printed (vitest/jest/pytest/mocha/dotnet style). Only counts that literally appear
+ * in the output are returned; nothing is inferred.
+ */
+export function parseTestSummary(output: string): TestSummary | undefined {
+  const lines = output.replace(/\x1b\[[0-9;]*m/g, '').split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+  const isCandidate = (l: string) => /\b\d+\s+(?:passed|passing|failed|failing)\b/i.test(l) || /\b(?:Passed|Failed):\s*\d+/.test(l);
+  const candidates = lines.filter(isCandidate);
+  // TAP-style summary (node --test prints "ℹ pass 1" or "# pass 1"; tap prints "# pass 1"): one count per line.
+  if (!candidates.length) {
+    const tap = (k: string) => { const l = [...lines].reverse().find((x) => new RegExp(`^[#\\u2139]\\s*${k}\\s+\\d+$`).test(x)); return l ? Number(l.replace(/\D+/g, '')) : undefined; };
+    const passed = tap('pass'); const failed = tap('fail');
+    if (passed === undefined && failed === undefined) return undefined;
+    const s: TestSummary = { line: lines.filter((x) => /^[#ℹ]\s*(?:tests|pass|fail|skipped)\s+\d+$/.test(x)).join(' · ').slice(0, 200) };
+    const total = tap('tests'); const skipped = tap('skipped');
+    if (passed !== undefined) s.passed = passed;
+    if (failed !== undefined) s.failed = failed;
+    if (skipped !== undefined) s.skipped = skipped;
+    if (total !== undefined) s.total = total;
+    return s;
+  }
+  const line = [...candidates].reverse().find((l) => /^Tests?[:\s]/.test(l)) ?? candidates[candidates.length - 1];
+  const s: TestSummary = { line: line.slice(0, 200) };
+  const passed = num(/\b(\d+)\s+(?:passed|passing)\b|\bPassed:\s*(\d+)/i, line);
+  const failed = num(/\b(\d+)\s+(?:failed|failing)\b|\bFailed:\s*(\d+)/i, line);
+  const skipped = num(/\b(\d+)\s+(?:skipped|pending)\b|\bSkipped:\s*(\d+)/i, line);
+  const total = num(/\b(\d+)\s+total\b|\((\d+)\)\s*$|\bTotal:\s*(\d+)/i, line);
+  if (passed !== undefined) s.passed = passed;
+  if (failed !== undefined) s.failed = failed;
+  if (skipped !== undefined) s.skipped = skipped;
+  if (total !== undefined) s.total = total;
+  return s;
 }
 
 /** Artifact source of a browser page screenshot: a preview of work, not a delivered result. */
@@ -95,5 +140,16 @@ export function sanitizeToolActivity(raw: unknown): ToolActivity | undefined {
   if (artifactIds.length) activity.artifactIds = artifactIds;
   if (excerpt) activity.excerpt = excerpt;
   if (diff) activity.diff = diff;
+  const command = text(record.command, 300);
+  if (command) activity.command = command;
+  if (record.exitCode === null || (typeof record.exitCode === 'number' && Number.isInteger(record.exitCode))) activity.exitCode = record.exitCode as number | null;
+  if (typeof record.timedOut === 'boolean') activity.timedOut = record.timedOut;
+  if (typeof record.durationMs === 'number' && Number.isFinite(record.durationMs) && record.durationMs >= 0) activity.durationMs = Math.round(record.durationMs);
+  const t = record.tests as Record<string, unknown> | undefined;
+  if (t && typeof t === 'object' && typeof t.line === 'string') {
+    const tests: TestSummary = { line: text(t.line, 200) ?? '' };
+    for (const k of ['passed', 'failed', 'skipped', 'total'] as const) if (typeof t[k] === 'number' && Number.isInteger(t[k]) && (t[k] as number) >= 0) tests[k] = t[k] as number;
+    activity.tests = tests;
+  }
   return activity;
 }

@@ -437,6 +437,13 @@ let lastTranscriptRefetchKey = null;
 /** Detects a newly-created/changed selected conversation (e.g. the first
  * submit of a session lazily creating one) so the rail picks it up. */
 let lastKnownSelectedConversationId = null;
+/** The conversation the host restored at launch, until its history is actually
+ * on screen. While it is set the pane is blank ("New conversation") although
+ * the host still holds the old conversation — a send then must start fresh. */
+let restoredConversationAwaitingDisplay = null;
+let restoredTranscriptFetchInFlight = false;
+let restoredTranscriptAttempts = 0;
+let restoredTranscriptLastAttemptAt = 0;
 /** Detects a newly-appeared chat-triggered image approval (see
  * detectImageGenerationIntent) so its exact card is shown exactly once. */
 let lastKnownPendingImageApprovalId = null;
@@ -511,6 +518,17 @@ function formatClock(ms) {
   const total = Math.max(0, Math.floor(ms / 1000));
   const minutes = Math.floor(total / 60);
   const seconds = String(total % 60).padStart(2, '0');
+  return `${minutes}:${seconds}`;
+}
+
+function formatCountdown(ms) {
+  const total = Math.max(0, Math.floor(ms / 1000));
+  const hours = Math.floor(total / 3600);
+  const minutes = Math.floor((total % 3600) / 60);
+  const seconds = String(total % 60).padStart(2, '0');
+  if (hours > 0) {
+    return `${hours}:${String(minutes).padStart(2, '0')}:${seconds}`;
+  }
   return `${minutes}:${seconds}`;
 }
 
@@ -1372,8 +1390,66 @@ function renderTodayDue(snapshot) {
   if (!todayDueList || !todayDueEmpty) return;
   todayDueList.replaceChildren();
   const due = snapshot.everydayTools?.dueReminders ?? [];
-  todayDueEmpty.hidden = due.length > 0;
-  todayDueEmpty.textContent = due.length === 0 ? 'No due reminders.' : '';
+  const timers = (snapshot.everydayTools?.activeTimers ?? []).filter((t) => t.state === 'running' || t.state === 'paused');
+  todayDueEmpty.hidden = due.length > 0 || timers.length > 0;
+  todayDueEmpty.textContent = (due.length === 0 && timers.length === 0) ? 'No due reminders or active timers.' : '';
+
+  for (const timer of timers) {
+    const li = document.createElement('li');
+    li.className = 'tools-item tools-item-timer';
+    li.setAttribute('data-timer-id', timer.id);
+    li.setAttribute('data-deadline-ms', String(timer.deadlineMs));
+    li.setAttribute('data-remaining-ms', String(timer.remainingMs));
+    li.setAttribute('data-state', timer.state);
+
+    const body = document.createElement('div');
+    body.className = 'tools-item-body selectable-text';
+    const labelSpan = document.createElement('strong');
+    labelSpan.textContent = `⏱ ${timer.label || 'Timer'}: `;
+    const countSpan = document.createElement('span');
+    countSpan.className = 'timer-countdown-text';
+    const rem = timer.state === 'paused'
+      ? timer.remainingMs
+      : Math.max(0, timer.deadlineMs - Date.now());
+    countSpan.textContent = timer.state === 'paused'
+      ? `${formatCountdown(rem)} (paused)`
+      : formatCountdown(rem);
+
+    body.append(labelSpan, countSpan);
+
+    const actions = document.createElement('div');
+    actions.className = 'row tools-item-actions';
+
+    if (timer.state === 'running') {
+      const pauseBtn = document.createElement('button');
+      pauseBtn.type = 'button';
+      pauseBtn.textContent = 'Pause';
+      pauseBtn.addEventListener('click', async () => {
+        await api.submitTask(`pause timer id:${timer.id}`);
+      });
+      actions.appendChild(pauseBtn);
+    } else {
+      const resumeBtn = document.createElement('button');
+      resumeBtn.type = 'button';
+      resumeBtn.textContent = 'Resume';
+      resumeBtn.addEventListener('click', async () => {
+        await api.submitTask(`resume timer id:${timer.id}`);
+      });
+      actions.appendChild(resumeBtn);
+    }
+
+    const cancelBtn = document.createElement('button');
+    cancelBtn.type = 'button';
+    cancelBtn.textContent = 'Cancel';
+    cancelBtn.addEventListener('click', async () => {
+      await api.submitTask(`cancel timer id:${timer.id}`);
+    });
+    actions.appendChild(cancelBtn);
+
+    li.append(body, actions);
+    todayDueList.appendChild(li);
+  }
+
   for (const item of due) {
     const li = document.createElement('li');
     const when = formatDueLocal(item.dueAt, item.timezone);
@@ -1480,8 +1556,64 @@ function renderEverydayTools(snapshot) {
   }
   if (remindersList && remindersEmpty) {
     remindersList.replaceChildren();
+    const timers = (tools.activeTimers || []).filter((t) => t.state === 'running' || t.state === 'paused');
     const reminders = tools.reminders || [];
-    remindersEmpty.hidden = reminders.length > 0;
+    remindersEmpty.hidden = reminders.length > 0 || timers.length > 0;
+    for (const timer of timers) {
+      const li = document.createElement('li');
+      li.className = 'tools-item tools-item-timer';
+      li.setAttribute('data-timer-id', timer.id);
+      li.setAttribute('data-deadline-ms', String(timer.deadlineMs));
+      li.setAttribute('data-remaining-ms', String(timer.remainingMs));
+      li.setAttribute('data-state', timer.state);
+
+      const body = document.createElement('div');
+      body.className = 'tools-item-body selectable-text';
+      const labelSpan = document.createElement('strong');
+      labelSpan.textContent = `⏱ ${timer.label || 'Timer'}: `;
+      const countSpan = document.createElement('span');
+      countSpan.className = 'timer-countdown-text';
+      const rem = timer.state === 'paused'
+        ? timer.remainingMs
+        : Math.max(0, timer.deadlineMs - Date.now());
+      countSpan.textContent = timer.state === 'paused'
+        ? `${formatCountdown(rem)} (paused)`
+        : formatCountdown(rem);
+
+      body.append(labelSpan, countSpan);
+
+      const actions = document.createElement('div');
+      actions.className = 'row tools-item-actions';
+
+      if (timer.state === 'running') {
+        const pauseBtn = document.createElement('button');
+        pauseBtn.type = 'button';
+        pauseBtn.textContent = 'Pause';
+        pauseBtn.addEventListener('click', async () => {
+          await api.submitTask(`pause timer id:${timer.id}`);
+        });
+        actions.appendChild(pauseBtn);
+      } else {
+        const resumeBtn = document.createElement('button');
+        resumeBtn.type = 'button';
+        resumeBtn.textContent = 'Resume';
+        resumeBtn.addEventListener('click', async () => {
+          await api.submitTask(`resume timer id:${timer.id}`);
+        });
+        actions.appendChild(resumeBtn);
+      }
+
+      const cancelBtn = document.createElement('button');
+      cancelBtn.type = 'button';
+      cancelBtn.textContent = 'Cancel';
+      cancelBtn.addEventListener('click', async () => {
+        await api.submitTask(`cancel timer id:${timer.id}`);
+      });
+      actions.appendChild(cancelBtn);
+
+      li.append(body, actions);
+      remindersList.appendChild(li);
+    }
     for (const rem of reminders) {
       const li = document.createElement('li');
       li.className = 'tools-item';
@@ -2811,11 +2943,40 @@ function renderConversationContext(context) {
   if (conversationExportStatus) conversationExportStatus.textContent = '';
 }
 
+/** Shows the conversation the host restored at launch; one fetch at a time,
+ * retried from the snapshot handler (at most every 3 s, 5 tries) until it
+ * succeeds. If it never does, a send starts a fresh conversation. */
+async function showRestoredTranscript(conversationId) {
+  if (restoredTranscriptFetchInFlight) return;
+  if (restoredTranscriptAttempts >= 5 || Date.now() - restoredTranscriptLastAttemptAt < 3000) return;
+  restoredTranscriptAttempts += 1;
+  restoredTranscriptLastAttemptAt = Date.now();
+  restoredTranscriptFetchInFlight = true;
+  try {
+    const shown = await refreshOpenedTranscript(conversationId);
+    if (shown && restoredConversationAwaitingDisplay === conversationId) restoredConversationAwaitingDisplay = null;
+  } finally {
+    restoredTranscriptFetchInFlight = false;
+  }
+}
+
+/** If the window still shows a blank pane while the host holds the conversation
+ * it restored at launch, start a fresh one, so what is sent is what the person
+ * sees: never a hidden earlier conversation with its history. */
+async function startFreshIfRestoredConversationHidden() {
+  const hidden = restoredConversationAwaitingDisplay;
+  if (!hidden || lastSnapshot?.selectedConversationId !== hidden) return;
+  if (lastSnapshot?.running || lastSnapshot?.pendingApproval || lastSnapshot?.pendingImageApproval) return;
+  if (result && [...result.children].some((node) => node.dataset?.liveEcho !== '1')) return;
+  await startNewConversation();
+}
+
+/** Returns true when the transcript was fetched and is now what the pane shows. */
 async function refreshOpenedTranscript(conversationId) {
   const fetchEpoch = activeConversationEpoch;
   try {
     const opened = await withCoreConnectRetry(() => api.openConversation(conversationId, false));
-    if (fetchEpoch !== activeConversationEpoch || viewingConversationId !== conversationId) return;
+    if (fetchEpoch !== activeConversationEpoch || viewingConversationId !== conversationId) return false;
     const resultNode = document.getElementById('result');
     if (resultNode && viewingConversationId === conversationId) {
       if (opened.messages.length > 0) {
@@ -2834,9 +2995,12 @@ async function refreshOpenedTranscript(conversationId) {
     }
     updateQuickAnswerFromMessages(opened.messages);
     if (viewingConversationId === conversationId && fetchEpoch === activeConversationEpoch) renderConversationContext(opened.context);
+    syncAssistantMode();
     void refreshConversationsRail();
+    return true;
   } catch (err) {
     showOperationError?.(err);
+    return false;
   }
 }
 
@@ -3054,6 +3218,7 @@ async function refreshConversationsRail() {
 }
 
 async function openConversationFromRail(conversationId) {
+  restoredConversationAwaitingDisplay = null;
   const fetchEpoch = ++conversationEpoch;
   activeConversationEpoch = fetchEpoch;
   try {
@@ -3079,6 +3244,7 @@ async function openConversationFromRail(conversationId) {
 }
 
 async function startNewConversation() {
+  restoredConversationAwaitingDisplay = null;
   activeConversationEpoch = ++conversationEpoch;
   viewingConversationId = null;
   lastTranscriptRefetchKey = null;
@@ -4316,15 +4482,26 @@ function renderSnapshot(snapshot) {
       // history in the thread instead of an empty pane.
       const restoredOnStartup = previousSelected === null && !viewingConversationId;
       if (restoredOnStartup) {
+        restoredConversationAwaitingDisplay = snapshot.selectedConversationId;
         setViewingConversation(snapshot.selectedConversationId);
-        void refreshOpenedTranscript(snapshot.selectedConversationId);
+        void showRestoredTranscript(snapshot.selectedConversationId);
+      } else {
+        restoredConversationAwaitingDisplay = null;
       }
     } else {
+      restoredConversationAwaitingDisplay = null;
       // The host cleared the selection: a new conversation was started (from
       // this window, from the phone, or by anything else). The pane must be
       // empty — never the previous conversation's turns.
       clearConversationPane();
     }
+  } else if (restoredConversationAwaitingDisplay
+    && snapshot.coreState === 'connected'
+    && snapshot.selectedConversationId === restoredConversationAwaitingDisplay
+    && viewingConversationId === restoredConversationAwaitingDisplay) {
+    // The launch-time fetch failed while Core was still starting (it can take
+    // longer than the short connect retry); try again now that Core is up.
+    void showRestoredTranscript(restoredConversationAwaitingDisplay);
   }
   const chatImageApproval = snapshot.pendingImageApproval;
   if (chatImageApproval && chatImageApproval.approvalId !== lastKnownPendingImageApprovalId) {
@@ -4597,6 +4774,14 @@ openrouterSetKey?.addEventListener('click', async () => {
     if (openrouterKey) openrouterKey.value = '';
     await refresh();
   } catch (err) {
+    // D8: a send the host refused (e.g. Ollama not reachable) never ran — the
+    // typed text goes back into the composer and its echo is removed, so the
+    // message is not lost and the pane does not show it as sent.
+    [...(result?.querySelectorAll('[data-live-echo="1"]') ?? [])].pop()?.remove();
+    if (taskInput && !taskInput.value.trim()) {
+      taskInput.value = typedInput;
+      unsentDraftText = typedInput;
+    }
     await refresh();
     showOperationError(err);
   }
@@ -4697,6 +4882,7 @@ async function onMicPress(mode = 'manual') {
     result.textContent = '';
     followLatest = true;
     logVoiceStage(turn, 'transcript_submitted');
+    await startFreshIfRestoredConversationHidden();
     await api.submitTask(transcript, workerSelect?.value, turn?.turnId);
     if (isVoiceTurnStale(turn)) {
       logVoiceStage(turn, 'dropped_stale_turn', 'stage=after_submit');
@@ -5474,6 +5660,7 @@ submit.addEventListener('click', async () => {
     }
   }
   unsentDraftText = '';
+  await startFreshIfRestoredConversationHidden();
   if (taskInput) taskInput.value = ''; // Cleanly clears composer immediately on submit
 
   // Immediately append user's turn to active conversation stream
@@ -6082,6 +6269,7 @@ async function beginVadUtterance(source = 'wake') {
     result.textContent = '';
     followLatest = true;
     logVoiceStage(turn, 'transcript_submitted');
+    await startFreshIfRestoredConversationHidden();
     await api.submitTask(transcript, workerSelect?.value, turn.turnId);
     if (isVoiceTurnStale(turn)) {
       logVoiceStage(turn, 'dropped_stale_turn', 'stage=after_submit');
@@ -6328,8 +6516,26 @@ api.onVoiceEvent?.((event) => {
   }
 });
 
+function updateTimerCountdowns() {
+  const timerEls = document.querySelectorAll('[data-timer-id]');
+  for (const el of timerEls) {
+    const state = el.getAttribute('data-state');
+    const countSpan = el.querySelector('.timer-countdown-text');
+    if (!countSpan) continue;
+    if (state === 'paused') {
+      const remainingMs = Number(el.getAttribute('data-remaining-ms') || 0);
+      countSpan.textContent = `${formatCountdown(remainingMs)} (paused)`;
+    } else if (state === 'running') {
+      const deadlineMs = Number(el.getAttribute('data-deadline-ms') || 0);
+      const rem = Math.max(0, deadlineMs - Date.now());
+      countSpan.textContent = rem > 0 ? formatCountdown(rem) : 'Done!';
+    }
+  }
+}
+
 setInterval(() => {
   if (lastSnapshot?.running) renderClocks(lastSnapshot);
+  updateTimerCountdowns();
 }, 1000);
 
 async function refreshHostTelemetry() {
@@ -8188,7 +8394,7 @@ function renderWorkspace(snapshot) {
     const connected = connection === 'connected';
     const local = snapshot?.provider !== 'openrouter';
     const text = connected
-      ? (local ? 'Local AI · Connected' : 'Cloud AI · Connected')
+      ? (local ? (snapshot?.modelServerReachable === false ? 'Local AI · Ollama not reachable' : 'Local AI · Connected') : 'Cloud AI · Connected')
       : connection === 'reconnecting' || connection === 'starting'
         ? 'Local AI · Reconnecting…'
         : 'Local AI · Not connected';

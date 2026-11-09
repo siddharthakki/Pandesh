@@ -1,0 +1,5 @@
+INVOICE A-1001 (fictional test fixture)
+Seller: Northwind Office Supplies
+Date: 2026-09-14
+Items: printer paper (EUR 24.50), toner cartridge (EUR 58.00)
+Total: EUR 82.50

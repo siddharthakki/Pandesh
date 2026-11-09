@@ -33,6 +33,7 @@ import {
   MEMORY_SENSITIVITIES,
   MEMORY_TYPES,
   analyzeMemoryImpact,
+  correctMemory,
   exportMemory,
   forgetMemory,
   recallMemories,
@@ -44,7 +45,7 @@ import type { AffectedEntityInput } from '../domain/memory';
 
 export const MEMORY_CAPABILITY_ID = 'memory';
 
-export const MEMORY_CONSEQUENTIAL_TOOLS = ['memory_remember', 'memory_resolve_contradiction', 'memory_forget'] as const;
+export const MEMORY_CONSEQUENTIAL_TOOLS = ['memory_remember', 'memory_correct', 'memory_resolve_contradiction', 'memory_forget'] as const;
 export const MEMORY_READ_ONLY_TOOLS = ['memory_recall', 'memory_impact', 'memory_export'] as const;
 export const MEMORY_TOOL_NAMES: readonly string[] = [...MEMORY_CONSEQUENTIAL_TOOLS, ...MEMORY_READ_ONLY_TOOLS];
 
@@ -139,7 +140,8 @@ const definitions: ModelToolDefinition[] = [
     description:
       'Durably remember one explicitly authorized fact or decision, with source evidence, scope, and sensitivity. '
       + 'Consequential — the user must approve the exact proposed memory before anything is written. '
-      + 'Never call this for ordinary conversation; only when the user has asked for something to be remembered.',
+      + 'Never call this for ordinary conversation; only when the user has asked for something to be remembered. '
+      + 'Store the user\'s own words: never add a date, time or detail they did not give ("Monday" stays "Monday").',
     parameters: {
       type: 'object',
       properties: {
@@ -224,6 +226,23 @@ const definitions: ModelToolDefinition[] = [
         scopeId: { type: 'string', maxLength: 200 },
       },
       required: [],
+    },
+  },
+  {
+    name: 'memory_correct',
+    description:
+      'Correct one stored fact in a single step: Core saves the complete corrected value (same scope and subject, with this '
+      + 'conversation as its source) and retires the old fact, so the old value is no longer recalled. Use it to change part of '
+      + 'a fact, and to forget PART of a fact (e.g. "forget the colour" on "meeting Tuesday 14:30; colour orange" -> value '
+      + '"meeting Tuesday 14:30"). Get memoryId from memory_recall first. Consequential: the user approves the exact new value. '
+      + 'Use the user\'s own words: never add a date, time or detail they did not give ("Monday" stays "Monday").',
+    parameters: {
+      type: 'object',
+      properties: {
+        memoryId: { type: 'string', maxLength: 100, description: 'The active fact to correct (from memory_recall).' },
+        value: { type: 'string', maxLength: MAX_VALUE_CHARS, description: 'The COMPLETE corrected value, with every part that should remain and nothing that should be forgotten.' },
+      },
+      required: ['memoryId', 'value'],
     },
   },
   {
@@ -335,6 +354,27 @@ export function createMemoryCapabilityAdapter(options: MemoryCapabilityOptions):
             scopeId: args.scopeId === undefined ? undefined : asString(args.scopeId),
           });
           return ok(result, 'memory_export_succeeded', safeArgs);
+        }
+        case 'memory_correct': {
+          const source = resolveSource(db, args, ctx);
+          const result = correctMemory(db, {
+            memoryId: asString(args.memoryId),
+            value: asString(args.value),
+            sourceConversationId: source.conversationId,
+            sourceMessageId: source.messageId,
+            consentApprovalId: ctx.approvalId ?? null,
+            toolInvocationId: ctx.invocationId ?? null,
+            attemptId: ctx.attemptId ?? null,
+            actor,
+          });
+          return ok({
+            memoryId: result.memory.id,
+            changed: result.changed,
+            previous: result.previous,
+            memory: result.memory,
+            evidence: result.evidence,
+            note: result.changed ? `Corrected: the old fact ${result.previous.id} is forgotten; the active fact is now ${result.memory.id}.` : 'Nothing changed: the stored value already equals the correction.',
+          }, result.changed ? 'memory_correct_succeeded' : 'memory_correct_deduplicated', safeArgs);
         }
         case 'memory_forget': {
           const result = forgetMemory(db, {

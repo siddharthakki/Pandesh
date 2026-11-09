@@ -181,7 +181,8 @@ describe('Core-owned local model routing over the real /v1/submit HTTP path', ()
       .toMatchObject({ available: false });
   });
 
-  it('records the historic fallback, marked unavailable, when Ollama is unreachable', async () => {
+  // D9: Auto no longer "selects" an uninstalled fallback while Ollama is unreachable.
+  it('refuses Auto selection when Ollama is unreachable', async () => {
     ollamaModels = 'unreachable';
     const res = await authed('/v1/submit', {
       method: 'POST',
@@ -193,10 +194,9 @@ describe('Core-owned local model routing over the real /v1/submit HTTP path', ()
         autoSelectModel: true,
       }),
     });
-    expect(res.status).toBe(201);
+    expect(res.status).toBe(400);
     const body = await res.json();
-    expect(body.modelSelection.selectedModel).toBe(AUTO_FALLBACK_MODEL);
-    expect(body.modelSelection.candidates.every((c: { available: boolean }) => !c.available)).toBe(true);
+    expect(body.error.message).toMatch(/not reachable/);
   });
 
   it('fails closed when Auto is combined with an explicit model', async () => {
@@ -217,8 +217,8 @@ describe('Core-owned local model routing over the real /v1/submit HTTP path', ()
     expect(ollamaTagsHits).toBe(0);
   });
 
-  it('fails closed when Ollama is reachable but no chain model is installed', async () => {
-    ollamaModels = ['some-unrelated-model:latest'];
+  it('fails closed when Ollama is reachable but no generative model is installed', async () => {
+    ollamaModels = ['nomic-embed-text:latest'];
     const res = await authed('/v1/submit', {
       method: 'POST',
       idempotencyKey: nextIdemp(),

@@ -1714,6 +1714,80 @@ CREATE INDEX IF NOT EXISTS idx_bridge_checkpoints_task ON bridge_task_checkpoint
 // result -> no second write) and makes an edit whose outcome is UNCERTAIN
 // non-replayable (the file matches neither -> the side effect is never
 // repeated on a guess).
+// Re-run M9: Pandesh kept only the 4,000-character excerpt the model saw, so a named company could not be traced to a
+// source or shown to be missing from it. One row per fetched source; `content` is the redacted readable text and is
+// cleared after `contentExpiresAt` (URL, title and hash stay, so a citation can still be re-fetched and verified).
+const MIGRATION_47_RESEARCH_SOURCES = `
+CREATE TABLE IF NOT EXISTS research_turn_sources (
+  id TEXT PRIMARY KEY,
+  attemptId TEXT NOT NULL,
+  conversationId TEXT,
+  invocationId TEXT,
+  toolName TEXT NOT NULL,
+  query TEXT NOT NULL,
+  marker TEXT,
+  searchUrl TEXT,
+  finalUrl TEXT NOT NULL,
+  title TEXT,
+  contentSha256 TEXT NOT NULL,
+  contentChars INTEGER NOT NULL,
+  excerptChars INTEGER NOT NULL,
+  content TEXT,
+  retrievedAt TEXT NOT NULL,
+  contentExpiresAt TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_research_turn_sources_attempt ON research_turn_sources(attemptId);
+CREATE INDEX IF NOT EXISTS idx_research_turn_sources_conversation ON research_turn_sources(conversationId, retrievedAt);
+`;
+
+/** Phase 2b — specialist agents (core/domain/agents.ts). Additive only: built-in
+ * definitions live in code; this stores custom agents and user overrides, which
+ * request ran as which agent with which frozen scope, and delegations. */
+const MIGRATION_48_AGENTS = `
+CREATE TABLE IF NOT EXISTS agent_definitions (
+  id TEXT PRIMARY KEY,
+  kind TEXT NOT NULL,
+  version INTEGER NOT NULL,
+  definition TEXT NOT NULL,
+  createdAt TEXT NOT NULL,
+  updatedAt TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS agent_runs (
+  requestId TEXT PRIMARY KEY REFERENCES requests(id),
+  agentId TEXT NOT NULL,
+  agentVersion INTEGER NOT NULL,
+  scope TEXT NOT NULL,
+  handoffId TEXT,
+  createdAt TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_agent_runs_agent ON agent_runs(agentId, createdAt);
+CREATE TABLE IF NOT EXISTS agent_handoffs (
+  id TEXT PRIMARY KEY,
+  parentAttemptId TEXT NOT NULL,
+  childRequestId TEXT,
+  fromAgentId TEXT NOT NULL,
+  toAgentId TEXT NOT NULL,
+  brief TEXT NOT NULL,
+  grantJson TEXT NOT NULL,
+  dedupeKey TEXT NOT NULL,
+  depth INTEGER NOT NULL,
+  status TEXT NOT NULL,
+  createdAt TEXT NOT NULL,
+  updatedAt TEXT NOT NULL,
+  UNIQUE(parentAttemptId, dedupeKey)
+);
+CREATE INDEX IF NOT EXISTS idx_agent_handoffs_parent ON agent_handoffs(parentAttemptId);
+CREATE TABLE IF NOT EXISTS agent_scope_refusals (
+  id TEXT PRIMARY KEY,
+  attemptId TEXT NOT NULL,
+  agentId TEXT NOT NULL,
+  toolName TEXT NOT NULL,
+  reason TEXT NOT NULL,
+  createdAt TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_agent_scope_refusals_agent ON agent_scope_refusals(agentId, createdAt);
+`;
+
 const MIGRATION_46_MUTATION_LEDGER = `
 CREATE TABLE IF NOT EXISTS mutation_ledger (
   fingerprint TEXT PRIMARY KEY,
@@ -1728,6 +1802,70 @@ CREATE TABLE IF NOT EXISTS mutation_ledger (
 );
 CREATE INDEX IF NOT EXISTS idx_mutation_ledger_path ON mutation_ledger(toolName, path);
 CREATE INDEX IF NOT EXISTS idx_mutation_ledger_attempt ON mutation_ledger(attemptId);
+`;
+
+/** Phase 2d — Second Brain (core/domain/secondBrain.ts). Additive. Sources are
+ * user-granted folders and Pandesh records; chunks and the FTS index are a
+ * derived cache that can be dropped and rebuilt at any time. */
+const MIGRATION_49_SECOND_BRAIN = `
+CREATE TABLE IF NOT EXISTS knowledge_sources (
+  id TEXT PRIMARY KEY,
+  kind TEXT NOT NULL,
+  locator TEXT NOT NULL,
+  grantId TEXT,
+  scopeType TEXT NOT NULL,
+  sensitivity TEXT NOT NULL,
+  contentSha256 TEXT,
+  lastIndexedAt TEXT,
+  state TEXT NOT NULL,
+  UNIQUE(kind, locator)
+);
+CREATE TABLE IF NOT EXISTS knowledge_chunks (
+  id TEXT PRIMARY KEY,
+  sourceId TEXT NOT NULL REFERENCES knowledge_sources(id),
+  ordinal INTEGER NOT NULL,
+  heading TEXT,
+  text TEXT NOT NULL,
+  charStart INTEGER NOT NULL,
+  charEnd INTEGER NOT NULL,
+  contentSha256 TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_knowledge_chunks_source ON knowledge_chunks(sourceId, ordinal);
+CREATE TABLE IF NOT EXISTS knowledge_links (
+  id TEXT PRIMARY KEY,
+  fromSourceId TEXT NOT NULL,
+  toSourceId TEXT NOT NULL,
+  linkType TEXT NOT NULL,
+  evidence TEXT NOT NULL,
+  UNIQUE(fromSourceId, toSourceId, linkType)
+);
+CREATE VIRTUAL TABLE IF NOT EXISTS brain_fts USING fts5(
+  title, body, itemType UNINDEXED, itemId UNINDEXED, scopeType UNINDEXED, sensitivity UNINDEXED, itemDate UNINDEXED,
+  tokenize = 'unicode61 remove_diacritics 2'
+);
+CREATE TABLE IF NOT EXISTS brain_index_state (
+  id INTEGER PRIMARY KEY CHECK (id = 1),
+  signature TEXT NOT NULL,
+  builtAt TEXT NOT NULL,
+  items INTEGER NOT NULL
+);
+`;
+
+/** Phase 2f — Social Studio drafts (core/domain/socialDrafts.ts). Drafting and
+ * the user's decisions only: nothing here publishes, schedules or sends. */
+const MIGRATION_50_SOCIAL_DRAFTS = `
+CREATE TABLE IF NOT EXISTS social_drafts (
+  id TEXT PRIMARY KEY,
+  channel TEXT NOT NULL,
+  text TEXT NOT NULL,
+  status TEXT NOT NULL,
+  decisionNote TEXT,
+  decidedAt TEXT,
+  revision INTEGER NOT NULL DEFAULT 1,
+  createdAt TEXT NOT NULL,
+  updatedAt TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_social_drafts_status ON social_drafts(status, updatedAt);
 `;
 
 export const MIGRATIONS: Migration[] = [
@@ -1777,6 +1915,10 @@ export const MIGRATIONS: Migration[] = [
   { version: 44, description: 'Household OS: PC organization move journal and rules, bounded recurring routines with run history, household obligations with evidence, JUGAAD companion sync', sql: MIGRATION_44_HOUSEHOLD_OS },
   { version: 45, description: 'Household OS hardening: replay nonces that survive a restart, per-folder document-reading grants', sql: MIGRATION_45_HOUSEHOLD_HARDENING },
   { version: 46, description: 'Durable mutation ledger: restart-safe, idempotent workspace edits and non-replayable uncertain mutations', sql: MIGRATION_46_MUTATION_LEDGER },
+  { version: 47, description: 'Research provenance: every fetched web source (URL, title, content hash, redacted text with an expiry) so citations can be reconstructed and claims checked', sql: MIGRATION_47_RESEARCH_SOURCES },
+  { version: 48, description: 'Specialist agents: custom definitions and overrides, agent runs with their frozen scope, delegations, scope refusals', sql: MIGRATION_48_AGENTS },
+  { version: 49, description: 'Second Brain: knowledge sources, rebuildable chunks, structural links and a full-text index', sql: MIGRATION_49_SECOND_BRAIN },
+  { version: 50, description: 'Social Studio drafts and the user decisions on them (no publishing)', sql: MIGRATION_50_SOCIAL_DRAFTS },
 ];
 
 

@@ -152,7 +152,14 @@ export function resolveDesktopProviderConfig(input: {
     throw new DesktopConfigError(`desktop slice requires local Ollama; configured provider is '${providerType}'`);
   }
 
-  const apiBaseRaw = stringSetting(layers, 'ollama-agent.apiBase')?.value ?? DEFAULTS.apiBase;
+  // D7: one Ollama address for everything — the host's health/model probes
+  // and Core's model calls (it is handed to Core as KARKEDIKHA_OLLAMA_URL).
+  // An address the app was started with wins (a launch-time override, like KARKEDIKHA_DESKTOP_MODEL for the model);
+  // otherwise the configured setting; otherwise the default. Re-run F1: the user's editor setting (11434) beat the
+  // launch override, so Core's model calls bypassed the configured relay again.
+  const apiBaseRaw = env.KARKEDIKHA_OLLAMA_URL?.trim()
+    || stringSetting(layers, 'ollama-agent.apiBase')?.value
+    || DEFAULTS.apiBase;
   const apiBase = apiBaseRaw.replace(/\/$/, '');
 
   let model: string;
