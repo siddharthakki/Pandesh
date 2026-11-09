@@ -91,3 +91,28 @@ describe('a declined extra step does not erase work that was done (Garden Shed P
     expect(evaluateTurnOutcome([{ tool: 'delegate_to_agent', status: 'completed', result: { content: [{ type: 'text', text: 'RESULT FROM THE CODING AGENT' }] } }]).verdict).toBe('verified');
   });
 });
+
+describe('a failed producing step followed by a successful one is a recovery (T13 re-run)', () => {
+  const nd = (t: string) => ({ content: [{ type: 'text', text: t }], isError: true });
+  const ok = (t: string) => ({ content: [{ type: 'text', text: t }] });
+  it('OpenCode NOT DONE, then write_file succeeds → verified (recovered)', () => {
+    const o = evaluateTurnOutcome([
+      { tool: 'delegate_to_opencode', status: 'failed', result: nd('NOT DONE: OpenCode finished, but no file was created') },
+      { tool: 'write_file', status: 'completed', result: ok('Successfully wrote file: dashboard.html') },
+    ]);
+    expect(o.verdict).toBe('verified');
+    expect(o.reason).toMatch(/recovered/);
+  });
+  it('write_file first, then a failing OpenCode → not a recovery', () => {
+    expect(evaluateTurnOutcome([
+      { tool: 'write_file', status: 'completed', result: ok('Successfully wrote file: a.html') },
+      { tool: 'delegate_to_opencode', status: 'failed', result: nd('NOT DONE: OpenCode finished, but no file was created') },
+    ]).verdict).not.toBe('verified');
+  });
+  it('a declined write is never recovered', () => {
+    expect(evaluateTurnOutcome([
+      { tool: 'write_file', status: 'failed', result: nd('Not written: the user declined file changes. Nothing was written.') },
+      { tool: 'delegate_to_agent', status: 'completed', result: ok('RESULT FROM THE CODING AGENT') },
+    ]).verdict).not.toBe('verified');
+  });
+});
