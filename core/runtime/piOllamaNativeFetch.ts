@@ -135,6 +135,20 @@ function contentChars(m: OpenAiMessage): number {
 
 const sse = (payload: unknown) => `data: ${JSON.stringify(payload)}\n\n`;
 
+/** A reply that is exactly one strict-JSON {"name", "arguments"} object (optionally in one code fence) naming an offered tool. */
+function singleInlineCall(text: string, offered: ReadonlySet<string>): { name: string; arguments: Record<string, unknown> } | null {
+  const body = text.trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '').trim();
+  try {
+    const parsed = JSON.parse(body) as { name?: unknown; arguments?: unknown };
+    if (typeof parsed.name !== 'string' || !offered.has(parsed.name)) return null;
+    const args = parsed.arguments;
+    if (args !== undefined && (typeof args !== 'object' || args === null || Array.isArray(args))) return null;
+    return { name: parsed.name, arguments: (args ?? {}) as Record<string, unknown> };
+  } catch {
+    return null;
+  }
+}
+
 export function createPiOllamaFetch(options: PiOllamaFetchOptions): typeof fetch {
   const passthrough = globalThis.fetch.bind(globalThis);
   return (async (input: Parameters<typeof fetch>[0], init?: RequestInit) => {
@@ -288,9 +302,16 @@ export function createPiOllamaFetch(options: PiOllamaFetchOptions): typeof fetch
                 // transport passed them on as prose, so nothing ran. Recovered only when the reply IS a call to an
                 // offered tool and no native call came; anything else is released unchanged.
                 const recovered = metrics.toolCalls === 0 && inline.mode === 'holding' ? parseInlineToolCalls(inline.held, offeredToolDefs) : { kind: 'none' as const };
+                // A well-formed call to an offered tool that only lacks a required argument goes through like a native
+                // call would: the agent loop's own argument validation tells the model what is missing so it can retry
+                // (qwen2.5-coder:3b omitted create_reminder's title). Broken JSON or an unknown tool stays prose.
+                const incomplete = recovered.kind === 'failure' && recovered.code === 'invalid_arguments' ? singleInlineCall(inline.held, offeredNames) : null;
                 if (recovered.kind === 'calls' && recovered.calls.every((c) => offeredNames.has(c.name))) {
                   for (const call of recovered.calls) emitToolCall(call.name, call.arguments ?? {});
                   metrics.inlineToolCallsRecovered = recovered.calls.length;
+                } else if (incomplete) {
+                  emitToolCall(incomplete.name, incomplete.arguments);
+                  metrics.inlineToolCallsRecovered = 1;
                 } else {
                   push(chunk({ content: inline.held }));
                 }

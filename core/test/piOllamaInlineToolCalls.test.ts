@@ -58,6 +58,11 @@ describe('inline tool calls on the native Ollama transport', () => {
     expect(out.calls).toEqual([{ name: 'read_file', args: { filePath: 'notes.md' } }]);
   });
 
+  it('passes on a well-formed call that lacks a required argument, so the agent loop reports what is missing', async () => {
+    const out = await run('{"name": "read_file", "arguments": {"path": "notes.md"}}');
+    expect(out.calls).toEqual([{ name: 'read_file', args: { path: 'notes.md' } }]);
+  });
+
   it('leaves prose, JSON that names no offered tool, and replies without offered tools untouched', async () => {
     expect((await run('The folder has four files.')).calls).toEqual([]);
     expect((await run('The folder has four files.')).content).toBe('The folder has four files.');
