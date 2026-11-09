@@ -140,7 +140,8 @@ const definitions: ModelToolDefinition[] = [
     description:
       'Durably remember one explicitly authorized fact or decision, with source evidence, scope, and sensitivity. '
       + 'Consequential — the user must approve the exact proposed memory before anything is written. '
-      + 'Never call this for ordinary conversation; only when the user has asked for something to be remembered.',
+      + 'Never call this for ordinary conversation; only when the user has asked for something to be remembered. '
+      + 'Store the user\'s own words: never add a date, time or detail they did not give ("Monday" stays "Monday").',
     parameters: {
       type: 'object',
       properties: {
@@ -233,7 +234,8 @@ const definitions: ModelToolDefinition[] = [
       'Correct one stored fact in a single step: Core saves the complete corrected value (same scope and subject, with this '
       + 'conversation as its source) and retires the old fact, so the old value is no longer recalled. Use it to change part of '
       + 'a fact, and to forget PART of a fact (e.g. "forget the colour" on "meeting Tuesday 14:30; colour orange" -> value '
-      + '"meeting Tuesday 14:30"). Get memoryId from memory_recall first. Consequential: the user approves the exact new value.',
+      + '"meeting Tuesday 14:30"). Get memoryId from memory_recall first. Consequential: the user approves the exact new value. '
+      + 'Use the user\'s own words: never add a date, time or detail they did not give ("Monday" stays "Monday").',
     parameters: {
       type: 'object',
       properties: {

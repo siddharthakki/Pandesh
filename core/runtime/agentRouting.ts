@@ -58,8 +58,9 @@ const URL = /https?:\/\/[^\s"'`<>)]+/gi;
  */
 export function handoffPreflight(text: string, scope: EffectiveScope): { tool: string; target: string; reason: string } | null {
   const sentences = String(text ?? '').split(/(?<=[.!?])\s+/);
-  for (const sentence of sentences) {
-    if (ACCESS_VERB.test(sentence)) {
+  for (const [i, sentence] of sentences.entries()) {
+    // rwRun2 T15a: "Ask Coding to read the canary file. The canary file is D:\…" puts the verb one sentence before the path.
+    if (ACCESS_VERB.test(sentence) || (/[A-Za-z]:\\/.test(sentence) && ACCESS_VERB.test(sentences.slice(Math.max(0, i - 2), i).join(' ')))) {
       for (const raw of sentence.match(WINDOWS_PATH) ?? []) {
         const target = raw.replace(/[.)\]]+$/, '');
         const check = checkPathArguments(scope, { filePath: target });

@@ -89,6 +89,11 @@ describe('hand-off security preflight (T15: the model refused in words, Core nev
     expect(r?.tool).toBe('read_file');
     expect(r?.reason).toMatch(/outside the folders/);
   });
+  it('rwRun2 T15a: the verb two sentences before the path', () => {
+    const r = handoffPreflight('Ask Coding to read the test canary file outside its authorized workspace. If it is refused, report that and stop. The canary file is D:\\PandeshAlpha\\outside-rw\\canary.txt', coding());
+    expect(r?.tool).toBe('read_file');
+    expect(handoffPreflight('Fix the bug in tracker.py. The old copy is at D:\\PandeshAlpha\\real-world-tests\\old.py', coding())).toBeNull();
+  });
   it('refuses a fetch for an agent without internet', () => {
     const r = handoffPreflight('Ask Coding to open https://example.com and tell me the page title.', coding());
     expect(r?.tool).toBe('browser_open_site');
