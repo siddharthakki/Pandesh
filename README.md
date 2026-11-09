@@ -113,6 +113,10 @@ npx vitest run core/test          # Core: about 2,600 tests
 npx vitest run apps/desktop/test  # Desktop: about 620 tests
 ```
 
+GitHub CI runs the same checks on `windows-latest`; seven timing-sensitive Core test files (listed in
+[`ci.yml`](.github/workflows/ci.yml)) run there in a separate, non-blocking job because shared runners are too slow
+for their time windows. The [watchdog](docs/WATCHDOG.md) runs the full suite locally.
+
 Real-speech and local-TTS tests are skipped unless their models are staged (`node scripts/fetch-whisper-model.mjs`,
 `node scripts/fetch-piper.mjs`).
 

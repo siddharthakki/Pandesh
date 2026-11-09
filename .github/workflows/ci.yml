@@ -13,10 +13,24 @@ concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
+# Seven Core test files exercise wall-clock behaviour (lease expiry, security-grant windows, a live headless browser,
+# real git worktrees) that failed on GitHub's 2-vCPU windows-latest runners even with 120 s budgets, while passing on
+# developer machines and in the scheduled watchdog (docs/WATCHDOG.md), which runs the full suite. They run here in a
+# separate, non-blocking job so their results stay visible instead of being dropped.
+env:
+  TIMING_SENSITIVE: >-
+    core/test/backgroundTaskDelegation.test.ts
+    core/test/governedNewFileCreation.test.ts
+    core/test/kandevStoryAcceptance.test.ts
+    core/test/m53ReadEvidence.test.ts
+    core/test/missionVerification.test.ts
+    core/test/permissionModes.test.ts
+    core/test/runtime.test.ts
+
 jobs:
   test:
     runs-on: windows-latest
-    timeout-minutes: 40
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -36,8 +50,26 @@ jobs:
         run: |
           node esbuild.core.js
           node apps/desktop/esbuild.mjs
-      - name: Core tests
-        # Shared runners are several times slower than a developer machine; time budgets are widened, not removed.
-        run: npx vitest run core/test --testTimeout=120000 --hookTimeout=120000
+      - name: Core tests (all but the timing-sensitive files)
+        shell: bash
+        run: |
+          excludes=""; for f in $TIMING_SENSITIVE; do excludes="$excludes --exclude $f"; done
+          npx vitest run core/test $excludes --testTimeout=120000 --hookTimeout=120000
       - name: Desktop tests
         run: npx vitest run apps/desktop/test --testTimeout=120000 --hookTimeout=120000
+
+  timing-sensitive:
+    runs-on: windows-latest
+    timeout-minutes: 45
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: node esbuild.core.js
+      - name: Timing-sensitive Core tests (informational)
+        shell: bash
+        run: npx vitest run $TIMING_SENSITIVE --testTimeout=120000 --hookTimeout=120000
