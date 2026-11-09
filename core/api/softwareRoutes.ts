@@ -7,6 +7,8 @@
 import { CoreError } from '../domain/errors';
 import { collectSoftwareInventory, dependentsOf, type SoftwareInventory } from '../runtime/software/inventory';
 import { checkForUpdates, periodicCheckDue, readUpdateState, writeUpdateSettings } from '../runtime/software/updates';
+import { aiRadarSchedule, scheduleAiRadar } from '../runtime/aiRadarRoutine';
+import { decideRadarFinding, readRadarState, RADAR_SOURCES, radarRequestText, scanAiRadar } from '../runtime/aiRadar';
 import type { ApiContext, ApiResult } from './context';
 import type { Router } from './router';
 
@@ -41,6 +43,36 @@ export function registerSoftwareRoutes(router: Router<ApiContext, ApiResult>, op
     if (!checking) checking = (async () => checkForUpdates(await inventory(false), { dataDir: options.dataDir }, trigger))().finally(() => { checking = null; });
     return checking;
   };
+
+  // --- AI Radar (core/runtime/aiRadar.ts): public releases/advisories vs what is installed here ---
+  const installedTools = (inv: SoftwareInventory) => inv.items.filter((i) => i.kind !== 'model').map((i) => ({ name: i.name, version: i.version }));
+  router.get('/v1/radar', (ctx) => {
+    requireHost(ctx);
+    const state = readRadarState(options.dataDir);
+    return ok({ ...state, findings: Object.values(state.findings).sort((a, b) => (b.publishedAt ?? '').localeCompare(a.publishedAt ?? '')), sources: RADAR_SOURCES.map((s) => ({ id: s.id, name: s.name, repo: s.repo, region: s.region, category: s.category, pandesh: s.pandesh })) });
+  });
+  router.post('/v1/radar/scan', async (ctx) => {
+    requireHost(ctx);
+    const result = await scanAiRadar({ dataDir: options.dataDir, installed: installedTools(await inventory(false)) });
+    return ok({ scannedAt: result.scannedAt, newFindings: result.newFindings.length, urgent: result.urgent.length, errors: result.errors });
+  });
+  router.get('/v1/radar/schedule', (ctx) => { requireHost(ctx); return ok({ schedule: aiRadarSchedule(ctx.db) }); });
+  router.post('/v1/radar/schedule', (ctx) => {
+    requireHost(ctx);
+    const b = (ctx.body ?? {}) as { enabled?: unknown; dailyTime?: unknown };
+    return ok({ schedule: scheduleAiRadar(ctx.db, { enabled: b.enabled === false ? false : true, dailyTime: typeof b.dailyTime === 'string' ? b.dailyTime : undefined }) });
+  });
+  router.post('/v1/radar/findings/:id/decision', (ctx, match) => {
+    requireHost(ctx);
+    const b = (ctx.body ?? {}) as { action?: unknown; note?: unknown };
+    const action = String(b.action ?? '');
+    if (!['investigate', 'prepare_update', 'dismiss'].includes(action)) throw new CoreError('invalid_request', 'action must be investigate, prepare_update or dismiss');
+    let finding;
+    try { finding = decideRadarFinding(options.dataDir, decodeURIComponent(match.params.id), action as 'investigate', typeof b.note === 'string' ? b.note.slice(0, 500) : null); }
+    catch (err) { throw new CoreError('not_found', err instanceof Error ? err.message : String(err)); }
+    // Investigate / Prepare update hand the desktop a normal chat request to send; Core governs it like any message.
+    return ok({ finding, request: action === 'dismiss' ? null : radarRequestText(finding, action as 'investigate' | 'prepare_update') });
+  });
 
   router.get('/v1/software/inventory', async (ctx) => {
     requireHost(ctx);
