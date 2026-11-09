@@ -38,6 +38,13 @@ describe('gap 4: suggested commands are checked against the folder', () => {
     expect(suggestedCommandProblems('Run `python cli.py`.', dir)).toEqual([]);
     expect(suggestedCommandProblems('Run `python app.py`.', dir)[0]).toMatch(/app\.py does not exist/);
   });
+  it('rwRun2 G4: `python -m unittest` on pytest-style tests runs nothing', () => {
+    const dir = tmp();
+    fs.writeFileSync(path.join(dir, 'test_tracker.py'), 'def test_total():\n    assert 1 == 1\n\nif __name__ == "__main__":\n    test_total()\n');
+    fs.writeFileSync(path.join(dir, 'test_board.py'), 'import unittest\nclass T(unittest.TestCase):\n    def test_x(self): pass\n');
+    expect(suggestedCommandProblems('Run `python -m unittest test_tracker.py`.', dir)[0]).toMatch(/runs 0 tests.*`python test_tracker\.py`/);
+    expect(suggestedCommandProblems('Run `python -m unittest test_board.py` or `python -m unittest test_board`.', dir)).toEqual([]);
+  });
   it('npm scripts must exist', () => {
     const dir = tmp();
     fs.writeFileSync(path.join(dir, 'package.json'), JSON.stringify({ scripts: { test: 'node --test' } }));

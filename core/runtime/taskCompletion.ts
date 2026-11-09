@@ -49,6 +49,16 @@ export function suggestedCommandProblems(reply: string, workspaceRoot: string): 
     if (/&&|\bcd\b|[|;]/.test(cmd)) continue; // a working directory change makes the check unreliable
     const moduleRun = /^(?:python3?|py)\s+-m\s+([A-Za-z_][\w.]*)/i.exec(cmd);
     if (moduleRun) {
+      // rwRun2 G4: `python -m unittest test_tracker.py` on pytest-style functions runs 0 tests ("NO TESTS RAN").
+      if (moduleRun[1] === 'unittest') {
+        for (const target of cmd.slice(moduleRun[0].length).trim().split(/\s+/).filter((a) => a && !a.startsWith('-') && a !== 'discover')) {
+          const file = path.join(workspaceRoot, /\.py$/i.test(target) ? target : `${target.replace(/\./g, path.sep)}.py`);
+          let text = '';
+          try { text = fs.readFileSync(file, 'utf8'); } catch { continue; }
+          if (!/\bTestCase\b/.test(text)) problems.push(`\`${cmd}\` runs 0 tests: ${path.basename(file)} has no unittest.TestCase class${/^def test_/m.test(text) && /__main__/.test(text) ? ` (its test functions are pytest-style and its own main block runs them: \`python ${path.basename(file)}\`)` : ''}`);
+        }
+        continue;
+      }
       const parts = moduleRun[1].split('.');
       if (parts.length > 1) {
         const pkgDir = path.join(workspaceRoot, parts[0]);
