@@ -15,6 +15,7 @@ import { registerBridgeRoutes } from './bridgeRoutes';
 import { registerOperatorRoutes } from './operatorRoutes';
 import { registerHouseholdRoutes } from './householdRoutes';
 import { registerSoftwareRoutes } from './softwareRoutes';
+import { registerRevenueRoutes } from './revenueRoutes';
 import { registerAgentRoutes } from './agentRoutes';
 import { registerToolHubRoutes } from './toolHubRoutes';
 import { registerSecondBrainRoutes } from './secondBrainRoutes';
@@ -497,6 +498,7 @@ export function buildRouter(
   if (bridge) registerHouseholdRoutes(router, { dataDir: bridge.dataDir, connectors, broadcaster });
   // --- Software & Services, read-only inventory and update discovery (core/api/softwareRoutes.ts) ---
   if (bridge) registerSoftwareRoutes(router, { dataDir: bridge.dataDir });
+  if (bridge) registerRevenueRoutes(router, { dataDir: bridge.dataDir });
   // --- Specialist agents: definitions, status, history, delegation (core/api/agentRoutes.ts) ---
   registerAgentRoutes(router, { executor });
   // --- Tools, Skills & MCP hub (core/api/toolHubRoutes.ts) ---

@@ -5,13 +5,14 @@ import { Chat } from './Chat';
 import { Board, useTaskOverview, needsYouCount } from './Board';
 import { Software } from './Software';
 import { Radar } from './Radar';
+import { Revenue } from './Revenue';
 import { Team } from './Team';
 import { ToolsHub } from './ToolsHub';
 import { SecondBrain } from './SecondBrain';
 import { Processes } from './Processes';
 import { Workspace, type SpaceId } from './Workspaces';
 
-export type View = 'chat' | 'board' | 'team' | 'space' | 'system' | 'software' | 'tools' | 'brain' | 'processes' | 'workspace' | 'radar';
+export type View = 'chat' | 'board' | 'team' | 'space' | 'system' | 'software' | 'tools' | 'brain' | 'processes' | 'workspace' | 'radar' | 'revenue';
 
 interface PaletteEntry { group: string; label: string; run: () => void }
 
@@ -77,6 +78,7 @@ export function App() {
     { name: 'Media Studio', sub: 'Local image studio and media Pandesh made', run: () => openSpace('media') },
     { name: 'Automations', sub: 'Routines, daily brief, command queue', run: () => openSpace('automations') },
     { name: 'AI Radar', sub: 'New local-AI releases and advisories vs this PC', run: () => go('radar') },
+    { name: 'Revenue', sub: 'Leads, offers, drafts awaiting you, verified results', run: () => go('revenue') },
   ];
   const system = [
     variantForced
@@ -141,6 +143,7 @@ export function App() {
         {view === 'board' && <Board overview={overview} narrow={narrow} onOpenPalette={() => openPop('palette')} onOpenConversation={(id) => { setOpenConversationId(id); go('chat'); }} />}
         {view === 'software' && <Software narrow={narrow} />}
         {view === 'radar' && <Radar onOpenChat={() => { setOpenConversationId(null); refresh(); go('chat'); }} />}
+        {view === 'revenue' && <Revenue />}
         {view === 'tools' && <ToolsHub narrow={narrow} />}
         {view === 'brain' && <SecondBrain narrow={narrow} />}
         {view === 'processes' && <Processes narrow={narrow} />}
