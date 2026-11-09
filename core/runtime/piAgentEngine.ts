@@ -4467,6 +4467,17 @@ ${filesPromptSection}${webResearchPromptSection}${wishesPromptSection}${emailCal
     if (agentScope) {
       const agentDef = BUILTIN_AGENTS.find((a) => a.id === agentScope.agentId);
       systemPrompt += `\n\nAGENT: this request is handled by the ${agentDef?.name ?? agentScope.agentId} agent${agentScope.depth > 0 ? ', delegated by another agent' : ''}. ${agentDef?.instructions ?? ''} You can only use the tools you were given; if the request needs anything else, say so plainly instead of trying another way.`;
+      // Alpha e2e re-run T9: asked to fetch a page with internet denied, the Coding agent said it was "blocked at the OS
+      // or container level". The real reason is Pandesh's own policy for this agent; it must say that.
+      try {
+        const egress = egressOf(agentScope);
+        const net = egress.mode === 'none' ? 'none: Pandesh policy denies this agent internet access (Network: Deny)' : egress.mode === 'domains' ? `only ${egress.domains.join(', ')}${egress.approval ? ', each run with the user\'s OK' : ''}` : `public web${egress.approval ? ', only with the user\'s OK' : ''}`;
+        // A folder is allowed only when every restricting layer allows it.
+        const restricting = agentScope.layers.filter((l) => l.roots !== null).map((l) => l.roots as string[]);
+        const within = (p: string, r: string) => { const rel = path.relative(r, p); return rel === '' || (!rel.startsWith('..') && !path.isAbsolute(rel)); };
+        const roots = restricting.length === 0 ? null : [...new Set(restricting.flat())].filter((p) => restricting.every((rs) => rs.some((r) => within(p, r))));
+        systemPrompt += `\nYOUR PERMISSIONS (set by Pandesh Core for agent:${agentScope.agentId}@${agentScope.agentVersion}; you cannot change them): folders ${roots === null ? 'not limited by this agent' : roots.length ? roots.join(', ') : 'none'}; internet ${net}. When something is outside these permissions, say exactly that it is Pandesh's policy for this agent (never an operating-system, container or network failure), name the permission, and stop.`;
+      } catch { /* the scope check at execution still applies */ }
     }
     // Earlier tasks' real outcomes (cancelled / failed / interrupted), so the model never presents them as pending (D4).
     const taskHistorySection = renderTaskHistorySection(priorTurns);
@@ -5537,6 +5548,34 @@ ${filesPromptSection}${webResearchPromptSection}${wishesPromptSection}${emailCal
         safeRecordRuntimeEvent(db, broadcaster, attemptId, 'unsupported_action_claims_withheld', { withheld: guarded.withheld }, actor);
       }
     }
+    // Alpha e2e re-run T6: after "forget the colour orange", the reply said the colour was forgotten and that the record
+    // held only the meeting time, while Core still stored "…15:00; project color is orange" (the forget had removed a
+    // different, older fact). After any memory change Core shows what is really stored now for the scopes it touched.
+    try {
+      const memoryChanges = toolCallsRecorded.filter((t) => /^memory_(?:remember|forget|resolve|update|correct)/.test(t.tool) && (t.status === 'completed' || t.status === 'failed'));
+      if (memoryChanges.length && !signal?.aborted) {
+        const scopes = new Map<string, { scopeType: string; scopeId: string }>();
+        for (const t of memoryChanges) {
+          const a = (t.args ?? {}) as Record<string, unknown>;
+          if (typeof a.scopeType === 'string' && typeof a.scopeId === 'string') scopes.set(`${a.scopeType}|${a.scopeId}`, { scopeType: a.scopeType, scopeId: a.scopeId });
+          if (typeof a.memoryId === 'string') {
+            const row = db.get<{ scopeType: string; scopeId: string }>('SELECT scopeType, scopeId FROM memory_facts WHERE id = ?', [a.memoryId]);
+            if (row) scopes.set(`${row.scopeType}|${row.scopeId}`, row);
+          }
+        }
+        const lines: string[] = [];
+        for (const s of [...scopes.values()].slice(0, 5)) {
+          const facts = db.all<{ id: string; subject: string; displayValue: string; updatedAt: string }>(
+            "SELECT id, subject, displayValue, updatedAt FROM memory_facts WHERE scopeType = ? AND scopeId = ? AND state = 'active' ORDER BY updatedAt DESC LIMIT 10", [s.scopeType, s.scopeId]);
+          lines.push(`- ${s.scopeType} "${s.scopeId}": ${facts.length ? '' : 'nothing active'}`);
+          for (const f of facts) lines.push(`  - ${f.subject}: "${f.displayValue}" (${f.id}, ${f.updatedAt.slice(0, 16).replace('T', ' ')})`);
+        }
+        if (lines.length) {
+          finalReply = `${finalReply.trimEnd()}\n\n**Stored in memory now** (read from Core after this turn's changes):\n${lines.join('\n')}`;
+          safeRecordRuntimeEvent(db, broadcaster, attemptId, 'memory_state_appended', { scopes: [...scopes.keys()] }, actor);
+        }
+      }
+    } catch { /* the memory tables are absent in some test databases */ }
     if (coreNotes.length && !signal?.aborted) finalReply = `${finalReply.trimEnd()}\n\n${coreNotes.join('\n\n')}`;
 
     // What actually happened, decided from the tool ledger rather than from
