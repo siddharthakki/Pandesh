@@ -18,6 +18,10 @@ export function referencesLocalContent(text: string | null | undefined): boolean
     || /\b(?:i(?:'ve| have)\s+(?:put|placed|saved|added|uploaded|attached|dropped))\b/i.test(text)
     || /\b(?:attached|uploaded)\s+(?:file|document|pdf|cv|resume)\b/i.test(text)
     || /\b[\w-]+\.(?:pdf|docx?|xlsx?|csv|md|txt|json|pptx?)\b/i.test(text)
+    // Source files and named folders are local work: "fix the bug in pricing.py in the price-tool folder" is not a
+    // shopping search for prices (live demo 2026-11-09: the whole prompt was proposed as a web query).
+    || /\b[\w-]+\.(?:py|js|mjs|cjs|ts|tsx|jsx|html?|css|java|cs|go|rs|rb|php|sh|ps1|ya?ml|toml|ini|sql|ipynb)\b/i.test(text)
+    || /\b(?:in|inside|within|from|under)\s+(?:the\s+)?[\w.-]+\s+(?:folder|directory|repo|repository)\b/i.test(text)
     || /\b(?:read|open|check|scan|look\s+(?:at|through))\s+(?:my|the|this)\s+(?:cv|resume|file|folder|documents?|price\s*lists?)\b/i.test(text);
 }
 
