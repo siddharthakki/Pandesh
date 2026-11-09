@@ -133,7 +133,9 @@ export function wantsAssistantMemory(body: string): boolean {
 export function isPersonalFact(body: string): boolean {
   const text = body.trim();
   if (/^to\s+/i.test(text)) return false; // "remember to call John" is a jotting
-  return /\b(?:about me|my\s+\w+(?:\s+\w+){0,3}\s+(?:is|are|was|were)|i\s+(?:am|live|work|prefer|like|use|speak|moved)|i['\u2019]m|(?:is|are)\s+(?:in|at)\s+\w+,?\s+not|correction)\b/i.test(text)
+  // "our flour supplier is \u2026" / "we deliver on Tuesdays" are facts about the user's own household or business (live demo
+  // 2026-11-09: they were saved as a plain note, so memory recall and the Second Brain never found them).
+  return /\b(?:about (?:me|us)|(?:my|our)\s+\w+(?:\s+\w+){0,3}\s+(?:is|are|was|were)|i\s+(?:am|live|work|prefer|like|use|speak|moved)|we\s+(?:are|live|work|prefer|like|use|sell|deliver|open|close|run|own|charge|offer)|i['\u2019]m|we['\u2019]re|(?:is|are)\s+(?:in|at)\s+\w+,?\s+not|correction)\b/i.test(text)
     || /\bmy\s+(?:home|address|city|name|birthday|timezone|time zone|language|job|company|email|phone)\b/i.test(text);
 }
 
