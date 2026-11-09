@@ -59,3 +59,15 @@ describe('gap 5: packages a program needs must load on this PC', () => {
     expect(missing[0]).toMatch(/pandesh_surely_not_installed_pkg: ModuleNotFoundError/);
   });
 });
+
+import { expectedOutputFiles } from '../runtime/taskCompletion';
+describe('files a hand-off must produce (rwRun2 T07: "Node.js" taken for an output)', () => {
+  it('ignores technology names and files that are only mentioned', () => {
+    expect(expectedOutputFiles('Find the current stable Node.js release using official sources.')).toEqual([]);
+    expect(expectedOutputFiles('Read invoices.csv and tell me the total.')).toEqual([]);
+  });
+  it('keeps files the brief asks to create, write or save', () => {
+    expect(expectedOutputFiles('Build a single-page HTML dashboard at D:\\w\\system_dashboard.html with React.js-free code.')).toEqual(['system_dashboard.html']);
+    expect(expectedOutputFiles('Write report.md and save totals.csv.')).toEqual(['report.md', 'totals.csv']);
+  });
+});

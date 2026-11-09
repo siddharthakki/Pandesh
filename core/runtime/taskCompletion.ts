@@ -100,3 +100,23 @@ export function thirdPartyImportProblems(file: string, content: string, run: Syn
   if (r.error) return [];
   return String(r.stdout ?? '').split(/\r?\n/).map((l) => l.trim()).filter(Boolean).map((l) => `${l} — this program cannot run on this PC until that is fixed`);
 }
+
+/** Technology names that look like file names ("Node.js") and are never an output. */
+const TECH_NAMES = /^(?:node|vue|react|next|nuxt|three|d3|chart|express|socket\.io|angular|ember|backbone|deno|bun)\.js$/i;
+const PRODUCE_VERB = /\b(?:create|write|save|build|generate|make|produce|export|output)\b/i;
+
+/**
+ * Files a hand-off brief asks the agent to PRODUCE (rwRun2 T07: "Node.js" in a research brief was taken for an output
+ * file and a correct research hand-off was reported NOT DONE). A name counts only in a sentence that asks to create,
+ * write or save something, and never a technology name.
+ */
+export function expectedOutputFiles(brief: string): string[] {
+  const out = new Set<string>();
+  for (const sentence of String(brief ?? '').split(/(?<=[.!?])\s+|\n+/)) {
+    if (!PRODUCE_VERB.test(sentence)) continue;
+    for (const m of sentence.matchAll(/(?<![\w.])[\w-]+\.(?:html?|py|js|ts|md|csv|json|txt)\b/gi)) {
+      if (!TECH_NAMES.test(m[0])) out.add(m[0]);
+    }
+  }
+  return [...out];
+}

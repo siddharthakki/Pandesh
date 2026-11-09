@@ -20,7 +20,7 @@ const OWN_OUTPUT_TOOLS = /^(?:write_file|propose_file_change|propose_text_edit|u
 const OPENCODE_BUDGET_MS = 6 * 60_000;
 const HANDOFF_FACT_TOOLS = /^(?:system_hardware_telemetry|run_system_diagnostics|get_system_info|software_updates|listening_ports|list_projects|ollama_list_models|pc_capability_inventory|port_list_services|calculate|resolve_time|list_reminders|memory_recall)$/;
 import { checkWrittenOutput, ungroundedValues, type OutputCheck } from './outputChecks';
-import { suggestedCommandProblems, thirdPartyImportProblems, unfinishedRequestedSteps } from './taskCompletion';
+import { expectedOutputFiles, suggestedCommandProblems, thirdPartyImportProblems, unfinishedRequestedSteps } from './taskCompletion';
 import { discoverCodingAgents, housekeepingRoot, spawnPlan } from './codingAgents';
 import { createProject, listProjects } from '../domain/projects';
 import { readUpdateState } from './software/updates';
@@ -4078,9 +4078,7 @@ ${String(args.objective ?? '').slice(0, 600)}`,
           if (facts.length) HANDOFF_FACTS.set(childAttemptId, facts.join('\n\n').slice(0, 8_000));
           // Files the brief asks the agent to produce: a hand-off that should leave a file and leaves none is not done.
           const existingNames = selectedWorkspace ? new Set([...snapshotFiles(selectedWorkspace).keys()].map((k) => path.basename(k).toLowerCase())) : new Set<string>();
-          const expectedOutputs = selectedWorkspace
-            ? [...new Set([...brief.matchAll(/[\w-]+\.(?:html?|py|js|ts|md|csv|json|txt)\b/gi)].map((m) => m[0]))].filter((n) => !existingNames.has(n.toLowerCase())).slice(0, 5)
-            : [];
+          const expectedOutputs = selectedWorkspace ? expectedOutputFiles(brief).filter((n) => !existingNames.has(n.toLowerCase())).slice(0, 5) : [];
           try {
             if (!started.duplicate) await delegation.run(childAttemptId);
             // A duplicate (or a run that returned early) is followed until it settles; bounded by the agent's wall limit.
