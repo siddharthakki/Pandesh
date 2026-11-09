@@ -37,11 +37,25 @@ describe('memory_recall at user scope also finds the user\'s project facts when 
     const out = await recall({ query: 'flour supplier delivery', scopeType: 'user' });
     expect(out.entries).toHaveLength(1);
     expect(JSON.stringify(out.entries[0])).toContain('Wednesday');
-    expect(out.widenedTo).toBe('project');
+    expect(out.includedScopes).toContain('project');
   });
 
-  it('does not widen an explicit scope id or a recall that already found facts', async () => {
+  it('prefers the project fact that matches more words over a user fact that matches one word', async () => {
+    const conversation = createConversation(db, { mode: 'saath_kar', actor: 'test:actor' });
+    const message = appendMessage(db, conversation.id, { role: 'user', content: 'The sourdough loaf costs 5.20 euros.', actor: 'test:actor' });
+    rememberMemory(db, {
+      memoryType: 'user', scopeType: 'user', scopeId: 'user_preferences', subject: 'sourdough loaf price', predicate: 'cost',
+      value: 'The sourdough loaf costs 5.20 euros.', sensitivity: 'internal',
+      sourceConversationId: conversation.id, sourceMessageId: (message as { id: string }).id, actor: 'test:actor',
+    });
+    const out = await recall({ query: 'flour supplier delivery cost', scopeType: 'user' });
+    expect(out.entries).toHaveLength(1);
+    expect(JSON.stringify(out.entries[0])).toContain('Muehle Sonnenhof');
+  });
+
+  it('does not widen an explicit scope id', async () => {
     expect((await recall({ query: 'flour supplier', scopeType: 'user', scopeId: 'someone-else' })).entries).toHaveLength(0);
     expect((await recall({ query: 'nothing-matches-this', scopeType: 'user' })).entries).toHaveLength(0);
+    expect((await recall({ scopeType: 'project', scopeId: 'Other' })).entries).toHaveLength(0);
   });
 });
