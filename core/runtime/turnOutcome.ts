@@ -151,7 +151,11 @@ export function evaluateTurnOutcome(calls: readonly TurnToolCall[]): TurnOutcome
   }
 
   for (const [tool, call] of completed) {
-    const text = resultText(call.result);
+    const full = resultText(call.result);
+    // A hand-off's own status is its first line ("RESULT FROM THE … AGENT (completed …)" or "NOT DONE: …"). The rest is
+    // the specialist's report, which may legitimately say "declined", "rejected" or "awaiting approval" about its
+    // subject (live revenue run 2026-11-09: a completed offer was judged "did not happen" for that reason).
+    const text = tool === 'delegate_to_agent' ? full.split('\n')[0] : full;
     const errored = Boolean((call.result as ToolResultShape | undefined)?.isError);
     if (REFUSED_PATTERN.test(text)) {
       if (!refused.includes(tool)) refused.push(tool);

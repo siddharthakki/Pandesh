@@ -67,3 +67,15 @@ describe('revenue tools reach the agents', () => {
     expect(selectCapabilitiesForIntent('What is the weather in Ulm?')).not.toContain('revenue');
   });
 });
+
+describe('turn verdict for a completed hand-off', () => {
+  it('judges delegate_to_agent by its status line, not by words inside the specialist report', async () => {
+    const { evaluateTurnOutcome } = await import('../runtime/turnOutcome');
+    const report = (head: string) => ({ content: [{ type: 'text', text: `${head}\n\nThe offer notes that orders are rejected until the trade registration is extended; nothing was sent.` }] });
+    const done = evaluateTurnOutcome([{ tool: 'delegate_to_agent', status: 'completed', result: report('RESULT FROM THE MARKETING AGENT (completed in 61s):') }] as never);
+    expect(done.refused).toEqual([]);
+    expect(done.performed).toContain('delegate_to_agent');
+    const notDone = evaluateTurnOutcome([{ tool: 'delegate_to_agent', status: 'completed', result: report('NOT DONE: the sales agent\'s task ended as "failed" after 158s.') }] as never);
+    expect(notDone.refused).toContain('delegate_to_agent');
+  });
+});
