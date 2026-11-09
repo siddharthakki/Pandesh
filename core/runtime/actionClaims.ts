@@ -107,6 +107,8 @@ const CATEGORIES: ActionClaimCategory[] = [
     kind: 'open',
     object: /[\w.-]+\.(?:pdf|md|txt|html?|png|jpe?g|svg|gif|webp)\b|\b(?:files?|pages?|dashboard|browser)\b/i,
     verbs: 'opened|launched|displayed',
+    // F13g: "I cannot confirm that the file has been opened" is the honest opposite of a claim.
+    exclude: /\b(?:cannot|can't|could\s*not|couldn't|unable|not|never|wasn't|was\s+not|please\s+open)\b/i,
     tools: /^open_local_file$|^inspect_page$|^browser_open_site$/i,
     label: 'file opening',
   },

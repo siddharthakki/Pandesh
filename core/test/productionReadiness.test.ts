@@ -107,3 +107,10 @@ describe('project tasks route to the Projects workspace (F13e)', () => {
     expect(groupsForText(t).has('projects')).toBe(true);
   });
 });
+
+describe('an honest "not opened" is not an open claim (F13g)', () => {
+  it('keeps the honest sentence, still withholds a false one', () => {
+    expect(withholdUnsupportedActionClaims('I cannot confirm that the file has been opened in your browser.', ['write_file']).withheld).toEqual([]);
+    expect(withholdUnsupportedActionClaims('The dashboard has been opened in your browser.', ['write_file']).withheld.map((w) => w.kind)).toContain('open');
+  });
+});
