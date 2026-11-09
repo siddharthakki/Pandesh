@@ -11,7 +11,7 @@ import { openCoreDatabase } from '../db/openCore';
 import { submitRequest } from '../domain/submission';
 import { appendMessage, createConversation, getConversation } from '../domain/conversations';
 import { createApproval } from '../domain/approvals';
-import { dispatchCapability, listCapabilityActions } from '../domain/capabilityDispatch';
+import { dispatchCapability, findCapabilityAttemptIds, listCapabilityActions } from '../domain/capabilityDispatch';
 import {
   BUILTIN_AGENTS, agentScopeForAttempt, assignAgentRun, checkEgress, chiefDelegationScope, deriveScope, egressOf, egressPreapproved,
   isToolAllowed, listScopeRefusals, type EffectiveScope,
@@ -155,6 +155,15 @@ describe('Chief → specialist delegation', () => {
     expect(listed.actions.find((a) => a.approvalId === approval.id)).toMatchObject({ attemptId: started.attemptId, toolName: 'run_checks' });
     const other = submit('unrelated');
     expect(listCapabilityActions(db, { correlationId: other.request.conversationId!, clientId: 'test-client' }).actions.some((a) => a.approvalId === approval.id)).toBe(false);
+  });
+
+  it('a governed capability card inside a child (anchored on an attempt the child owns) is listed in the delegating conversation', () => {
+    const parent = submit('ask research');
+    const started = delegate(parent.attempt.id, 'research', 'Find the current stable Node.js release from official sources.');
+    const cols = db.all<{ name: string }>('PRAGMA table_info(attempts)').map((c) => c.name);
+    const anchorId = `att_anchor_${Date.now()}`;
+    db.run(`INSERT INTO attempts (${cols.join(',')}) SELECT ${cols.map((c) => (c === 'id' ? '?' : c === 'parentAttemptId' ? '?' : c)).join(',')} FROM attempts WHERE id = ?`, [anchorId, started.attemptId!, started.attemptId!]);
+    expect(findCapabilityAttemptIds(db, parent.request.conversationId!, 'test-client')).toContain(anchorId);
   });
 
   it('the delegate tool is offered when the user asks for an agent', () => {

@@ -235,7 +235,7 @@ function findExistingCapabilityAttemptIds(db: CoreDatabase, correlationId: strin
  * resolved through their owning attempt's conversation, keeping discovery
  * unchanged for the caller while ownership stays per mission.
  */
-function findCapabilityAttemptIds(db: CoreDatabase, correlationId: string, clientId: string): string[] {
+export function findCapabilityAttemptIds(db: CoreDatabase, correlationId: string, clientId: string): string[] {
   const direct = findExistingCapabilityAttemptIds(db, correlationId, clientId);
   const owned = db.all<{ id: string }>(
     `SELECT anchor.id AS id
@@ -266,7 +266,15 @@ function findCapabilityAttemptIds(db: CoreDatabase, correlationId: string, clien
       ORDER BY child.createdAt`,
     [correlationId],
   ).map((row) => row.id);
-  return [...new Set([...direct.reverse(), ...owned, ...directAttempts, ...delegated])];
+  // Real-world challenge T7: a governed capability inside a specialist (governed_research) anchors its approval on an
+  // attempt owned by the child, so the card was only reachable from the Board. Those belong here too.
+  const delegatedAnchors = delegated.length
+    ? db.all<{ id: string }>(
+      `SELECT anchor.id AS id FROM attempts anchor WHERE anchor.parentAttemptId IN (${delegated.map(() => '?').join(',')}) ORDER BY anchor.createdAt`,
+      delegated,
+    ).map((row) => row.id)
+    : [];
+  return [...new Set([...direct.reverse(), ...owned, ...directAttempts, ...delegated, ...delegatedAnchors])];
 }
 
 /**

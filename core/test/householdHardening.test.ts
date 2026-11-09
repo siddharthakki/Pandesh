@@ -10,6 +10,12 @@ import * as https from 'node:https';
 import * as http from 'node:http';
 import * as os from 'node:os';
 import * as path from 'node:path';
+import * as net from 'node:net';
+
+/** A port nothing is listening on right now (a random port could already be taken by another process). */
+function freePort(): Promise<number> {
+  return new Promise((resolve, reject) => { const s = net.createServer(); s.once('error', reject); s.listen(0, '127.0.0.1', () => { const p = (s.address() as net.AddressInfo).port; s.close(() => resolve(p)); }); });
+}
 import type { CoreDatabase } from '../db/connection';
 import { openCoreDatabase } from '../db/openCore';
 import {
@@ -141,7 +147,7 @@ function request(mod: typeof https | typeof http, port: number, urlPath: string,
 
 describe('companion listener over TLS', () => {
   it('pairs over HTTPS, hands the phone the certificate it saw, serves pinned calls and refuses plain HTTP', async () => {
-    const port = 49152 + Math.floor(Math.random() * 10000);
+    const port = await freePort();
     writeCompanionSettings(dir, { enabled: true, bind: 'loopback', port });
     const controller = new CompanionServerController(db, dir, () => undefined, fakeProtector());
     await controller.apply();
@@ -185,7 +191,7 @@ describe('companion listener over TLS', () => {
   }, 30_000);
 
   it('settings applied while the vault is still opening wait for it instead of starting a second listener', async () => {
-    const port = 49152 + Math.floor(Math.random() * 10000);
+    const port = await freePort();
     writeCompanionSettings(dir, { enabled: true, bind: 'loopback', port });
     const slow = fakeProtector();
     const unprotect = slow.unprotect; const protect = slow.protect;
@@ -205,7 +211,7 @@ describe('companion listener over TLS', () => {
   });
 
   it('does not listen when the vault cannot be opened', async () => {
-    writeCompanionSettings(dir, { enabled: true, bind: 'loopback', port: 49152 + Math.floor(Math.random() * 10000) });
+    writeCompanionSettings(dir, { enabled: true, bind: 'loopback', port: await freePort() });
     const controller = new CompanionServerController(db, dir, () => undefined, null);
     await controller.apply();
     expect(controller.status()).toMatchObject({ listening: false, vaultOpen: false });
