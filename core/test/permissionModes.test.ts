@@ -135,6 +135,28 @@ describe('Auto with a standing authorization', () => {
     expect(cmd(turn, 'npm test').decision).toBe('review'); // node_modules is not walked; the fresh grant alone matched before this write
   });
 
+  // Build 161 audit: the CI-only failure of the test above. GitHub's Windows runners expose TEMP as an 8.3 short path
+  // (C:\Users\RUNNER~1\...). The authorization stores the canonical long path, a write record keeps the spelling it was
+  // given, and the prefix comparison missed the write: the grant then auto-authorized code Pandesh had just changed.
+  const shortPath = (p: string): string => {
+    try {
+      return cp.execFileSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', `(New-Object -ComObject Scripting.FileSystemObject).GetFolder('${p.replace(/'/g, "''")}').ShortPath`], { encoding: 'utf8', windowsHide: true }).trim();
+    } catch {
+      return p;
+    }
+  };
+  it.runIf(process.platform === 'win32')('a Pandesh write recorded under another spelling of the workspace path still voids the grant', () => {
+    const short = shortPath(ws);
+    if (short.toLowerCase() === ws.toLowerCase()) return; // 8.3 names disabled on this volume: nothing to tell apart
+    const fresh = grant(['workspace_validation']);
+    const turn = submit('again').attempt.id;
+    expect(cmd(turn, 'npm test')).toMatchObject({ decision: 'auto_authorize', authorizationId: fresh.id });
+    db.run(`INSERT INTO artifacts (id, conversationId, kind, title, mimeType, absolutePath, byteSize, sha256, source, createdAt)
+            VALUES ('art_short', ?, 'file', 'x', 'text/plain', ?, 1, 'x', 'pi:write_file', ?)`, [conversationId, path.join(short, 'node_modules', 'vitest', 'x.js'), new Date(Date.now() + 1000).toISOString()]);
+    const decision = cmd(turn, 'npm test');
+    expect(decision.decision, JSON.stringify({ decision, short, ws })).toBe('review');
+  });
+
   it('revocation and expiry take effect immediately for the running turn', () => {
     revokeStandingAuthorization(db, authId, 'desktop');
     expect(cmd(attemptId, 'npm test')).toMatchObject({ decision: 'review' });

@@ -82,7 +82,7 @@ describe('governed creation of a file in a missing directory', () => {
       call,
       { cwd: dir, expectedBaseline: proposal.expectedBaseline, securityGrant: grant, attemptId },
     );
-    expect(result.status).toBe('succeeded');
+    expect(result.status, String(result.output).slice(0, 400)).toBe('succeeded');
     expect(fs.readFileSync(path.join(dir, 'a', 'b', 'new.txt'), 'utf8')).toBe('hello\n');
   });
 
