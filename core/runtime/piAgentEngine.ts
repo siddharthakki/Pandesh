@@ -4722,6 +4722,14 @@ ${filesPromptSection}${webResearchPromptSection}${wishesPromptSection}${emailCal
         if (toolStatus === 'failed' && !signal?.aborted && !String(output?.content?.[0]?.text ?? '').startsWith('NOT WRITTEN YET:')) {
           failedCalls.set(callSignature(toolName, afterCtx.args ?? toolArgs), String(output?.content?.[0]?.text ?? 'it failed'));
         }
+        // Challenge T11: after the fix was written, the model's re-run of the same failing test command was refused three
+        // times as a "repeated failed call", and the turn ended in a synthesis that never saw the test output. A change
+        // on disk means an earlier failure says nothing about the same call now.
+        if (toolStatus === 'completed' && /^(?:write_file|edit_file|apply_patch|delegate_to_opencode|delegate_to_agent)$|^propose_|file_change/.test(toolName) && failedCalls.size > 0) {
+          failedCalls.clear();
+          refusedRepeats = 0;
+          safeRecordRuntimeEvent(db, broadcaster, attemptId, 'failed_call_memory_cleared', { after: toolName }, actor);
+        }
         toolCallsRecorded.push({ tool: toolName, args: toolArgs, result: output, status: toolStatus });
         return undefined;
       },
