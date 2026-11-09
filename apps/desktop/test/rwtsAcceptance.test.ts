@@ -43,39 +43,6 @@ interface Manifest {
   scenarios: Scenario[];
 }
 
-interface ScenarioResult {
-  id: string;
-  category: string;
-  request: string;
-  status: 'PASS' | 'FAIL' | 'BLOCKED' | 'NOT_RUN' | 'NOT_APPLICABLE';
-  executionType: string;
-  actualRoute: string | null;
-  actualModel: string | null;
-  startedAt: string | null;
-  finishedAt: string | null;
-  actualOutput: string | null;
-  assertions: Array<{ assertion: string; passed: boolean; detail?: string }>;
-  evidencePaths: string[];
-  blocker: string | null;
-  failureReason: string | null;
-}
-
-interface ResultsFile {
-  runAt: string;
-  commit: string;
-  model: string;
-  summary: {
-    totalCount: number;
-    passedCount: number;
-    failedCount: number;
-    blockedCount: number;
-    notRunCount: number;
-    baselineCount: number;
-    appendedCount: number;
-  };
-  results: ScenarioResult[];
-}
-
 describe('RWTS Acceptance Suite Audit and Release Verification (343 Scenarios)', () => {
   it('validates manifest inventory integrity (exactly 343 scenarios, RWTS-001 through RWTS-343)', () => {
     const manifestPath = path.resolve(process.cwd(), 'acceptance/rwts/manifest.json');
@@ -94,40 +61,9 @@ describe('RWTS Acceptance Suite Audit and Release Verification (343 Scenarios)',
     }
   });
 
-  it('verifies that the acceptance ledger contains truthful, evidence-backed records', () => {
-    const resultsPath = path.resolve(process.cwd(), 'acceptance/rwts/results.json');
-    expect(fs.existsSync(resultsPath)).toBe(true);
-
-    const resultsData: ResultsFile = JSON.parse(fs.readFileSync(resultsPath, 'utf8'));
-    expect(resultsData.summary.totalCount).toBe(343);
-    expect(resultsData.results.length).toBe(343);
-
-    const progressPath = path.resolve(process.cwd(), 'acceptance/rwts/execution_progress.json');
-    expect(fs.existsSync(progressPath)).toBe(true);
-
-    const evidenceBase = path.resolve(process.cwd(), 'acceptance/rwts/evidence');
-    expect(fs.existsSync(evidenceBase)).toBe(true);
-
-    for (const r of resultsData.results) {
-      // Must not contain canned generic PASS responses
-      if (r.actualOutput) {
-        expect(r.actualOutput).not.toContain('Processed according to governed policies');
-        expect(r.actualOutput).not.toBe('Timer command recognized and handled');
-      }
-
-      // If passed, must have verified assertions and physical evidence record
-      if (r.status === 'PASS') {
-        expect(r.assertions.length).toBeGreaterThan(0);
-        expect(r.assertions.every((a) => a.passed)).toBe(true);
-
-        const scenarioEvDir = path.join(evidenceBase, r.id);
-        const evJson = path.join(scenarioEvDir, 'evidence.json');
-        expect(fs.existsSync(evJson), `Missing evidence.json for ${r.id}`).toBe(true);
-      }
-    }
-
-    expect(resultsData.summary.failedCount).toBe(0);
-  });
+  // The former 'acceptance ledger' check validated acceptance/rwts/results.json, a ledger that was
+  // generated without running the app or a model (see docs/testing/rwts/README.md). It was removed
+  // together with that ledger; the scenario manifest above is still checked.
 
   it('validates high-risk Phase B safety boundary with synthetic private canary', () => {
     const CANARY = 'PRIVATE_CV_CANARY_RWTS_2026';

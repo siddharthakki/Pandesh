@@ -1,6 +1,6 @@
 /**
  * Generates the authoritative machine-readable scenario acceptance manifest
- * from Pandesh_RWTS_320_Expanded.md, preserving all 320 baseline scenarios
+ * from docs/testing/rwts/RWTS_scenario_library.md, preserving all 320 baseline scenarios
  * with exact text and categories, and appending adjacent real-world scenarios
  * (RWTS-321 through RWTS-343) with explicit acceptance assertions.
  */
@@ -10,7 +10,7 @@ import * as path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
-const sourceMdPath = path.join(repoRoot, 'Pandesh_RWTS_320_Expanded.md');
+const sourceMdPath = path.join(repoRoot, 'docs/testing/rwts/RWTS_scenario_library.md');
 const outputJsonPath = path.join(repoRoot, 'acceptance', 'rwts', 'manifest.json');
 
 const content = fs.readFileSync(sourceMdPath, 'utf8');
