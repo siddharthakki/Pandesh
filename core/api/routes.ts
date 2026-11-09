@@ -94,6 +94,8 @@ import {
   disableDailyBriefRoutine,
   getDailyBriefRoutine,
 } from '../domain/assistantRoutine';
+import { WATCHDOG_ROUTINE, runWatchdogSoon, scheduleWatchdog, watchdogSchedule } from '../domain/watchdogRoutine';
+import { setScheduledTaskEnabled } from '../domain/scheduledTasks';
 import { buildConnectorAdapters } from '../runtime/connectors/connectorDefinitions';
 import { setGmailAccessToken, clearGmailAccessToken } from '../runtime/connectors/gmailAccessTokenStore';
 import { summarizeGmailThreadLocally, type GmailSummaryMessageInput } from '../runtime/gmailSummary';
@@ -1987,6 +1989,39 @@ export function buildRouter(
     });
     return { status: 200, body: { brief, markdown: renderAssistantBriefMarkdown(brief) } };
   });
+
+  // --- Reliability watchdog (scripts/watchdog/run-watchdog.mjs on a schedule) ---
+  router.get('/v1/watchdog', (ctx) => {
+    const schedule = watchdogSchedule(ctx.db);
+    const runs = schedule
+      ? ctx.db.all<Record<string, unknown>>("SELECT eventType, createdAt, metadata FROM runtime_events WHERE domain = 'watchdog_routine' AND entityId = ? ORDER BY sequence DESC LIMIT 20", [schedule.id])
+        .map((r) => ({ eventType: r.eventType, at: r.createdAt, ...JSON.parse(String(r.metadata ?? '{}')) }))
+      : [];
+    return { status: 200, body: { routine: WATCHDOG_ROUTINE, schedule, runs } };
+  });
+
+  router.post('/v1/watchdog/schedule', (ctx) => {
+    const body = asRecord(ctx.body);
+    if (body.enabled === false) {
+      const existing = watchdogSchedule(ctx.db);
+      return { status: 200, body: { schedule: existing ? setScheduledTaskEnabled(ctx.db, existing.id, false) : null } };
+    }
+    return {
+      status: 200,
+      body: {
+        schedule: scheduleWatchdog(ctx.db, {
+          repoPath: String(body.repoPath ?? ''), stateDir: String(body.stateDir ?? ''),
+          model: typeof body.model === 'string' ? body.model : undefined,
+          dailyTime: typeof body.dailyTime === 'string' ? body.dailyTime : undefined,
+          timezone: typeof body.timezone === 'string' ? body.timezone : undefined,
+          everyDays: typeof body.everyDays === 'number' ? body.everyDays : undefined,
+        }),
+      },
+    };
+  });
+
+  // Sets the next run to now; the scheduler (not this request) then runs it on its next tick.
+  router.post('/v1/watchdog/run-soon', (ctx) => ({ status: 200, body: { schedule: runWatchdogSoon(ctx.db) } }));
 
   // --- Pandesh: the one proactive routine (a daily brief) ---
   router.get('/v1/assistant/routine/daily-brief', (ctx) => ({

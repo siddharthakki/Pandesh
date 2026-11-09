@@ -9,6 +9,8 @@ import { runDailyBriefRoutine } from './assistantRoutine';
 import { DAILY_BRIEF_ROUTINE } from '../domain/assistantRoutine';
 import { runIntelligenceScoutRoutine } from './scoutRoutine';
 import { SCOUT_ROUTINE } from '../domain/scoutRoutine';
+import { WATCHDOG_ROUTINE } from '../domain/watchdogRoutine';
+import { runReliabilityWatchdogRoutine } from './watchdogRoutine';
 import type { IntelligenceScout } from './intelligenceScout';
 import type { ConnectorAdapter } from './connectors/connectorCapability';
 import type { ConnectorId } from '../shared/wireTypes';
@@ -80,6 +82,16 @@ export function startScheduledTaskLoop(
             })
             .catch((err) => {
               console.error(`[karkedikha-core ${new Date().toISOString()}] household routine ${task.id} failed:`, err instanceof Error ? err.message : err);
+            });
+          continue;
+        }
+        if (task.routine === WATCHDOG_ROUTINE) {
+          void runReliabilityWatchdogRoutine(db, broadcaster, { task })
+            .then((result) => {
+              console.log(`[karkedikha-core ${new Date().toISOString()}] reliability watchdog ${task.id} ${result.delivered ? 'reported' : 'quiet'} (${result.reason})`);
+            })
+            .catch((err) => {
+              console.error(`[karkedikha-core ${new Date().toISOString()}] reliability watchdog ${task.id} failed:`, err instanceof Error ? err.message : err);
             });
           continue;
         }
