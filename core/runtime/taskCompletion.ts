@@ -120,3 +120,16 @@ export function expectedOutputFiles(brief: string): string[] {
   }
   return [...out];
 }
+
+const MONTH = '(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|june?|july?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)';
+const CALENDAR_DATE = new RegExp(`\\b(?:${MONTH}\\.?\\s+\\d{1,2}(?:st|nd|rd|th)?|\\d{1,2}(?:st|nd|rd|th)?\\s+(?:of\\s+)?${MONTH}|\\d{4}-\\d{2}-\\d{2}|\\d{1,2}[./]\\d{1,2}[./]\\d{2,4})\\b`, 'gi');
+const dateKey = (d: string) => d.toLowerCase().replace(/(?:st|nd|rd|th)\b/g, '').replace(/\bof\s+/, '').replace(/[^a-z0-9]+/g, ' ').trim();
+
+/**
+ * rwRun2 T09: told "Monday", the model stored "Monday, Nov 9" (and later "Thursday, Nov 12"). A calendar date in a
+ * memory value must come from what the user said; returns the dates that did not.
+ */
+export function inventedDates(value: string, userText: string): string[] {
+  const given = new Set([...String(userText ?? '').matchAll(CALENDAR_DATE)].map((m) => dateKey(m[0])));
+  return [...String(value ?? '').matchAll(CALENDAR_DATE)].map((m) => m[0]).filter((d) => !given.has(dateKey(d)));
+}

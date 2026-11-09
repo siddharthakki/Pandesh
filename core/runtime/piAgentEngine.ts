@@ -20,7 +20,7 @@ const OWN_OUTPUT_TOOLS = /^(?:write_file|propose_file_change|propose_text_edit|u
 const OPENCODE_BUDGET_MS = 6 * 60_000;
 const HANDOFF_FACT_TOOLS = /^(?:system_hardware_telemetry|run_system_diagnostics|get_system_info|software_updates|listening_ports|list_projects|ollama_list_models|pc_capability_inventory|port_list_services|calculate|resolve_time|list_reminders|memory_recall)$/;
 import { checkWrittenOutput, ungroundedValues, type OutputCheck } from './outputChecks';
-import { expectedOutputFiles, suggestedCommandProblems, thirdPartyImportProblems, unfinishedRequestedSteps } from './taskCompletion';
+import { expectedOutputFiles, inventedDates, suggestedCommandProblems, thirdPartyImportProblems, unfinishedRequestedSteps } from './taskCompletion';
 import { discoverCodingAgents, housekeepingRoot, spawnPlan } from './codingAgents';
 import { createProject, listProjects } from '../domain/projects';
 import { readUpdateState } from './software/updates';
@@ -3886,6 +3886,13 @@ ${String(args.objective ?? '').slice(0, 600)}`,
     async function runMemoryTool(toolName: string, args: Record<string, unknown>) {
       const bridge = ctx.memory;
       if (!bridge) return connectorText('Durable memory is not available in this build.', true);
+      if (toolName === 'memory_remember' || toolName === 'memory_correct') {
+        const added = inventedDates(String(args.value ?? args.fact ?? ''), `${requestText}\n${prompt}`);
+        if (added.length) {
+          safeRecordRuntimeEvent(db, broadcaster, attemptId, 'memory_invented_date_refused', { tool: toolName, dates: added }, actor);
+          return connectorText(`NOT DONE: the value adds ${added.join(', ')}, which the user did not say. Store the user's own words (e.g. "Thursday at 3 PM", not a calendar date you worked out) and call ${toolName} again.`, true);
+        }
+      }
       let outcome = await bridge.dispatch(toolName, args);
       if (outcome.outcome === 'approval_required') {
         const decision = await awaitConnectorApproval(outcome.approval.id);

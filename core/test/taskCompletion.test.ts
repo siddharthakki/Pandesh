@@ -71,3 +71,15 @@ describe('files a hand-off must produce (rwRun2 T07: "Node.js" taken for an outp
     expect(expectedOutputFiles('Write report.md and save totals.csv.')).toEqual(['report.md', 'totals.csv']);
   });
 });
+
+import { inventedDates } from '../runtime/taskCompletion';
+describe('memory keeps the user\'s words (rwRun2 T09: "Monday" stored as "Monday, Nov 9")', () => {
+  it('flags a date the user never gave', () => {
+    expect(inventedDates('Review meeting on Thursday, Nov 12 at 3 PM.', 'The meeting moved to Thursday at 3 PM.')).toEqual(['Nov 12']);
+    expect(inventedDates('Meeting on 2026-11-12', 'Move it to Thursday')).toEqual(['2026-11-12']);
+  });
+  it('allows dates the user said, in any common form, and values with no date', () => {
+    expect(inventedDates('Meeting on November 12th at 3 PM', 'Move it to November 12th at 3 PM')).toEqual([]);
+    expect(inventedDates('Review meeting on Thursday at 3 PM', 'Thursday at 3 PM')).toEqual([]);
+  });
+});
