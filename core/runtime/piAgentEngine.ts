@@ -5889,7 +5889,14 @@ ${filesPromptSection}${webResearchPromptSection}${wishesPromptSection}${emailCal
       }
       // Audit D12: the delegation's verified diff and test run are part of the answer, whatever the model wrote. They
       // are Core's own text, appended after the claim guard below (which judges what the model said).
-      if (delegationReports.length && !signal?.aborted) coreNotes.unshift(...delegationReports);
+      if (delegationReports.length && !signal?.aborted) {
+        // rwRun2 T13: after the agent wrote nothing, Pandesh wrote the file itself; "no file was created" was then false.
+        const ownWrites = [...outputChecks.keys()].map((k) => path.basename(k));
+        coreNotes.unshift(...delegationReports.map((r) => (ownWrites.length
+          ? r.replace(/- \*\*No file was created, changed or deleted\.\*\* Whatever the reply above says, (\S+) did not produce a file\./,
+            (_m, agent) => `- **${agent} did not produce a file.** Pandesh then wrote ${ownWrites.map((f) => `\`${f}\``).join(', ')} itself, without ${agent}.`)
+          : r)));
+      }
       // Audit D11: a stated total that does not match its listed amounts is corrected by Core's own exact sum.
       const totals = checkStatedTotals(finalReply);
       if (totals.corrections.length) {
