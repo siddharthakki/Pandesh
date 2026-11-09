@@ -4,13 +4,14 @@ import { Icon, useNarrow, type IconName } from './ui';
 import { Chat } from './Chat';
 import { Board, useTaskOverview, needsYouCount } from './Board';
 import { Software } from './Software';
+import { Revenue } from './Revenue';
 import { Team } from './Team';
 import { ToolsHub } from './ToolsHub';
 import { SecondBrain } from './SecondBrain';
 import { Processes } from './Processes';
 import { Workspace, type SpaceId } from './Workspaces';
 
-export type View = 'chat' | 'board' | 'team' | 'space' | 'system' | 'software' | 'tools' | 'brain' | 'processes' | 'workspace';
+export type View = 'chat' | 'board' | 'team' | 'space' | 'system' | 'software' | 'tools' | 'brain' | 'processes' | 'workspace' | 'revenue';
 
 interface PaletteEntry { group: string; label: string; run: () => void }
 
@@ -75,6 +76,7 @@ export function App() {
     { name: 'Social Studio', sub: 'Drafts and your decisions (no publishing)', run: () => openSpace('social') },
     { name: 'Media Studio', sub: 'Local image studio and media Pandesh made', run: () => openSpace('media') },
     { name: 'Automations', sub: 'Routines, daily brief, command queue', run: () => openSpace('automations') },
+    { name: 'Revenue', sub: 'Leads, offers, drafts awaiting you, verified results', run: () => go('revenue') },
   ];
   const system = [
     variantForced
@@ -137,6 +139,7 @@ export function App() {
         {view === 'chat' && <Chat snapshot={snapshot} snapshotError={error} refresh={refresh} narrow={narrow} openConversationId={openConversationId} onOpenPalette={() => openPop('palette')} onOpenBoard={() => go('board')} draft={draft} onDraftUsed={() => setDraft(null)} />}
         {view === 'board' && <Board overview={overview} narrow={narrow} onOpenPalette={() => openPop('palette')} onOpenConversation={(id) => { setOpenConversationId(id); go('chat'); }} />}
         {view === 'software' && <Software narrow={narrow} />}
+        {view === 'revenue' && <Revenue />}
         {view === 'tools' && <ToolsHub narrow={narrow} />}
         {view === 'brain' && <SecondBrain narrow={narrow} />}
         {view === 'processes' && <Processes narrow={narrow} />}

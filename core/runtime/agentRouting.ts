@@ -8,20 +8,21 @@
  * agent do?"), a negation ("don't ask Coding") or a hypothetical stays an ordinary turn. Pure and deterministic.
  */
 
-export type SpecialistId = 'coding' | 'research' | 'operations' | 'personal';
+export type SpecialistId = 'coding' | 'research' | 'operations' | 'personal' | 'sales' | 'marketing' | 'social' | 'reviewer';
 
 const AGENT_WORD: Record<string, SpecialistId> = {
   coding: 'coding', code: 'coding', coder: 'coding', developer: 'coding',
   research: 'research', researcher: 'research',
   operations: 'operations', ops: 'operations',
   personal: 'personal',
+  sales: 'sales', marketing: 'marketing', social: 'social', 'social-media': 'social', reviewer: 'reviewer',
 };
 
-const NAME = '(coding|code|coder|developer|research|researcher|operations|ops|personal)';
+const NAME = '(coding|code|coder|developer|research|researcher|operations|ops|personal|sales|marketing|social(?:\\s+media|-media)?|reviewer)';
 const ROLE = '(?:\\s+(?:specialist|agent|assistant|team))';
 /** "ask/have/get/let/tell/use (your|the|my) Research specialist", "ask Coding to …" (bare name needs "to"). */
 const DIRECT = new RegExp(
-  `\\b(?:ask|have|get|let|tell|use|send|assign|delegate(?:\\s+(?:this|it|that))?\\s+to|hand\\s+(?:this|it|that)\\s+(?:off\\s+|over\\s+)?to|give\\s+(?:this|it|that)\\s+to)\\s+(?:(?:your|the|my|our)\\s+)?(?:${NAME}${ROLE}\\b|(coding|research|operations|personal)\\s+to\\b)`,
+  `\\b(?:ask|have|get|let|tell|use|send|assign|delegate(?:\\s+(?:this|it|that))?\\s+to|hand\\s+(?:this|it|that)\\s+(?:off\\s+|over\\s+)?to|give\\s+(?:this|it|that)\\s+to)\\s+(?:(?:your|the|my|our)\\s+)?(?:${NAME}${ROLE}\\b|(coding|research|operations|personal|sales|marketing|reviewer)\\s+to\\b)`,
   'i',
 );
 /** "Delegate coding to Coding", "delegate the build to the Coding agent". */
@@ -38,10 +39,10 @@ export function explicitSpecialistRequest(text: string | null | undefined): Spec
   // A negation in the same sentence, before the instruction, cancels it ("Don't ask Coding to …").
   const sentenceStart = Math.max(t.lastIndexOf('.', m.index), t.lastIndexOf('!', m.index), t.lastIndexOf('?', m.index)) + 1;
   if (NEGATED.test(t.slice(sentenceStart, m.index + m[0].length))) return null;
-  return AGENT_WORD[(m[1] ?? m[2] ?? '').toLowerCase()] ?? null;
+  return AGENT_WORD[(m[1] ?? m[2] ?? '').toLowerCase().replace(/\s+media$|-media$/, '')] ?? null;
 }
 
-export const SPECIALIST_NAMES: Record<SpecialistId, string> = { coding: 'Coding', research: 'Research', operations: 'Operations', personal: 'Personal' };
+export const SPECIALIST_NAMES: Record<SpecialistId, string> = { coding: 'Coding', research: 'Research', operations: 'Operations', personal: 'Personal', sales: 'Sales', marketing: 'Marketing', social: 'Social Media', reviewer: 'Reviewer' };
 
 import { checkEgress, checkPathArguments, type EffectiveScope } from '../domain/agents';
 

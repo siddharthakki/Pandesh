@@ -2733,6 +2733,9 @@ export class DesktopSession {
       agent: { path: `/v1/agents/${id}` },
       agentUpdate: { path: `/v1/agents/${id}/update`, method: 'POST', body: { enabled: args.enabled, modelPolicy: args.modelPolicy, toolDenylist: args.toolDenylist, alwaysAsk: args.alwaysAsk } },
       agentDelegate: { path: '/v1/agents/delegate', method: 'POST', body: { parentAttemptId: args.parentAttemptId, toAgentId: args.toAgentId, brief: args.brief, grant: args.grant, workspaceRoot: this.folder ?? null } },
+      revenue: { path: '/v1/revenue' },
+      revenueDecide: { path: `/v1/revenue/${encodeURIComponent(String(args.track ?? ''))}/drafts/${id}/decide`, method: 'POST', body: { decision: args.decision, note: args.note } },
+      revenueOutcome: { path: `/v1/revenue/${encodeURIComponent(String(args.track ?? ''))}/outcomes`, method: 'POST', body: { kind: args.kind, leadId: args.leadId, amountEur: args.amountEur, evidence: args.evidence } },
       softwareSettings: { path: '/v1/software/settings', method: 'POST', body: { periodicEnabled: args.periodicEnabled, intervalHours: args.intervalHours } },
     };
     if (action === 'selectAgent') {

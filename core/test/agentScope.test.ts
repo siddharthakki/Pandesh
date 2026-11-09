@@ -105,7 +105,7 @@ describe('delegation records', () => {
     proposeHandoff(db, { parentAttemptId: parent.attempt.id, toAgentId: 'operations', brief: 'Check free disk space on all drives' });
     expect(() => proposeHandoff(db, { parentAttemptId: parent.attempt.id, toAgentId: 'coding', brief: 'Fix the failing kitchen test' })).toThrow(/3 active/);
     expect(() => proposeHandoff(db, { parentAttemptId: parent.attempt.id, toAgentId: 'chief', brief: 'Do it yourself again' })).toThrow(/itself/);
-    expect(() => proposeHandoff(db, { parentAttemptId: submit('x').attempt.id, toAgentId: 'sales', brief: 'Find new leads in Vienna' })).toThrow(/not available/);
+    expect(() => proposeHandoff(db, { parentAttemptId: submit('x').attempt.id, toAgentId: 'support', brief: 'Answer the customer in Vienna' })).toThrow(/not available/);
   });
 
   it('a finished child frees its fan-out slot (status follows the child attempt)', () => {
@@ -173,8 +173,8 @@ describe('definitions and frozen scope', () => {
   });
 
   it('cannot enable or run Phase 3 templates, and cannot run a disabled agent', () => {
-    expect(() => updateAgentDefinition(db, 'sales', { enabled: true })).toThrow(/Phase 3/);
-    expect(() => submit('find leads', 'sales')).toThrow(/Phase 3/);
+    expect(() => updateAgentDefinition(db, 'support', { enabled: true })).toThrow(/Phase 3/);
+    expect(() => submit('answer the customer', 'support')).toThrow(/Phase 3/);
     updateAgentDefinition(db, 'operations', { enabled: false });
     expect(getAgentDefinition(db, 'operations').enabled).toBe(false);
     expect(() => submit('check disk', 'operations')).toThrow(/turned off/);

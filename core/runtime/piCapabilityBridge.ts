@@ -97,6 +97,11 @@ export function selectCapabilitiesForIntent(requestText?: string): readonly stri
   caps.add('capability-inventory');
   caps.add('ollama-management');
 
+  // Revenue team: the pipeline tools for leads, offers and drafts (core/runtime/revenueCapability.ts).
+  if (/\b(?:leads?|prospects?|offers?|outreach|pipeline|revenue|catering|sales|marketing|social[- ]media|instagram|campaign|posts?|kunden|angebot)\b/i.test(text)) {
+    caps.add('revenue');
+  }
+
   // Weather intent
   if (/\b(?:weather|forecast|temperature|rain|snow|degrees|celsius|umbrella|climate)\b/i.test(text)) {
     caps.add('weather');
@@ -199,7 +204,7 @@ export interface BuildPiCapabilityBridgeOptions {
 }
 
 /** Chat capabilities the intent selection can add beyond the bounded set. */
-export const CHAT_EXPANDABLE_CAPABILITY_IDS = [...CHAT_CAPABILITY_IDS, 'system-management', 'port-management', 'computer-use', 'pc-organizer'] as const;
+export const CHAT_EXPANDABLE_CAPABILITY_IDS = [...CHAT_CAPABILITY_IDS, 'system-management', 'port-management', 'computer-use', 'pc-organizer', 'revenue'] as const;
 
 /**
  * Builds the bridge, or returns undefined when this build's registry owns none
