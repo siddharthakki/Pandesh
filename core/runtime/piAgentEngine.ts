@@ -124,6 +124,8 @@ const DESTRUCTIVE_COMMANDS: Array<[RegExp, string]> = [
 const RUN_CHECKS_TIMEOUT_MS = 120_000;
 /** Pi's model window. Measured: gemma4 26B runs fully in VRAM at 32K and spills at the 64K machine default. */
 const PI_CONTEXT_WINDOW = 32_768;
+/** Output cap per model call: large enough for one complete file (a dashboard, a report) inside a write_file call. */
+const PI_MAX_OUTPUT_TOKENS = 12_288;
 
 /** D15: the replies `describeUnansweredTurn` writes when the model produced no answer (with Core's correction line). */
 export function isUnansweredTurnNotice(text: string): boolean {
@@ -1025,7 +1027,9 @@ export class PiAgentEngine implements EngineAdapter {
       input: ctx.images?.length ? ['text', 'image'] : ['text'],
       cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
       contextWindow: PI_CONTEXT_WINDOW,
-      maxTokens: 4096,
+      // Final run F13c: a write_file call carrying a full dashboard hit the old 4096-token cap twice, was cut off mid-
+      // content, and no tool ran ("Now I'll build the dashboard…"). 12288 still leaves the prompt ~20k of the 32k window.
+      maxTokens: PI_MAX_OUTPUT_TOKENS,
       compat: { supportsDeveloperRole: false, supportsReasoningEffort: false },
     };
 
