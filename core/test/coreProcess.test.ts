@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeAll, afterEach, vi } from 'vitest';
+import { ensureCoreBundle } from './support/coreBundle';
 // Real Core processes start slower when the whole suite runs in parallel; the assertions are unchanged.
 vi.setConfig({ testTimeout: 60_000 });
 import { execFileSync, spawn, type ChildProcess } from 'node:child_process';
@@ -19,7 +20,7 @@ const bundlePath = path.join(repoRoot, 'out-core', 'core.js');
  * Core's own startup/shutdown/database_failed behavior regardless of host.
  */
 beforeAll(() => {
-  execFileSync(process.execPath, [path.join(repoRoot, 'esbuild.core.js')], { cwd: repoRoot, stdio: 'inherit' });
+  ensureCoreBundle(repoRoot); // one shared, locked build per run (parallel rebuilds raced)
 });
 
 const children: ChildProcess[] = [];

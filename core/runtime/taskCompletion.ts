@@ -17,7 +17,7 @@ import type { SyncRunner } from './outputChecks';
 const WANTS_OPEN = /\bopen\s+(?:it|them|this|that|the\s+(?:file|report|page|dashboard|result|html)|[^.?!]{0,40}\bin\s+(?:my|the)\s+browser)\b|\bshow\s+(?:it|me\s+the\s+(?:page|dashboard|report))\b/i;
 const WANTS_VERIFY = /\b(?:verify|validate|check\s+(?:that\s+)?it\s+works|make\s+sure\s+it\s+works|test\s+it)\b/i;
 const HANDS_BACK_FIX = /\b(?:you\s+(?:should|need\s+to|can|could|may\s+want\s+to|will\s+need\s+to)\s+(?:correct|fix|change|update|edit|replace|adjust)|please\s+(?:correct|fix|change|update|edit|adjust))\b/i;
-const PRODUCED = /^(?:write_file|propose_file_change|propose_text_edit|delegate_to_opencode|delegate_to_agent|delegate_to_coding_cli)$/;
+const PRODUCED = /^(?:write_file|propose_file_change|propose_text_edit|delegate_to_opencode|delegate_to_agent|delegate_to_coding_agent)$/;
 
 export function unfinishedRequestedSteps(request: string, reply: string, succeededTools: readonly string[], canWrite: boolean): string[] {
   const produced = succeededTools.some((t) => PRODUCED.test(t));

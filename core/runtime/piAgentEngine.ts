@@ -21,6 +21,7 @@ const OPENCODE_BUDGET_MS = 6 * 60_000;
 const HANDOFF_FACT_TOOLS = /^(?:system_hardware_telemetry|run_system_diagnostics|get_system_info|software_updates|listening_ports|list_projects|ollama_list_models|pc_capability_inventory|port_list_services|calculate|resolve_time|list_reminders|memory_recall)$/;
 import { checkWrittenOutput, ungroundedValues, type OutputCheck } from './outputChecks';
 import { suggestedCommandProblems, thirdPartyImportProblems, unfinishedRequestedSteps } from './taskCompletion';
+import { discoverCodingAgents, spawnPlan } from './codingAgents';
 import { createProject, listProjects } from '../domain/projects';
 import { readUpdateState } from './software/updates';
 import { collectListeningPorts } from './software/inventory';
@@ -223,6 +224,36 @@ function runShellCommand(command: string, cwd: string, timeoutMs: number, signal
     const cap = (s: string, add: string) => (s.length > 200_000 ? s : s + add);
     child.stdout?.on('data', (d) => { stdout = cap(stdout, String(d)); });
     child.stderr?.on('data', (d) => { stderr = cap(stderr, String(d)); });
+    const killTree = () => {
+      if (child.pid === undefined || child.exitCode !== null) return;
+      if (process.platform === 'win32') cp.spawnSync('taskkill', ['/PID', String(child.pid), '/T', '/F'], { windowsHide: true });
+      else child.kill('SIGKILL');
+    };
+    const timer = setTimeout(() => { timedOut = true; killTree(); }, timeoutMs);
+    const onAbort = () => killTree();
+    signal?.addEventListener('abort', onAbort, { once: true });
+    const finish = (code: number | null, extra = '') => {
+      clearTimeout(timer);
+      signal?.removeEventListener('abort', onAbort);
+      resolve({ code, stdout, stderr: stderr + extra, timedOut });
+    };
+    child.on('error', (err) => finish(1, err.message));
+    child.on('close', (code) => finish(code));
+  });
+}
+
+/** Runs an executable with an argument array (no shell, so a task text is never interpreted), with the same timeout
+ * and tree-kill as runShellCommand. Used for external coding agents. */
+function runArgvCommand(file: string, args: string[], cwd: string, env: Record<string, string>, timeoutMs: number, signal?: AbortSignal): Promise<{ code: number | null; stdout: string; stderr: string; timedOut: boolean }> {
+  return new Promise((resolve) => {
+    const child = cp.spawn(file, args, { cwd, shell: false, windowsHide: true, env: { ...process.env, ...env } });
+    let stdout = '';
+    let stderr = '';
+    let timedOut = false;
+    const cap = (s: string, add: string) => (s.length > 200_000 ? s : s + add);
+    child.stdout?.on('data', (d) => { stdout = cap(stdout, String(d)); });
+    child.stderr?.on('data', (d) => { stderr = cap(stderr, String(d)); });
+    child.stdin?.end();
     const killTree = () => {
       if (child.pid === undefined || child.exitCode !== null) return;
       if (process.platform === 'win32') cp.spawnSync('taskkill', ['/PID', String(child.pid), '/T', '/F'], { windowsHide: true });
@@ -3438,6 +3469,76 @@ ${String(args.objective ?? '').slice(0, 600)}`,
           };
         },
       },
+      ...(() => {
+        // External coding agents installed on this PC (codingAgents.ts). One governed tool; Core verifies the result.
+        const agents = discoverCodingAgents(ctx.dataDir).filter((a) => a.enabled);
+        if (!agents.length) return [];
+        const list = agents.map((a) => `${a.spec.id} (${a.spec.name}: ${a.spec.strengths}; ${a.spec.locality === 'local' ? 'local model, nothing leaves the PC' : 'CLOUD'})`).join('; ');
+        return [{
+          name: 'delegate_to_coding_agent',
+          label: 'delegate_to_coding_agent',
+          description: `Hand a coding job in the selected folder to an external coding agent installed on this PC: ${list}. Runs up to 6 minutes; the user approves each run; Pandesh then verifies what really changed. Use write_file instead for a single file whose content you know.`,
+          parameters: { type: 'object', properties: { agent: { type: 'string', enum: agents.map((a) => a.spec.id) }, objective: { type: 'string', description: 'The complete job: what to build or change, and how to check it.' } }, required: ['agent', 'objective'] },
+          execute: async (_id: string, args: any) => {
+            const chosen = agents.find((a) => a.spec.id === String(args?.agent ?? ''));
+            if (!chosen) return { content: [{ type: 'text', text: `NOT AVAILABLE: no enabled coding agent "${String(args?.agent ?? '')}". Available: ${agents.map((a) => a.spec.id).join(', ')}.` }], isError: true };
+            const dir = selectedWorkspace;
+            if (!dir || !fs.existsSync(dir)) return { content: [{ type: 'text', text: 'NOT DONE: a coding agent works only in the selected folder, and none is selected.' }], isError: true };
+            const objective = String(args?.objective ?? '').trim();
+            if (objective.length < 8) return { content: [{ type: 'text', text: 'NOT DONE: the coding agent needs the complete job in "objective".' }], isError: true };
+            const { spec, executable } = chosen;
+            const decision = await requestToolApproval({
+              toolName: 'delegate_to_coding_agent',
+              agent: spec.id,
+              locality: spec.locality,
+              objective: objective.slice(0, 2_000),
+              workspacePath: dir,
+              ...(spec.locality === 'cloud' ? { alwaysAsk: true } : {}),
+              cardText: `Pandesh wants ${spec.name} to work in ${dir}. ${spec.name} ${spec.dataFlow}. It can create and change files there:\n${objective.slice(0, 600)}`,
+            });
+            if (decision.outcome !== 'approved') return { content: [{ type: 'text', text: `Not delegated: ${decision.outcome === 'rejected' ? `the user did not approve handing this to ${spec.name}` : 'no approval was recorded'}. Nothing was changed.` }], isError: true };
+            const untrackedBefore = isGitRepository(dir) ? untrackedPaths(dir) : new Set<string>();
+            const snapshotBefore = isGitRepository(dir) ? undefined : snapshotFiles(dir);
+            const plan = spawnPlan(executable, spec.args(objective, dir, selectedModel));
+            safeRecordRuntimeEvent(db, broadcaster, attemptId, 'coding_agent_started', { agent: spec.id, locality: spec.locality, model: spec.locality === 'local' ? selectedModel : null }, actor);
+            const t0 = Date.now();
+            const run = await runArgvCommand(plan.file, plan.args, dir, spec.env?.(selectedModel) ?? {}, OPENCODE_BUDGET_MS, signal);
+            const secs = Math.round((Date.now() - t0) / 1000);
+            const verification = await verifyDelegation(dir, untrackedBefore, runShellCommand, signal, snapshotBefore);
+            const report = redactCredentialShapes(renderDelegationReport(verification)).replace(/OpenCode/g, spec.name);
+            delegationReports.push(report);
+            if (verification.test && verification.test.coversChanges) {
+              const passed = verification.test.code === 0 && !verification.test.timedOut;
+              toolCallsRecorded.push({ tool: 'run_checks', args: { command: verification.test.command, workspacePath: dir, initiatedBy: 'core_delegation_verification' }, status: passed ? 'completed' : 'failed',
+                result: { content: [{ type: 'text', text: `${verification.test.command} → ${passed ? 'PASSED' : `FAILED (exit ${verification.test.code ?? 'none'})`}\n${verification.test.tail}` }], isError: !passed } });
+            }
+            // The files it produced get the same Core check as Pandesh's own writes.
+            const runner = (command: string, cmdArgs: string[]) => { const r = cp.spawnSync(command, cmdArgs, { encoding: 'utf8', timeout: 15_000, windowsHide: true }); return { status: r.status, stdout: String(r.stdout ?? ''), stderr: String(r.stderr ?? ''), error: r.error }; };
+            const corpus = [requestText, objective, ...toolCallsRecorded.filter((t) => t.status === 'completed' && !OWN_OUTPUT_TOOLS.test(t.tool)).map((t) => `${JSON.stringify(t.args ?? '')}\n${extractToolResultText(t.result)}`)].join('\n');
+            for (const rel of [...verification.newUntracked, ...verification.changedFiles].slice(0, 20)) {
+              const full = path.join(dir, rel);
+              try {
+                if (!fs.statSync(full).isFile() || fs.statSync(full).size > 512 * 1024) continue;
+                const content = fs.readFileSync(full, 'utf8');
+                const base = checkWrittenOutput(full, content, corpus, runner);
+                const importProblems = base.syntaxOk === false ? [] : thirdPartyImportProblems(full, content, runner);
+                outputChecks.set(full, importProblems.length ? { ...base, importProblems } : base);
+              } catch { /* unreadable: not checked */ }
+            }
+            const agentText = redactCredentialShapes(`${run.stdout}\n${run.stderr}`.trim()).slice(-2_500);
+            safeRecordRuntimeEvent(db, broadcaster, attemptId, 'coding_agent_finished', { agent: spec.id, seconds: secs, exit: run.code, timedOut: run.timedOut, created: verification.newUntracked.length, modified: verification.changedFiles.length }, actor);
+            const activity = { kind: 'code', title: `${spec.name}: ${objective.slice(0, 110)}`, excerpt: agentText.slice(-1_200) };
+            if (delegationChangedNothing(verification) && !signal?.aborted) {
+              return { content: [{ type: 'text', text: `NOT DONE: ${spec.name} finished after ${secs}s${run.timedOut ? ' (stopped at the 6-minute limit)' : ''} (exit ${run.code ?? 'none'}), but no file in ${dir} was created, changed or deleted. Its own output (unverified):\n${agentText}\n\n${report}` }], isError: true, details: { activity } };
+            }
+            return {
+              content: [{ type: 'text', text: `${spec.name} finished after ${secs}s${run.timedOut ? ' (stopped at the 6-minute limit; the work may be incomplete)' : ''} (exit ${run.code ?? 'none'}). Its own output (unverified):\n${agentText}\n\n${report}\n\nReport the verified results above; do not claim tests passed unless Pandesh's re-run passed.` }],
+              details: { activity },
+              isError: run.timedOut,
+            };
+          },
+        }];
+      })(),
       {
         name: 'search_recent_projects',
         label: 'search_recent_projects',

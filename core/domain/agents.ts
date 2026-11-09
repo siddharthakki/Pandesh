@@ -74,7 +74,7 @@ export const BUILTIN_AGENTS: AgentDefinition[] = [
   def({
     id: 'coding', kind: 'builtin', name: 'Coding', role: 'Repositories, coding engines, tests and previews',
     instructions: 'You change code only inside the selected workspace, run its checks, and report exactly which files changed and which checks passed. Never push or install.',
-    tools: ['read_file', 'list_directory', 'search_files', 'write_file', 'run_checks', 'delegate_to_opencode', 'dev_stories_*', 'dev_story_*', 'get_project_context', 'find_project_roots', 'search_recent_projects', 'port_list_services', 'port_service_health', 'port_check_setup', 'port_allocate', 'browser_open_site', 'browser_read', 'inspect_page', 'hermes_list_skills'],
+    tools: ['read_file', 'list_directory', 'search_files', 'write_file', 'run_checks', 'delegate_to_opencode', 'delegate_to_coding_agent', 'dev_stories_*', 'dev_story_*', 'get_project_context', 'find_project_roots', 'search_recent_projects', 'port_list_services', 'port_service_health', 'port_check_setup', 'port_allocate', 'browser_open_site', 'browser_read', 'inspect_page', 'hermes_list_skills'],
     toolDenylist: ['read_file_outside_workspace', 'list_directory_outside_workspace', 'system_kill_process', 'port_stop_service'],
     memoryScopes: [{ scope: 'project', access: 'read_write' }, { scope: 'repository', access: 'read_write' }, { scope: 'task', access: 'read_write' }],
     workspaceRoots: ['conversation'], egress: 'none', alwaysAsk: ['install', 'push'],

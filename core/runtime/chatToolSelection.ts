@@ -141,7 +141,7 @@ export const NATIVE_GROUP: Record<string, string> = {
   build_wish_deliverable: 'wish', wish_order: 'wish', wish_owner_decision: 'wish',
   get_briefing_data: 'briefing',
   web_research: 'web',
-  run_checks: 'coding', delegate_to_opencode: 'coding',
+  run_checks: 'coding', delegate_to_opencode: 'coding', delegate_to_coding_agent: 'coding',
   list_printers: 'printing', print_test_page: 'printing',
   send_to_phone: 'phone',
   delegate_to_agent: 'agents',

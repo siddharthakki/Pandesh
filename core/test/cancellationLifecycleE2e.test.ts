@@ -15,6 +15,7 @@
  * directory, separate fake model.
  */
 import { describe, it, expect, beforeAll, afterEach } from 'vitest';
+import { ensureCoreBundle } from './support/coreBundle';
 import { execFileSync, spawn, type ChildProcess } from 'node:child_process';
 import * as http from 'node:http';
 import * as fs from 'node:fs';
@@ -27,7 +28,7 @@ const TOKEN = 'cancellation-e2e-token';
 
 beforeAll(() => {
   // The Core under test is the real bundle, built from the current sources.
-  execFileSync(process.execPath, [path.join(repoRoot, 'esbuild.core.js')], { cwd: repoRoot, stdio: 'inherit' });
+  ensureCoreBundle(repoRoot); // one shared, locked build per run (parallel rebuilds raced)
 }, 120_000);
 
 const children: ChildProcess[] = [];

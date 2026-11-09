@@ -99,7 +99,7 @@ const CATEGORIES: ActionClaimCategory[] = [
     verbs: 'saved|created|written|wrote|exported|generated|converted|moved|renamed|copied|deleted|removed|downloaded|printed|organi[sz]ed|prepared',
     // Tools that produce or change files; read-only tools (read_file, document_read, list_directory, list_printers)
     // never support it.
-    tools: /write|propose_|edit|create_note|export|build_|image_generate|comfyui_generate|media_|download|print_|organize_apply|pdf|file_change|delegate_to_opencode/i,
+    tools: /write|propose_|edit|create_note|export|build_|image_generate|comfyui_generate|media_|download|print_|organize_apply|pdf|file_change|delegate_to_opencode|delegate_to_coding_agent/i,
     label: 'file change',
   },
   {

@@ -87,6 +87,7 @@ export const CONSEQUENTIAL_PI_TOOLS: ReadonlySet<string> = new Set([
   'cancel_scheduled_task',
   'send_to_phone',
   'delegate_to_opencode',
+  'delegate_to_coding_agent',
   'delegate_to_agent',
   'create_project',
   'dev_stories_dispatch',
@@ -171,7 +172,7 @@ export function evaluateTurnOutcome(calls: readonly TurnToolCall[]): TurnOutcome
   // Real-world challenge T13: OpenCode produced nothing (NOT DONE), then the turn wrote and opened the file itself, and
   // the reply still ended "the requested work did not happen". A producing step that did not work, followed later by a
   // producing step that did, is a recovery. A declined approval is never "recovered": the person said no.
-  const PRODUCING = /^(?:write_file|propose_file_change|propose_text_edit|delegate_to_opencode|delegate_to_agent)$/;
+  const PRODUCING = /^(?:write_file|propose_file_change|propose_text_edit|delegate_to_opencode|delegate_to_coding_agent|delegate_to_agent)$/;
   const lastIndex = (tool: string) => { for (let i = calls.length - 1; i >= 0; i -= 1) if (calls[i].tool === tool && calls[i].status !== 'running') return i; return -1; };
   const unrecovered = (list: string[]) => list.filter((tool) => {
     if (!PRODUCING.test(tool)) return true;
