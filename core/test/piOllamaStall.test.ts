@@ -62,6 +62,20 @@ describe('model stall watchdog', () => {
     expect(Date.now() - started).toBeLessThan(5_000);
   }, 15_000);
 
+  it('a reply cut off by a dropped connection fails as a lost connection, not as "no reply" (fault matrix: model disconnect)', async () => {
+    const baseUrl = await fakeOllama((_req, res) => {
+      res.writeHead(200, { 'content-type': 'application/x-ndjson' });
+      res.write(`${JSON.stringify({ message: { role: 'assistant', content: 'Partial ans' }, done: false })}\n`);
+      setTimeout(() => res.socket?.destroy(), 100); // Ollama stopped / connection dropped mid-reply
+    });
+    const metrics: Array<{ status: string; error?: string }> = [];
+    const pf = createPiOllamaFetch({ baseUrl, numCtx: () => 8192, think: false, onMetrics: (m) => metrics.push(m), firstOutputTimeoutMs: 5_000, idleTimeoutMs: 5_000 });
+    const res = await pf('http://ignored/v1/chat/completions', { method: 'POST', body: JSON.stringify(request) });
+    await expect(readAll(res)).rejects.toThrow();
+    expect(metrics[0]?.status).toBe('error');
+    expect(metrics[0]?.error).toMatch(/closed before the reply finished|other side closed|terminated|socket|ECONNRESET/i);
+  }, 15_000);
+
   it('a reply that keeps streaming is never cut off', async () => {
     const baseUrl = await fakeOllama((_req, res) => {
       res.writeHead(200, { 'content-type': 'application/x-ndjson' });
