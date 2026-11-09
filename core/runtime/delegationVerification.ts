@@ -154,7 +154,9 @@ export async function verifyDelegation(dir: string, before: Set<string>, run: Co
     changedFiles = lines.filter((l) => !l.startsWith('?? ')).map((l) => l.slice(3).trim());
     newUntracked = lines.filter((l) => l.startsWith('?? ')).map((l) => l.slice(3).trim()).filter((p) => !before.has(p.replace(/\/$/, '')));
   }
-  const testFilesChanged = [...changedFiles, ...newUntracked].filter((p) => TEST_FILE.test(p.replace(/\\/g, '/')));
+  // Only EXISTING tests that were edited are a warning sign (a fix that edits tests to go green); new tests written for
+  // new code are expected (AG1b warned about the tests Aider had just created).
+  const testFilesChanged = changedFiles.filter((p) => TEST_FILE.test(p.replace(/\\/g, '/')));
   const fullDiff = git(dir, ['diff', '--no-color', '--no-ext-diff']) ?? '';
   const diffTruncated = fullDiff.length > MAX_DIFF_CHARS;
   const diff = diffTruncated ? `${fullDiff.slice(0, MAX_DIFF_CHARS)}\n… (diff truncated)` : fullDiff;
