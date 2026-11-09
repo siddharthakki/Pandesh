@@ -5526,7 +5526,7 @@ ${filesPromptSection}${webResearchPromptSection}${wishesPromptSection}${emailCal
     // A reply may not promise background work or a notification that nothing is set up to deliver.
     {
       const capability = notificationCapability(db);
-      const correction = auditPromises(finalReply, { activeWorker: hasActiveWorker(db, conversationId), canNotify: capability.canNotify, notifyStatement: capability.statement });
+      const correction = auditPromises(finalReply, { activeWorker: hasActiveWorker(db, conversationId, attemptId), canNotify: capability.canNotify, notifyStatement: capability.statement });
       if (correction) finalReply += "\n\n" + correction;
     }
 

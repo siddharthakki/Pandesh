@@ -114,3 +114,21 @@ describe('an honest "not opened" is not an open claim (F13g)', () => {
     expect(withholdUnsupportedActionClaims('The dashboard has been opened in your browser.', ['write_file']).withheld.map((w) => w.kind)).toContain('open');
   });
 });
+
+import { hasActiveWorker } from '../runtime/assistantStatus';
+import { submitRequest } from '../domain/submission';
+import { createConversation } from '../domain/conversations';
+describe('a running hand-off in the same chat is active work (F14)', () => {
+  it('counts another unfinished attempt in the conversation, not the asking one', () => {
+    const dir2 = fs.mkdtempSync(path.join(os.tmpdir(), 'pandesh-active-'));
+    const db2 = openDatabase(path.join(dir2, 'core.db'));
+    runMigrations(db2);
+    let n = 0;
+    const sub = (msg: string, conversationId: string) => submitRequest(db2, { clientId: 'c', currentMessage: msg, requestedMode: 'baat_kar', conversationId, workspaceRoot: dir2, capability: { hasWorkspace: true, gitCapable: false }, correlationId: `corr-${++n}`, toolPermissionPolicy: {}, selectedProvider: 'ollama', selectedModel: 'zeta:1b' } as never);
+    const convo = createConversation(db2, { mode: 'baat_kar', actor: 'test' }).id;
+    sub('build a task board', convo);
+    const second = sub('how much RAM?', convo);
+    expect(hasActiveWorker(db2, convo, second.attempt.id)).toBe(true);
+    expect(hasActiveWorker(db2, convo)).toBe(false);
+  });
+});

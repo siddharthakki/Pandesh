@@ -134,8 +134,17 @@ export function auditPromises(reply: string, facts: { activeWorker: boolean; can
 }
 
 /** True while a persisted background worker task owns work for this conversation. */
-export function hasActiveWorker(db: CoreDatabase, conversationId: string): boolean {
+export function hasActiveWorker(db: CoreDatabase, conversationId: string, excludeAttemptId?: string): boolean {
   if (!conversationId) return false;
   const row = db.get<{ n: number }>("SELECT COUNT(*) AS n FROM background_tasks WHERE conversationId = ? AND status IN ('queued','in_progress')", [conversationId]);
-  return Number(row?.n ?? 0) > 0;
+  if (Number(row?.n ?? 0) > 0) return true;
+  // Challenge F14: while a Coding hand-off from this chat was still running, a quick question's reply got "nothing is
+  // running in the background" appended. Another unfinished attempt in the same conversation is active work.
+  if (!excludeAttemptId) return false;
+  const other = db.get<{ n: number }>(
+    `SELECT COUNT(*) AS n FROM attempts a JOIN requests q ON q.id = a.requestId
+      WHERE q.conversationId = ? AND a.id <> ? AND a.status IN ('created','queued','running','waiting_for_approval','validating','paused','blocked','cancelling')`,
+    [conversationId, excludeAttemptId],
+  );
+  return Number(other?.n ?? 0) > 0;
 }
