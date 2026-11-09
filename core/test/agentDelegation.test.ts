@@ -166,6 +166,23 @@ describe('Chief → specialist delegation', () => {
     expect(findCapabilityAttemptIds(db, parent.request.conversationId!, 'test-client')).toContain(anchorId);
   });
 
+  it('a governed capability card on the child conversation\'s own anchor is listed in the delegating conversation', async () => {
+    // The 2026-11-09 browser_open_site hang: the child dispatched with its own conversation as correlation id, so the
+    // approval sat on that conversation's unowned anchor and the parent chat never showed it.
+    const { GovernedCapabilityRegistry } = await import('../runtime/governedCapability');
+    const { createMemoryCapabilityAdapter } = await import('../runtime/memoryCapability');
+    const registry = new GovernedCapabilityRegistry().register(createMemoryCapabilityAdapter({ db }));
+    const parent = submit('ask personal to remember');
+    const started = delegate(parent.attempt.id, 'personal', 'Remember that the oven is serviced on Thursdays for the user.');
+    appendMessage(db, started.conversationId!, { role: 'user', content: 'Remember: the oven is serviced on Thursdays.', actor: 'test', clientId: null } as never);
+    const pending = await dispatchCapability(db, registry, { correlationId: started.conversationId!, scopeIdentity: started.attemptId!, toolName: 'memory_remember', arguments: { memoryType: 'user', scopeType: 'user', scopeId: 'user_profile', subject: 'oven', predicate: 'serviced on', value: 'Thursday', sensitivity: 'internal' }, cwd: dir, actor: 'test-client', clientId: 'test-client' } as never);
+    expect(pending.outcome).toBe('approval_required');
+    const listed = listCapabilityActions(db, { correlationId: parent.request.conversationId!, clientId: 'test-client' });
+    expect(listed.actions.some((a) => a.attemptId === pending.attemptId && a.actionable)).toBe(true);
+    const other = submit('unrelated');
+    expect(listCapabilityActions(db, { correlationId: other.request.conversationId!, clientId: 'test-client' }).actions.some((a) => a.attemptId === pending.attemptId)).toBe(false);
+  });
+
   it('the delegate tool is offered when the user asks for an agent', () => {
     expect(groupOfTool('delegate_to_agent')).toBe('agents');
     expect(groupsForText('Ask the research agent to compare three laptops').has('agents')).toBe(true);

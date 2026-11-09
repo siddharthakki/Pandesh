@@ -275,7 +275,23 @@ export function findCapabilityAttemptIds(db: CoreDatabase, correlationId: string
       delegated,
     ).map((row) => row.id)
     : [];
-  return [...new Set([...direct.reverse(), ...owned, ...directAttempts, ...delegated, ...delegatedAnchors])];
+  // Release blocker 2026-11-09 (the browser_open_site hang, general form): a governed capability called inside the
+  // specialist's own conversation anchors its approval on that conversation's UNOWNED anchor (keyed by the child
+  // conversation id), which none of the lookups above reach — the card stayed invisible and the delegating turn waited
+  // until it was cancelled. Those anchors belong to the person in THIS conversation too.
+  const childConversationAnchors = db.all<{ id: string }>(
+    `SELECT anchor.id AS id
+       FROM agent_handoffs h
+       JOIN attempts parent ON parent.id = h.parentAttemptId
+       JOIN requests pr ON pr.id = parent.requestId
+       JOIN requests cr ON cr.id = h.childRequestId
+       JOIN requests ar ON ar.routeReason = 'm38_capability_dispatch' AND ar.correlationId = cr.conversationId
+       JOIN attempts anchor ON anchor.requestId = ar.id
+      WHERE pr.conversationId = ? AND cr.conversationId IS NOT NULL
+      ORDER BY anchor.createdAt`,
+    [correlationId],
+  ).map((row) => row.id);
+  return [...new Set([...direct.reverse(), ...owned, ...directAttempts, ...delegated, ...delegatedAnchors, ...childConversationAnchors])];
 }
 
 /**

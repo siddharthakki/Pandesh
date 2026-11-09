@@ -108,6 +108,37 @@ export function settleIdleCapabilityAnchorsOnBoot(db: CoreDatabase): string[] {
   return settled;
 }
 
+/**
+ * Release blocker 2026-11-09: between restarts a conversation's anchor stayed `running` after its turn was over (the
+ * boot sweep above only runs at Core start), so task lists showed phantom running work. When a turn in a conversation
+ * ends, that conversation's unowned anchors are settled the same way — but only when no approval is pending, no
+ * continuation is saved and no tool call is still running on them, so a call in flight is never cut off. The next
+ * governed call gets a fresh anchor generation (`ensureCapabilityAttempt`); nothing is re-executed.
+ */
+export function settleIdleCapabilityAnchorsForConversation(db: CoreDatabase, conversationId: string, actor = 'core:executor'): string[] {
+  const settled: string[] = [];
+  const anchors = db.all<{ id: string; status: string }>(
+    `SELECT a.id AS id, a.status AS status
+       FROM attempts a JOIN requests r ON r.id = a.requestId
+      WHERE r.routeReason = 'm38_capability_dispatch' AND a.parentAttemptId IS NULL
+        AND r.correlationId = ? AND a.status IN ('created', 'running')`,
+    [conversationId],
+  );
+  for (const anchor of anchors) {
+    if (listApprovalsForAttempt(db, anchor.id).some((approval) => approval.status === 'pending')) continue;
+    if (loadLoopContinuation(db, anchor.id)?.pendingApprovalId) continue;
+    if (db.get<{ n: number }>("SELECT COUNT(*) AS n FROM tool_invocations WHERE attemptId = ? AND status IN ('pending', 'running')", [anchor.id])!.n > 0) continue;
+    try {
+      if (anchor.status === 'created') transitionAttempt(db, anchor.id, { toStatus: 'running', actor });
+      transitionAttempt(db, anchor.id, { toStatus: 'completed', actor, reason: 'idle capability anchor closed when its conversation turn ended' });
+      settled.push(anchor.id);
+    } catch {
+      // A state this walk cannot settle is left as it is; the boot sweep tries again.
+    }
+  }
+  return settled;
+}
+
 export interface BootReconciliationSummary {
   scanned: number;
   byClassification: Record<RecoveryClassification, number>;

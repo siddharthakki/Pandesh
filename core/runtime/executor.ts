@@ -21,6 +21,7 @@ import type { EventBroadcaster } from '../ws/broadcaster';
 import { maybeAutoReroute, type RerouteEnvironmentProvider } from './autoRerouteRuntime';
 import { FailureCooldowns } from '../platform/autoReroute';
 import { getAttempt, transitionAttempt, failAttempt, confirmAttemptCancelled, settleCancelledAttempt } from '../domain/attempts';
+import { settleIdleCapabilityAnchorsForConversation } from '../domain/bootReconciliation';
 import { acquireFence, renewFenceLease } from '../domain/fence';
 import { getRequest } from '../domain/requests';
 import { classifyAttemptLane, interactiveLane, DEFAULT_MAX_TOOL_YIELD_MS } from './interactiveLane';
@@ -769,6 +770,15 @@ export class RuntimeExecutor {
       clearInterval(heartbeat);
       releaseLane?.();
       this.active.delete(attemptId);
+      // A finished turn closes its conversation's idle governed-capability anchors (never one with a pending approval or
+      // a tool call still running), so they do not linger as "running" until the next Core start.
+      try {
+        const finished = getAttempt(this.db, attemptId);
+        const finishedRequest = isTerminalAttemptStatus(finished.status) ? getRequest(this.db, finished.requestId) : null;
+        if (finishedRequest?.conversationId && finishedRequest.routeReason !== 'm38_capability_dispatch') {
+          this.mutate(() => settleIdleCapabilityAnchorsForConversation(this.db, finishedRequest.conversationId!));
+        }
+      } catch { /* bookkeeping only; the boot sweep settles anything left */ }
     }
     // Live Auto recovery: the fence is released, so a bounded successor on another model may continue the objective.
     const sequenceBefore = latestRuntimeSequence(this.db);
