@@ -10,7 +10,11 @@ import { buildGroundingRewritePrompt, problemCount, ungroundedClaims } from './r
 import { correctWeekdayDates } from './dateConsistency';
 import { asksForSingleChoice, SINGLE_CHOICE_RULE } from './choiceConstraint';
 import { delegationChangedNothing, isGitRepository, renderDelegationReport, snapshotFiles, untrackedPaths, verifyDelegation } from './delegationVerification';
-import { explicitSpecialistRequest, SPECIALIST_NAMES } from './agentRouting';
+import { explicitSpecialistRequest, handoffPreflight, SPECIALIST_NAMES } from './agentRouting';
+
+/** Facts a delegating turn got from Pandesh's own local tools, keyed by the child attempt that receives them. */
+const HANDOFF_FACTS = new Map<string, string>();
+const HANDOFF_FACT_TOOLS = /^(?:system_hardware_telemetry|run_system_diagnostics|get_system_info|software_updates|listening_ports|list_projects|ollama_list_models|pc_capability_inventory|port_list_services|calculate|resolve_time|list_reminders|memory_recall)$/;
 import { checkWrittenOutput, type OutputCheck } from './outputChecks';
 import { createProject, listProjects } from '../domain/projects';
 import { readUpdateState } from './software/updates';
@@ -3102,7 +3106,7 @@ export class PiAgentEngine implements EngineAdapter {
             // Core checks what it just wrote: it must parse, and a report may not show values nothing returned.
             let checkNote = '';
             try {
-              const corpus = [requestText, ctx.currentMessage ?? '', ...toolCallsRecorded.filter((t) => t.status === 'completed').map((t) => `${JSON.stringify(t.args ?? '')}\n${extractToolResultText(t.result)}`)].join('\n');
+              const corpus = [requestText, ctx.currentMessage ?? '', HANDOFF_FACTS.get(attemptId) ?? '', ...toolCallsRecorded.filter((t) => t.status === 'completed').map((t) => `${JSON.stringify(t.args ?? '')}\n${extractToolResultText(t.result)}`)].join('\n');
               const check = checkWrittenOutput(full, String(args.content), corpus, (command, cmdArgs) => {
                 const r = cp.spawnSync(command, cmdArgs, { encoding: 'utf8', timeout: 15_000, windowsHide: true });
                 return { status: r.status, stdout: String(r.stdout ?? ''), stderr: String(r.stderr ?? ''), error: r.error };
@@ -3894,6 +3898,14 @@ ${String(args.objective ?? '').slice(0, 600)}`,
             // Would the child be able to go online at all? Ask the user here, in this conversation, before it starts.
             const root = agentScope?.conversationRoot ?? (selectedWorkspace || null);
             const childScope = deriveScope(getAgentDefinition(db, toAgentId), root, agentScope ?? chiefDelegationScope(root), null);
+            // Core's boundary is checked before the child starts, not left to the child's model to try (T15).
+            const blocked = handoffPreflight(`${brief}\n${requestedSpecialist ? requestText : ''}`, childScope);
+            if (blocked) {
+              recordScopeRefusal(db, attemptId, toAgentId, blocked.tool, blocked.reason);
+              safeRecordRuntimeEvent(db, broadcaster, attemptId, 'agent_scope_refused', { agentId: toAgentId, tool: blocked.tool, target: blocked.target.slice(0, 200), reason: blocked.reason, stage: 'handoff_preflight' }, actor);
+              return { content: [{ type: 'text', text: `NOT DONE (refused by Pandesh Core before the ${name} agent started): ${blocked.reason}. Target: ${blocked.target}. Nothing was read or fetched. This is recorded under the ${name} agent's refusals in Team. Tell the user exactly that and stop; do not try another way.` }], isError: true,
+                details: { activity: { kind: 'tool', title: `${name} agent: refused by Core`, excerpt: `${blocked.reason}\n${blocked.target}` } } };
+            }
             const egress = egressOf(childScope);
             if (egress.mode !== 'none' && egress.approval) {
               const decision = await requestToolApproval({
@@ -3923,6 +3935,18 @@ ${String(args.objective ?? '').slice(0, 600)}`,
           const onAbort = () => delegation.cancel(childAttemptId);
           signal?.addEventListener('abort', onAbort, { once: true });
           const t0 = Date.now();
+          // T13: the Operations agent's real data never reached the Coding agent, which then invented a task list and an
+          // update row. Facts this turn got from Pandesh's own local tools travel with the hand-off (never web, email or
+          // document text: those stay behind the untrusted-content rule).
+          const facts = toolCallsRecorded
+            .filter((t) => t.status === 'completed' && (HANDOFF_FACT_TOOLS.test(t.tool) || (t.tool === 'delegate_to_agent' && /^RESULT FROM THE OPERATIONS AGENT/.test(extractToolResultText(t.result)))))
+            .map((t) => `[${t.tool}]\n${extractToolResultText(t.result).slice(0, 2_500)}`);
+          if (facts.length) HANDOFF_FACTS.set(childAttemptId, facts.join('\n\n').slice(0, 8_000));
+          // Files the brief asks the agent to produce: a hand-off that should leave a file and leaves none is not done.
+          const existingNames = selectedWorkspace ? new Set([...snapshotFiles(selectedWorkspace).keys()].map((k) => path.basename(k).toLowerCase())) : new Set<string>();
+          const expectedOutputs = selectedWorkspace
+            ? [...new Set([...brief.matchAll(/[\w-]+\.(?:html?|py|js|ts|md|csv|json|txt)\b/gi)].map((m) => m[0]))].filter((n) => !existingNames.has(n.toLowerCase())).slice(0, 5)
+            : [];
           try {
             if (!started.duplicate) await delegation.run(childAttemptId);
             // A duplicate (or a run that returned early) is followed until it settles; bounded by the agent's wall limit.
@@ -3936,6 +3960,15 @@ ${String(args.objective ?? '').slice(0, 600)}`,
               return { content: [{ type: 'text', text: `NOT DONE: the ${name} agent's task ended as "${out.status}" after ${secs}s${out.answer ? `. Its last message: ${out.answer.slice(0, 1500)}` : ''}. Tell the user exactly that; do not do the task yourself.` }], isError: true,
                 details: { activity: { kind: 'document', title: `${name} agent: ${out.status}`, excerpt: (out.answer ?? '').slice(0, 1200) } } };
             }
+            if (expectedOutputs.length && selectedWorkspace) {
+              const nowNames = new Set([...snapshotFiles(selectedWorkspace).keys()].map((k) => path.basename(k).toLowerCase()));
+              const missing = expectedOutputs.filter((n) => !nowNames.has(n.toLowerCase()));
+              if (missing.length) {
+                safeRecordRuntimeEvent(db, broadcaster, attemptId, 'handoff_output_missing', { agent: toAgentId, missing }, actor);
+                return { content: [{ type: 'text', text: `NOT DONE: the ${name} agent finished after ${secs}s, but ${missing.join(', ')} does not exist — it was not created, whatever its reply says. Its reply (unverified):\n${out.answer.slice(0, 1500)}\n\nEither create ${missing.join(', ')} yourself now with write_file from the real data you have, or tell the user plainly it was not created.` }], isError: true,
+                  details: { activity: { kind: 'document', title: `${name} agent: ${missing.join(', ')} not created`, excerpt: out.answer.slice(0, 1200) } } };
+              }
+            }
             return {
               content: [{ type: 'text', text: `RESULT FROM THE ${name.toUpperCase()} AGENT (completed in ${secs}s; its task runs in its own conversation "${name} · ${brief.slice(0, 60)}"):
 
@@ -3946,6 +3979,7 @@ Report this to the user, saying the ${name} agent did the work. Do not add facts
             };
           } finally {
             signal?.removeEventListener('abort', onAbort);
+            HANDOFF_FACTS.delete(childAttemptId);
           }
         },
       });
@@ -4517,6 +4551,13 @@ ${filesPromptSection}${webResearchPromptSection}${wishesPromptSection}${emailCal
     if (agentScope) {
       const agentDef = BUILTIN_AGENTS.find((a) => a.id === agentScope.agentId);
       systemPrompt += `\n\nAGENT: this request is handled by the ${agentDef?.name ?? agentScope.agentId} agent${agentScope.depth > 0 ? ', delegated by another agent' : ''}. ${agentDef?.instructions ?? ''} You can only use the tools you were given; if the request needs anything else, say so plainly instead of trying another way.`;
+      const handedFacts = HANDOFF_FACTS.get(attemptId);
+      if (handedFacts) {
+        systemPrompt += `\n\nFACTS FROM PANDESH'S OWN TOOLS (collected for this task by the agent that delegated it, from local tools on this PC). Use these exact values; never use placeholders or invent values. Anything not here and not read by your own tools must be shown as unknown:\n${handedFacts}`;
+        safeRecordRuntimeEvent(db, broadcaster, attemptId, 'handoff_facts_received', { chars: handedFacts.length }, actor);
+      }
+      // Generated tests must never touch the user's real data (challenge T10: tests deleted expenses.csv in the folder).
+      if (agentScope.agentId === 'coding') systemPrompt += '\nTESTS YOU WRITE must use a temporary directory (tempfile.TemporaryDirectory / os.tmpdir) for any file they create or delete; never create, overwrite or delete files the program uses in the user\'s folder.';
       // Alpha e2e re-run T9: asked to fetch a page with internet denied, the Coding agent said it was "blocked at the OS
       // or container level". The real reason is Pandesh's own policy for this agent; it must say that.
       try {

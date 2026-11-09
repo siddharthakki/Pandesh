@@ -42,3 +42,37 @@ export function explicitSpecialistRequest(text: string | null | undefined): Spec
 }
 
 export const SPECIALIST_NAMES: Record<SpecialistId, string> = { coding: 'Coding', research: 'Research', operations: 'Operations', personal: 'Personal' };
+
+import { checkEgress, checkPathArguments, type EffectiveScope } from '../domain/agents';
+
+const ACCESS_VERB = /\b(?:read|open|inspect|show|print|view|look\s+at|copy|edit|modify|change|delete|remove|write|access|load|list|scan|cat)\b/i;
+const FETCH_VERB = /\b(?:fetch|open|visit|download|browse|load|get|read|scrape|go\s+to|retrieve|check|access)\b/i;
+const WINDOWS_PATH = /(?<![A-Za-z0-9])[A-Za-z]:\\[^\s"'`<>|,;]+/g;
+const URL = /https?:\/\/[^\s"'`<>)]+/gi;
+
+/**
+ * Real-world challenge T15: asked to read a file outside its folder (or fetch a page with internet denied), the
+ * specialist refused in words before calling any tool, so Core's boundary was never reached and nothing was recorded.
+ * Before a hand-off starts, Core checks what the request explicitly asks the specialist to access against the child's
+ * frozen scope, with the same checks its tools would hit. Returns the refusal, or null when nothing is out of scope.
+ */
+export function handoffPreflight(text: string, scope: EffectiveScope): { tool: string; target: string; reason: string } | null {
+  const sentences = String(text ?? '').split(/(?<=[.!?])\s+/);
+  for (const sentence of sentences) {
+    if (ACCESS_VERB.test(sentence)) {
+      for (const raw of sentence.match(WINDOWS_PATH) ?? []) {
+        const target = raw.replace(/[.)\]]+$/, '');
+        const check = checkPathArguments(scope, { filePath: target });
+        if (!check.allowed) return { tool: 'read_file', target, reason: check.reason };
+      }
+    }
+    if (FETCH_VERB.test(sentence)) {
+      for (const raw of sentence.match(URL) ?? []) {
+        const target = raw.replace(/[.)\]]+$/, '');
+        const check = checkEgress(scope, 'browser_open_site', { url: target });
+        if (!check.allowed) return { tool: 'browser_open_site', target, reason: check.reason };
+      }
+    }
+  }
+  return null;
+}

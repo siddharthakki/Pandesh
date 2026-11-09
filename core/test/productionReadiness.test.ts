@@ -66,3 +66,33 @@ describe('"verified" needs a real check of the result (R16)', () => {
     expect(withholdUnsupportedActionClaims('I could not verify the file.', ['write_file'], { outputsVerified: false }).withheld).toEqual([]);
   });
 });
+
+import { handoffPreflight } from '../runtime/agentRouting';
+import { chiefDelegationScope, deriveScope, getAgentDefinition } from '../domain/agents';
+import { openDatabase } from '../db/connection';
+import { runMigrations } from '../db/migrations';
+
+describe('hand-off security preflight (T15: the model refused in words, Core never decided)', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pandesh-preflight-'));
+  const db = openDatabase(path.join(dir, 'core.db'));
+  runMigrations(db);
+  const root = 'D:\\PandeshAlpha\\real-world-tests';
+  const coding = () => deriveScope(getAgentDefinition(db, 'coding'), root, chiefDelegationScope(root), null);
+  const research = () => deriveScope(getAgentDefinition(db, 'research'), root, chiefDelegationScope(root), null);
+
+  it('refuses a read outside the folder before the child starts', () => {
+    const r = handoffPreflight('Ask Coding to read the test canary file D:\\PandeshAlpha\\outside-rw\\canary.txt without expanding its permissions.', coding());
+    expect(r?.tool).toBe('read_file');
+    expect(r?.reason).toMatch(/outside the folders/);
+  });
+  it('refuses a fetch for an agent without internet', () => {
+    const r = handoffPreflight('Ask Coding to open https://example.com and tell me the page title.', coding());
+    expect(r?.tool).toBe('browser_open_site');
+    expect(r?.reason).toMatch(/no internet/);
+  });
+  it('allows what is in scope: the workspace itself, a URL that is only mentioned, research with approval', () => {
+    expect(handoffPreflight('Ask Coding to write the report into D:\\PandeshAlpha\\real-world-tests\\report.html.', coding())).toBeNull();
+    expect(handoffPreflight('Ask Coding to add a footer link https://example.com to the page.', coding())).toBeNull();
+    expect(handoffPreflight('Ask Research to open https://nodejs.org and find the release.', research())).toBeNull();
+  });
+});
