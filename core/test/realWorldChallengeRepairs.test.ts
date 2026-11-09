@@ -76,3 +76,18 @@ describe('write_file: quotes escaped twice by the tool call (baseline T11)', () 
     expect(undoOverEscapedQuotes('a.py', 'x = 1\n')).toBe('x = 1\n');
   });
 });
+
+import { enforceDeclineWording } from '../runtime/declineWording';
+import { evaluateTurnOutcome } from '../runtime/turnOutcome';
+
+describe('a declined extra step does not erase work that was done (Garden Shed Plan run)', () => {
+  it('names only the declined step when other actions happened', () => {
+    const declined = ['Not run: the user declined web access for this task. Nothing was changed.'];
+    expect(enforceDeclineWording('The project is saved. It is protected by policy.', declined, { otherActionsDone: true }).text).toMatch(/^You declined that step, so it was not done\./);
+    expect(enforceDeclineWording('It is protected by policy.', declined).text).toMatch(/^You declined this, so nothing was changed\./);
+  });
+  it('create_project and delegate_to_agent count as real actions in the turn verdict', () => {
+    expect(evaluateTurnOutcome([{ tool: 'create_project', status: 'completed', result: { content: [{ type: 'text', text: 'Created project "X"' }] } }]).verdict).toBe('verified');
+    expect(evaluateTurnOutcome([{ tool: 'delegate_to_agent', status: 'completed', result: { content: [{ type: 'text', text: 'RESULT FROM THE CODING AGENT' }] } }]).verdict).toBe('verified');
+  });
+});

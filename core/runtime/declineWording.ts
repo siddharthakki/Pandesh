@@ -14,7 +14,7 @@ const MISATTRIBUTION = /\b(?:(?:do\s+not|don't|did\s+not|didn't)\s+have\s+(?:the
 export interface DeclineCheck { text: string; corrected: boolean }
 
 /** `declinedResults` are the outputs of this turn's tools; only a real decline result triggers anything. */
-export function enforceDeclineWording(reply: string, declinedResults: string[]): DeclineCheck {
+export function enforceDeclineWording(reply: string, declinedResults: string[], options: { otherActionsDone?: boolean } = {}): DeclineCheck {
   const declined = declinedResults.find((r) => DECLINE_RESULT.test(r));
   if (!declined || !reply.trim()) return { text: reply, corrected: false };
   if (ALREADY_SAYS_DECLINED.test(reply) && !MISATTRIBUTION.test(reply)) return { text: reply, corrected: false };
@@ -22,7 +22,9 @@ export function enforceDeclineWording(reply: string, declinedResults: string[]):
   const sentences = reply.split(/(?<=[.!?])\s+(?=[A-Z*`"])/);
   const kept = sentences.filter((s) => !MISATTRIBUTION.test(s));
   const nothingChanged = /nothing was (?:changed|written|done|sent|printed)/i.exec(declined)?.[0] ?? 'nothing was changed';
-  const statement = `You declined this, so ${nothingChanged.toLowerCase()}.`;
+  // Real-world challenge: a declined extra web search after create_project had worked produced "You declined this, so
+  // nothing was changed" — false. When other actions did happen, only the declined step is named.
+  const statement = options.otherActionsDone ? 'You declined that step, so it was not done.' : `You declined this, so ${nothingChanged.toLowerCase()}.`;
   const rest = kept.join(' ').trim();
   return { text: rest ? `${statement} ${rest}` : statement, corrected: true };
 }

@@ -87,6 +87,8 @@ export const CONSEQUENTIAL_PI_TOOLS: ReadonlySet<string> = new Set([
   'cancel_scheduled_task',
   'send_to_phone',
   'delegate_to_opencode',
+  'delegate_to_agent',
+  'create_project',
   'dev_stories_dispatch',
   'dev_story_approve_review',
   // Sending a web form is the browser's one outward action; a declined send must never read as "submitted".

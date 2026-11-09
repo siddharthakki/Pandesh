@@ -5173,7 +5173,11 @@ ${filesPromptSection}${webResearchPromptSection}${wishesPromptSection}${emailCal
     const fallbackMessage = ctx.currentMessage ?? prompt;
     const fallbackIsLocal = referencesLocalContent(fallbackMessage);
     const fallbackAllowed = !fallbackIsLocal || explicitlyRequestsWebSearch(fallbackMessage);
-    if (fallbackAllowed && isProductResearchRequest(fallbackMessage) && !signal?.aborted) {
+    // Real-world challenge: "Set up a project … tasks: buy timber, …" was read as shopping after create_project had
+    // already done the work, and a web search with the whole message as its query was proposed. A request another
+    // tool already handled is not a product search.
+    const handledByAnotherTool = toolCallsRecorded.some((t) => t.status === 'completed' && !/^(?:update_task_outcome|request_tools|resolve_time|calculate|get_system_info)$/.test(t.tool));
+    if (fallbackAllowed && !handledByAnotherTool && isProductResearchRequest(fallbackMessage) && !signal?.aborted) {
       // Re-run M9: the governed research capability is web research too; ignoring it re-searched and re-prompted a
       // turn that had already answered from two real searches, and the 1-token re-answer replaced the real answer.
       const hasWebResearch = toolCallsRecorded.some(t => (t.tool === 'web_research' || t.tool === 'governed_research') && t.status === 'completed');
@@ -5196,7 +5200,11 @@ ${filesPromptSection}${webResearchPromptSection}${wishesPromptSection}${emailCal
                 finalReply = followUpReply;
               }
             } else if (searchResult?.isError) {
-              finalReply = outText || 'Web research failed to retrieve verified results for this request.';
+              // The tool's error text is written for the model ("Do not claim any web findings…"); the person gets a plain
+              // note under the answer instead of that text replacing it.
+              const declined = /declin|not approve|did not approve|no approval/i.test(outText);
+              const note = declined ? 'No web search was run: you declined it.' : 'The web search did not return verified results.';
+              finalReply = finalReply ? `${finalReply.trimEnd()}\n\n${note}` : note;
             }
           } catch (err: any) {
             safeRecordRuntimeEvent(db, broadcaster, attemptId, 'web_research_fallback_failed', { error: err?.message ?? String(err) }, actor);
@@ -5573,7 +5581,9 @@ ${filesPromptSection}${webResearchPromptSection}${wishesPromptSection}${emailCal
         const r = t.result as any;
         return typeof r === 'string' ? r : String(r?.content?.[0]?.text ?? r?.output ?? '');
       });
-      const decline = enforceDeclineWording(finalReply, declineResults);
+      const decline = enforceDeclineWording(finalReply, declineResults, {
+        otherActionsDone: toolCallsRecorded.some((t) => t.status === 'completed' && !/^(?:update_task_outcome|request_tools|resolve_time|calculate|get_system_info)$/.test(t.tool)),
+      });
       if (decline.corrected) {
         finalReply = decline.text;
         safeRecordRuntimeEvent(db, broadcaster, attemptId, 'decline_wording_corrected', {}, actor);
