@@ -387,6 +387,14 @@ export function describeUnansweredTurn(calls: Array<{ tool: string; status?: str
   return `${lead} Nothing is confirmed as done — the steps are listed under Details. Ask me to continue and I will pick up from there.`;
 }
 
+/** Consecutive calls to tools that do not exist this turn before the turn is stopped. */
+export const UNKNOWN_TOOL_STREAK_LIMIT = 6;
+
+/** pi-agent-core's result for a call to a tool that is not offered this turn. */
+export function isUnknownToolResult(text: string): boolean {
+  return /^Tool \S+ not found$/.test(text.trim());
+}
+
 export function isPublicResearchTask(text: string | null | undefined): boolean {
   if (!text) return false;
   const t = text.trim();
@@ -4179,7 +4187,10 @@ Report this to the user, saying the ${name} agent did the work. Do not add facts
     // the public-research route could strip delegate_to_agent away (T3) and without relying on the model choosing it.
     const requestedSpecialist = tools.some((t) => t.name === 'delegate_to_agent') ? explicitSpecialistRequest(requestText) : null;
     if (requestedSpecialist) safeRecordRuntimeEvent(db, broadcaster, attemptId, 'specialist_request_detected', { agent: requestedSpecialist }, actor);
-    const isPublicResearch = !requestedSpecialist && isPublicResearchTask(requestText) && !requestReferencesLocalContent;
+    // Web-only scoping keeps nothing but web_research. Inside an agent scope without it (Coding, Operations) that left the
+    // model with zero tools, and it looped on calls to tools that did not exist (519 model calls, live demo 2026-11-09).
+    const isPublicResearch = !requestedSpecialist && isPublicResearchTask(requestText) && !requestReferencesLocalContent
+      && tools.some((t) => t.name === 'web_research');
     if (isPublicResearch) {
       // For public research (job/vacancy search, market prices, external news), expose ONLY relevant web research tools.
       // Do not expose filesystem, printer, phone, Gmail, calendar, memory, coding or unrelated tool schemas.
@@ -4944,8 +4955,19 @@ ${filesPromptSection}${webResearchPromptSection}${wishesPromptSection}${emailCal
     });
 
     // Subscribe to token streaming to publish deltas to the UI
+    // A model that keeps calling tools this turn does not have can never finish; stop it instead of spending minutes of GPU
+    // time on "Tool X not found" (live demo 2026-11-09: 519 such calls in 6.7 minutes before the turn failed).
+    let unknownToolStreak = 0;
     agent.subscribe((event: any) => {
       try {
+        if (event.type === 'tool_execution_end') {
+          const resultText = String(event.result?.content?.[0]?.text ?? '');
+          unknownToolStreak = event.isError && isUnknownToolResult(resultText) ? unknownToolStreak + 1 : 0;
+          if (unknownToolStreak >= UNKNOWN_TOOL_STREAK_LIMIT) {
+            safeRecordRuntimeEvent(db, broadcaster, attemptId, 'unknown_tool_loop_stopped', { toolName: String(event.toolName ?? ''), streak: unknownToolStreak }, actor);
+            agent.abort();
+          }
+        }
         if (event.type === 'message_update') {
           // pi-ai text_delta carries `delta` as a string; thinking/toolcall
           // deltas are never surfaced to the conversation.
@@ -5385,7 +5407,9 @@ ${filesPromptSection}${webResearchPromptSection}${wishesPromptSection}${emailCal
     // already done the work, and a web search with the whole message as its query was proposed. A request another
     // tool already handled is not a product search.
     const handledByAnotherTool = toolCallsRecorded.some((t) => t.status === 'completed' && !/^(?:update_task_outcome|request_tools|resolve_time|calculate|get_system_info)$/.test(t.tool));
-    if (fallbackAllowed && !handledByAnotherTool && isProductResearchRequest(fallbackMessage) && !signal?.aborted) {
+    // A turn addressed to a specialist is that specialist's job: when the hand-off fails, the honest answer is that it
+    // failed, not a web search with the user's request as the query.
+    if (fallbackAllowed && !requestedSpecialist && !handledByAnotherTool && isProductResearchRequest(fallbackMessage) && !signal?.aborted) {
       // Re-run M9: the governed research capability is web research too; ignoring it re-searched and re-prompted a
       // turn that had already answered from two real searches, and the 1-token re-answer replaced the real answer.
       const hasWebResearch = toolCallsRecorded.some(t => (t.tool === 'web_research' || t.tool === 'governed_research') && t.status === 'completed');
