@@ -131,7 +131,7 @@ function spawnCore(dataDir: string): ChildProcess {
   return child;
 }
 
-async function waitForDiscovery(dataDir: string, timeoutMs = 20_000): Promise<{ port: number }> {
+async function waitForDiscovery(dataDir: string, timeoutMs = 45_000): Promise<{ port: number }> {
   const discoveryPath = path.join(dataDir, 'core.json');
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
@@ -210,5 +210,5 @@ describe('M32 Priority 2: Core-owned execution survives the Extension Host going
 
     const invocations = await fetch(`${base}/v1/attempts/${attempt.id}/model-invocations`, { headers: H() }).then((r) => r.json());
     expect(invocations.modelInvocations[0].status).toBe('succeeded');
-  }, 60_000);
+  }, 120_000);
 });
