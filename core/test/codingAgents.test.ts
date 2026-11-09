@@ -61,9 +61,9 @@ describe('agent housekeeping and Windows console (live run AG1)', () => {
   it('Aider writes UTF-8 and keeps its history out of the user folder', () => {
     const a = spec('aider');
     expect(a.env?.('m')).toMatchObject({ PYTHONIOENCODING: 'utf-8', PYTHONUTF8: '1' });
-    const args = a.args('x', 'D:\w', 'm');
+    const args = a.args('x', 'D:\\w', 'm');
     const hist = args[args.indexOf('--chat-history-file') + 1];
-    expect(hist.startsWith('D:\w')).toBe(false);
+    expect(hist.startsWith('D:\\w')).toBe(false);
     expect(args).toContain('--no-restore-chat-history');
   });
 });
