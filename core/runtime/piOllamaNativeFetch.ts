@@ -45,6 +45,31 @@ export interface PiOllamaFetchOptions {
   /** Used when the request carries no reasoning_effort. */
   think: boolean;
   onMetrics?: (metrics: OllamaCallMetrics) => void;
+  /**
+   * A call that has produced no output at all after this long (model load and prompt evaluation included) is stopped.
+   * Default 300 s, or PANDESH_MODEL_FIRST_OUTPUT_TIMEOUT_MS.
+   */
+  firstOutputTimeoutMs?: number;
+  /** A reply that stops streaming for this long is stopped. Default 120 s, or PANDESH_MODEL_IDLE_TIMEOUT_MS. */
+  idleTimeoutMs?: number;
+}
+
+/**
+ * Build 161 audit: the transport disabled undici's timers so the attempt's AbortSignal would own deadlines, but a chat
+ * turn's signal is aborted only by Stop — an Ollama that accepted a request and then hung kept the turn (and an
+ * unattended scheduled model run) waiting forever. A stalled call now fails with this reason.
+ */
+export class ModelStalledError extends Error {
+  readonly code = 'model_stalled';
+  constructor(readonly silentMs: number, phase: 'first_output' | 'mid_reply') {
+    super(`no output from Ollama for ${Math.round(silentMs / 1000)} s ${phase === 'first_output' ? 'after the request was sent' : 'in the middle of the reply'} (the model may be stuck or the machine overloaded); the call was stopped`);
+    this.name = 'ModelStalledError';
+  }
+}
+
+function positiveEnv(name: string, fallback: number): number {
+  const value = Number(process.env[name]);
+  return Number.isFinite(value) && value > 0 ? value : fallback;
 }
 
 type OpenAiPart = { type?: string; text?: string; image_url?: { url?: string } | string };
@@ -153,14 +178,18 @@ export function createPiOllamaFetch(options: PiOllamaFetchOptions): typeof fetch
       try { options.onMetrics?.(metrics); } catch { /* metrics never break a turn */ }
     };
 
+    const firstOutputMs = options.firstOutputTimeoutMs ?? positiveEnv('PANDESH_MODEL_FIRST_OUTPUT_TIMEOUT_MS', 300_000);
+    const idleMs = options.idleTimeoutMs ?? positiveEnv('PANDESH_MODEL_IDLE_TIMEOUT_MS', 120_000);
     let upstream: Awaited<ReturnType<typeof streamOllamaChatNdjson>>;
     try {
-      upstream = await streamOllamaChatNdjson({ baseUrl: options.baseUrl, body, signal: init.signal ?? undefined });
+      // Ollama sends its response headers with the first streamed frame, after loading the model and reading the prompt.
+      upstream = await streamOllamaChatNdjson({ baseUrl: options.baseUrl, body, signal: init.signal ?? undefined, headersTimeoutMs: firstOutputMs });
     } catch (err) {
+      const stalled = (err as { code?: string })?.code === 'UND_ERR_HEADERS_TIMEOUT' ? new ModelStalledError(firstOutputMs, 'first_output') : null;
       metrics.status = init.signal?.aborted ? 'aborted' : 'error';
-      metrics.error = err instanceof Error ? err.message : String(err);
+      metrics.error = stalled ? stalled.message : err instanceof Error ? err.message : String(err);
       report();
-      throw err;
+      throw stalled ?? err;
     }
 
     if (upstream.statusCode !== 200) {
@@ -186,13 +215,29 @@ export function createPiOllamaFetch(options: PiOllamaFetchOptions): typeof fetch
       ...(usage ? { usage } : {}),
     });
     const encoder = new TextEncoder();
+    let silence: NodeJS.Timeout | null = null;
     const stream = new ReadableStream<Uint8Array>({
       async start(controller) {
         const push = (text: string) => controller.enqueue(encoder.encode(text));
         const firstToken = () => { if (metrics.firstTokenMs == null) metrics.firstTokenMs = Date.now() - started; };
         let sawDone = false;
+        // Silence watchdog: until the first frame the whole first-output allowance applies, then the idle allowance.
+        let stall: ModelStalledError | null = null;
+        let sawFrame = false;
+        const watch = () => {
+          if (silence) clearTimeout(silence);
+          const ms = sawFrame ? idleMs : Math.max(idleMs, firstOutputMs - (Date.now() - started));
+          silence = setTimeout(() => {
+            stall = new ModelStalledError(ms, sawFrame ? 'mid_reply' : 'first_output');
+            upstream.destroy(stall);
+          }, ms);
+          silence.unref?.();
+        };
+        watch();
         try {
           for await (const raw of upstream.lines) {
+            sawFrame = true;
+            watch();
             const frame = raw as {
               error?: unknown; done?: boolean; done_reason?: string;
               message?: { content?: string; thinking?: string; tool_calls?: Array<{ function?: { name?: string; arguments?: unknown } }> };
@@ -228,19 +273,24 @@ export function createPiOllamaFetch(options: PiOllamaFetchOptions): typeof fetch
           }
           // D8: a stream that ends without Ollama's final frame was cut (server stopped, connection lost),
           // not a finished reply; the turn must say the connection was lost, not "no reply".
+          if (silence) clearTimeout(silence);
+          if (stall) throw stall;
           if (!sawDone && !init.signal?.aborted) throw new Error('the connection to Ollama closed before the reply finished');
           push('data: [DONE]\n\n');
           report();
           controller.close();
         } catch (err) {
+          if (silence) clearTimeout(silence);
+          const failure = stall ?? err;
           metrics.status = init.signal?.aborted ? 'aborted' : 'error';
-          metrics.error = err instanceof Error ? err.message : String(err);
+          metrics.error = failure instanceof Error ? failure.message : String(failure);
           report();
           upstream.destroy();
-          controller.error(err);
+          controller.error(failure);
         }
       },
       cancel() {
+        if (silence) clearTimeout(silence);
         metrics.status = 'aborted';
         upstream.destroy();
         report();

@@ -102,6 +102,20 @@ describe('failDeadExecutorAttemptsOnBoot: a chat approval whose waiting worker d
     expect(row?.failureReason).toMatch(/Nothing was approved, rejected or run/);
   });
 
+  // Build 161 audit: production held attempts parked in waiting_for_approval for weeks whose approvals were all
+  // answered or expired while the waiting worker was gone. With no pending approval left the walk skipped them, so
+  // they could never end. They are settled now, truthfully: nothing more ran.
+  it('settles a dead worker\'s attempt still waiting although no approval is pending any more', () => {
+    const { attemptId, approvalId } = waitingOnApproval('core:executor:4250');
+    db.run("UPDATE approvals SET status = 'expired', resolvedAt = ? WHERE id = ?", [new Date().toISOString(), approvalId]);
+    const settled = failDeadExecutorAttemptsOnBoot(db, { selfPid: 1, isProcessAlive: () => false });
+    expect(settled).toEqual([{ attemptId, status: 'waiting_for_approval', outcome: 'failed' }]);
+    const row = db.get<{ status: string; failureReason: string }>('SELECT status, failureReason FROM attempts WHERE id = ?', [attemptId]);
+    expect(row?.status).toBe('failed');
+    expect(row?.failureReason).toMatch(/no approval was pending any more/);
+    expect(getApproval(db, approvalId).status).toBe('expired');
+  });
+
   it('leaves it alone when its owner is still alive or is this process', () => {
     const alive = waitingOnApproval('core:executor:4243');
     expect(failDeadExecutorAttemptsOnBoot(db, { selfPid: 1, isProcessAlive: () => true })).toEqual([]);

@@ -6049,7 +6049,9 @@ ${filesPromptSection}${webResearchPromptSection}${wishesPromptSection}${emailCal
       // "complete without a reply".
       const lastCall = modelCalls[modelCalls.length - 1];
       const reason = lastCall?.status === 'error'
-        ? `Lost the connection to the local model server (Ollama) before a reply was generated: ${lastCall.error ?? 'unknown error'}`
+        ? /^no output from Ollama/.test(lastCall.error ?? '')
+          ? `The local model (Ollama) stopped responding before a reply was generated: ${lastCall.error}`
+          : `Lost the connection to the local model server (Ollama) before a reply was generated: ${lastCall.error ?? 'unknown error'}`
         : 'The model completed the turn without generating a reply';
       turnOutcome = { verdict: 'unverified', reason, performed: [], refused: [], failed: ['reply_generation'] };
     }

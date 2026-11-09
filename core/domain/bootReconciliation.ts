@@ -48,7 +48,18 @@ export function failDeadExecutorAttemptsOnBoot(
       // Approve could only pretend to continue. Retire the approval (nobody decided) and settle the task truthfully.
       if (loadLoopContinuation(db, attempt.id)?.pendingApprovalId) continue;
       const pending = listApprovalsForAttempt(db, attempt.id).filter((approval) => approval.status === 'pending');
-      if (pending.length === 0) continue;
+      if (pending.length === 0) {
+        // Build 161 audit: the approvals were answered or expired while the waiting worker was gone (or none was ever
+        // recorded). Nothing can resume this attempt, and with no card left nobody can act on it: it used to stay
+        // waiting forever. Settle it truthfully; nothing more ran.
+        failAttempt(db, attempt.id, {
+          fenceToken: attempt.fenceToken,
+          actor,
+          failureReason: 'Interrupted: the worker waiting for an approval stopped, and no approval was pending any more when Core restarted. Nothing further was run. Ask again to retry.',
+        });
+        settled.push({ attemptId: attempt.id, status: attempt.status, outcome: 'failed' });
+        continue;
+      }
       for (const approval of pending) {
         expireApproval(db, approval.id, { actor, reason: 'the worker that was waiting for this answer stopped when Core restarted; ask again to retry' });
       }
@@ -91,14 +102,17 @@ export function settleIdleCapabilityAnchorsOnBoot(db: CoreDatabase): string[] {
     `SELECT a.id AS id, a.status AS status
        FROM attempts a JOIN requests r ON r.id = a.requestId
       WHERE r.routeReason = 'm38_capability_dispatch' AND a.parentAttemptId IS NULL
-        AND a.status IN ('created', 'running')`,
+        AND a.status IN ('created', 'running', 'waiting_for_approval')`,
   );
   for (const anchor of anchors) {
+    // Build 161 audit: an anchor can also be left `waiting_for_approval` after every approval on it was answered or
+    // expired (production held four for weeks). With nothing pending it is as idle as a running one.
     if (listApprovalsForAttempt(db, anchor.id).some((approval) => approval.status === 'pending')) continue;
     if (loadLoopContinuation(db, anchor.id)?.pendingApprovalId) continue;
+    if (db.get<{ n: number }>("SELECT COUNT(*) AS n FROM tool_invocations WHERE attemptId = ? AND status = 'running'", [anchor.id])!.n > 0) continue;
     const actor = 'core:boot-reconciliation';
     try {
-      if (anchor.status === 'created') transitionAttempt(db, anchor.id, { toStatus: 'running', actor });
+      if (anchor.status === 'created' || anchor.status === 'waiting_for_approval') transitionAttempt(db, anchor.id, { toStatus: 'running', actor });
       transitionAttempt(db, anchor.id, { toStatus: 'completed', actor, reason: 'idle capability anchor closed at Core start' });
       settled.push(anchor.id);
     } catch {
