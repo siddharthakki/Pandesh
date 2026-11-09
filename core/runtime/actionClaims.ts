@@ -55,7 +55,7 @@ const CATEGORIES: ActionClaimCategory[] = [
     object: /\b(?:calendar|events?|appointments?|meetings?)\b/i,
     verbs: 'added|created|scheduled|booked|moved|rescheduled|updated|cancell?ed|deleted|removed',
     // A meeting kept as a memory fact ("the review meeting is now Wednesday", re-run T6c) is changed by memory tools.
-    tools: /^calendar_(?:create|update|delete)|event|^memory_(?:remember|forget|resolve)$/i,
+    tools: /^calendar_(?:create|update|delete)|event|^memory_(?:remember|correct|forget|resolve)$/i,
     label: 'calendar change',
   },
   {
@@ -69,7 +69,7 @@ const CATEGORIES: ActionClaimCategory[] = [
     kind: 'memory',
     object: /\b(?:memor(?:y|ies)|remember|preferences?|profile)\b/i,
     verbs: 'saved|stored|remembered|noted|added|recorded|forgotten|deleted|removed|updated',
-    tools: /^memory_(?:remember|forget|resolve)|remember/i,
+    tools: /^memory_(?:remember|correct|forget|resolve)|remember/i,
     label: 'memory change',
   },
   {
@@ -77,7 +77,7 @@ const CATEGORIES: ActionClaimCategory[] = [
     kind: 'memory',
     object: /\b(?:facts?|stored (?:details?|values?|records?))\b/i,
     verbs: 'forgotten|deleted|removed|updated|changed|corrected|erased',
-    tools: /^memory_(?:remember|forget|resolve)/i,
+    tools: /^memory_(?:remember|correct|forget|resolve)/i,
     label: 'memory change',
   },
   {

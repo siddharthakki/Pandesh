@@ -81,6 +81,7 @@ export const CONSEQUENTIAL_PI_TOOLS: ReadonlySet<string> = new Set([
   'update_commitment',
   'memory_remember',
   'memory_forget',
+  'memory_correct',
   'memory_resolve_contradiction',
   'schedule_task',
   'cancel_scheduled_task',

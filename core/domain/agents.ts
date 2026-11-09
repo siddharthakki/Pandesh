@@ -490,7 +490,7 @@ export function listScopeRefusals(db: CoreDatabase, agentId: string, limit = 20)
 }
 
 const MEMORY_READ_TOOLS = new Set(['memory_recall', 'memory_export', 'memory_impact']);
-const MEMORY_WRITE_TOOLS = new Set(['memory_remember', 'memory_forget', 'memory_resolve_contradiction']);
+const MEMORY_WRITE_TOOLS = new Set(['memory_remember', 'memory_correct', 'memory_forget', 'memory_resolve_contradiction']);
 
 /**
  * Memory scope gate for an agent run (Core memory scope types: user, project,
