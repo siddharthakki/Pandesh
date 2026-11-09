@@ -54,7 +54,8 @@ const CATEGORIES: ActionClaimCategory[] = [
     kind: 'calendar',
     object: /\b(?:calendar|events?|appointments?|meetings?)\b/i,
     verbs: 'added|created|scheduled|booked|moved|rescheduled|updated|cancell?ed|deleted|removed',
-    tools: /^calendar_(?:create|update|delete)|event/i,
+    // A meeting kept as a memory fact ("the review meeting is now Wednesday", re-run T6c) is changed by memory tools.
+    tools: /^calendar_(?:create|update|delete)|event|^memory_(?:remember|forget|resolve)$/i,
     label: 'calendar change',
   },
   {
@@ -244,6 +245,10 @@ export function withholdUnsupportedActionClaims(message: string, succeededTools:
   }
   if (withheld.length === 0) return { text: message, withheld };
   const performed = succeededTools.length > 0 ? `Tools that actually succeeded this turn: ${[...new Set(succeededTools)].join(', ')}.` : 'No tool ran this turn.';
-  out.push('', `**Not performed:** the reply above claimed an action that no tool carried out, so nothing changed. ${performed}`);
+  // Re-run T6c: "so nothing changed" was false when other tools had really changed things.
+  const consequence = succeededTools.some((t) => !/^(?:update_task_outcome|request_tools|resolve_time|calculate)$|^memory_recall$|^(?:read|list|get|search)_/.test(t))
+    ? 'that action did not happen (the tools listed below did run)'
+    : 'so nothing changed';
+  out.push('', `**Not performed:** the reply above claimed an action that no tool carried out, ${consequence}. ${performed}`);
   return { text: out.join('\n'), withheld };
 }

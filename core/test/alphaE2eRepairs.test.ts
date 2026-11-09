@@ -65,6 +65,18 @@ describe('alpha e2e: claims the guard now withholds', () => {
     expect(withholdUnsupportedActionClaims('The colour fact has been removed.', ['memory_forget']).withheld).toEqual([]);
   });
 
+  it('re-run T6c: a meeting stored in memory, changed by memory tools, is not a calendar fabrication', () => {
+    expect(withholdUnsupportedActionClaims('The review meeting has been rescheduled to Wednesday at 15:00.', ['memory_recall', 'memory_remember', 'memory_forget']).withheld).toEqual([]);
+    expect(withholdUnsupportedActionClaims('The review meeting has been rescheduled to Wednesday at 15:00.', ['web_research']).withheld.map((w) => w.kind)).toContain('calendar');
+  });
+
+  it('the footer does not say "nothing changed" when other tools changed things', () => {
+    const r = withholdUnsupportedActionClaims('I have sent the email to Anna.', ['write_file']);
+    expect(r.text).toContain('that action did not happen');
+    expect(r.text).not.toContain('so nothing changed');
+    expect(withholdUnsupportedActionClaims('I have sent the email to Anna.', []).text).toContain('so nothing changed');
+  });
+
   it('T10: "I have initiated the creation of the project" with no project tool', () => {
     const r = withholdUnsupportedActionClaims('I have initiated the creation of the Pandesh Alpha Playground project.', ['update_task_outcome']);
     expect(r.withheld.map((w) => w.kind)).toContain('project');
