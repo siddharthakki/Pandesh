@@ -1,0 +1,7 @@
+Grocery list (fictional test fixture)
+- Milk, 2 litres
+- Basmati rice, 5 kg
+- Tomatoes, 1 kg
+- Ginger, 200 g
+- Tea powder, 250 g
+- Sugar, 1 kg

@@ -1,0 +1,5 @@
+INVOICE C-3310 (fictional test fixture)
+Seller: Fabrikam Furniture
+Date: 2026-10-27
+Items: desk lamp (EUR 39.99)
+Total: EUR 39.99
