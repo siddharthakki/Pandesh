@@ -56,7 +56,12 @@ jobs:
           excludes=""; for f in $TIMING_SENSITIVE; do excludes="$excludes --exclude $f"; done
           npx vitest run core/test $excludes --testTimeout=120000 --hookTimeout=120000
       - name: Desktop tests
-        run: npx vitest run apps/desktop/test --testTimeout=120000 --hookTimeout=120000
+        # Desktop tests that check "is the selected model installed?" need an Ollama /api/tags endpoint; the runner has
+        # no Ollama, so a stub that lists two model names (and serves nothing else) stands in.
+        shell: bash
+        run: |
+          node scripts/ci/ollama-tags-stub.mjs &
+          npx vitest run apps/desktop/test --testTimeout=120000 --hookTimeout=120000
 
   timing-sensitive:
     runs-on: windows-latest
