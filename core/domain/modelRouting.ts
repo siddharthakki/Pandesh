@@ -90,6 +90,22 @@ export function autoRoutingCandidateModels(): string[] {
 export interface RouteModelOptions {
   /** The user's explicit context window; never raised above what the provider reported. */
   contextWindowOverrideTokens?: number;
+  /** The request text: a short single-step question is served by the fast chat model (see isQuickRequest). */
+  requestText?: string | null;
+}
+
+/**
+ * Real-world challenge: in Auto every v2 request went to the 27B model, so "how much free RAM do I have?" took several
+ * seconds longer than needed, while the 27B model was what made multi-step work (debug, recover, verify) succeed.
+ * A short request that asks for one fact or one simple action goes to the fast model; anything that builds, fixes,
+ * delegates, researches or chains steps goes to the stronger one.
+ */
+const MULTI_STEP = /\b(?:build|create|make|write|generate|draft|fix|debug|repair|refactor|implement|test|tests|run|install|delegate|ask\s+(?:your\s+|the\s+)?\w+\s+(?:agent|specialist)|ask\s+(?:coding|research|operations|personal)|research|investigate|compare|analy[sz]e|summari[sz]e|report|dashboard|organi[sz]e|retry|verify|correct|forget|change|update|then|and then|step)\b/i;
+export function isQuickRequest(text: string | null | undefined): boolean {
+  const t = String(text ?? '').trim();
+  if (!t || t.length > 160) return false;
+  if ((t.match(/[.!?](?:\s|$)/g) ?? []).length > 2) return false;
+  return !MULTI_STEP.test(t);
 }
 
 /** Pure, deterministic request-kind routing over a Core-observed catalog. */
@@ -108,7 +124,8 @@ export function routeModel(
       'Ollama is not reachable, so Auto cannot choose an installed model. Start Ollama, then send again.',
     );
   }
-  const preferred = chainFor(kind);
+  const quick = kind === 'question' && isQuickRequest(options.requestText);
+  const preferred = quick ? [AUTO_CHAT_MODEL, ...chainFor(kind).filter((m) => m !== AUTO_CHAT_MODEL)] : chainFor(kind);
   const chained = preferred.find((model) => installed.has(model));
   const fallback = chained ? undefined : installedFallback(catalog);
   const chain = fallback ? [...preferred, fallback] : preferred;
@@ -168,7 +185,7 @@ export function routeModel(
     selectedProvider: 'ollama',
     selectedModel,
     selectionReason: catalog.reachable
-      ? `Core selected the first installed model in the ${kind} preference chain.`
+      ? `Core selected the first installed model in the ${quick ? 'quick-question' : kind} preference chain.`
       : `Ollama catalog was unreachable; Core retained the historic local fallback for ${kind}.`,
     suitabilitySummary: catalog.reachable
       ? `Using local ${selectedModel} for ${kind}.`

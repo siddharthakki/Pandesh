@@ -114,6 +114,18 @@ const CATEGORIES: ActionClaimCategory[] = [
     // Alpha e2e T7: "The test was rerun after the fix, and it passed successfully" with no run after the fix. Supported
     // only by a passing run_checks after the last file change (the engine passes `testsVerified`) or by a specialist
     // agent whose own turn was guarded the same way.
+    // R16 (gemma): "All data has been successfully verified against the source text files" with no check of the file it
+    // wrote. A "verified/validated" claim about a result stands when Core's own output check passed or a real check
+    // (read-back, test run, page inspection) followed the last write — the engine passes `outputsVerified`.
+    kind: 'verified',
+    object: /\b(?:files?|dashboard|report|page|html|output|result|app|script|code|data|everything|it|calculations?|totals?)\b/i,
+    verbs: '',
+    claim: /\b(?:(?:has|have|was|were|been|is|are)\s+(?:now\s+|also\s+|successfully\s+|fully\s+)*(?:verified|validated|double-checked)|i\s+(?:have\s+|also\s+|successfully\s+)*(?:verified|validated|double-checked))\b/i,
+    exclude: /\b(?:not|never|cannot|unable|could(?:n't| not)|would|should|will|please|if|before)\b|n't\b/i,
+    tools: /^(?:run_checks|read_file|inspect_page)$/,
+    label: 'verification of the result',
+  },
+  {
     kind: 'tests_passed',
     object: /\b(?:tests?|checks?|test suite|suite|re-?runs?|re-?ran)\b/i,
     verbs: '',
@@ -179,10 +191,14 @@ const echo = (value: string): string => {
 };
 
 /** The first category whose completion claim in `sentence` is not supported by a succeeded tool, if any. */
-export function unsupportedActionClaim(sentence: string, succeededTools: readonly string[], options: Pick<ActionClaimOptions, 'testsVerified'> = {}): ActionClaimCategory | null {
+export function unsupportedActionClaim(sentence: string, succeededTools: readonly string[], options: Pick<ActionClaimOptions, 'testsVerified' | 'outputsVerified'> = {}): ActionClaimCategory | null {
   for (const category of COMPILED) {
     if (!category.claim.test(sentence) || !category.object.test(sentence)) continue;
     if (category.exclude?.test(sentence)) continue;
+    if (category.kind === 'verified' && options.outputsVerified !== undefined) {
+      if (options.outputsVerified || succeededTools.includes('delegate_to_agent')) continue;
+      return category;
+    }
     if (category.kind === 'tests_passed' && options.testsVerified !== undefined) {
       // The engine knows the order: a pass before the last change is not evidence for the code as it is now.
       if (options.testsVerified || succeededTools.includes('delegate_to_agent')) continue;
@@ -210,6 +226,8 @@ export interface ActionClaimOptions {
    * sentence stands only if it is true (a pass before a later edit, or a failed re-run, is not evidence).
    */
   testsVerified?: boolean;
+  /** Whether the result really was checked (Core's output check passed, or a read-back/test/inspection followed the last write). */
+  outputsVerified?: boolean;
 }
 
 const OUTPUT_FILE = /(?:[A-Za-z]:[\\/][^\s`*"'<>|]+|[\w.\\/-]+)\.(?:pdf|docx?|xlsx?|pptx?|md|txt|csv|html?|json|png|jpe?g|zip|odt|rtf)\b/gi;

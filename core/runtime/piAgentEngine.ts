@@ -11,6 +11,7 @@ import { correctWeekdayDates } from './dateConsistency';
 import { asksForSingleChoice, SINGLE_CHOICE_RULE } from './choiceConstraint';
 import { delegationChangedNothing, isGitRepository, renderDelegationReport, snapshotFiles, untrackedPaths, verifyDelegation } from './delegationVerification';
 import { explicitSpecialistRequest, SPECIALIST_NAMES } from './agentRouting';
+import { checkWrittenOutput, type OutputCheck } from './outputChecks';
 import { createProject, listProjects } from '../domain/projects';
 import { readUpdateState } from './software/updates';
 import { collectListeningPorts } from './software/inventory';
@@ -1039,6 +1040,8 @@ export class PiAgentEngine implements EngineAdapter {
     const folderLedger = new FolderReadLedger(requestText);
     /** Audit D12: Core-verified reports of this turn's coding delegations, appended to the final reply. */
     const delegationReports: string[] = [];
+    /** Core's own check of each file written this turn (syntax + values grounded in what was read), latest per path. */
+    const outputChecks = new Map<string, OutputCheck>();
     const wholeFolderRequest = requiresWholeFolder(requestText);
     /**
      * Core runs the real read_file tool (same authorization, credential refusal and redaction) on documents the model
@@ -3096,7 +3099,19 @@ export class PiAgentEngine implements EngineAdapter {
                 actor,
               });
             } catch {}
-            return { content: [{ type: 'text', text: `Successfully wrote file: ${args.filePath}${unescapeNote}` }], details: { success: true, activity: { ...changeView, kind: 'code' } } };
+            // Core checks what it just wrote: it must parse, and a report may not show values nothing returned.
+            let checkNote = '';
+            try {
+              const corpus = [requestText, ctx.currentMessage ?? '', ...toolCallsRecorded.filter((t) => t.status === 'completed').map((t) => `${JSON.stringify(t.args ?? '')}\n${extractToolResultText(t.result)}`)].join('\n');
+              const check = checkWrittenOutput(full, String(args.content), corpus, (command, cmdArgs) => {
+                const r = cp.spawnSync(command, cmdArgs, { encoding: 'utf8', timeout: 15_000, windowsHide: true });
+                return { status: r.status, stdout: String(r.stdout ?? ''), stderr: String(r.stderr ?? ''), error: r.error };
+              });
+              outputChecks.set(full, check);
+              if (check.summary) checkNote = `\n${check.summary}`;
+              safeRecordRuntimeEvent(db, broadcaster, attemptId, 'output_checked', { path: full, syntaxOk: check.syntaxOk, problem: check.syntaxProblem, ungrounded: check.ungrounded }, actor);
+            } catch { /* the write itself stands */ }
+            return { content: [{ type: 'text', text: `Successfully wrote file: ${args.filePath}${unescapeNote}${checkNote}` }], details: { success: true, activity: { ...changeView, kind: 'code' } } };
           } catch (err: any) {
             return { content: [{ type: 'text', text: `Error writing file: ${err.message}` }], isError: true };
           }
@@ -5538,6 +5553,23 @@ ${filesPromptSection}${webResearchPromptSection}${wishesPromptSection}${emailCal
       const lastCheck = lastIndexWhere(done, isRealCheck);
       testsVerified = lastCheck >= 0 && lastCheck > lastWrite && done[lastCheck].status === 'completed';
     }
+    // "Verified" about a written file stands when Core's own check of every file written this turn passed (it parses
+    // and shows no value nothing returned), or a real check ran after the last write (R16: "All data has been
+    // successfully verified" with no check at all).
+    let outputsVerified = false;
+    {
+      const done = finishedCalls();
+      const lastWrite = lastIndexWhere(done, (t) => t.status === 'completed' && WRITE_TOOL.test(t.tool));
+      const lastLook = lastIndexWhere(done, (t) => t.status === 'completed' && /^(?:run_checks|read_file|inspect_page)$/.test(t.tool));
+      const coreChecksPass = outputChecks.size > 0 && [...outputChecks.entries()].every(([file, c]) => c.syntaxOk !== false && c.ungrounded.length === 0 && fs.existsSync(file));
+      outputsVerified = lastWrite < 0 ? lastLook >= 0 : (coreChecksPass || lastLook > lastWrite);
+      // What remains wrong in a written file is shown under the answer, whatever the model says.
+      for (const [file, c] of outputChecks) {
+        if (!fs.existsSync(file) || (c.syntaxOk !== false && c.ungrounded.length === 0)) continue;
+        const name = workspaceRelative(file) ?? path.basename(file);
+        coreNotes.push(`**Checked by Pandesh — ${name}:** ${c.syntaxOk === false ? `${c.syntaxProblem}. ` : ''}${c.ungrounded.length ? `These values in it were not found in anything read or computed this turn, so treat them as unverified: ${c.ungrounded.join(', ')}.` : ''}`.trim());
+      }
+    }
 
     // No tool result, no claim (audit D1): a sentence saying a timer was paused, a reminder set, a message sent or a
     // file saved stands only if a tool of that kind completed in this turn. Applied after every follow-up prompt, so a
@@ -5636,7 +5668,7 @@ ${filesPromptSection}${webResearchPromptSection}${wishesPromptSection}${emailCal
         finalReply = `${finalReply.trimEnd()}\n\nCorrection: nothing was saved or changed in this turn — no tool carried this out, so it is not done.`;
         safeRecordRuntimeEvent(db, broadcaster, attemptId, 'unbacked_completion_corrected', {}, actor);
       }
-      const guarded = withholdUnsupportedActionClaims(finalReply, succeeded, { fileExists, testsVerified });
+      const guarded = withholdUnsupportedActionClaims(finalReply, succeeded, { fileExists, testsVerified, outputsVerified });
       for (const w of guarded.withheld) withheldKinds.add(w.kind);
       withheldCount += guarded.withheld.length;
       if (guarded.withheld.length > 0) {

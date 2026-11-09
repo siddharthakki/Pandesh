@@ -224,6 +224,7 @@ export function submitRequest(db: CoreDatabase, input: SubmitRequestInput): Subm
       isAutoSelection && input.installedModelsCatalog
         ? routeModel(decision.resolvedMode, input.toolPermissionPolicy?.profile, input.installedModelsCatalog, {
             contextWindowOverrideTokens: input.contextWindowOverrideTokens,
+            requestText: input.currentMessage ?? null,
           })
         : legacySelectionEvidence(
             decision.resolvedMode,
