@@ -319,14 +319,24 @@ export function createMemoryCapabilityAdapter(options: MemoryCapabilityOptions):
           }, result.deduplicated ? 'memory_remember_deduplicated' : 'memory_remember_succeeded', safeArgs);
         }
         case 'memory_recall': {
-          const result = recallMemories(db, {
+          const input = {
             scopeType: args.scopeType === undefined ? undefined : asString(args.scopeType) as never,
             scopeId: args.scopeId === undefined ? undefined : asString(args.scopeId),
             subject: args.subject === undefined ? undefined : asString(args.subject),
             predicate: args.predicate === undefined ? undefined : asString(args.predicate),
             query: args.query === undefined ? undefined : asString(args.query),
             includeHistorical: Boolean(args.includeHistorical),
-          });
+          };
+          const result = recallMemories(db, input);
+          // Live demo 2026-11-09: "our flour supplier delivers on Wednesdays" was stored in project scope "Bakery";
+          // a later user-scope recall found nothing and the answer was "I don't have that information". A keyword
+          // recall at user/global scope that finds nothing also looks at the user's project facts (task and
+          // repository scopes stay out), and says so.
+          if (result.entries.length === 0 && input.query && !input.scopeId && !input.subject
+            && (input.scopeType === 'user' || input.scopeType === 'global')) {
+            const widened = recallMemories(db, { ...input, scopeType: 'project' as never });
+            if (widened.entries.length > 0) return ok({ ...widened, widenedFrom: input.scopeType, widenedTo: 'project' }, 'memory_recall_succeeded', safeArgs);
+          }
           return ok(result, 'memory_recall_succeeded', safeArgs);
         }
         case 'memory_resolve_contradiction': {
