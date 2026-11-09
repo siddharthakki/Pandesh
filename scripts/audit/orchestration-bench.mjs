@@ -43,7 +43,7 @@ const TASKS = [
 ].filter((t) => !TASK_FILTER || TASK_FILTER.has(t.id));
 
 /** Approvals the harness may grant: they stay inside the throwaway workspace and data dir. */
-const APPROVE = /^(?:write_file|run_checks|request_search_permission|memory_remember|create_reminder|revenue_record_lead|revenue_[a-z_]+|create_note|propose_file_change)$/;
+const APPROVE = /^(?:write_file|run_checks|request_search_permission|memory_remember|create_reminder|revenue_record_lead|revenue_[a-z_]+|create_note|propose_file_change|authorize_mission)$/;
 
 function workspaceTemplate(dir) {
   fs.mkdirSync(dir, { recursive: true });
@@ -150,10 +150,11 @@ async function runTask(model, mode, task) {
   const elapsedMs = Date.now() - t0;
   const invocations = (await call('GET', `/v1/attempts/${attemptId}/tool-invocations`)).toolInvocations ?? [];
   const events = [];
+  // The route caps a page (200); read until a page comes back empty.
   for (let after = 0; ;) {
-    const page = (await call('GET', `/v1/runtime-events?after=${after}&limit=500`)).events ?? [];
+    const page = (await call('GET', `/v1/runtime-events?after=${after}&limit=200`)).events ?? [];
     for (const e of page) if (e.entityId === attemptId || e.metadata?.attemptId === attemptId) events.push(e);
-    if (page.length < 500) break;
+    if (page.length === 0) break;
     after = page[page.length - 1].sequence;
   }
   const messages = (await call('GET', `/v1/conversations/${conversation.id}/messages`)).messages ?? [];

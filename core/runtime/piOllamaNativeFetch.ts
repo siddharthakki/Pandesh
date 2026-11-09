@@ -13,6 +13,8 @@
  */
 import { resolveKeepAlive } from './ollamaResidency';
 import { streamOllamaChatNdjson } from './ollamaStreamTransport';
+import { parseInlineToolCalls } from './inlineToolCalls';
+import type { ModelToolDefinition } from './modelBackend';
 
 /** One model call as Ollama measured it, plus what Core sent. Durations are milliseconds. */
 export interface OllamaCallMetrics {
@@ -29,6 +31,8 @@ export interface OllamaCallMetrics {
   totalMs: number;
   thinkingChars: number;
   toolCalls: number;
+  /** Tool calls the model wrote as JSON text that were recovered into real calls (Build 161 audit). */
+  inlineToolCallsRecovered?: number;
   messages: number;
   toolDefinitions: number;
   /** Characters sent by section: what the prompt budget is spent on. */
@@ -141,6 +145,10 @@ export function createPiOllamaFetch(options: PiOllamaFetchOptions): typeof fetch
     const params = JSON.parse(init.body) as Record<string, any>;
     const messages = (params.messages ?? []) as OpenAiMessage[];
     const tools = Array.isArray(params.tools) ? params.tools : [];
+    const offeredToolDefs: ModelToolDefinition[] = tools
+      .map((t: { function?: { name?: string; description?: string; parameters?: Record<string, unknown> } }) => ({ name: String(t.function?.name ?? ''), description: String(t.function?.description ?? ''), parameters: t.function?.parameters ?? { type: 'object' } }))
+      .filter((t: ModelToolDefinition) => t.name);
+    const offeredNames = new Set(offeredToolDefs.map((t) => t.name));
     const chars = {
       system: messages.filter((m) => m.role === 'system' || m.role === 'developer').reduce((n, m) => n + contentChars(m), 0),
       history: messages.filter((m) => m.role !== 'system' && m.role !== 'developer').reduce((n, m) => n + contentChars(m), 0),
@@ -220,6 +228,12 @@ export function createPiOllamaFetch(options: PiOllamaFetchOptions): typeof fetch
       async start(controller) {
         const push = (text: string) => controller.enqueue(encoder.encode(text));
         const firstToken = () => { if (metrics.firstTokenMs == null) metrics.firstTokenMs = Date.now() - started; };
+        const emitToolCall = (name: string, args: unknown) => {
+          const index = metrics.toolCalls;
+          metrics.toolCalls += 1;
+          push(chunk({ tool_calls: [{ index, id: `call_${started.toString(36)}_${index}`, type: 'function', function: { name, arguments: typeof args === 'string' ? args : JSON.stringify(args ?? {}) } }] }));
+        };
+        const inline: { mode: 'undecided' | 'holding' | 'streaming'; held: string } = { mode: 'undecided', held: '' };
         let sawDone = false;
         // Silence watchdog: until the first frame the whole first-output allowance applies, then the idle allowance.
         let stall: ModelStalledError | null = null;
@@ -252,15 +266,36 @@ export function createPiOllamaFetch(options: PiOllamaFetchOptions): typeof fetch
             }
             if (msg?.content) {
               firstToken();
-              push(chunk({ content: msg.content }));
+              // A reply that starts like a JSON object or a code fence may be a tool call written as text: hold it.
+              if (inline.mode === 'undecided' && offeredToolDefs.length > 0) {
+                inline.held += msg.content;
+                const lead = inline.held.trimStart();
+                if (lead) inline.mode = lead.startsWith('{') || lead.startsWith('```') ? 'holding' : 'streaming';
+                if (inline.mode === 'streaming') { push(chunk({ content: inline.held })); inline.held = ''; }
+              } else if (inline.mode === 'holding') {
+                inline.held += msg.content;
+              } else {
+                push(chunk({ content: msg.content }));
+              }
             }
             for (const call of msg?.tool_calls ?? []) {
               firstToken();
-              const index = metrics.toolCalls;
-              metrics.toolCalls += 1;
-              push(chunk({ tool_calls: [{ index, id: `call_${started.toString(36)}_${index}`, type: 'function', function: { name: call.function?.name ?? '', arguments: JSON.stringify(call.function?.arguments ?? {}) } }] }));
+              emitToolCall(call.function?.name ?? '', call.function?.arguments ?? {});
             }
             if (frame.done) {
+              if (inline.held) {
+                // Build 161 audit: qwen2.5-coder:3b wrote correct calls as JSON text in 8 of 9 benchmark tasks; the
+                // transport passed them on as prose, so nothing ran. Recovered only when the reply IS a call to an
+                // offered tool and no native call came; anything else is released unchanged.
+                const recovered = metrics.toolCalls === 0 && inline.mode === 'holding' ? parseInlineToolCalls(inline.held, offeredToolDefs) : { kind: 'none' as const };
+                if (recovered.kind === 'calls' && recovered.calls.every((c) => offeredNames.has(c.name))) {
+                  for (const call of recovered.calls) emitToolCall(call.name, call.arguments ?? {});
+                  metrics.inlineToolCallsRecovered = recovered.calls.length;
+                } else {
+                  push(chunk({ content: inline.held }));
+                }
+                inline.held = '';
+              }
               sawDone = true;
               metrics.promptTokens = frame.prompt_eval_count ?? 0;
               metrics.promptMs = Math.round((frame.prompt_eval_duration ?? 0) / 1e6);
