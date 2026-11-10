@@ -55,10 +55,16 @@ const PRONOUN_FOLLOW_UP = /\b(?:what (?:language|languages|programming language)
  */
 const ASSISTANT_TOPIC = /\b(?:notif\w*|reminders?|gmail|e-?mails?|inbox|calendar|tasks?|schedul\w*|briefings?|background|labels?|approvals?|batch(?:es)?|tray|toast|alerts?|status|your)\b/i;
 
+/** Pandesh's own setup and settings. A question naming one of these is about the assistant, whatever "this app" says. */
+const PANDESH_SETUP_TOPIC = /\b(?:pandesh|google|gmail|calendar|credentials?|oauth|client id|connections?|connected services|permission(?:s| mode| settings)?|auto mode|plan only|wake word|microphone|settings)\b/i;
+
 /** True when the request asks about the selected project itself ("this project", "here", "how do I run it"). */
 export function isProjectInspectionRequest(text: string): boolean {
   const t = String(text || '').trim();
   if (!t || t.length > 600) return false;
+  // "Where can I set up my Google credentials in this app?" is about Pandesh itself, not a project folder: without a
+  // workspace it was refused as "no active project to inspect" before the model saw it (2026-11-10).
+  if (PANDESH_SETUP_TOPIC.test(t)) return false;
   if (DEICTIC_PROJECT.test(t) && INSPECTION_QUESTION.test(t)) return true;
   if (ASSISTANT_TOPIC.test(t)) return false;
   return PRONOUN_FOLLOW_UP.test(t);
