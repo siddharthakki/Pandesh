@@ -112,8 +112,14 @@ export const DECISIONS = {
           confidential: 'internal business details, customers, suppliers, prices, file paths, passwords or keys',
         },
       },
+      // Aimed at the miss of v3 ("Jonas Weber diabetes diagnosis treatment options"): a name next to a private matter.
+      v8_person_detail: { type: 'noul', instructions: 'Does `query` mention a named person together with their health, money, family, address or other private matters?' },
+      v9_identifiable: { type: 'noul', instructions: 'Could `query` identify a private person or a private business and reveal something about them?' },
     },
     scorers: {
+      'v8.private': { label: (c) => c.private, risk: (a) => noul(a.v8_person_detail) },
+      'v9.private': { label: (c) => c.private, risk: (a) => noul(a.v9_identifiable) },
+      'v3v8.private': { label: (c) => c.private, risk: (a) => max(not(p(a.v3_kind, 'public')), noul(a.v8_person_detail)) },
       'v1.private': { label: (c) => c.private, risk: (a) => max(noul(a.v1_personal), noul(a.v1_confidential)) },
       'v2.private': { label: (c) => c.private, risk: (a) => noul(a.v2_private) },
       'v3.private': { label: (c) => c.private, risk: (a) => not(p(a.v3_kind, 'public')) },
