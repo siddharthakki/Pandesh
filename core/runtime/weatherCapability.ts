@@ -9,12 +9,13 @@ export interface WeatherCapabilityOptions {
   fetchImpl?: typeof fetch;
 }
 
-interface GeocodePlace {
+export interface GeocodePlace {
   id?: number;
   name: string;
   country?: string;
   country_code?: string;
   admin1?: string;
+  population?: number;
   latitude: number;
   longitude: number;
 }
@@ -60,6 +61,72 @@ const WEATHER_CODE_LABELS: Record<number, string> = {
 
 function failure(output: string, category: string): ToolExecutionResult {
   return { status: 'failed', exitCode: null, output, resultCategory: category };
+}
+
+/** The most extra name lookups a "no such place" answer may make, all to the same geocoder, in parallel. */
+export const MAX_SOUND_ALIKE_QUERIES = 10;
+
+function lettersOf(name: string): string {
+  return name.normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase().replace(/[^a-z]/g, '');
+}
+
+/**
+ * A rough sound key for a place name: the leading vowels become one "*", later vowels drop out, similar letters merge
+ * and doubles collapse. A misheard or misspelt name usually keeps its consonants: "Ostin" and "Austin" share a key.
+ */
+export function placeSoundKey(name: string): string {
+  const w = lettersOf(name).replace(/ph/g, 'f').replace(/[ckq]/g, 'k').replace(/z/g, 's').replace(/w/g, 'v');
+  const m = /^([^aeiouy]*)([aeiouy]*)(.*)$/.exec(w);
+  if (!m) return w;
+  return `${m[1]}${m[2] ? '*' : ''}${m[3].replace(/[aeiouyh]/g, '')}`.replace(/(.)\1+/g, '$1');
+}
+
+/**
+ * Other spellings to look up when a name finds nothing, because the geocoder's own fuzzy match keeps the first letters:
+ * the first vowel sound swapped ("Ostin" → "Austin"), and for a short name its consonants alone with each vowel
+ * ("Ellum" → "Alm", "Olm", …). Bounded, never the original spelling.
+ */
+export function soundAlikeQueries(name: string, max = MAX_SOUND_ALIKE_QUERIES): string[] {
+  const word = lettersOf(name);
+  const m = /^([^aeiouy]*)([aeiouy]+)(.*)$/.exec(word);
+  if (word.length < 3 || !m) return [];
+  const [, lead, , rest] = m;
+  const out = new Set<string>();
+  const skeleton = rest.replace(/[aeiouy]/g, '').replace(/(.)\1+/g, '$1');
+  if (skeleton.length >= 1 && skeleton.length <= 2) for (const v of ['a', 'e', 'i', 'o', 'u']) out.add(lead + v + skeleton);
+  for (const v of ['a', 'e', 'i', 'o', 'u', 'au']) out.add(lead + v + rest);
+  out.add(word.replace(/(.)\1+/g, '$1'));
+  out.delete(word);
+  return [...out].slice(0, max).map((q) => q.charAt(0).toUpperCase() + q.slice(1));
+}
+
+function editDistance(a: string, b: string): number {
+  const prev = Array.from({ length: b.length + 1 }, (_, j) => j);
+  for (let i = 1; i <= a.length; i += 1) {
+    let diagonal = prev[0];
+    prev[0] = i;
+    for (let j = 1; j <= b.length; j += 1) {
+      const saved = prev[j];
+      prev[j] = a[i - 1] === b[j - 1] ? diagonal : 1 + Math.min(diagonal, prev[j], prev[j - 1]);
+      diagonal = saved;
+    }
+  }
+  return prev[b.length];
+}
+
+/** The places that sound most like the name, best first: same sound key, then the larger place. */
+export function closestPlaceNames(heard: string, candidates: GeocodePlace[], limit = 3): string[] {
+  const key = placeSoundKey(heard);
+  // A short key ("*lm") matches only exactly; a longer one may differ by one sound.
+  const allowed = key.length <= 3 ? 0 : 1;
+  const seen = new Set<string>();
+  return candidates
+    .map((c) => ({ c, distance: editDistance(key, placeSoundKey(c.name)) }))
+    .filter(({ distance }) => distance <= allowed)
+    .sort((a, b) => a.distance - b.distance || (b.c.population ?? 0) - (a.c.population ?? 0))
+    .map(({ c }) => [c.name, c.admin1, c.country].filter(Boolean).join(', '))
+    .filter((label) => (seen.has(label) ? false : (seen.add(label), true)))
+    .slice(0, limit);
 }
 
 function matchesCountry(result: GeocodePlace, exp: string): boolean {
@@ -130,7 +197,20 @@ export function createWeatherCapabilityAdapter(options: WeatherCapabilityOptions
         : candidates;
 
       if (matchedCandidates.length === 0) {
-        return failure(`No location found matching "${cityName}"${expectedCountry ? ` in ${expectedCountry}` : ''}. Please verify the city and country name.`, 'weather_location_not_found');
+        // Not a dead end: a spoken or misspelt name ("Ostin") usually sounds like the place meant ("Austin").
+        const lookups = await Promise.allSettled(soundAlikeQueries(cityName).map((q) => json(
+          `https://geocoding-api.open-meteo.com/v1/search?count=10&name=${encodeURIComponent(q)}`,
+        ) as Promise<GeocodeResult>));
+        const pool = [...candidates, ...lookups.flatMap((r) => (r.status === 'fulfilled' ? r.value.results ?? [] : []))];
+        const inCountry = expectedCountry ? pool.filter((c) => matchesCountry(c, expectedCountry!)) : pool;
+        const closest = closestPlaceNames(cityName, inCountry.length ? inCountry : pool);
+        const where = `"${cityName}"${expectedCountry ? ` in ${expectedCountry}` : ''}`;
+        return failure(
+          closest.length
+            ? `No place called ${where} was found. Closest place names: ${closest.join('; ')}. Ask the user which one they meant (a spoken place name is often misheard); do not pick one yourself.`
+            : `No place called ${where} was found, and no similar-sounding place either. Ask the user to spell the place name or name a nearby larger town.`,
+          'weather_location_not_found',
+        );
       }
 
       // Check for exact match on city name (case-insensitive)

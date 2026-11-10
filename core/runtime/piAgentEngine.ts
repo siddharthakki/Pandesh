@@ -29,6 +29,7 @@ import { discoverCodingAgents, housekeepingRoot, spawnPlan } from './codingAgent
 import { createProject, listProjects } from '../domain/projects';
 import { readUpdateState } from './software/updates';
 import { collectListeningPorts } from './software/inventory';
+import { findInstalledApp, formatInstalledAppLookup, validAppQuery } from './installedAppLookup';
 import { FolderReadLedger, requestedOutputFiles, requiresSourceEvidence, requiresWholeFolder, unreadFilesNotice } from './folderCompleteness';
 import * as cp from 'node:child_process';
 import { holdAwaitedApproval } from './cancellationRecovery';
@@ -3246,6 +3247,25 @@ export class PiAgentEngine implements EngineAdapter {
         },
       },
       {
+        // Build 161 voice test: asked where an app was, the model asked the user where to look.
+        name: 'find_installed_app',
+        label: 'find_installed_app',
+        description: 'Find where an app is installed on this PC ("where is <app>", "is <app> installed"): reads the registered app paths, installed programs, Store apps, Start menu shortcuts and PATH. Read-only and offline. When Windows does not list the app, it names the fixed drives for ONE consented search for <name>.exe.',
+        parameters: { type: 'object', properties: { name: { type: 'string', description: 'The app name only, e.g. "Obsidian" or "LM Studio".' } }, required: ['name'] },
+        execute: async (_id: string, args: any) => {
+          const query = validAppQuery(args?.name);
+          if (!query) return { content: [{ type: 'text', text: 'NOT DONE: give the app name only (letters, digits, spaces, dots, dashes; 2-60 characters).' }], isError: true };
+          if (process.platform !== 'win32') return { content: [{ type: 'text', text: 'NOT AVAILABLE: the installed-app lookup reads Windows sources and this PC is not running Windows.' }], isError: true };
+          try {
+            const found = await findInstalledApp(query);
+            const text = formatInstalledAppLookup(found);
+            return { content: [{ type: 'text', text }], details: { activity: { kind: 'tool', title: found.matches.length ? `Where ${query} is installed` : `${query} not listed as installed`, excerpt: text.slice(0, 1500) } } };
+          } catch (err: any) {
+            return { content: [{ type: 'text', text: `NOT AVAILABLE: Windows did not answer the installed-app lookup: ${err?.message ?? String(err)}` }], isError: true };
+          }
+        },
+      },
+      {
         // Alpha e2e T10: no chat tool created projects, and the reply said "I have initiated the creation…".
         name: 'create_project',
         label: 'create_project',
@@ -4775,8 +4795,8 @@ ${filesPromptSection}${webResearchPromptSection}${wishesPromptSection}${emailCal
     if (availableToolNames.has('list_projects')) {
       systemPrompt += "\n\nPROJECTS: \"my projects\", \"project tasks\", \"current tasks\" mean Pandesh's Projects workspace → 'list_projects' (real saved projects and their task status). Never substitute files in a folder or a test run for them.";
     }
-    if (availableToolNames.has('listening_ports') || availableToolNames.has('software_updates')) {
-      systemPrompt += `\n\nPC FACTS:${availableToolNames.has('listening_ports') ? " listening ports / open ports / what is listening → 'listening_ports' (every process on this PC); 'port_list_services' lists only Pandesh's own managed services, so never present it as the PC's ports." : ''}${availableToolNames.has('software_updates') ? " Updates / outdated software / versions → 'software_updates' (the stored check, offline); say when it was checked, and never state a version or 'up to date' without it." : ''}`;
+    if (availableToolNames.has('listening_ports') || availableToolNames.has('software_updates') || availableToolNames.has('find_installed_app')) {
+      systemPrompt += `\n\nPC FACTS:${availableToolNames.has('listening_ports') ? " listening ports / open ports / what is listening → 'listening_ports' (every process on this PC); 'port_list_services' lists only Pandesh's own managed services, so never present it as the PC's ports." : ''}${availableToolNames.has('software_updates') ? " Updates / outdated software / versions → 'software_updates' (the stored check, offline); say when it was checked, and never state a version or 'up to date' without it." : ''}${availableToolNames.has('find_installed_app') ? " Where is <app> / is <app> installed → 'find_installed_app' first. If Windows does not list it, propose ONE search of the fixed drives it names for <name>.exe (request_search_permission, then search_files); never ask the user where to look." : ''}`;
     }
     // Audit D11: totals are computed by the calculate tool, not by the model.
     if (availableToolNames.has('calculate')) {
