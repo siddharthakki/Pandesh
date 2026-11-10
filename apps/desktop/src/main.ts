@@ -19,7 +19,15 @@ import {
   resolveBuildIdentity,
   type DesktopBuildIdentity,
 } from './host/desktopBuildIdentity';
-import { ownsLoginItem, readHostPreferences, resolveUiVariant, writeHostPreferences } from './host/desktopHostPreferences';
+import {
+  LOGIN_ITEM_NAME,
+  mayChangeLoginItem,
+  ownsLoginItem,
+  readHostPreferences,
+  readRunValue,
+  resolveUiVariant,
+  writeHostPreferences,
+} from './host/desktopHostPreferences';
 import { DESKTOP_CHANNELS, type DesktopAppMetadata, type DesktopUpdateStartResult, type DesktopUpdateStatus } from './ipc';
 import {
   acknowledgeUpdateResult, inspectPackage, launchUpdater, quiesceCore, readCoreReadiness, readUpdateResult,
@@ -290,9 +298,17 @@ function syncTrayFromSession(): void {
 
 function applyOpenAtLogin(enabled: boolean): void {
   prefs = writeHostPreferences(dataDir, { openAtLogin: enabled });
-  // A test or scratch profile keeps its own preference but never writes or deletes the shared Windows entry.
-  if (!ownsLoginItem(dataDir, defaultDesktopDataDir())) {
-    hostLog(`login item left alone: profile ${dataDir} is not the real desktop profile (preference saved: ${enabled ? 'on' : 'off'})`);
+  // A test or scratch profile keeps its own preference but never writes or deletes the shared Windows entry. The profile
+  // check alone is not enough: a test that points LOCALAPPDATA at a scratch folder makes that folder look like the real
+  // profile, so an entry that starts another Pandesh that still exists is left alone as well.
+  const decision = mayChangeLoginItem({
+    ownsProfile: ownsLoginItem(dataDir, defaultDesktopDataDir()),
+    existingValue: readRunValue(LOGIN_ITEM_NAME),
+    execPath: process.execPath,
+    exists: (file) => fs.existsSync(file),
+  });
+  if (!decision.allowed) {
+    hostLog(`login item left alone: ${decision.reason} (profile ${dataDir}; preference saved: ${enabled ? 'on' : 'off'})`);
     syncTrayFromSession();
     return;
   }
@@ -301,6 +317,7 @@ function applyOpenAtLogin(enabled: boolean): void {
       openAtLogin: enabled,
       path: process.execPath,
       args: process.defaultApp ? [path.resolve(process.argv[1] || '')] : [],
+      name: LOGIN_ITEM_NAME,
     });
   } catch (err) {
     hostLog(`setLoginItemSettings failed: ${(err as Error).message}`);
