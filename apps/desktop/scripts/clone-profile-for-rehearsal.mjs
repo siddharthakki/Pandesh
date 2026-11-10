@@ -1,4 +1,3 @@
-#!/usr/bin/env node
 /**
  * Copies a Pandesh profile for an upgrade rehearsal or a test run WITHOUT its live identity or its secrets.
  *

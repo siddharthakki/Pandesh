@@ -275,9 +275,14 @@ describe('one Core per profile (real Core processes)', () => {
     expect(legacy.reason).toMatch(/names no profile/);
     expect(isAlive(pidA)).toBe(true);
 
-    // The profile that started the Core can still stop it (the forced-cleanup path is not disabled).
-    const own = await createPortProcessManager({ dataDir: dirA }).stopOwned('karkeDikha-core');
-    expect(own.stopped).toBe(true);
+    // The profile that started the Core can still stop it (the forced-cleanup path is not disabled). A cold PowerShell
+    // on a loaded CI runner can miss the identity query's deadline: that is a safe refusal that keeps the record, so the
+    // profile simply asks again. Any other refusal fails at once.
+    let own = await createPortProcessManager({ dataDir: dirA }).stopOwned('karkeDikha-core');
+    for (let attempt = 1; !own.stopped && /creation time or executable path/.test(own.reason ?? '') && attempt < 4; attempt += 1) {
+      own = await createPortProcessManager({ dataDir: dirA }).stopOwned('karkeDikha-core');
+    }
+    expect(own.stopped, own.reason).toBe(true);
     const deadline = Date.now() + 5_000;
     while (isAlive(pidA) && Date.now() < deadline) await new Promise((r) => setTimeout(r, 100));
     expect(isAlive(pidA)).toBe(false);

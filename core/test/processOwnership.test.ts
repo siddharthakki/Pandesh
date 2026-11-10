@@ -2,9 +2,12 @@ import { describe, expect, it, vi } from 'vitest';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
+import * as cp from 'node:child_process';
+import { createPortProcessManager } from '../runtime/portManager';
 import {
   createProcessOwnershipBoundary,
   createProcessOwnershipLedger,
+  createWindowsProcessIdentityProvider,
   verifyProcessOwnership,
   type OwnershipProvenance,
   type ProcessIdentitySnapshot,
@@ -277,5 +280,35 @@ describe('Process ownership boundary termination', () => {
     // Both are refusals, and neither one authorizes a kill.
     expect(['not_alive', 'identity_unavailable']).toContain(result.verdict.code);
     expect(killFn).not.toHaveBeenCalled();
+  });
+});
+
+// Build 161 PR #47 (CI): a cold PowerShell on a loaded runner timed out. The empty answer was read as "not running",
+// so a live Core counted as gone and its service record was dropped as stale. An empty or unreadable answer now leaves
+// the question "does it exist" to the OS directly: alive with an unknown identity is a refusal that keeps the record.
+describe('an identity query that gives no answer', () => {
+  /** A query that prints nothing, as one that timed out or failed does. */
+  const silentQuery = ((_cmd: string, _args: string[], opts: cp.SpawnOptions) => cp.spawn(process.execPath, ['-e', ''], opts)) as unknown as typeof cp.spawn;
+
+  it.runIf(process.platform === 'win32')('reports a live process as alive with an unknown identity, and a finished one as gone', async () => {
+    const provider = createWindowsProcessIdentityProvider(silentQuery);
+    expect(await provider(process.pid)).toMatchObject({ alive: true, creationTimeMs: null, executablePath: null });
+    const finished = cp.spawnSync(process.execPath, ['-e', 'process.stdout.write(String(process.pid))'], { encoding: 'utf8' });
+    expect(await provider(Number(finished.stdout))).toMatchObject({ alive: false });
+  });
+
+  it.runIf(process.platform === 'win32')('refuses to stop the process but keeps its service record for a later attempt', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ownership-silent-'));
+    try {
+      const manager = createPortProcessManager({ dataDir: dir, identityProvider: createWindowsProcessIdentityProvider(silentQuery) });
+      manager.register({ name: 'svc', port: 0, pid: process.pid, processStartMs: Date.now(), executable: process.execPath });
+      manager.recordOwnership({ pid: process.pid, creationTimeMs: Date.now(), executablePath: process.execPath, source: 'test' });
+      const stop = await manager.stopOwned('svc');
+      expect(stop.stopped).toBe(false);
+      expect(stop.reason).toMatch(/creation time or executable path|identity/);
+      expect(manager.get('svc')).toBeTruthy();
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
   });
 });

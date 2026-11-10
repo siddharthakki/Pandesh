@@ -320,16 +320,32 @@ function identityQueryScript(pid: number): string {
   ].join('\n');
 }
 
+/**
+ * No usable answer from the OS: the query printed nothing (it does so for a process that is gone, but also when it
+ * timed out or failed) or something unreadable. Whether the process exists is checked directly, so a slow query is not
+ * mistaken for "not running" (Build 161 PR #47 CI: a cold PowerShell on a loaded runner timed out, the live Core was
+ * reported gone, and its service record was dropped as stale). A live process with an unreadable identity is
+ * "identity unavailable": still a refusal — nothing is killed — but the record is kept for a later attempt.
+ */
+function unreadableIdentity(pid: number): ProcessIdentitySnapshot {
+  let alive = false;
+  try {
+    process.kill(pid, 0);
+    alive = true;
+  } catch (err) {
+    alive = (err as NodeJS.ErrnoException).code === 'EPERM';
+  }
+  return { pid, alive, executablePath: null, creationTimeMs: null, commandLine: null };
+}
+
 function parseIdentityOutput(pid: number, output: string): ProcessIdentitySnapshot {
   const trimmed = output.trim();
-  if (!trimmed) {
-    return { pid, alive: false, executablePath: null, creationTimeMs: null, commandLine: null };
-  }
+  if (!trimmed) return unreadableIdentity(pid);
   let parsed: { pid?: number; exe?: string | null; cmd?: string | null; created?: string | null };
   try {
     parsed = JSON.parse(trimmed) as typeof parsed;
   } catch {
-    return { pid, alive: false, executablePath: null, creationTimeMs: null, commandLine: null };
+    return unreadableIdentity(pid);
   }
   const creationTimeMs = parsed.created ? Date.parse(parsed.created) : NaN;
   return {
