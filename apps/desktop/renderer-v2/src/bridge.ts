@@ -59,7 +59,18 @@ export interface Snapshot {
   /** Everyday Tools catalog: Calendar counts as connected only when Core verified it with a live read. */
   everydayTools?: { catalog?: Array<{ id: string; connectorState?: string; availability?: string }>; [k: string]: unknown };
   modelNote?: string | null;
+  /** openWakeWord readiness and the enable / mute preference (the host detects; the page feeds it microphone frames). */
+  wakeWord?: WakeWordStatus;
+  /** What the host's detector has received (frames, warm-up, capture errors). */
+  wakeDiagnostics?: WakeDiagnostics;
+  speechInterrupt?: { buttonStop?: boolean; spokenBargeIn?: boolean; spokenBargeInBlocker?: string };
 }
+
+export interface WakeWordStatus { capability: string; engine?: string | null; blocker?: string; phrase?: string; enabled: boolean; muted: boolean }
+export interface WakeDiagnostics { engineReady?: boolean; captureActive?: boolean; captureError?: string; framesReceived?: number; readyForDetect?: boolean; [k: string]: unknown }
+export interface WakeCaptureMeta { captureActive?: boolean; captureError?: string; rms?: number; sampleRate?: number; contextSampleRate?: number; framesEmitted?: number; trackLabel?: string }
+/** Host voice events: wake_detected, wake_state, wake_score, speaking, speak_stopped, speak_finished, speak_failed. */
+export interface VoiceEvent { kind: string; score?: number; wakeDetectMs?: number | null; inferenceMs?: number; framesReceived?: number; enabled?: boolean; muted?: boolean; [k: string]: unknown }
 
 export interface TranscriptMessage { id: string; role: 'user' | 'assistant' | 'system'; content: string; createdAt: string; model?: string | null; provider?: string | null }
 export interface ConversationEntry { id: string; title: string | null; preview: string | null; state: string; updatedAt: string; archivedAt: string | null; pinnedAt: string | null }
@@ -122,6 +133,13 @@ export interface DesktopApi {
   openArtifactFolder(artifactId: string): Promise<{ opened: boolean }>;
   openWorkspaceFolder(): Promise<{ opened: boolean }>;
   onEvent(listener: (event: ActivityEvent) => void): () => void;
+  setWakeWordEnabled(enabled: boolean): Promise<Snapshot | null>;
+  setWakeWordMuted(muted: boolean): Promise<Snapshot | null>;
+  /** Tells the host whether this page's wake microphone is open (and why not, when it failed). */
+  reportWakeCapture(meta: WakeCaptureMeta): Promise<Snapshot | null>;
+  /** One or more 16 kHz Int16 frames (base64) for the host's wake detector. */
+  pushWakeAudio(pcmBase64: string, meta?: WakeCaptureMeta): Promise<{ score: number; detected: boolean; diagnostics?: WakeDiagnostics }>;
+  onVoiceEvent?(listener: (event: VoiceEvent) => void): () => void;
 }
 
 export const api: DesktopApi = (window as unknown as { desktop: DesktopApi }).desktop;

@@ -13,6 +13,7 @@ import { SecondBrain } from './SecondBrain';
 import { Processes } from './Processes';
 import { Workspace, type SpaceId } from './Workspaces';
 import { Connections } from './Connections';
+import { useWakeWord } from './wake';
 
 export type View = 'chat' | 'board' | 'team' | 'space' | 'system' | 'software' | 'tools' | 'brain' | 'processes' | 'workspace' | 'radar' | 'revenue' | 'connections';
 
@@ -32,6 +33,11 @@ export function App() {
   useEffect(() => { api.getUiVariant().then((v) => setVariantForced(v.forcedByEnv)).catch(() => setVariantForced(false)); }, []);
 
   const needs = needsYouCount(overview.data?.tasks ?? [], snapshot);
+
+  // The wake word listens on every view: a detection opens the chat and starts a voice turn there.
+  const [voiceBusy, setVoiceBusy] = useState(false);
+  const [wakeTurn, setWakeTurn] = useState<{ id: number } | null>(null);
+  const wake = useWakeWord({ snapshot, refresh, voiceBusy, onWake: () => { setWakeTurn({ id: Date.now() }); setView('chat'); setPop(null); } });
 
   const openPop = (name: 'spaces' | 'system' | 'palette') => {
     if (pop === name) { closePop(); return; }
@@ -176,7 +182,8 @@ export function App() {
       )}
 
       <div className="main" data-view={view}>
-        {view === 'chat' && <Chat snapshot={snapshot} snapshotError={error} refresh={refresh} narrow={narrow} openConversationId={openConversationId} onOpenPalette={() => openPop('palette')} onOpenBoard={() => go('board')} draft={draft} onDraftUsed={() => setDraft(null)} />}
+        {view === 'chat' && <Chat snapshot={snapshot} snapshotError={error} refresh={refresh} narrow={narrow} openConversationId={openConversationId} onOpenPalette={() => openPop('palette')} onOpenBoard={() => go('board')} draft={draft} onDraftUsed={() => setDraft(null)}
+          wake={wake} wakeTurn={wakeTurn} onWakeTurnTaken={() => setWakeTurn(null)} onVoiceBusy={setVoiceBusy} />}
         {view === 'board' && <Board overview={overview} narrow={narrow} onOpenPalette={() => openPop('palette')} onOpenConversation={(id) => { setOpenConversationId(id); go('chat'); }} />}
         {view === 'software' && <Software narrow={narrow} />}
         {view === 'radar' && <Radar onOpenChat={() => { setOpenConversationId(null); refresh(); go('chat'); }} />}
