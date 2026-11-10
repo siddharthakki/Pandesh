@@ -145,7 +145,7 @@ the same records. More in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 Everything below runs in the current source build and is covered by recorded runs or screenshots in
 [`docs/media`](docs/media/README.md).
 
-| | |
+| Feature | What it does |
 |---|---|
 | 💻 **Coding that checks its work** | Writes files, runs your tests after you approve the exact command, fixes failures and re-runs them. Core checks written files, attributes results and flags suggested commands that can't work. Aider runs as a local coding engine; OpenCode is optional. |
 | 🔎 **Research with sources** | Asks once for internet access, searches public sources and returns citations. Private text is stripped from the query before it leaves your PC. |
