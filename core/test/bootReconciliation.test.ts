@@ -8,6 +8,7 @@ import { failDeadExecutorAttemptsOnBoot, scanOrphanedAttemptsOnBoot } from '../d
 import { createApproval, getApproval } from '../domain/approvals';
 import { acquireFence } from '../domain/fence';
 import { transitionAttempt } from '../domain/attempts';
+import { loadLoopContinuation, saveLoopContinuation } from '../domain/attemptLoopContinuation';
 import { claimKarkeDikhaAttempt } from '../domain/karkeDikhaLifecycle';
 import { submitRequest } from '../domain/submission';
 
@@ -123,5 +124,50 @@ describe('failDeadExecutorAttemptsOnBoot: a chat approval whose waiting worker d
     const self = waitingOnApproval('core:executor:7');
     expect(failDeadExecutorAttemptsOnBoot(db, { selfPid: 7, isProcessAlive: (pid) => pid === 4243 })).toEqual([]);
     expect(getApproval(db, self.approvalId).status).toBe('pending');
+  });
+});
+
+// Build 161 audit (rehearsal on a copy of production): a Saath loop parked on a governed approval was skipped at boot
+// whatever that approval's state. Its card had been superseded in September, so the attempt stayed "waiting for
+// approval" with nothing to approve. Only an answer that can still come keeps it waiting now.
+describe('failDeadExecutorAttemptsOnBoot: a Saath loop parked on an approval', () => {
+  function parkedOn(approvalStatus: 'pending' | 'superseded' | 'missing', owner: string) {
+    const { attempt } = submit('saath_kar', `parked ${owner}`);
+    const fence = acquireFence(db, attempt.id, { owner, actor: 'test', leaseMs: 120_000 });
+    transitionAttempt(db, attempt.id, { toStatus: 'running', fenceToken: fence.token, actor: 'test' });
+    transitionAttempt(db, attempt.id, { toStatus: 'waiting_for_approval', fenceToken: fence.token, actor: 'test' });
+    // The card lives on the conversation's capability anchor, another attempt.
+    const anchor = submit('saath_kar', `anchor ${owner}`).attempt;
+    let cardId = 'appr_missing_' + owner.replace(/W/g, '');
+    if (approvalStatus !== 'missing') {
+      cardId = createApproval(db, { attemptId: anchor.id, kind: 'mutation', summary: { toolName: 'write_file' }, presentation: { cardText: 'write' }, actor: 'test' }).id;
+      if (approvalStatus === 'superseded') db.run("UPDATE approvals SET status = 'superseded', resolvedAt = ? WHERE id = ?", [new Date().toISOString(), cardId]);
+    }
+    saveLoopContinuation(db, attempt.id, {
+      state: 'awaiting_capability_approval', provider: 'ollama', model: 'test-model', turnIndex: 1, baseMessageSeq: 0,
+      payload: { deltaMessages: [], priorOperations: [], pendingCall: null, remainingCalls: [] } as never,
+      pendingApprovalId: cardId, requestedActionDigest: 'digest', frozenContextHash: 'ctx',
+    });
+    return attempt.id;
+  }
+
+  it('settles it when the awaited approval was superseded or no longer exists, and closes its continuation', () => {
+    const superseded = parkedOn('superseded', 'core:executor:4270');
+    const missing = parkedOn('missing', 'core:executor:4271');
+    const settled = failDeadExecutorAttemptsOnBoot(db, { selfPid: 1, isProcessAlive: () => false });
+    expect(settled.map((s) => s.attemptId).sort()).toEqual([superseded, missing].sort());
+    for (const id of [superseded, missing]) {
+      const row = db.get<{ status: string; failureReason: string }>('SELECT status, failureReason FROM attempts WHERE id = ?', [id]);
+      expect(row?.status).toBe('failed');
+      expect(row?.failureReason).toMatch(/Nothing further was run/);
+      expect(loadLoopContinuation(db, id)).toBeUndefined();
+    }
+  });
+
+  it('keeps it waiting while the awaited approval can still be answered', () => {
+    const waiting = parkedOn('pending', 'core:executor:4272');
+    expect(failDeadExecutorAttemptsOnBoot(db, { selfPid: 1, isProcessAlive: () => false })).toEqual([]);
+    expect(db.get<{ status: string }>('SELECT status FROM attempts WHERE id = ?', [waiting])?.status).toBe('waiting_for_approval');
+    expect(loadLoopContinuation(db, waiting)?.pendingApprovalId).toBeTruthy();
   });
 });

@@ -1,6 +1,6 @@
 import type { CoreDatabase } from '../db/connection';
 import { expireApproval, getApproval, listApprovalsForAttempt } from './approvals';
-import { loadLoopContinuation } from './attemptLoopContinuation';
+import { closeLoopContinuation, loadLoopContinuation } from './attemptLoopContinuation';
 import { failAttempt, listAttempts, transitionAttempt } from './attempts';
 import { classifyAttemptRecovery, type RecoveryClassification } from './recovery';
 import { isBackgroundTaskAttempt } from './backgroundTasks';
@@ -46,7 +46,22 @@ export function failDeadExecutorAttemptsOnBoot(
       // A Saath loop suspended on a governed approval keeps a durable continuation and resumes after the answer.
       // Any other worker (the live chat agent) waited for the answer in memory; that wait died with the process, so
       // Approve could only pretend to continue. Retire the approval (nobody decided) and settle the task truthfully.
-      if (loadLoopContinuation(db, attempt.id)?.pendingApprovalId) continue;
+      // Only while that answer can still come (Build 161 audit, rehearsal on a copy of production: a continuation still
+      // waited on an approval superseded in September, so its attempt stayed "waiting for approval" with no card). An
+      // approval that is gone, superseded, expired or cancelled can never resume the loop — the executor's own resume
+      // path calls that "can no longer be resumed" — so the attempt is settled below like any other.
+      let awaiting: string | null = null;
+      try {
+        awaiting = loadLoopContinuation(db, attempt.id)?.pendingApprovalId ?? null;
+      } catch {
+        awaiting = 'unreadable';
+      }
+      if (awaiting) {
+        const card = awaiting === 'unreadable' ? undefined : db.get<{ status: string }>('SELECT status FROM approvals WHERE id = ?', [awaiting]);
+        if (card && ['pending', 'approved', 'rejected'].includes(card.status)) continue;
+      }
+      // The continuation of a settled attempt is closed after the attempt is terminal, never before.
+      const closeContinuation = () => { if (awaiting) closeLoopContinuation(db, attempt.id); };
       const pending = listApprovalsForAttempt(db, attempt.id).filter((approval) => approval.status === 'pending');
       if (pending.length === 0) {
         // Build 161 audit: the approvals were answered or expired while the waiting worker was gone (or none was ever
@@ -57,6 +72,7 @@ export function failDeadExecutorAttemptsOnBoot(
           actor,
           failureReason: 'Interrupted: the worker waiting for an approval stopped, and no approval was pending any more when Core restarted. Nothing further was run. Ask again to retry.',
         });
+        closeContinuation();
         settled.push({ attemptId: attempt.id, status: attempt.status, outcome: 'failed' });
         continue;
       }
@@ -68,6 +84,7 @@ export function failDeadExecutorAttemptsOnBoot(
         actor,
         failureReason: 'Interrupted: KarkeDikha restarted while this task was waiting for your approval. Nothing was approved, rejected or run. Ask again to retry.',
       });
+      closeContinuation();
       settled.push({ attemptId: attempt.id, status: attempt.status, outcome: 'failed' });
       continue;
     }
