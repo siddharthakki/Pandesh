@@ -1,0 +1,60 @@
+{"id":"rt01","request":"Ask the Coding specialist to fix the failing tests in the price-tool project","agent":"coding","note":"shopping-like folder name (PR #38)"}
+{"id":"rt02","request":"Build a tip calculator in Python with unit tests","agent":"coding"}
+{"id":"rt03","request":"My TypeScript build fails with TS2345 in invoice.ts, please fix it","agent":"coding"}
+{"id":"rt04","request":"Write a script that renames all photos in a folder by the date they were taken","agent":"coding"}
+{"id":"rt05","request":"Add a dark mode toggle to my React app","agent":"coding"}
+{"id":"rt06","request":"Run the tests and tell me which ones fail","agent":"coding"}
+{"id":"rt07","request":"Refactor the pricing module so that discounts are applied before tax","agent":"coding"}
+{"id":"rt08","request":"Create a small website for the bakery that shows the opening hours","agent":"coding"}
+{"id":"rt09","request":"The shop-price-checker script throws KeyError 'amount', can you fix it?","agent":"coding","note":"shopping words in a coding request"}
+{"id":"rt10","request":"Write unit tests for the order total function","agent":"coding"}
+{"id":"rt11","request":"Convert this Python 2 script to Python 3","agent":"coding"}
+{"id":"rt12","request":"Set up a GitHub Actions workflow that runs npm test","agent":"coding"}
+{"id":"rt13","request":"What is the latest stable Ollama release?","agent":"research"}
+{"id":"rt14","request":"Find the current price of an RTX 5090 in Germany","agent":"research"}
+{"id":"rt15","request":"What's the weather in Ulm tomorrow?","agent":"research"}
+{"id":"rt16","request":"Find three suppliers of organic rye flour near Ulm","agent":"research"}
+{"id":"rt17","request":"What changed in Electron 45 compared to 44?","agent":"research"}
+{"id":"rt18","request":"Search the web for reviews of the Bosch PSB 18 drill","agent":"research"}
+{"id":"rt19","request":"Which German cities have the cheapest rent in 2026?","agent":"research"}
+{"id":"rt20","request":"Find the official documentation for SQLite WAL mode","agent":"research"}
+{"id":"rt21","request":"Are there any new security advisories for pdf.js this month?","agent":"research"}
+{"id":"rt22","request":"What are the opening hours of Ulm Minster this weekend?","agent":"research"}
+{"id":"rt23","request":"Compare the latest open-weight coding models","agent":"research"}
+{"id":"rt24","request":"Look up the train connections from Ulm to Munich tonight","agent":"research"}
+{"id":"rt25","request":"Remember that our flour supplier is Example Mills","agent":"personal"}
+{"id":"rt26","request":"Remind me to call the landlord tomorrow at 9","agent":"personal"}
+{"id":"rt27","request":"What's on my calendar on Friday?","agent":"personal"}
+{"id":"rt28","request":"Do I have any unread emails from Maria?","agent":"personal"}
+{"id":"rt29","request":"Make a note: renew the car insurance before December","agent":"personal"}
+{"id":"rt30","request":"What did I tell you about my supplier last week?","agent":"personal"}
+{"id":"rt31","request":"Add the dentist appointment on the 12th at 9:30 to my calendar","agent":"personal"}
+{"id":"rt32","request":"Forget the supplier's name I told you","agent":"personal"}
+{"id":"rt33","request":"Draft a reply to Maria's invoice email","agent":"personal"}
+{"id":"rt34","request":"Show me my reminders for this week","agent":"personal"}
+{"id":"rt35","request":"What is my wife's favourite cake? I told you before","agent":"personal"}
+{"id":"rt36","request":"Summarise today's unread mails","agent":"personal"}
+{"id":"rt37","request":"Can you find where Blender is installed on my PC?","agent":"operations"}
+{"id":"rt38","request":"Which apps are open on my screen right now?","agent":"operations"}
+{"id":"rt39","request":"How much free space is left on drive D?","agent":"operations"}
+{"id":"rt40","request":"Find all PDF files in my Downloads folder that are larger than 50 MB","agent":"operations"}
+{"id":"rt41","request":"Which program is using port 11434?","agent":"operations"}
+{"id":"rt42","request":"Is Ollama running?","agent":"operations"}
+{"id":"rt43","request":"Move the screenshots from the desktop into a Screenshots folder","agent":"operations"}
+{"id":"rt44","request":"What software updates are available on this PC?","agent":"operations"}
+{"id":"rt45","request":"Clean up the temp files on drive C","agent":"operations"}
+{"id":"rt46","request":"Show me the processes that use the most memory","agent":"operations"}
+{"id":"rt47","request":"Open the folder D:\\AI in Explorer","agent":"operations"}
+{"id":"rt48","request":"Which Python versions are installed on this machine?","agent":"operations"}
+{"id":"rt49","request":"Explain what a junction point is in Windows","agent":"chat"}
+{"id":"rt50","request":"Thank you, that's all for now","agent":"chat"}
+{"id":"rt51","request":"What is the difference between RAM and VRAM?","agent":"chat"}
+{"id":"rt52","request":"Tell me a joke about bakers","agent":"chat"}
+{"id":"rt53","request":"How does a sourdough starter work?","agent":"chat"}
+{"id":"rt54","request":"Good morning!","agent":"chat"}
+{"id":"rt55","request":"What does idempotent mean?","agent":"chat"}
+{"id":"rt56","request":"Can you explain recursion with a simple example?","agent":"chat"}
+{"id":"rt57","request":"How do I politely decline a meeting?","agent":"chat"}
+{"id":"rt58","request":"What is 15 percent of 84.50?","agent":"chat"}
+{"id":"rt59","request":"Translate 'good morning' into German","agent":"chat"}
+{"id":"rt60","request":"Who wrote Faust?","agent":"chat"}

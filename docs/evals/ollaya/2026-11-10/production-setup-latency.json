@@ -1,0 +1,47 @@
+{
+  "cmd": [
+    {
+      "model": "decider:2b",
+      "decision": "command_review",
+      "calls": 20,
+      "p50ms": 1065,
+      "p95msIncludingColdLoad": 20551
+    }
+  ],
+  "priv": [
+    {
+      "model": "decider:2b",
+      "decision": "web_query_privacy",
+      "calls": 20,
+      "p50ms": 1182,
+      "p95msIncludingColdLoad": 1324
+    }
+  ],
+  "inj": [
+    {
+      "model": "nli",
+      "decision": "prompt_injection",
+      "calls": 20,
+      "p50ms": 359,
+      "p95msIncludingColdLoad": 7071
+    }
+  ],
+  "inj2": [
+    {
+      "model": "decider:2b",
+      "decision": "prompt_injection",
+      "calls": 20,
+      "p50ms": 1190,
+      "p95msIncludingColdLoad": 1305
+    }
+  ],
+  "route": [
+    {
+      "model": "decider:0.8b",
+      "decision": "routing",
+      "calls": 20,
+      "p50ms": 707,
+      "p95msIncludingColdLoad": 11988
+    }
+  ]
+}
