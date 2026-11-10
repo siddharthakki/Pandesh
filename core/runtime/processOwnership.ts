@@ -400,6 +400,8 @@ export function createWindowsProcessIdentityProviderSync(
  */
 export function createWindowsProcessIdentityProvider(
   spawnImpl: typeof spawn = spawn,
+  /** How long the OS query may take before the identity counts as unreadable (a refusal, never a permission). */
+  timeoutMs: number = IDENTITY_QUERY_TIMEOUT_MS,
 ): ProcessIdentityProvider {
   return async (pid: number): Promise<ProcessIdentitySnapshot> => {
     if (!Number.isInteger(pid) || pid <= 0) {
@@ -425,7 +427,7 @@ export function createWindowsProcessIdentityProvider(
         const timer = setTimeout(() => {
           try { child.kill(); } catch { /* best effort */ }
           finish('');
-        }, IDENTITY_QUERY_TIMEOUT_MS);
+        }, timeoutMs);
         timer.unref?.();
         child.stdout?.on('data', (chunk: Buffer) => { out += chunk.toString('utf8'); });
         child.stderr?.on('data', () => { /* ignore */ });
