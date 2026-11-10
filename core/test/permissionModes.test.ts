@@ -157,6 +157,57 @@ describe('Auto with a standing authorization', () => {
     expect(decision.decision, JSON.stringify({ decision, short, ws })).toBe('review');
   });
 
+  // Gate D (Build 161 audit): every other spelling of the same workspace is the same workspace. A Pandesh write recorded
+  // under it voids the grant (deny when required), and the unchanged workspace opened under it is still covered (allow
+  // when authorized: no fail-closed regression for a workspace reached through a junction or another spelling).
+  const freeDrive = (): string | null => {
+    for (const letter of 'ZYXWVUTSRQPONM') if (!fs.existsSync(`${letter}:\\`)) return `${letter}:`;
+    return null;
+  };
+  const aliases: Array<[string, () => { alias: string; undo?: () => void } | null]> = [
+    ['a junction', () => { const j = path.join(dir, 'via-junction'); fs.symlinkSync(ws, j, 'junction'); return { alias: j }; }],
+    ['another letter case', () => ({ alias: ws.toUpperCase() })],
+    ['the \\\\?\\ long-path prefix', () => ({ alias: `\\\\?\\${ws}` })],
+    // A subst drive is a per-session mapping: created only when asked for, and removed again at once.
+    ['a subst drive (PANDESH_TEST_SUBST=1)', () => {
+      const drive = process.env.PANDESH_TEST_SUBST === '1' ? freeDrive() : null;
+      if (!drive) return null;
+      cp.execFileSync('subst', [drive, dir], { windowsHide: true });
+      return { alias: `${drive}\\repo`, undo: () => { cp.execFileSync('subst', [drive, '/D'], { windowsHide: true }); } };
+    }],
+  ];
+  for (const [label, make] of aliases) {
+    it.runIf(process.platform === 'win32')(`${label}: the same workspace — covered while unchanged, voided by a Pandesh write recorded under it`, () => {
+      const made = make();
+      if (!made) return;
+      try {
+        const fresh = grant(['workspace_validation']);
+        const turn = submit('again').attempt.id;
+        const viaAlias = () => decidePermission(db, { attemptIds: [turn], toolName: 'run_command', arguments: { command: 'npm test' }, mutating: true, workspaceRoot: made.alias });
+        expect(viaAlias()).toMatchObject({ decision: 'auto_authorize', authorizationId: fresh.id });
+        db.run(`INSERT INTO artifacts (id, conversationId, kind, title, mimeType, absolutePath, byteSize, sha256, source, createdAt)
+                VALUES ('art_alias', ?, 'file', 'x', 'text/plain', ?, 1, 'x', 'pi:write_file', ?)`, [conversationId, path.join(made.alias, 'node_modules', 'vitest', 'x.js'), new Date(Date.now() + 1000).toISOString()]);
+        expect(cmd(turn, 'npm test').decision).toBe('review');
+        expect(viaAlias().decision).toBe('review');
+      } finally {
+        made.undo?.();
+      }
+    });
+  }
+
+  it('a junction INSIDE the workspace points outside the pin: no validation grant is given, and a later one voids it', () => {
+    const outside = path.join(dir, 'outside');
+    fs.mkdirSync(outside);
+    fs.symlinkSync(outside, path.join(ws, 'linked'), 'junction');
+    expect(() => grant(['workspace_validation'])).toThrow(/cannot verify what this workspace's scripts would run/);
+    fs.rmSync(path.join(ws, 'linked'));
+    const fresh = grant(['workspace_validation']);
+    const turn = submit('again').attempt.id;
+    expect(cmd(turn, 'npm test')).toMatchObject({ decision: 'auto_authorize', authorizationId: fresh.id });
+    fs.symlinkSync(outside, path.join(ws, 'linked'), 'junction');
+    expect(cmd(turn, 'npm test').decision).toBe('review');
+  });
+
   it('revocation and expiry take effect immediately for the running turn', () => {
     revokeStandingAuthorization(db, authId, 'desktop');
     expect(cmd(attemptId, 'npm test')).toMatchObject({ decision: 'review' });

@@ -77,6 +77,40 @@ describe('schema upgrade safety', () => {
     expect(left).toContain('core-schema100-2026-01-01T00-00-00-000Z.db');
   });
 
+  it('a backup that cannot be taken blocks the upgrade: nothing is migrated and the database is unchanged', () => {
+    const file = path.join(dir, 'core.db');
+    previousBuildDatabase(file);
+    fs.writeFileSync(path.join(dir, 'migration-backups'), 'a file where the backup folder should be');
+    const before = fs.readFileSync(file);
+    expect(() => openCoreDatabase(file)).toThrow(CoreDatabaseFailedError);
+    expect(() => openCoreDatabase(file)).toThrow(/could not take a verified backup.*Nothing was migrated/);
+    expect(schemaOf(file)).toBe(latest - 1);
+    expect(fs.readFileSync(file).equals(before)).toBe(true);
+  });
+
+  it('the backup restores on its own: as a fresh copy it upgrades again, and put back in place it is the previous build\'s database', () => {
+    const file = path.join(dir, 'core.db');
+    previousBuildDatabase(file);
+    const { db, preMigrationBackup } = openCoreDatabase(file);
+    db.close();
+    expect(preMigrationBackup).toBeTruthy();
+    // Independent of the original and its WAL: a copy elsewhere opens, upgrades and keeps the data.
+    const elsewhere = path.join(dir, 'restore-test', 'core.db');
+    fs.mkdirSync(path.dirname(elsewhere));
+    fs.copyFileSync(preMigrationBackup!, elsewhere);
+    const restored = openCoreDatabase(elsewhere);
+    expect(restored.migrationsApplied).toEqual([latest]);
+    expect(restored.db.get("SELECT title FROM conversations WHERE id = 'conv_keep'")).toEqual({ title: 'keep me' });
+    restored.db.close();
+    // Rollback in place: the upgraded database is replaced by the backup, which an older build reads as its own.
+    for (const suffix of ['', '-wal', '-shm']) fs.rmSync(`${file}${suffix}`, { force: true });
+    fs.copyFileSync(preMigrationBackup!, file);
+    expect(schemaOf(file)).toBe(latest - 1);
+    const rolledBack = new DatabaseSync(file, { readOnly: true });
+    expect(rolledBack.prepare("SELECT title FROM conversations WHERE id = 'conv_keep'").get()).toEqual({ title: 'keep me' });
+    rolledBack.close();
+  });
+
   it('takes no backup for a new database or one already at the current schema', () => {
     const file = path.join(dir, 'core.db');
     openCoreDatabase(file).db.close();
