@@ -27,9 +27,14 @@ function inline(text: string, key: string): React.ReactNode[] {
   return out;
 }
 
+/** Local models sometimes write arrows as LaTeX ("$\rightarrow$"), which this renderer would show raw. */
+export function plainArrows(text: string): string {
+  return text.replace(/\$\s*\\(?:rightarrow|to|longrightarrow)\s*\$/g, '→').replace(/\$\s*\\(?:Rightarrow|implies)\s*\$/g, '⇒');
+}
+
 export function Markdown({ text }: { text: string }) {
   const blocks: React.ReactNode[] = [];
-  const lines = text.replace(/\r\n/g, '\n').split('\n');
+  const lines = plainArrows(text).replace(/\r\n/g, '\n').split('\n');
   let i = 0; let k = 0;
   while (i < lines.length) {
     const line = lines[i];
