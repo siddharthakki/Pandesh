@@ -2226,6 +2226,8 @@ export class DesktopSession {
     const submission = await client.submit({
       currentMessage: text,
       ...(this.selectedAgentId ? { agentId: this.selectedAgentId } : {}),
+      // A voice turn's text is a speech transcript: Core tells the model so it asks about a misheard word.
+      ...(voiceTurnId ? { inputModality: 'voice' as const } : {}),
       requestedMode,
       conversationId,
       ...(attachmentIds.length > 0 ? { attachmentIds } : {}),

@@ -66,11 +66,19 @@ function canonicalFor(word: string): string | null {
 
 export function correctVoiceVocabulary(text: string): { text: string; corrections: string[] } {
   const corrections: string[] = [];
-  const corrected = text.replace(/[A-Za-z]+/g, (word) => {
-    const canonical = canonicalFor(word);
-    if (!canonical) return word;
-    corrections.push(`${word} -> ${canonical}`);
-    return canonical;
+  const corrected = text.replace(/[A-Za-z]+(?:-[A-Za-z]+)*/g, (token) => {
+    // Whisper sometimes splits a name it does not know with a hyphen ("Pan-dish"): try the joined word first.
+    const joined = token.includes('-') ? canonicalFor(token.replace(/-/g, '')) : null;
+    if (joined) {
+      corrections.push(`${token} -> ${joined}`);
+      return joined;
+    }
+    return token.replace(/[A-Za-z]+/g, (word) => {
+      const canonical = canonicalFor(word);
+      if (!canonical) return word;
+      corrections.push(`${word} -> ${canonical}`);
+      return canonical;
+    });
   });
   return { text: corrected, corrections };
 }

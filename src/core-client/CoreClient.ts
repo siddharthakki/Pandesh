@@ -781,6 +781,8 @@ export class CoreClient {
     attachmentIds?: string[];
     /** Phase 2b: run this request as a specialist agent (Core freezes its scope). */
     agentId?: string;
+    /** 'voice' when the message is a speech transcript; Core freezes it so the model can ask about misheard words. */
+    inputModality?: 'text' | 'voice';
   }): Promise<{ request: RequestEnvelopeRecord; attempt: AttemptRecord; planningOnly: boolean; messageId: string | null; modelSelection: ModelSelectionEvidence }> {
     return this.request('/v1/submit', { method: 'POST', body: input });
   }

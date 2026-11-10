@@ -73,7 +73,9 @@ import { resolveTimeExpression, localWallTimeToIso as zonedWallToIso, utcOffsetL
 import { cancelScheduledTask, createScheduledTask, listScheduledTasks } from '../domain/scheduledTasks';
 import { transitionAttempt, failAttempt, getAttempt, settleCancelledAttempt } from '../domain/attempts';
 import { createApproval, getApproval, listApprovalsForAttempt, expireApproval } from '../domain/approvals';
-import { classifyChatToolCall, decidePermission, frozenPermissionFor, READ_ONLY_CONSENT_TOOLS, recordPermissionDecision, STANDING_AUTHORIZATION_ACTOR } from '../domain/permissionModes';
+import { asksAboutPermissions, classifyChatToolCall, decidePermission, frozenPermissionFor, permissionModesPromptSection, permissionPromptState, READ_ONLY_CONSENT_TOOLS, recordPermissionDecision, STANDING_AUTHORIZATION_ACTOR } from '../domain/permissionModes';
+import { getAttemptContext } from '../domain/attemptContext';
+import { inputModalityOf, spokenInputPromptSection } from '../domain/spokenInput';
 import { recordExecutionQuality } from '../domain/executionQuality';
 import { AUTHORIZE_MISSION_TOOL, buildWorkspaceWriteEnvelope, createPendingMissionAuthorization, evaluateAuthorizedDispatch, evaluateMissionAction, getMissionAuthorization, markMissionAuthorized, markMissionRejected, protectedWriteReason, recordAuthorizedAction } from './missionAuthorization';
 import { NON_WORKSPACE_MARKERS } from '../domain/taskToolSurface';
@@ -4603,7 +4605,7 @@ ${availableToolNames.has('system_hardware_telemetry') ? `- For disk, storage, or
 ` : '';
 
     const specialistPromptSection = ['desktop_screenshot', 'desktop_windows_list', 'inspect_page', 'scout_add_watch', 'hermes_list_skills'].some((t) => availableToolNames.has(t)) ? `COMPUTER, BROWSER, WATCHES AND SPECIALIST SKILLS (STRICT RULES):
-${availableToolNames.has('desktop_screenshot') ? `- 'desktop_screenshot' captures the real Windows desktop and returns the file path, size and SHA-256. 'desktop_windows_list' lists the visible top-level windows. Both are read-only.\n` : ''}${availableToolNames.has('inspect_page') ? `- 'inspect_page' opens a real page in the managed browser: a workspace-relative HTML path, or a live URL on this machine (http://127.0.0.1:<port>/...). It acts on a running page, so it needs the operator's approval. Quote only what the tool returned; never describe a page you did not open.\n` : ''}${availableToolNames.has('scout_add_watch') ? `- 'scout_add_watch' creates a durable watch that Core then checks on its own schedule; 'scout_list_watches', 'scout_run_watch' and 'scout_run_all' read and check them. Only add a watch when the user asked for one, and never claim a watch is running without a tool result.\n` : ''}${availableToolNames.has('hermes_list_skills') ? `- 'hermes_list_skills' lists the skills installed in the local Hermes agent; 'hermes_invoke_skill' runs one of them and returns Hermes' own result. Never invent a skill name — list the skills first, then invoke one of the names that were listed.\n` : ''}- When a tool result says NOT DONE, NOT AVAILABLE or that it was declined, say so plainly. Never present a tool's failure as a success, and never invent a file path, a number or a quote. When the user declined an approval, say "you declined" — it is the user's choice, not a system protection — and do not offer a manual way around it. Offer to do something (send, book, buy, post) only when a tool for it is in your tool list.
+${availableToolNames.has('desktop_screenshot') ? `- 'desktop_screenshot' saves a PNG of the whole visible Windows desktop on this PC and returns only its path, size and SHA-256. You cannot see the image: in this build no model reads screenshots, so never describe what is on the screen from one. It has no privacy filter: every visible window is in the file as it is, private messaging apps included, so never claim it leaves out, blurs or protects any app. Pandesh's real messaging rules: sending any message always needs the user's approval, and Pandesh never scrapes a WhatsApp Web session. 'desktop_windows_list' lists the visible top-level windows (use it to say which apps are open). Both are read-only.\n` : ''}${availableToolNames.has('inspect_page') ? `- 'inspect_page' opens a real page in the managed browser: a workspace-relative HTML path, or a live URL on this machine (http://127.0.0.1:<port>/...). It acts on a running page, so it needs the operator's approval. Quote only what the tool returned; never describe a page you did not open.\n` : ''}${availableToolNames.has('scout_add_watch') ? `- 'scout_add_watch' creates a durable watch that Core then checks on its own schedule; 'scout_list_watches', 'scout_run_watch' and 'scout_run_all' read and check them. Only add a watch when the user asked for one, and never claim a watch is running without a tool result.\n` : ''}${availableToolNames.has('hermes_list_skills') ? `- 'hermes_list_skills' lists the skills installed in the local Hermes agent; 'hermes_invoke_skill' runs one of them and returns Hermes' own result. Never invent a skill name — list the skills first, then invoke one of the names that were listed.\n` : ''}- When a tool result says NOT DONE, NOT AVAILABLE or that it was declined, say so plainly. Never present a tool's failure as a success, and never invent a file path, a number or a quote. When the user declined an approval, say "you declined" — it is the user's choice, not a system protection — and do not offer a manual way around it. Offer to do something (send, book, buy, post) only when a tool for it is in your tool list.
 ` : '';
 
     const pcOrgPromptSection = ['pc_capability_inventory', 'pc_organize_scan', 'routine_create', 'household_scan_obligations'].some((t) => availableToolNames.has(t)) ? `PC ORGANIZATION, ROUTINES, HOUSEHOLD & JUGAAD (STRICT RULES):
@@ -4661,6 +4663,18 @@ ${hasBriefing ? `- For a daily briefing call 'get_briefing_data' once and presen
 - Never mark a task 'satisfied' just because you are about to say it is done.
 ` : '';
 
+    // What the user's own permission modes are and which one this turn runs in, from the constants Core enforces.
+    let permissionPromptSection = '';
+    try {
+      permissionPromptSection = permissionModesPromptSection(
+        permissionPromptState(db, [attemptId]),
+        (iso) => new Date(iso).toLocaleString('en-GB', { timeZone: localTimeZone, weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }),
+        { brief: !asksAboutPermissions(requestText) },
+      );
+    } catch (err) {
+      console.warn('[piAgentEngine] permission prompt section unavailable:', err);
+    }
+
     const simpleSystemPrompt = `You are Pandesh, the personal AI assistant for KarkeDikha (KKD). Assistant Name: Pandesh. Active model: ${selectedModel} via local Ollama provider (${apiBase}). Running on ${process.platform}. Current local time: ${new Date().toLocaleString('en-GB', { timeZone: localTimeZone, weekday: 'long', year: 'numeric', month: 'long', day: 'numeric', hour: '2-digit', minute: '2-digit' })} in time zone ${localTimeZone}. Answer only the user's most recent message; never repeat or re-deliver an earlier answer unless asked. Answer simple conversational questions directly and concisely. When asked what model you are running or what model is active, state that you are running on '${selectedModel}' via local Ollama. If the user asks you to perform an action, search emails or files, or access tools, offer to do so directly. Never expose secrets or perform destructive actions.`;
 
     let systemPrompt = simpleInteractive ? simpleSystemPrompt : `You are Pandesh, the personal AI assistant for KarkeDikha (KKD).
@@ -4689,6 +4703,8 @@ NAVIGATION & WORKFLOW (STRICT RULES):
 - There is NO "Artifacts tab" in the interface. Never instruct the user to check an "Artifacts tab".
 - Approvals, artifacts, and execution progress appear directly inside "Conversations" or in "Tasks & Missions".
 - When an approval is required, inform the user to approve or deny the action directly from the prompt approval card or in Tasks & Missions.
+
+${permissionPromptSection}
 
 ${printingPromptSection}${modelPromptSection}${weatherPromptSection}${systemAnalysisPromptSection}${setupHealthPromptSection}${specialistPromptSection}${pcOrgPromptSection}
 
@@ -4791,6 +4807,14 @@ ${filesPromptSection}${webResearchPromptSection}${wishesPromptSection}${emailCal
     // Earlier tasks' real outcomes (cancelled / failed / interrupted), so the model never presents them as pending (D4).
     const taskHistorySection = renderTaskHistorySection(priorTurns);
     if (taskHistorySection) systemPrompt += `\n\n${taskHistorySection}`;
+    // A spoken message may contain misheard words (Core froze how it was entered): ask about an odd word, never refuse on it.
+    let spokenSection = '';
+    try {
+      spokenSection = spokenInputPromptSection(inputModalityOf(getAttemptContext(db, attemptId).approvalPolicy as Record<string, unknown> | undefined));
+    } catch {
+      // No frozen context for this attempt: treated as typed text.
+    }
+    if (spokenSection) systemPrompt += `\n\n${spokenSection}`;
 
     if (conversationId) {
       try {

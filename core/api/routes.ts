@@ -77,6 +77,7 @@ import { steerPiAttempt } from '../runtime/piAgentEngine';
 import { getTaskOutcome, objectiveFromRequest, updateTaskOutcome } from '../domain/taskOutcomes';
 import { classifyRequest } from '../domain/routing';
 import { buildContextPolicy } from '../domain/contextPolicy';
+import { parseInputModality } from '../domain/spokenInput';
 import { classifyAttemptRecovery } from '../domain/recovery';
 import { submitRequest } from '../domain/submission';
 import { getAttemptContext } from '../domain/attemptContext';
@@ -1200,6 +1201,7 @@ export function buildRouter(
           correlationId: (body.correlationId as string) ?? key,
           idempotencyKey: key,
           attachmentIds: Array.isArray(body.attachmentIds) ? (body.attachmentIds as string[]) : undefined,
+          inputModality: parseInputModality(body.inputModality),
         });
         if (agentId && !submitted.duplicateOfActiveAttempt && !agentScopeForAttempt(ctx.db, submitted.attempt.id)) {
           assignAgentRun(ctx.db, { requestId: submitted.request.id, agentId, conversationRoot: (body.workspaceRoot as string) ?? null });

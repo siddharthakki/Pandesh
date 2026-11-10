@@ -20,6 +20,7 @@ import { appendMessage } from './conversations';
 import { recordConversationTurn } from './conversationLedger';
 import { linkAttachmentsToMessage } from './attachments';
 import { freezeRequestPermission } from './permissionModes';
+import type { InputModality } from './spokenInput';
 import { recordRuntimeEvent } from './runtimeEvents';
 import { routeModel } from './modelRouting';
 import { contextWindowEventMetadata, getAttemptContext, sanitizeModelSelectionWindow } from './attemptContext';
@@ -72,6 +73,9 @@ export interface SubmitRequestInput {
    * regenerate route. */
   reuseUserMessageId?: string | null;
   regenerateAssistantMessageId?: string | null;
+  /** How the user entered this message. Core freezes it with the request, so the runtime can tell a spoken
+   * transcript (which may contain misheard words) from typed text. Absent means typed. */
+  inputModality?: InputModality;
 }
 
 export interface SubmitRequestResult {
@@ -195,7 +199,9 @@ export function submitRequest(db: CoreDatabase, input: SubmitRequestInput): Subm
 
     // The permission mode and standing authorizations are Core's to freeze; a client-supplied value is discarded.
     const frozen = freezeRequestPermission(db, { conversationId: input.conversationId, clientPolicy: input.toolPermissionPolicy, actor: input.clientId });
-    const toolPermissionPolicy = frozen.policy as ToolPermissionPolicy;
+    // How the message was entered comes only from the explicit field; a copy inside the client's policy is dropped.
+    const { inputModality: _clientCopy, ...policy } = frozen.policy;
+    const toolPermissionPolicy = (input.inputModality === 'voice' ? { ...policy, inputModality: 'voice' } : policy) as ToolPermissionPolicy;
 
     const request = createRequest(db, {
       clientId: input.clientId,
