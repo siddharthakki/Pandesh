@@ -1,0 +1,5 @@
+# The five formerly "timing-sensitive" CI files, TEMP/TMP = an 8.3 short path (GitHub runner condition), audit HEAD before the final pass
+ RUN  v4.1.9 D:/Projects/Pandesh-audit
+ Test Files  5 passed (5)
+      Tests  68 passed (68)
+   Duration  11.48s (transform 4.45s, setup 2.17s, import 5.12s, tests 19.69s, environment 0ms)

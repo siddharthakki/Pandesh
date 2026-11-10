@@ -1,0 +1,11 @@
+# qwen2.5-coder:3b, task-aware tool selection, final recovery rule (d222470), isolated Core, synthetic workspace
+task | stage | expected | called | approvals
+T1-list | OK | list_directory/search_files | list_directory | -
+T2-read | OK | read_file | read_file | -
+T3-reminder | A_model | create_reminder | - | -
+T4-tests | G_execution | run_checks | run_checks | run_checks:approved
+T5-fix | A_model | write_file/delegate_to_coding_agent/delegate_to_opencode | - | -
+T6-lead | OK | revenue_record_lead | revenue_record_lead | -
+T7-printers | OK | list_printers | list_printers | -
+T8-aider | F_approval_policy | delegate_to_coding_agent | delegate_to_coding_agent | delegate_to_coding_agent:rejected
+T9-calc | OK | calculate/(answer) | calculate | -

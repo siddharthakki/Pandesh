@@ -1,0 +1,132 @@
+# Build 161 candidate — built from a clean worktree at e88bdc5 (2026-11-10), existing packaging path
+
+## build-identity.json (portable tree)
+{
+  "schema": 1,
+  "version": "0.1.8",
+  "buildNumber": 161,
+  "buildKind": "release",
+  "releaseChannel": "alpha",
+  "commit": "e88bdc595653d1d4eb4dc54a0461fa9bb7861468",
+  "builtAt": "2026-11-10T05:50:13.028Z",
+  "installerVersion": "0.1.8",
+  "coreVersion": "0.1.8",
+  "sourceState": "clean"
+}
+
+Electron: 45.2.3
+
+## SHA-256  bytes  file
+55E5AB58598E5A002253D47902EAA593C066325EC009BD5ED1305B31D3674CB9  355583486  Pandesh-Setup.exe
+A021458828646EDF1ADBE68F286C1E636AD42C49080669B0FB55F8FF7E7E544E  355583471  Pandesh-Smoke-Setup.exe
+
+## steps
+start 2026-11-10T06:50:01.5593421+01:00
+checkout head=e88bdc5 porcelain=[]
+package exit=0 seconds=6 end=2026-11-10T06:50:07.7327796+01:00
+installer exit=0 seconds=438 end=2026-11-10T06:57:25.3644037+01:00
+package-smoke exit=0 seconds=31 end=2026-11-10T06:57:56.6400555+01:00
+installer-smoke exit=0 seconds=144 end=2026-11-10T07:00:20.5287156+01:00
+DONE 2026-11-10T07:00:22.7201201+01:00
+rehearsal (re-run directly after a path bug in the wrapper script) exit=0
+
+## package smoke
+ok=true; steps: api-ready, core-connected, ollama-models, model-selected, local-speech-probe, wake-word-probe, submitted, question-completed (26 s)
+
+## installer smoke (Smoke edition, distinct AppId, scratch install dir, isolated profile)
+[PASS] smoke_installed_silently %USERPROFILE%\AppData\Local\Temp\karkedikha-installer-smoke-1794290277136\install
+[PASS] payload_verified
+[PASS] smoke_launched
+[PASS] installed_app_core_connected
+[PASS] installed_app_conversation_reply [Not done: no passing test run after the last change was performed — no tool confirmed it.]
+[PASS] installed_app_governed_capability
+[PASS] running_app_hidden_to_tray
+[PASS] upgrade_while_running_succeeded %USERPROFILE%\AppData\Local\Temp\karkedikha-installer-smoke-1794290277136\install
+[PASS] previous_instance_terminated_cleanly
+[PASS] upgraded_app_launched
+[PASS] upgraded_app_core_connected
+[PASS] upgrade_preserved_user_data
+[PASS] smoke_uninstalled %USERPROFILE%\AppData\Local\Temp\karkedikha-installer-smoke-1794290277136\install
+[PASS] owner_install_untouched_after absent
+[smoke] passed=14 failed=0 evidence=D:\Projects\Pandesh-audit\.tmp\rc-b161\.acceptance-evidence\pandesh-live-gaps\installed-smoke.json
+
+## rehearsal (counts and hashes only)
+{
+  "A_realData": {
+    "coreVersion": "0.1.8",
+    "dataDirMatches": true,
+    "stop": "stopped cleanly",
+    "before": {
+      "schema": 50,
+      "quickCheck": "ok",
+      "conversations": 97,
+      "messages": null,
+      "memoryFacts": 2,
+      "attempts": {
+        "cancelled": 18,
+        "completed": 542,
+        "failed": 21,
+        "waiting_for_approval": 5
+      },
+      "approvals": {
+        "approved": 166,
+        "expired": 12,
+        "pending": 5,
+        "rejected": 10,
+        "superseded": 8
+      },
+      "schedulesEnabled": 0
+    },
+    "after": {
+      "schema": 50,
+      "quickCheck": "ok",
+      "conversations": 97,
+      "messages": null,
+      "memoryFacts": 2,
+      "attempts": {
+        "cancelled": 18,
+        "completed": 546,
+        "failed": 22
+      },
+      "approvals": {
+        "approved": 166,
+        "expired": 12,
+        "pending": 5,
+        "rejected": 10,
+        "superseded": 8
+      },
+      "schedulesEnabled": 0
+    },
+    "migrationBackups": []
+  },
+  "A_rollback": {
+    "b160Started": true,
+    "b160Stop": "stopped cleanly",
+    "b160AfterSchema": 50,
+    "restoredMatchesPreRun": true
+  },
+  "B_upgrade": {
+    "before": 49,
+    "after": 50,
+    "stop": "stopped cleanly",
+    "backups": [
+      "core-schema49-2026-11-10T06-01-17-883Z.db"
+    ],
+    "backupSchema": 49,
+    "backupQuickCheck": "ok",
+    "restoredSchema": 49,
+    "restoredKeepsData": true
+  },
+  "C_downgradeRefusal": {
+    "refused": true,
+    "exitCode": 1,
+    "reasonLogged": true,
+    "unchanged": true
+  },
+  "D_isolation": {
+    "copyStartedItsOwnCore": true,
+    "originalUntouchedWhileCopyRan": true,
+    "originalAliveAfterCopyQuit": true,
+    "hostLogHasNoPairingPin": true
+  }
+}
