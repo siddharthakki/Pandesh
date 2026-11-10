@@ -5,6 +5,7 @@
  * apps/desktop/src/ipc.ts the v2 surfaces read.
  */
 import { useEffect, useRef, useState } from 'react';
+import type { PermissionMode, PermissionState } from './composerModel';
 
 export type ApprovalResolution = 'approved' | 'rejected';
 
@@ -39,7 +40,19 @@ export interface Snapshot {
   speaking: boolean;
   voiceMode: boolean;
   localSpeech?: { state?: string; ready?: boolean; detail?: string; [k: string]: unknown };
-  cloud?: { selected?: { providerId?: string; model?: string } | null; [k: string]: unknown };
+  /** Installed Ollama model names for the model menu. */
+  installedModels?: string[];
+  /** Free cloud providers (off by default); `selectedModel` is `<provider>::<model>`. */
+  cloud?: {
+    selectedModel?: string | null;
+    providers?: Array<{ id: string; displayName?: string; enabled?: boolean; configured?: boolean }>;
+    listings?: Record<string, { pool?: Array<{ id: string; displayName?: string }> }>;
+    [k: string]: unknown;
+  } | null;
+  /** The selected workspace folder, if any (Auto's workspace categories are bound to it). */
+  folder?: string | null;
+  /** Ask / Auto / Plan only for the selected conversation (or the next new one). Core stores and enforces it. */
+  permission?: PermissionState;
   modelNote?: string | null;
 }
 
@@ -59,7 +72,13 @@ export interface Brief { generatedAt: string; home: BriefItem[] }
 
 export interface DesktopApi {
   getSnapshot(): Promise<Snapshot | null>;
-  submitTask(goal: string): Promise<{ attemptId: string; requestId: string; model: string; routed?: string }>;
+  /** `voiceTurnId` marks a message that was spoken (the transcript of a voice turn). */
+  submitTask(goal: string, worker?: string, voiceTurnId?: string): Promise<{ attemptId: string; requestId: string; model: string; routed?: string }>;
+  /** A local model name, `__auto__`, or `<provider>::<model>` for a free cloud model. */
+  selectModel(model: string): Promise<Snapshot | null>;
+  listModels(): Promise<string[]>;
+  setPermissionMode(mode: PermissionMode, grant?: { categories: string[]; expiresInMinutes: number }): Promise<Snapshot>;
+  revokeAuthorization(id: string): Promise<Snapshot>;
   cancel(): Promise<void>;
   cancelTask(attemptId: string): Promise<{ requested: boolean }>;
   resumeTask(attemptId: string): Promise<{ attemptId: string }>;

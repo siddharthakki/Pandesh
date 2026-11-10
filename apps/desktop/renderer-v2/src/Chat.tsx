@@ -4,6 +4,8 @@ import { Icon, Mark, elapsed, timeOf } from './ui';
 import { ActivityAside } from './Activity';
 import { Markdown } from './markdown';
 import { useVoice } from './voice';
+import { useComposerControls } from './ComposerControls';
+import { modelLabel as describeModel } from './composerModel';
 
 interface Props {
   snapshot: Snapshot | null;
@@ -161,9 +163,15 @@ export function Chat({ snapshot, snapshotError, refresh, narrow, openConversatio
   const decision = pendingDecision(snapshot);
   const showDecisionBar = narrow && Boolean(decision) && !deciding;
 
-  const send = async (spoken?: string) => {
+  /** The transcript last put in the composer for review, with its voice turn: sent unchanged, it is still speech. */
+  const heldTranscript = useRef<{ text: string; voiceTurnId: string } | null>(null);
+  const send = async (spoken?: string, voiceTurnId?: string) => {
     const goal = (spoken ?? text).trim();
     if (!goal || busy) return;
+    const held = heldTranscript.current;
+    heldTranscript.current = null;
+    // Core is told a message was spoken, so it can ask about a misheard word instead of acting on it.
+    const turnId = voiceTurnId ?? (spoken === undefined && held && held.text.trim() === goal ? held.voiceTurnId : undefined);
     setBusy(true);
     setNotice(null);
     setDeclined(false);
@@ -171,7 +179,7 @@ export function Chat({ snapshot, snapshotError, refresh, narrow, openConversatio
     setText('');
     if (textarea.current) textarea.current.style.height = 'auto';
     try {
-      const r = await api.submitTask(goal);
+      const r = turnId ? await api.submitTask(goal, undefined, turnId) : await api.submitTask(goal);
       if (r?.routed && ROUTED[r.routed]) setNotice({ text: ROUTED[r.routed] });
       refresh();
     } catch (err) {
@@ -253,18 +261,23 @@ export function Chat({ snapshot, snapshotError, refresh, narrow, openConversatio
   const viewable = activities.some((a) => a.preview || a.state === 'running');
   const asideOpen = (forcedOpen || (viewable && closedFor !== activeTaskKey)) && activities.length > 0;
   const step = [...activities].reverse().find((a) => a.state === 'running');
-  const modelLabel = snapshot?.model ? (snapshot.modelIsAuto ? `${snapshot.model} (auto)` : snapshot.model) : 'model not chosen';
+  const modelLabel = describeModel(snapshot);
   const isLocal = (snapshot?.provider ?? snapshot?.selectedInferenceProvider ?? 'ollama') === 'ollama';
   const routeLabel = `${isLocal ? 'Local' : 'Cloud'} · ${modelLabel}`;
   const coreDown = snapshot && snapshot.coreState !== 'connected' && snapshot.coreState !== 'ready';
   const needs = brief?.length ?? 0;
+  const [controlNotice, setControlNotice] = useState<{ text: string; error?: boolean } | null>(null);
+  const controls = useComposerControls({ snapshot, refresh, onNotice: setControlNotice, disabled: Boolean(coreDown) || !snapshot });
 
   const awaitingSpokenAnswer = useRef<string | null>(null);
   const voice = useVoice({
-    onTranscript: (t, needsReview, reasons) => {
-      if (needsReview) { setText(t); setNotice({ text: `Check what was heard before sending${reasons.length ? `: ${reasons.join(', ')}` : ''}.` }); textarea.current?.focus(); return; }
+    onTranscript: (t, needsReview, reasons, voiceTurnId) => {
+      if (needsReview) {
+        heldTranscript.current = { text: t, voiceTurnId };
+        setText(t); setNotice({ text: `Check what was heard before sending${reasons.length ? `: ${reasons.join(', ')}` : ''}.` }); textarea.current?.focus(); return;
+      }
       awaitingSpokenAnswer.current = t;
-      void send(t);
+      void send(t, voiceTurnId);
     },
   });
   // Speak the answer to a spoken turn when Speak replies is on (existing voice mode).
@@ -294,18 +307,18 @@ export function Chat({ snapshot, snapshotError, refresh, narrow, openConversatio
   );
 
   const route = (
-    <div style={{ position: 'relative', display: 'flex', justifyContent: 'center' }}>
+    <div className="route-wrap">
       <button type="button" className="route-btn" aria-expanded={routeOpen} title="How this chat is routed" onClick={() => setRouteOpen(!routeOpen)}>
         <span className="dot" style={{ width: 6, height: 6, background: snapshot?.modelServerReachable === false ? 'var(--danger)' : 'var(--pulse)' }} aria-hidden="true" />
         <span>{routeLabel}</span>
       </button>
       {routeOpen && (
-        <div className="popover" role="dialog" aria-label="How this chat is routed" style={{ bottom: 34, left: '50%', transform: 'translateX(-50%)', width: 360 }}>
+        <div className="popover" role="dialog" aria-label="How this chat is routed" style={{ bottom: 34, right: 0, width: 360 }}>
           <div className="kv"><span className="k">Provider</span><span>{isLocal ? 'Local · Ollama on this PC' : `Cloud · ${snapshot?.provider}`} (in use now)</span></div>
           <div className="kv"><span className="k">Model</span><span>{modelLabel}</span></div>
           <div className="kv"><span className="k">Context</span><span>{snapshot?.contextEnvelope ? `${Math.round(snapshot.contextEnvelope / 1024)}K tokens` : 'Not reported'}</span></div>
           <div className="kv"><span className="k">Model server</span><span>{snapshot?.modelServerReachable === false ? 'Not answering' : snapshot?.modelServerReachable ? 'Answering' : 'Unknown'}</span></div>
-          <div className="kv"><span className="k">Outward actions</span><span>Ask you first (approval rules)</span></div>
+          <div className="kv"><span className="k">Outward actions</span><span>{snapshot?.permission?.mode === 'plan' ? 'None: Plan only changes nothing' : snapshot?.permission?.mode === 'auto' ? 'Ask you first, except what Auto covers' : 'Ask you first (approval rules)'}</span></div>
           <div className="kv"><span className="k">Speech</span><span>{speechReady ? `Local recognition ready${(snapshot?.localSpeech as { engine?: string } | undefined)?.engine ? ` (${(snapshot?.localSpeech as { engine?: string }).engine})` : ''}` : speechBlocker}</span></div>
           <div className="kv"><span className="k">Speak replies</span><span><button type="button" className="btn small" onClick={() => void voice.setVoiceMode(!snapshot?.voiceMode).then(refresh)}>{snapshot?.voiceMode ? 'On — turn off' : 'Off — turn on'}</button></span></div>
           {(snapshot as { wakeWord?: { enabled?: boolean; muted?: boolean } } | null)?.wakeWord?.enabled && <div className="kv"><span className="k">Wake word</span><span>{(snapshot as { wakeWord?: { muted?: boolean } }).wakeWord?.muted ? 'Muted' : 'Listening (Classic UI monitor)'}</span></div>}
@@ -430,6 +443,8 @@ export function Chat({ snapshot, snapshotError, refresh, narrow, openConversatio
 
         <div className="footer">
           <div className="footer-inner">
+            {!showDecisionBar && controls.panel}
+            {controlNotice && <div className={`notice${controlNotice.error ? ' error' : ''}`} role={controlNotice.error ? 'alert' : 'status'} style={{ margin: 0 }}>{controlNotice.text} <button type="button" className="btn link" style={{ minHeight: 0, padding: 0 }} onClick={() => setControlNotice(null)}>OK</button></div>}
             {showDecisionBar && decision ? (
               <div className="decision-bar" role="group" aria-label={`Decide: ${decision.title}`}>
                 <button type="button" className="btn primary" disabled={deciding} onClick={() => void resolve('approved')}>{decision.allowLabel}</button>
@@ -456,7 +471,13 @@ export function Chat({ snapshot, snapshotError, refresh, narrow, openConversatio
                 {composer}
               </>
             )}
-            {!showDecisionBar && route}
+            {!showDecisionBar && (
+              <div className="composer-controls">
+                {controls.controls}
+                <span className="grow" />
+                {route}
+              </div>
+            )}
           </div>
         </div>
         <div className="spacer-v" />

@@ -113,6 +113,33 @@ kbd { font-family: var(--font-mono); font-size: 12px; color: var(--muted); borde
 .send-btn.ready { background: var(--pulse); color: var(--on-pulse); }
 .route-btn { align-self: center; display: flex; align-items: center; gap: 8px; height: 28px; padding: 0 10px; border: 0; border-radius: 14px; background: transparent; color: var(--muted); font-family: var(--font-mono); font-size: 13px; }
 .route-btn:hover { color: var(--ink); }
+.route-wrap { position: relative; display: flex; justify-content: center; min-width: 0; }
+.route-wrap .route-btn span:last-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* Mode and model, under the composer (same choices as the Classic composer) */
+.composer-controls { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; min-width: 0; }
+.composer-controls .grow { flex: 1 1 0; }
+.ctl-select { flex: 0 1 auto; height: 30px; max-width: 240px; min-width: 0; padding: 0 8px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); color: var(--muted); font-size: 13px; }
+#v2-model { flex-basis: 220px; min-width: 120px; }
+.composer-controls .route-wrap { flex: 0 1 auto; }
+.ctl-select:hover:not(:disabled), .ctl-select:focus-visible { color: var(--ink); }
+.ctl-select:disabled { opacity: 0.55; cursor: not-allowed; }
+.ctl-select.mode-auto { border-color: var(--attention); color: var(--ink); }
+.ctl-select.mode-plan { border-color: var(--verified); color: var(--ink); }
+.ctl-select option, .ctl-select optgroup { background: var(--surface); color: var(--ink); }
+.perm-panel { display: flex; flex-direction: column; gap: 10px; padding: 10px 14px; border: 1px solid var(--line); border-radius: 14px; background: var(--surface); font-size: 14px; }
+.perm-status { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+.perm-status > li { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; }
+.perm-items { flex-basis: 100%; margin: 0; padding-left: 18px; color: var(--muted); font-size: 13.5px; }
+.perm-grant { display: flex; flex-direction: column; gap: 8px; }
+.perm-title { margin: 0; font-weight: 600; }
+.perm-cats { margin: 0; padding: 0; border: 0; display: flex; flex-direction: column; gap: 6px; }
+.perm-cats label { display: flex; align-items: flex-start; gap: 8px; }
+.perm-cats label.disabled { color: var(--faint); }
+.perm-cats input { margin-top: 4px; flex: 0 0 auto; }
+.perm-expiry select { height: 30px; margin-left: 6px; padding: 0 8px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); }
+.perm-note { margin: 0; color: var(--muted); font-size: 13.5px; }
+.perm-error { margin: 0; color: var(--danger); }
+.perm-actions { display: flex; flex-wrap: wrap; gap: 8px; }
 .chip-btn { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; width: 100%; padding: 9px 14px; border: 1px solid var(--line); border-radius: 12px; background: transparent; font-size: 14px; text-align: left; }
 .chip-btn .muted { color: var(--muted); }
 .chip-btn .end { margin-left: auto; color: var(--muted); }

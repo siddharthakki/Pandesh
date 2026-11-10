@@ -23,7 +23,13 @@ interface VoiceApi {
 const capture = (): CaptureModule | null => (window as unknown as { jarvisVoiceCapture?: CaptureModule }).jarvisVoiceCapture ?? null;
 const vapi = api as unknown as VoiceApi;
 
-export function useVoice(opts: { onTranscript: (text: string, needsReview: boolean, reasons: string[]) => void }) {
+/** One id per spoken turn: the host logs it with each voice stage and tells Core the message was spoken. */
+export function newVoiceTurnId(): string {
+  try { if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') return crypto.randomUUID().slice(0, 8); } catch { /* fall through */ }
+  return `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
+}
+
+export function useVoice(opts: { onTranscript: (text: string, needsReview: boolean, reasons: string[], voiceTurnId: string) => void }) {
   const [state, setState] = useState<VoiceState>('idle');
   const [detail, setDetail] = useState('');
   const [heard, setHeard] = useState(false);
@@ -49,12 +55,13 @@ export function useVoice(opts: { onTranscript: (text: string, needsReview: boole
       const bytes = wav instanceof Uint8Array ? wav : wav ? new Uint8Array(wav) : null;
       if (!bytes || bytes.length < 44) { setState('idle'); setDetail('No speech was captured.'); return; }
       setState('transcribing');
-      const r = await vapi.transcribeUtterance(mod.bytesToBase64(bytes));
+      const turnId = newVoiceTurnId();
+      const r = await vapi.transcribeUtterance(mod.bytesToBase64(bytes), turnId);
       if (mine !== listenGen.current) return;
       setState('idle');
       const text = r.transcript.trim();
       if (!text) { setDetail('Nothing was recognised. Try again or type.'); return; }
-      opts.onTranscript(text, Boolean(r.review?.required), r.review?.reasons ?? []);
+      opts.onTranscript(text, Boolean(r.review?.required), r.review?.reasons ?? [], turnId);
     } catch (err) {
       session.current = null;
       if (mine !== listenGen.current) return;
