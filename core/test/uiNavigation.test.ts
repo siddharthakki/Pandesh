@@ -48,7 +48,7 @@ describe('the destination registry', () => {
   });
 
   it('says where Google is really set up in both interfaces', () => {
-    expect(GOOGLE_SETUP_WHERE).toBe('System (bottom of the left rail) → Connections in the v2 interface, or Connections and settings (left sidebar) → Add / Configure → Google in the Classic interface');
+    expect(GOOGLE_SETUP_WHERE).toBe('System (bottom of the left rail) → Connections in the v2 interface, or Connections and settings (left sidebar) → Add / Configure → Google Services in the Classic interface');
   });
 });
 

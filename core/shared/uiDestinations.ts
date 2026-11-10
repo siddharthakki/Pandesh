@@ -22,7 +22,7 @@ export const UI_DESTINATIONS: readonly UiDestination[] = [
     targets: { v2: 'view:chat', classic: 'surface:assistant' }, where: { v2: 'Pandesh (top of the left rail)', classic: 'Home (left sidebar)' } },
   { id: 'google_setup', label: 'Google account setup (Gmail, Calendar)', keywords: ['google', 'gmail', 'calendar', 'oauth', 'credentials', 'client', 'account', 'sign in', 'email'],
     targets: { v2: 'view:connections', classic: 'surface:integrations/configure#google' },
-    where: { v2: 'System (bottom of the left rail) → Connections', classic: 'Connections and settings (left sidebar) → Add / Configure → Google' } },
+    where: { v2: 'System (bottom of the left rail) → Connections', classic: 'Connections and settings (left sidebar) → Add / Configure → Google Services' } },
   { id: 'connected_services', label: 'Connected services and their status', keywords: ['connected', 'services', 'connectors', 'connections', 'integrations', 'accounts', 'status'],
     targets: { v2: 'view:tools#connectors', classic: 'surface:integrations/connected' },
     where: { v2: 'System → Tools & Skills → Connectors', classic: 'Connections and settings (left sidebar) → Connected' } },
