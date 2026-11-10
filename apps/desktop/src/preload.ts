@@ -26,6 +26,7 @@ import {
   type DesktopImageStudioStatus,
   type DesktopWeatherResult,
   type MobilePairingView,
+  type MobileAccessMode,
   type DesktopAssistantBrief,
   type DesktopDailyBriefRoutine,
   type DesktopCloudPublicTextPreview,
@@ -238,6 +239,10 @@ const desktopApi = {
   useArtifactAsReference: (artifactId: string): Promise<{ opened: boolean }> =>
     ipcRenderer.invoke(DESKTOP_CHANNELS.useArtifactAsReference, artifactId),
   getMobilePairing: (): Promise<MobilePairingView> => ipcRenderer.invoke(DESKTOP_CHANNELS.getMobilePairing),
+  rotateMobilePairingCode: (): Promise<MobilePairingView> => ipcRenderer.invoke(DESKTOP_CHANNELS.rotateMobilePairingCode),
+  forgetMobileDevice: (id: string): Promise<MobilePairingView> => ipcRenderer.invoke(DESKTOP_CHANNELS.forgetMobileDevice, id),
+  setMobileAccess: (mode: MobileAccessMode): Promise<MobilePairingView> => ipcRenderer.invoke(DESKTOP_CHANNELS.setMobileAccess, mode),
+  resumeMobilePairing: (): Promise<MobilePairingView> => ipcRenderer.invoke(DESKTOP_CHANNELS.resumeMobilePairing),
   probeImageStudio: (): Promise<DesktopImageStudioStatus> => ipcRenderer.invoke(DESKTOP_CHANNELS.probeImageStudio),
   generateImage: (input: Record<string, unknown>): Promise<DesktopImageGenerationResult> => ipcRenderer.invoke(DESKTOP_CHANNELS.generateImage, input),
   resolveImageApproval: (approvalId: string, resolution: DesktopApprovalResolution): Promise<DesktopImageGenerationResult> => ipcRenderer.invoke(DESKTOP_CHANNELS.resolveImageApproval, approvalId, resolution),

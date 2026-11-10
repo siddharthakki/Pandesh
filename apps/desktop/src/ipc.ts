@@ -90,6 +90,11 @@ export const DESKTOP_CHANNELS = {
   stageAttachmentBytes: 'desktop:stageAttachmentBytes',
   removeAttachment: 'desktop:removeAttachment',
   getMobilePairing: 'desktop:getMobilePairing',
+  /** Phone pairing on the PC: a new code, forget a phone, who may reach the phone server, resume paused pairing. */
+  rotateMobilePairingCode: 'desktop:rotateMobilePairingCode',
+  forgetMobileDevice: 'desktop:forgetMobileDevice',
+  setMobileAccess: 'desktop:setMobileAccess',
+  resumeMobilePairing: 'desktop:resumeMobilePairing',
   /** Jarvis Conversations rail (Checkpoint 1) — Core-owned, no Desktop database. */
   listConversations: 'desktop:listConversations',
   openConversation: 'desktop:openConversation',
@@ -1095,15 +1100,48 @@ export interface DesktopOpenRouterKeyResult {
   keyConfigured: boolean;
 }
 
+/** Who can reach the phone server: nobody, the home network (and Tailscale), or only the local Tailscale proxy. */
+export type MobileAccessMode = 'off' | 'lan' | 'tailscale';
+
+export interface MobileSecureLinkView {
+  state: 'ready' | 'not-installed' | 'not-running' | 'not-serving' | 'funnel' | 'error' | 'unchecked';
+  url: string | null;
+  detail: string;
+}
+
+export interface MobilePairedDeviceView {
+  id: string;
+  name: string;
+  pairedAt: string;
+  lastSeenAt: string | null;
+  connected: boolean;
+  legacy?: boolean;
+}
+
+/** The phone pairing state for the PC (Connections → Phone; Classic Integrations). Never contains a session token. */
 export interface MobilePairingView {
+  /** The current single-use pairing code, as ABCD-EFGH ('' while phone access is off). */
   code: string;
-  token: string;
+  codeExpiresAt: string | null;
   port: number;
+  /** The address the server is reachable on from the home network, or its bind address. */
   ip: string;
+  /** Home-network pairing link (plain HTTP), '' when the server does not listen on the network. */
   url: string;
+  /** HTTPS pairing link through `tailscale serve`, when it is set up. */
+  secureUrl: string | null;
+  secure: MobileSecureLinkView;
+  /** This PC's own address for the phone app (no code), for opening it here. */
+  localUrl: string;
+  access: MobileAccessMode;
+  /** Number of paired phones. */
   pairedCount: number;
+  /** Phones with a live connection right now. */
   connectedClients: number;
   listening: boolean;
+  devices: MobilePairedDeviceView[];
+  /** Set while pairing is paused after too many wrong codes. */
+  pairingPausedUntil: string | null;
 }
 
 /** Renderer-visible contract. Credentials never appear here. */

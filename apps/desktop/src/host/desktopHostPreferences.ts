@@ -17,6 +17,9 @@ export interface DesktopHostPreferences {
   /** Which renderer the window loads. `classic` stays the default; `v2` is the
    * Phase 2 React UI. `PANDESH_UI_V2=1|0` in the environment overrides it. */
   uiVariant: 'classic' | 'v2';
+  /** Who can reach Pandesh Mobile: nobody ('off'), the home network and Tailscale ('lan', the default), or only the
+   * local `tailscale serve` proxy ('tailscale': the server listens on 127.0.0.1). */
+  mobileAccess: 'off' | 'lan' | 'tailscale';
 }
 
 const DEFAULTS: DesktopHostPreferences = {
@@ -26,6 +29,7 @@ const DEFAULTS: DesktopHostPreferences = {
   wakeMuted: false,
   ttsEngine: 'piper',
   uiVariant: 'classic',
+  mobileAccess: 'lan',
 };
 
 /** The renderer to load: the environment flag wins over the saved preference. */
@@ -63,6 +67,7 @@ export function readHostPreferences(dataDir: string): DesktopHostPreferences {
       wakeMuted: Boolean(raw.wakeMuted),
       ttsEngine: raw.ttsEngine === 'pocket' ? 'pocket' : 'piper',
       uiVariant: raw.uiVariant === 'v2' ? 'v2' : 'classic',
+      mobileAccess: raw.mobileAccess === 'off' || raw.mobileAccess === 'tailscale' ? raw.mobileAccess : 'lan',
     };
   } catch {
     return { ...DEFAULTS };

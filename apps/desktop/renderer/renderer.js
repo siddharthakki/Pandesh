@@ -7906,18 +7906,21 @@ async function refreshIntegrationsView() {
       const urlEl = document.getElementById('integ-mobile-url');
       const statusEl = document.getElementById('integ-mobile-status');
       if (pinEl) pinEl.textContent = pairInfo.code || '----';
-      if (urlEl) urlEl.textContent = pairInfo.url || `http://${pairInfo.ip}:3030/?pair=${pairInfo.code}`;
+      // The secure (Tailscale HTTPS) link first; the home Wi-Fi link only when the server listens on the network.
+      if (urlEl) urlEl.textContent = pairInfo.secureUrl || pairInfo.url || (pairInfo.access === 'off' ? 'Phone access is off' : 'Set up the secure link in v2 → System → Connections → Phone');
       if (statusEl) {
-        const liveCount = Number(pairInfo.connectedClients ?? pairInfo.pairedCount ?? 0);
-        statusEl.textContent = pairInfo.listening === false
-          ? `Not running (port ${pairInfo.port} unavailable)`
-          : liveCount > 0
-            ? `${liveCount} device(s) connected`
-            : 'Ready for pairing (Local Wi-Fi)';
+        const liveCount = Number(pairInfo.connectedClients ?? 0);
+        statusEl.textContent = pairInfo.access === 'off'
+          ? 'Off'
+          : pairInfo.listening === false
+            ? `Not running (port ${pairInfo.port} unavailable)`
+            : liveCount > 0
+              ? `${liveCount} device(s) connected`
+              : pairInfo.secureUrl ? 'Ready for pairing (secure link)' : 'Ready for pairing (home Wi-Fi)';
       }
       const mobileBadge = document.getElementById('integ-mobile-badge');
       if (mobileBadge) {
-        const live = Number(pairInfo.connectedClients ?? pairInfo.pairedCount ?? 0);
+        const live = Number(pairInfo.connectedClients ?? 0);
         const listening = pairInfo.listening !== false && Boolean(pairInfo.code);
         mobileBadge.textContent = !listening ? 'Not running' : live > 0 ? `${live} phone${live === 1 ? '' : 's'} connected` : 'Ready to pair';
         mobileBadge.className = `int-badge ${listening ? 'online' : 'warn'}`;
