@@ -64,3 +64,20 @@ describe('a correction typed while a task works', () => {
     expect(routeSendWhileRunning(text)).toBe(expected);
   });
 });
+
+describe('opening a place in the window while a task works', () => {
+  // navigate_to only changes what the window shows, so it is answered alongside the task instead of waiting behind it.
+  it.each([
+    'Take me there', 'take me to Google account setup', 'Open Settings', 'Show my connected services',
+    'Open Software Discovery', 'Go to my Projects', 'Take me to the permission settings',
+  ])('is answered alongside: %s', (text) => {
+    expect(routeSendWhileRunning(text)).toBe('side_question');
+  });
+
+  it.each([
+    ['open the project folder and fix the failing tests', 'queue'],
+    ['Gotta go to bed soon, finish the report', 'queue'],
+  ] as const)('real work still waits its turn: %s', (text, expected) => {
+    expect(routeSendWhileRunning(text)).toBe(expected);
+  });
+});

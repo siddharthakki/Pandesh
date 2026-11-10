@@ -58,11 +58,12 @@ The choice is saved (`host-preferences.json` → `uiVariant`) and the window rel
    - Speak replies is in the route popover.
    - Stop speaking interrupts playback.
    - Stop listening discards what was captured.
+   - The wake word ("Hey Jarvis") starts a voice turn on any view. The route popover says what it is really doing (listening, paused, muted or why it is not listening) and has Mute and Turn off.
 
 ## Known limits for this alpha
 
 - Voice has not been tested with a person speaking into the microphone (capture opening was verified).
-- The wake word is only in Classic.
+- The wake word was only in Classic until 2026-11-10. v2 now listens for it too, but only a synthetic voice has been checked, not a person speaking.
 - Per-agent internet choices are: none, ask, or a domain list. There is no per-agent setting UI beyond tightening.
 - No MCP registry, no embedded terminal or VS Code windows, no software update execution, still Electron 33. These are separate follow-ups.
 - Fonts are the Windows system fonts.

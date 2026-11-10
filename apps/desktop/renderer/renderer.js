@@ -5804,7 +5804,55 @@ jumpLatest.addEventListener('click', () => {
   activity.lastElementChild?.scrollIntoView({ block: 'end' });
 });
 
+/**
+ * navigate_to: the assistant asked this window to open a registered place (core/shared/uiDestinations.ts). The window's
+ * own navigation does it, and Core is told only what the window then really shows, so Pandesh never says "opened"
+ * when it was not. A running task is not touched.
+ */
+async function applyNavigationRequest(nav) {
+  let ok = false;
+  let detail = '';
+  try {
+    const [kind, rest = ''] = String(nav.target ?? '').split(':');
+    if (nav.surface !== 'classic') {
+      detail = 'this window shows the Classic interface';
+    } else if (kind === 'surface') {
+      const [path, anchor] = rest.split('#');
+      const [surface, tab] = path.split('/');
+      if (!['assistant', 'tasks', 'integrations'].includes(surface)) throw new Error(`the Classic interface has no page "${surface}"`);
+      switchSurface(surface);
+      if (tab) showConnTab(tab);
+      if (anchor === 'google') {
+        const setup = document.getElementById('google-setup');
+        if (setup) setup.open = true;
+        document.getElementById('integ-card-google')?.scrollIntoView?.({ block: 'start' });
+      }
+      ok = document.querySelector('.app')?.dataset.activeSurface === surface
+        && (!tab || document.querySelector(`[data-conn-panel="${tab}"]`)?.hidden === false);
+    } else if (kind === 'focus' && (rest === 'permission' || rest === 'model')) {
+      switchSurface('assistant');
+      const el = document.getElementById(rest === 'permission' ? 'permission-mode-select' : 'model-select');
+      el?.focus();
+      ok = Boolean(el) && document.activeElement === el;
+    } else {
+      detail = `the Classic interface cannot open "${nav.target}"`;
+    }
+    if (!ok && !detail) detail = 'the window did not switch';
+  } catch (err) {
+    detail = String(err?.message ?? err);
+  }
+  try {
+    await api.confirmNavigation?.(nav.id, ok, ok ? undefined : detail, 'classic');
+  } catch {
+    // Core then reports the navigation as not confirmed, which is the truth.
+  }
+}
+
 api.onEvent((event) => {
+  if (event?.kind === 'navigate' && event.navigation) {
+    void applyNavigationRequest(event.navigation);
+    return;
+  }
   if (event?.kind === 'conversation_message') {
     // A reply stored while a task works (a side answer) refreshes the open chat at once; other messages wait for the turn.
     if (event.conversationId && event.conversationId === viewingConversationId && (!lastSnapshot?.running || event.messageRole === 'assistant')) void refreshOpenedTranscript(event.conversationId);

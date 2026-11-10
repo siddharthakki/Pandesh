@@ -10,7 +10,7 @@ const NATIVE = [
   'create_commitment', 'create_wish_goal', 'wish_order', 'schedule_task', 'get_briefing_data', 'web_research',
   'list_directory', 'read_file', 'write_file', 'run_checks', 'delegate_to_opencode', 'calculate', 'list_printers',
   'print_test_page', 'send_to_phone', 'gmail_search', 'gmail_create_draft', 'calendar_create_event', 'memory_remember',
-  'memory_recall', 'request_tools',
+  'memory_recall', 'request_tools', 'navigate_to', 'find_installed_app',
 ];
 const CAPS = new Map<string, { capabilityId?: string; deferred?: boolean }>([
   ['ollama_list_models', { capabilityId: 'ollama-management' }],

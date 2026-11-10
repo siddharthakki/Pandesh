@@ -5,6 +5,8 @@
  * apps/desktop/src/ipc.ts the v2 surfaces read.
  */
 import { useEffect, useRef, useState } from 'react';
+import type { PermissionMode, PermissionState } from './composerModel';
+import type { GmailStatus } from './googleModel';
 
 export type ApprovalResolution = 'approved' | 'rejected';
 
@@ -39,13 +41,44 @@ export interface Snapshot {
   speaking: boolean;
   voiceMode: boolean;
   localSpeech?: { state?: string; ready?: boolean; detail?: string; [k: string]: unknown };
-  cloud?: { selected?: { providerId?: string; model?: string } | null; [k: string]: unknown };
+  /** Installed Ollama model names for the model menu. */
+  installedModels?: string[];
+  /** Free cloud providers (off by default); `selectedModel` is `<provider>::<model>`. */
+  cloud?: {
+    selectedModel?: string | null;
+    providers?: Array<{ id: string; displayName?: string; enabled?: boolean; configured?: boolean }>;
+    listings?: Record<string, { pool?: Array<{ id: string; displayName?: string }> }>;
+    [k: string]: unknown;
+  } | null;
+  /** The selected workspace folder, if any (Auto's workspace categories are bound to it). */
+  folder?: string | null;
+  /** Ask / Auto / Plan only for the selected conversation (or the next new one). Core stores and enforces it. */
+  permission?: PermissionState;
+  /** Google (Gmail, Calendar) connection status, non-secret. */
+  gmail?: GmailStatus;
+  /** Everyday Tools catalog: Calendar counts as connected only when Core verified it with a live read. */
+  everydayTools?: { catalog?: Array<{ id: string; connectorState?: string; availability?: string }>; [k: string]: unknown };
   modelNote?: string | null;
+  /** openWakeWord readiness and the enable / mute preference (the host detects; the page feeds it microphone frames). */
+  wakeWord?: WakeWordStatus;
+  /** What the host's detector has received (frames, warm-up, capture errors). */
+  wakeDiagnostics?: WakeDiagnostics;
+  speechInterrupt?: { buttonStop?: boolean; spokenBargeIn?: boolean; spokenBargeInBlocker?: string };
 }
+
+export interface WakeWordStatus { capability: string; engine?: string | null; blocker?: string; phrase?: string; enabled: boolean; muted: boolean }
+export interface WakeDiagnostics { engineReady?: boolean; captureActive?: boolean; captureError?: string; framesReceived?: number; readyForDetect?: boolean; [k: string]: unknown }
+export interface WakeCaptureMeta { captureActive?: boolean; captureError?: string; rms?: number; sampleRate?: number; contextSampleRate?: number; framesEmitted?: number; trackLabel?: string }
+/** Host voice events: wake_detected, wake_state, wake_score, speaking, speak_stopped, speak_finished, speak_failed. */
+export interface VoiceEvent { kind: string; score?: number; wakeDetectMs?: number | null; inferenceMs?: number; framesReceived?: number; enabled?: boolean; muted?: boolean; [k: string]: unknown }
 
 export interface TranscriptMessage { id: string; role: 'user' | 'assistant' | 'system'; content: string; createdAt: string; model?: string | null; provider?: string | null }
 export interface ConversationEntry { id: string; title: string | null; preview: string | null; state: string; updatedAt: string; archivedAt: string | null; pinnedAt: string | null }
-export interface ActivityEvent { kind: string; at: string; conversationId?: string; messageRole?: string; attemptId?: string; eventType?: string; toolName?: string; summary: string; text?: string }
+export interface ActivityEvent {
+  kind: string; at: string; conversationId?: string; messageRole?: string; attemptId?: string; eventType?: string; toolName?: string; summary: string; text?: string;
+  /** For `navigate`: the place the assistant asked this window to open (navigate_to). */
+  navigation?: { id: string; destination: string; target: string; label: string; surface: 'v2' | 'classic' };
+}
 export interface TaskRow {
   attemptId: string; requestId: string; conversationId: string | null; kind: string; status: string; title: string;
   provider: string | null; model: string | null; worker: string; activity: string; createdAt: string; startedAt: string | null;
@@ -59,7 +92,24 @@ export interface Brief { generatedAt: string; home: BriefItem[] }
 
 export interface DesktopApi {
   getSnapshot(): Promise<Snapshot | null>;
-  submitTask(goal: string): Promise<{ attemptId: string; requestId: string; model: string; routed?: string }>;
+  /** `voiceTurnId` marks a message that was spoken (the transcript of a voice turn). */
+  submitTask(goal: string, worker?: string, voiceTurnId?: string): Promise<{ attemptId: string; requestId: string; model: string; routed?: string }>;
+  /** A local model name, `__auto__`, or `<provider>::<model>` for a free cloud model. */
+  selectModel(model: string): Promise<Snapshot | null>;
+  listModels(): Promise<string[]>;
+  setPermissionMode(mode: PermissionMode, grant?: { categories: string[]; expiresInMinutes: number }): Promise<Snapshot>;
+  revokeAuthorization(id: string): Promise<Snapshot>;
+  /** Google: the same calls the Classic Google card makes. */
+  connectGmail(): Promise<GmailStatus>;
+  cancelGoogleConnect(): Promise<GmailStatus>;
+  retryGmailProbe(): Promise<GmailStatus>;
+  disconnectGmail(): Promise<GmailStatus>;
+  allowInboxOrganization(): Promise<GmailStatus>;
+  saveGoogleOAuthClient(clientId: string, clientSecret: string): Promise<GmailStatus>;
+  clearGoogleOAuthClient(): Promise<GmailStatus>;
+  importGoogleOAuthClientFile(): Promise<{ cancelled: boolean; status?: GmailStatus }>;
+  /** Tells Core whether this window opened the place the assistant asked for (navigate_to). */
+  confirmNavigation(navigationId: string, ok: boolean, detail?: string, surface?: 'v2' | 'classic'): Promise<{ recorded: boolean }>;
   cancel(): Promise<void>;
   cancelTask(attemptId: string): Promise<{ requested: boolean }>;
   resumeTask(attemptId: string): Promise<{ attemptId: string }>;
@@ -83,6 +133,13 @@ export interface DesktopApi {
   openArtifactFolder(artifactId: string): Promise<{ opened: boolean }>;
   openWorkspaceFolder(): Promise<{ opened: boolean }>;
   onEvent(listener: (event: ActivityEvent) => void): () => void;
+  setWakeWordEnabled(enabled: boolean): Promise<Snapshot | null>;
+  setWakeWordMuted(muted: boolean): Promise<Snapshot | null>;
+  /** Tells the host whether this page's wake microphone is open (and why not, when it failed). */
+  reportWakeCapture(meta: WakeCaptureMeta): Promise<Snapshot | null>;
+  /** One or more 16 kHz Int16 frames (base64) for the host's wake detector. */
+  pushWakeAudio(pcmBase64: string, meta?: WakeCaptureMeta): Promise<{ score: number; detected: boolean; diagnostics?: WakeDiagnostics }>;
+  onVoiceEvent?(listener: (event: VoiceEvent) => void): () => void;
 }
 
 export const api: DesktopApi = (window as unknown as { desktop: DesktopApi }).desktop;

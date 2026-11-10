@@ -25,6 +25,12 @@ const STEER_START = /^(?:(?:and|also|oh|ok(?:ay)?|btw|actually|wait|hold on|one 
 const STEER_ANYWHERE = /\b(?:also|instead|additionally|as well|while you'?re at it|for this task|for that task|the current task|in the summary|in the report|in that file|in the same)\b/i;
 const QUESTION_START = /^(?:(?:quick question|btw|by the way|hey|hi|ok(?:ay)?|so|and)[\s,:]*)*(?:what|who|when|where|why|how|which|is|are|can|could|do|does|did|will|would|should|whats|what's|tell me|give me)\b/i;
 
+/**
+ * "Take me there", "open the settings", "go to my projects": opening a place in the window (navigate_to) changes only
+ * what the window shows, so it is answered alongside the running task instead of waiting behind it.
+ */
+const NAVIGATION_REQUEST = /^(?:(?:please|pandesh|hey|ok(?:ay)?|and|now)[\s,]+)*(?:take me (?:there|back|to\b)|bring me (?:there|to\b)|navigate to\b|go to\b|(?:open|show(?: me)?)\s+(?:the\s+|my\s+)?(?:settings|connections?|connected services|permission(?:s| settings| mode)?|software discovery|software & services|projects|board|team|tools(?: & skills)?|processes|second brain|automations|media studio|social studio|wish to reality|ai radar|revenue|google(?: account)?(?: setup| settings)?|model menu)\b)/i;
+
 /** Longer than a quick question: that is a new piece of work, not an aside. */
 const QUICK_QUESTION_MAX_CHARS = 280;
 /** A correction is a short sentence; a long message is a new request. */
@@ -49,7 +55,7 @@ export function routeSendWhileRunning(text: string): RunningSendRoute {
   if (isExplicitCorrection(value)) return 'correct';
   if (/^(?:steer|update)\s*:/i.test(value)) return 'steer';
   if (STEER_START.test(value) || STEER_ANYWHERE.test(value)) return 'steer';
-  const questionLike = /\?\s*$/.test(value) || QUESTION_START.test(value);
+  const questionLike = /\?\s*$/.test(value) || QUESTION_START.test(value) || NAVIGATION_REQUEST.test(value);
   if (questionLike && value.length <= QUICK_QUESTION_MAX_CHARS) return 'side_question';
   return 'queue';
 }

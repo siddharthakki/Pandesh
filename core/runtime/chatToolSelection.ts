@@ -29,8 +29,9 @@ export const TOOL_GROUPS: Record<string, ToolGroup> = {
     pattern: /\b(?:projects?|repos?|repositor(?:y|ies)|drives?|duplicates?|across (?:my|the)|outside|other folders?|whole (?:pc|computer|disk)|search (?:my|the) (?:pc|computer|disk|drive))\b|\b[a-z]:\\/i,
   },
   pc: {
-    purpose: 'this PC: disks and free space, hardware and GPU, processes, services and listening ports, screen and windows, installed software, available software updates and what Pandesh can do',
-    pattern: /\b(?:pc|computer|machine|laptop|hardware|specs?|disks?|drives?|free space|storage|ram|cpu|gpu|vram|nvidia|processes?|services?|ports?|screen(?:shot)?|desktop|windows? (?:list|open)|installed|install|software|utilit(?:y|ies)|setup|diagnos\w*|capabilit(?:y|ies)|what can you do|which tools|updates?|outdated|upgrades?|versions?)\b/i,
+    purpose: 'this PC: disks and free space, hardware and GPU, processes, services and listening ports, screen and windows, installed software and where an app is, available software updates and what Pandesh can do',
+    // Locating an app: "find/where … app|program" (not "write a program"), and a short "where is X?" question.
+    pattern: /\b(?:pc|computer|machine|laptop|hardware|specs?|disks?|drives?|free space|storage|ram|cpu|gpu|vram|nvidia|processes?|services?|ports?|screen(?:shot)?|desktop|windows? (?:list|open)|installed|install|software|utilit(?:y|ies)|setup|diagnos\w*|capabilit(?:y|ies)|what can you do|which tools|updates?|outdated|upgrades?|versions?|[\w-]+\.exe)\b|\b(?:where|find|locate)\b[^.?!]{0,40}\b(?:apps?|applications?|programs?)\b|^\s*(?:(?:hey|ok|so)[\s,]+)?(?:pandesh[\s,]+)?where(?:'s|\s+is|\s+are)\s+(?:the\s+|my\s+)?[\w.+-]+(?:\s+[\w.+-]+)?\s*[?.!]*\s*$/i,
   },
   projects: {
     purpose: "Pandesh's Projects workspace: create a project with tasks, list saved projects",
@@ -126,6 +127,8 @@ export const BASE_TOOLS = new Set([
   // Challenge (Project Birch): "When and where is the Project Birch review?" in a new chat searched files and said
   // nothing was known, because recall was only offered when the request said "remember"/"memory". Read-only.
   'memory_recall',
+  // Only defined when the message came from a Pandesh window; one small definition, needed for "take me there".
+  'navigate_to',
 ]);
 
 export const NATIVE_GROUP: Record<string, string> = {
@@ -145,7 +148,7 @@ export const NATIVE_GROUP: Record<string, string> = {
   list_printers: 'printing', print_test_page: 'printing',
   send_to_phone: 'phone',
   delegate_to_agent: 'agents',
-  software_updates: 'pc', listening_ports: 'pc',
+  software_updates: 'pc', listening_ports: 'pc', find_installed_app: 'pc',
   create_project: 'projects', list_projects: 'projects',
 };
 

@@ -24,6 +24,14 @@ import { runPowerShellScript } from './windowsShellExec';
 const READ_ONLY_TOOLS = new Set(['desktop_screenshot', 'desktop_windows_list']);
 const MAX_OUTPUT_CHARS = 24_000;
 
+/**
+ * What a screenshot is and is not, said with every capture. Capturing (saving the file), opening (showing it to the
+ * user) and inspecting (reading what is on it) are different things, and this tool only captures. No model reads the
+ * image in this build (an owner decision, for privacy), and the capture has no filter: a model once claimed it was
+ * "programmed to exclude private messaging apps", which was never true.
+ */
+export const SCREENSHOT_CONTENTS_NOTE = 'Captured means saved, nothing more: the PNG was written on this PC and has been neither opened for anyone nor inspected. Pandesh cannot inspect it in this build (no model reads the image; only its path, size and hash are known), so do not describe, check or verify anything on the screen with it, and never say it shows, confirms or proves something. It records every visible window as it is; nothing is excluded, blurred or filtered. The user can open it at the path above; this tool sends it nowhere.';
+
 export interface ComputerUseCapabilityOptions {
   /** Core's data directory — where screen evidence is written. */
   dataDir?: string;
@@ -130,7 +138,7 @@ try {
     return {
       status: 'succeeded',
       exitCode: 0,
-      output: `Captured the Windows desktop: ${target} (${bytes} bytes, ${result.output.trim() || 'unknown size'}, sha256 ${digest}).`,
+      output: `Captured the Windows desktop: ${target} (${bytes} bytes, ${result.output.trim() || 'unknown size'}, sha256 ${digest}). ${SCREENSHOT_CONTENTS_NOTE}`,
       resultCategory: 'computer_desktop_captured',
       normalizedArguments: { path: target, bytes, sha256: digest },
     };
@@ -141,7 +149,7 @@ try {
     definitions: () => [
       {
         name: 'desktop_screenshot',
-        description: 'Capture the real Windows desktop as a PNG and return its path, size and SHA-256. Read-only.',
+        description: 'Capture the real Windows desktop (every visible window, nothing filtered) as a PNG on this PC and return its path, size and SHA-256. Pandesh cannot see what is in the image in this build. Read-only.',
         parameters: { type: 'object', properties: {}, required: [] },
       },
       {

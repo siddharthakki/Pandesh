@@ -493,6 +493,84 @@ export function classifyWorkspaceCommand(command: string, workspaceRoot: string,
   return { category: null, reason: `'${exe}' is not a covered command` };
 }
 
+/**
+ * Plain words for what Auto never covers. Each phrase stands for a rule in `alwaysEscalateReason` below (the tests
+ * check that Core really escalates an example of each), so the assistant can state them without improvising.
+ */
+export const ALWAYS_ASKS_PHRASES: readonly string[] = [
+  'sending email or any other message (WhatsApp, SMS, calls)',
+  'purchases, payments and contracts',
+  'deleting, removing or uninstalling anything',
+  'writing or editing files',
+  'calendar changes',
+  'network, install and destructive commands (git push/pull/fetch/clone, npm or pip install, curl, wget)',
+];
+
+/** Short names for the categories, for one line of the prompt. Typed so a new category cannot be left out. */
+const CATEGORY_SHORT_NAMES: Record<AuthorizationCategory, string> = {
+  workspace_read_commands: 'read-only workspace commands',
+  workspace_validation: 'the pinned validation scripts',
+  workspace_git_commit: 'git add/commit in the workspace',
+  workspace_inspect_page: 'inspecting a workspace HTML page',
+  web_research_public: 'public web searches',
+};
+
+export interface PermissionPromptState {
+  mode: PermissionMode;
+  /** Active standing authorizations frozen on this turn (empty unless Auto). */
+  authorizations: Array<{ categories: string[]; expiresAt: string; workspaceRoot?: string | null }>;
+}
+
+/** The mode this turn was frozen with and the authorizations it carries that are still active. */
+export function permissionPromptState(db: CoreDatabase, attemptIds: Array<string | null | undefined>, nowMs = Date.now()): PermissionPromptState {
+  const frozen = frozenPermissionFor(db, attemptIds);
+  if (frozen.mode !== 'auto') return { mode: frozen.mode, authorizations: [] };
+  const authorizations: PermissionPromptState['authorizations'] = [];
+  for (const id of frozen.authorizationIds) {
+    try {
+      const auth = getStandingAuthorization(db, id);
+      if (isActive(auth, nowMs)) authorizations.push({ categories: auth.categories, expiresAt: auth.expiresAt, workspaceRoot: auth.workspaceRoot });
+    } catch {
+      // A grant that no longer exists covers nothing.
+    }
+  }
+  return { mode: 'auto', authorizations };
+}
+
+/** A message about approvals or modes ("we need an auto mode where I don't approve every time"). */
+export function asksAboutPermissions(text: string): boolean {
+  return /\b(?:auto(?:matic(?:ally)?)?|approv\w*|permissions?|modes?|plan only|ask(?:ing)? (?:me|first|every)|stop asking|every time|allow(?:ed|ing)?|authori[sz]\w*|grants?|revok\w*)\b/i.test(String(text ?? ''));
+}
+
+/**
+ * The product facts the assistant needs when the user asks about approvals or an "auto mode": the three modes, what
+ * Auto can cover, its limits, what always asks, where the switch is, and what is in force for this message. Built from
+ * the constants Core enforces, so the answer is product truth rather than an improvised policy. With `brief`, one
+ * line: the mode in force and that the others exist (the full facts cost ~350 tokens on every turn).
+ */
+export function permissionModesPromptSection(current: PermissionPromptState, formatTime: (iso: string) => string = (iso) => iso, options: { brief?: boolean } = {}): string {
+  if (options.brief && current.mode === 'ask') {
+    return 'PERMISSION MODE: this conversation is in Ask permission (every protected action waits for the user\'s approval card). The other modes are Auto (governed: the user lets a few low-risk kinds of work run without a card for up to 24 hours, revocable) and Plan only (nothing is changed). Only the user switches them, with the permission menu next to the model menu at the message box; never invent other modes or rules.';
+  }
+  const categories = Object.values(AUTHORIZATION_CATEGORIES).map((text) => `"${text}"`).join('; ');
+  const short = (c: string) => CATEGORY_SHORT_NAMES[c as AuthorizationCategory] ?? c;
+  let now: string;
+  if (current.mode === 'plan') now = 'Plan only.';
+  else if (current.mode === 'ask') now = 'Ask permission.';
+  else if (current.authorizations.length === 0) now = 'Auto, but nothing is granted, so everything still asks.';
+  else {
+    now = `Auto, covering ${current.authorizations.map((a) => `${a.categories.map(short).join(', ')}${a.workspaceRoot ? ` in ${a.workspaceRoot}` : ''} until ${formatTime(a.expiresAt)}`).join('; ')}. Everything else asks.`;
+  }
+  return `PANDESH PERMISSION MODES (product facts; use them for any question about approvals or an "auto mode", never improvise):
+- Every conversation has one of three modes. Only the user switches it, with the permission menu next to the model menu at the message box (v2 and Classic interface). You cannot switch it, and never claim you did.
+- Ask permission (the default): anything that changes something, goes online or leaves this PC waits for the user's approval card.
+- Auto (governed): the user ticks what may run without a card in this conversation, for 1, 8 or 24 hours (never longer than ${MAX_AUTHORIZATION_MINUTES / 60} hours). Only these can be ticked: ${categories}. The workspace ones need a selected workspace folder and apply only inside it. The user can revoke Auto at any time (Revoke, or switch back to Ask), and it ends by itself when it expires. A change applies from the next message; a running task keeps the mode it started with.
+- Even in Auto these always ask: ${ALWAYS_ASKS_PHRASES.join('; ')}; and anything that was not ticked.
+- Plan only: Pandesh researches and plans; nothing is created, changed, sent or run.
+- This conversation, for this message: ${now}
+- When the user wants fewer approvals ("auto mode", "stop asking me every time"), explain Auto with these facts and say where the switch is. There are no other modes or settings for this.`;
+}
+
 /** Actions that always need the human, whatever the mode or authorization says (requirement: explicit approval). */
 export function alwaysEscalateReason(toolName: string, args: Record<string, unknown>): string | null {
   const name = toolName.toLowerCase();
@@ -600,6 +678,8 @@ const CHAT_READ_TOOLS: ReadonlySet<string> = new Set([
   'dev_stories_status', 'list_reminders', 'list_commitments', 'list_scheduled_tasks', 'get_briefing_data', 'web_research',
   'find_duplicate_files', 'list_directory', 'get_project_context', 'read_file', 'search_recent_projects', 'list_printers',
   'wish_status', 'calculate',
+  // Reads what Windows lists as installed; opens a place in the Pandesh window (changes nothing, stops nothing).
+  'find_installed_app', 'navigate_to',
 ]);
 /** Pandesh's own record of what this turn did; it changes nothing outside the turn. */
 const CHAT_BOOKKEEPING_TOOLS: ReadonlySet<string> = new Set(['update_task_outcome']);

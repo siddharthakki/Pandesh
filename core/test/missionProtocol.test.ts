@@ -921,8 +921,11 @@ describe('Core-owned autonomous mission loop', () => {
     const { conversationId, attemptId } = await submitMission();
     await pollAttempt(attemptId, (attempt) => attempt.status === 'waiting_for_approval');
     // Resume binds the deadline from attempt.startedAt — pull the clock forward
-    // so the hung generation must be aborted within a few hundred ms.
-    const nearDeadline = new Date(Date.now() - (MISSION_WALL_CLOCK_MS - 200)).toISOString();
+    // so the hung generation must be aborted within about two seconds. The margin
+    // has to cover the approval round trips and the resume: with 200 ms, a slow CI
+    // runner reached the wall clock before any generation opened, so there was no
+    // open generation to abort and the test failed without a product fault.
+    const nearDeadline = new Date(Date.now() - (MISSION_WALL_CLOCK_MS - 2_000)).toISOString();
     db.run('UPDATE attempts SET startedAt = ? WHERE id = ?', [nearDeadline, attemptId]);
     await resolveMissionAuthorization(conversationId, attemptId);
     const done = await pollAttempt(
@@ -936,7 +939,7 @@ describe('Core-owned autonomous mission loop', () => {
       'SELECT id, status FROM model_invocations WHERE attemptId = ?',
       [attemptId],
     );
-    expect(open.some((row) => row.status === 'failed')).toBe(true);
+    expect(open.some((row) => row.status === 'failed'), `no generation was open at the deadline: ${JSON.stringify(open)}`).toBe(true);
     expect(open.every((row) => row.status !== 'pending')).toBe(true);
   }, 15_000);
 

@@ -20,6 +20,8 @@ import { appendMessage } from './conversations';
 import { recordConversationTurn } from './conversationLedger';
 import { linkAttachmentsToMessage } from './attachments';
 import { freezeRequestPermission } from './permissionModes';
+import type { InputModality } from './spokenInput';
+import type { UiSurface } from '../shared/uiDestinations';
 import { recordRuntimeEvent } from './runtimeEvents';
 import { routeModel } from './modelRouting';
 import { contextWindowEventMetadata, getAttemptContext, sanitizeModelSelectionWindow } from './attemptContext';
@@ -72,6 +74,11 @@ export interface SubmitRequestInput {
    * regenerate route. */
   reuseUserMessageId?: string | null;
   regenerateAssistantMessageId?: string | null;
+  /** How the user entered this message. Core freezes it with the request, so the runtime can tell a spoken
+   * transcript (which may contain misheard words) from typed text. Absent means typed. */
+  inputModality?: InputModality;
+  /** The Pandesh window (interface) the message was sent from, if any; only then may the assistant open places in it. */
+  uiSurface?: UiSurface;
 }
 
 export interface SubmitRequestResult {
@@ -195,7 +202,14 @@ export function submitRequest(db: CoreDatabase, input: SubmitRequestInput): Subm
 
     // The permission mode and standing authorizations are Core's to freeze; a client-supplied value is discarded.
     const frozen = freezeRequestPermission(db, { conversationId: input.conversationId, clientPolicy: input.toolPermissionPolicy, actor: input.clientId });
-    const toolPermissionPolicy = frozen.policy as ToolPermissionPolicy;
+    // How the message was entered and which window sent it come only from explicit fields; client copies inside the
+    // policy are dropped.
+    const { inputModality: _clientModality, uiSurface: _clientSurface, ...policy } = frozen.policy;
+    const toolPermissionPolicy = {
+      ...policy,
+      ...(input.inputModality === 'voice' ? { inputModality: 'voice' } : {}),
+      ...(input.uiSurface ? { uiSurface: input.uiSurface } : {}),
+    } as ToolPermissionPolicy;
 
     const request = createRequest(db, {
       clientId: input.clientId,

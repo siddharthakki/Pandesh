@@ -628,6 +628,11 @@ export class CoreClient {
   }
 
   // --- Chat permission modes and standing authorizations (Core decides; the client records the user's choice) ---
+  /** The window's answer to a navigate_to request: it opened the place, or why it could not. */
+  async confirmUiNavigation(navigationId: string, input: { ok: boolean; detail?: string; surface?: 'v2' | 'classic' }): Promise<{ recorded: boolean }> {
+    return this.request(`/v1/ui-navigation/${encodeURIComponent(navigationId)}/confirm`, { method: 'POST', body: input });
+  }
+
   async getConversationPermission(conversationId: string): Promise<{
     mode: 'ask' | 'auto' | 'plan';
     authorizations: Array<{ id: string; categories: string[]; workspaceRoot: string | null; expiresAt: string; createdAt: string; revokedAt: string | null; active: boolean; pins: { npmScripts?: Record<string, string> } }>;
@@ -781,6 +786,10 @@ export class CoreClient {
     attachmentIds?: string[];
     /** Phase 2b: run this request as a specialist agent (Core freezes its scope). */
     agentId?: string;
+    /** 'voice' when the message is a speech transcript; Core freezes it so the model can ask about misheard words. */
+    inputModality?: 'text' | 'voice';
+    /** The Pandesh window (interface) the message came from; only then may the assistant open places in it. */
+    uiSurface?: 'v2' | 'classic';
   }): Promise<{ request: RequestEnvelopeRecord; attempt: AttemptRecord; planningOnly: boolean; messageId: string | null; modelSelection: ModelSelectionEvidence }> {
     return this.request('/v1/submit', { method: 'POST', body: input });
   }

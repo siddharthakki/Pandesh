@@ -169,3 +169,15 @@ describe.skipIf(!fs.existsSync(IMAGEGEN) || !fs.existsSync(JOBFINDER))('real wor
     expect(formatProjectEvidenceForModel(a)).not.toContain('JobFinder');
   });
 });
+
+describe('questions about Pandesh itself', () => {
+  // 2026-11-10: "Where can I set up my Google credentials in this app?" was refused as "no active project to inspect"
+  // when no workspace was selected, before the model saw it. "This app" with Pandesh's own setup words is Pandesh.
+  it('are not project inspections, while questions about a project still are', () => {
+    expect(isProjectInspectionRequest('Where can I set up my Google credentials in this app?')).toBe(false);
+    expect(isProjectInspectionRequest('How do I connect my calendar in this app?')).toBe(false);
+    expect(isProjectInspectionRequest('Where are the permission settings in this app?')).toBe(false);
+    expect(isProjectInspectionRequest('What does this project do?')).toBe(true);
+    expect(isProjectInspectionRequest('How do I run this app?')).toBe(true);
+  });
+});

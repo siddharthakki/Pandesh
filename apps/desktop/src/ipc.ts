@@ -76,6 +76,8 @@ export const DESKTOP_CHANNELS = {
   retryGmailProbe: 'desktop:retryGmailProbe',
   setPermissionMode: 'desktop:setPermissionMode',
   revokeAuthorization: 'desktop:revokeAuthorization',
+  /** The window's answer to a navigate_to request (it opened the place, or why not). */
+  confirmNavigation: 'desktop:confirmNavigation',
   /** Incremental consent: the separate gmail.modify permission that lets Pandesh organize mail. */
   allowInboxOrganization: 'desktop:allowInboxOrganization',
   /** Google onboarding: the operator's own OAuth Desktop client, stored encrypted by the host. */
@@ -1009,7 +1011,9 @@ export type DesktopActivityKind =
   /** Core appended a message outside a live turn (e.g. a development-story report). */
   | 'conversation_message'
   /** A pending approval was requested, resolved, superseded or expired. */
-  | 'assistant_approval_changed';
+  | 'assistant_approval_changed'
+  /** The assistant asked this window to open a place (navigate_to); the window confirms with confirmNavigation. */
+  | 'navigate';
 
 export interface DesktopActivityEvent {
   kind: DesktopActivityKind;
@@ -1025,6 +1029,8 @@ export interface DesktopActivityEvent {
   invocationId?: string;
   invocationStatus?: string;
   toolArgs?: Record<string, unknown>;
+  /** For `navigate`: which registered place to open and the window's own navigation target for it. */
+  navigation?: { id: string; destination: string; target: string; label: string; surface: 'v2' | 'classic' };
   /**
    * Core's structured `run_check` evidence, mirroring
    * `core/runtime/missionObservations.ts`. Absent on a non-check event and on

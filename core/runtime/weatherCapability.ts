@@ -7,14 +7,17 @@ const FETCH_TIMEOUT_MS = 8_000;
 
 export interface WeatherCapabilityOptions {
   fetchImpl?: typeof fetch;
+  /** Clock for the freshness check (tests). */
+  now?: () => number;
 }
 
-interface GeocodePlace {
+export interface GeocodePlace {
   id?: number;
   name: string;
   country?: string;
   country_code?: string;
   admin1?: string;
+  population?: number;
   latitude: number;
   longitude: number;
 }
@@ -24,7 +27,12 @@ interface GeocodeResult {
 }
 
 interface ForecastResult {
+  /** Seconds the location's local time is ahead of UTC; `current.time` is local wall time without an offset. */
+  utc_offset_seconds?: number;
+  timezone_abbreviation?: string;
   current?: {
+    /** When the provider's current values are for, e.g. "2026-11-10T10:45" (local to the place). */
+    time?: string;
     temperature_2m?: number;
     relative_humidity_2m?: number;
     wind_speed_10m?: number;
@@ -62,6 +70,91 @@ function failure(output: string, category: string): ToolExecutionResult {
   return { status: 'failed', exitCode: null, output, resultCategory: category };
 }
 
+/** Current values older than this are reported as old, never passed off as now. */
+export const STALE_AFTER_MINUTES = 180;
+
+/**
+ * Where the numbers come from and for when, so "current" is checkable: the provider's own timestamp for its current
+ * values, and a plain warning when they are old.
+ */
+export function observedNote(forecast: { utc_offset_seconds?: number; timezone_abbreviation?: string; current?: { time?: string } }, nowMs: number): string {
+  const local = forecast.current?.time;
+  if (!local || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/.test(local)) return 'Source: Open-Meteo (live request); the provider gave no time for these values.';
+  const zone = forecast.timezone_abbreviation ? ` ${forecast.timezone_abbreviation}` : ' local time';
+  const observedUtc = Date.parse(`${local.slice(0, 16)}:00Z`) - (forecast.utc_offset_seconds ?? 0) * 1000;
+  const ageMinutes = Math.round((nowMs - observedUtc) / 60_000);
+  const age = Number.isFinite(ageMinutes) && ageMinutes > STALE_AFTER_MINUTES
+    ? ` These values are ${Math.round(ageMinutes / 60)} hours old; say so instead of calling them current.`
+    : '';
+  return `Source: Open-Meteo (live request), values for ${local.slice(0, 16).replace('T', ' ')}${zone}.${age}`;
+}
+
+/** The most extra name lookups a "no such place" answer may make, all to the same geocoder, in parallel. */
+export const MAX_SOUND_ALIKE_QUERIES = 10;
+
+function lettersOf(name: string): string {
+  return name.normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase().replace(/[^a-z]/g, '');
+}
+
+/**
+ * A rough sound key for a place name: the leading vowels become one "*", later vowels drop out, similar letters merge
+ * and doubles collapse. A misheard or misspelt name usually keeps its consonants: "Ostin" and "Austin" share a key.
+ */
+export function placeSoundKey(name: string): string {
+  const w = lettersOf(name).replace(/ph/g, 'f').replace(/[ckq]/g, 'k').replace(/z/g, 's').replace(/w/g, 'v');
+  const m = /^([^aeiouy]*)([aeiouy]*)(.*)$/.exec(w);
+  if (!m) return w;
+  return `${m[1]}${m[2] ? '*' : ''}${m[3].replace(/[aeiouyh]/g, '')}`.replace(/(.)\1+/g, '$1');
+}
+
+/**
+ * Other spellings to look up when a name finds nothing, because the geocoder's own fuzzy match keeps the first letters:
+ * the first vowel sound swapped ("Ostin" → "Austin"), and for a short name its consonants alone with each vowel
+ * ("Ellum" → "Alm", "Olm", …). Bounded, never the original spelling.
+ */
+export function soundAlikeQueries(name: string, max = MAX_SOUND_ALIKE_QUERIES): string[] {
+  const word = lettersOf(name);
+  const m = /^([^aeiouy]*)([aeiouy]+)(.*)$/.exec(word);
+  if (word.length < 3 || !m) return [];
+  const [, lead, , rest] = m;
+  const out = new Set<string>();
+  const skeleton = rest.replace(/[aeiouy]/g, '').replace(/(.)\1+/g, '$1');
+  if (skeleton.length >= 1 && skeleton.length <= 2) for (const v of ['a', 'e', 'i', 'o', 'u']) out.add(lead + v + skeleton);
+  for (const v of ['a', 'e', 'i', 'o', 'u', 'au']) out.add(lead + v + rest);
+  out.add(word.replace(/(.)\1+/g, '$1'));
+  out.delete(word);
+  return [...out].slice(0, max).map((q) => q.charAt(0).toUpperCase() + q.slice(1));
+}
+
+function editDistance(a: string, b: string): number {
+  const prev = Array.from({ length: b.length + 1 }, (_, j) => j);
+  for (let i = 1; i <= a.length; i += 1) {
+    let diagonal = prev[0];
+    prev[0] = i;
+    for (let j = 1; j <= b.length; j += 1) {
+      const saved = prev[j];
+      prev[j] = a[i - 1] === b[j - 1] ? diagonal : 1 + Math.min(diagonal, prev[j], prev[j - 1]);
+      diagonal = saved;
+    }
+  }
+  return prev[b.length];
+}
+
+/** The places that sound most like the name, best first: same sound key, then the larger place. */
+export function closestPlaceNames(heard: string, candidates: GeocodePlace[], limit = 3): string[] {
+  const key = placeSoundKey(heard);
+  // A short key ("*lm") matches only exactly; a longer one may differ by one sound.
+  const allowed = key.length <= 3 ? 0 : 1;
+  const seen = new Set<string>();
+  return candidates
+    .map((c) => ({ c, distance: editDistance(key, placeSoundKey(c.name)) }))
+    .filter(({ distance }) => distance <= allowed)
+    .sort((a, b) => a.distance - b.distance || (b.c.population ?? 0) - (a.c.population ?? 0))
+    .map(({ c }) => [c.name, c.admin1, c.country].filter(Boolean).join(', '))
+    .filter((label) => (seen.has(label) ? false : (seen.add(label), true)))
+    .slice(0, limit);
+}
+
 function matchesCountry(result: GeocodePlace, exp: string): boolean {
   const normExp = exp.toLowerCase().trim();
   const cName = (result.country ?? '').toLowerCase().trim();
@@ -83,6 +176,7 @@ function matchesCountry(result: GeocodePlace, exp: string): boolean {
  * harmless. */
 export function createWeatherCapabilityAdapter(options: WeatherCapabilityOptions = {}): GovernedCapabilityAdapter {
   const fetcher = options.fetchImpl ?? fetch;
+  const nowMs = options.now ?? Date.now;
 
   async function json(url: string): Promise<unknown> {
     const response = await fetcher(url, { signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) });
@@ -130,7 +224,22 @@ export function createWeatherCapabilityAdapter(options: WeatherCapabilityOptions
         : candidates;
 
       if (matchedCandidates.length === 0) {
-        return failure(`No location found matching "${cityName}"${expectedCountry ? ` in ${expectedCountry}` : ''}. Please verify the city and country name.`, 'weather_location_not_found');
+        // Not a dead end: a spoken or misspelt name ("Ostin") usually sounds like the place meant ("Austin").
+        const lookups = await Promise.allSettled(soundAlikeQueries(cityName).map((q) => json(
+          `https://geocoding-api.open-meteo.com/v1/search?count=10&name=${encodeURIComponent(q)}`,
+        ) as Promise<GeocodeResult>));
+        const pool = [...candidates, ...lookups.flatMap((r) => (r.status === 'fulfilled' ? r.value.results ?? [] : []))];
+        const inCountry = expectedCountry ? pool.filter((c) => matchesCountry(c, expectedCountry!)) : pool;
+        const closest = closestPlaceNames(cityName, inCountry.length ? inCountry : pool);
+        const where = `"${cityName}"${expectedCountry ? ` in ${expectedCountry}` : ''}`;
+        // Worded for the person: the desktop shows this text as it is when it answers a weather question itself.
+        const options = closest.length > 1 ? `${closest.slice(0, -1).join('; ')} or ${closest[closest.length - 1]}` : closest[0];
+        return failure(
+          closest.length
+            ? `No place called ${where} was found. Did you mean ${options}? Say which one, and the weather is looked up for it.`
+            : `No place called ${where} was found, and no similar-sounding place either. Please spell the place name, or name a nearby larger town.`,
+          'weather_location_not_found',
+        );
       }
 
       // Check for exact match on city name (case-insensitive)
@@ -191,7 +300,7 @@ export function createWeatherCapabilityAdapter(options: WeatherCapabilityOptions
         }
       }
 
-      const summary = summaryParts.filter(Boolean).join(', ');
+      const summary = `${summaryParts.filter(Boolean).join(', ')}. ${observedNote(forecast, nowMs())}`;
       return {
         status: 'succeeded',
         exitCode: 0,

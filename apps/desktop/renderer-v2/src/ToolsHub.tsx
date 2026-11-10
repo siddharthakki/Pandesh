@@ -18,9 +18,11 @@ const head: React.CSSProperties = { ...cell, color: 'var(--muted)', fontWeight: 
 const mono: React.CSSProperties = { fontFamily: 'var(--font-mono)', fontSize: 13 };
 const STATUS_TONE: Record<string, string> = { working: 'var(--verified)', installed_unverified: 'var(--attention)', unreachable: 'var(--danger)', missing: 'var(--muted)', not_connected: 'var(--muted)' };
 
-export function ToolsHub({ narrow }: { narrow: boolean }) {
+export function ToolsHub({ narrow, initialTab }: { narrow: boolean; initialTab?: { tab: Tab; n: number } | null }) {
   const [hub, setHub] = useState<Hub | null>(null);
-  const [tab, setTab] = useState<Tab>('tools');
+  const [tab, setTab] = useState<Tab>(initialTab?.tab ?? 'tools');
+  // Opened on a tab by navigate_to ("show my connected services").
+  useEffect(() => { if (initialTab) setTab(initialTab.tab); }, [initialTab?.n]);
   const [q, setQ] = useState('');
   const [risk, setRisk] = useState('all');
   const [agent, setAgent] = useState('coding');

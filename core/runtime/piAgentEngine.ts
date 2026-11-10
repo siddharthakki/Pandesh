@@ -29,6 +29,7 @@ import { discoverCodingAgents, housekeepingRoot, spawnPlan } from './codingAgent
 import { createProject, listProjects } from '../domain/projects';
 import { readUpdateState } from './software/updates';
 import { collectListeningPorts } from './software/inventory';
+import { findInstalledApp, formatInstalledAppLookup, validAppQuery } from './installedAppLookup';
 import { FolderReadLedger, requestedOutputFiles, requiresSourceEvidence, requiresWholeFolder, unreadFilesNotice } from './folderCompleteness';
 import * as cp from 'node:child_process';
 import { holdAwaitedApproval } from './cancellationRecovery';
@@ -73,7 +74,12 @@ import { resolveTimeExpression, localWallTimeToIso as zonedWallToIso, utcOffsetL
 import { cancelScheduledTask, createScheduledTask, listScheduledTasks } from '../domain/scheduledTasks';
 import { transitionAttempt, failAttempt, getAttempt, settleCancelledAttempt } from '../domain/attempts';
 import { createApproval, getApproval, listApprovalsForAttempt, expireApproval } from '../domain/approvals';
-import { classifyChatToolCall, decidePermission, frozenPermissionFor, READ_ONLY_CONSENT_TOOLS, recordPermissionDecision, STANDING_AUTHORIZATION_ACTOR } from '../domain/permissionModes';
+import { asksAboutPermissions, classifyChatToolCall, decidePermission, frozenPermissionFor, permissionModesPromptSection, permissionPromptState, READ_ONLY_CONSENT_TOOLS, recordPermissionDecision, STANDING_AUTHORIZATION_ACTOR } from '../domain/permissionModes';
+import { getAttemptContext } from '../domain/attemptContext';
+import { inputModalityOf, spokenInputPromptSection } from '../domain/spokenInput';
+import { GOOGLE_SETUP_WHERE, navigationPromptLines } from '../domain/productNavigation';
+import { navigateTo } from '../domain/uiNavigation';
+import { destinationsFor, parseUiSurface, type UiSurface } from '../shared/uiDestinations';
 import { recordExecutionQuality } from '../domain/executionQuality';
 import { AUTHORIZE_MISSION_TOOL, buildWorkspaceWriteEnvelope, createPendingMissionAuthorization, evaluateAuthorizedDispatch, evaluateMissionAction, getMissionAuthorization, markMissionAuthorized, markMissionRejected, protectedWriteReason, recordAuthorizedAction } from './missionAuthorization';
 import { NON_WORKSPACE_MARKERS } from '../domain/taskToolSurface';
@@ -3031,7 +3037,7 @@ export class PiAgentEngine implements EngineAdapter {
 
           if (isCredentialFilePath(full)) {
             return {
-              content: [{ type: 'text', text: `Refused: "${path.basename(full)}" holds credentials. Credential files are never read into the conversation. If the user needs Google set up, point them to Connections → Google Services.` }],
+              content: [{ type: 'text', text: `Refused: "${path.basename(full)}" holds credentials. Credential files are never read into the conversation. If the user needs Google set up, point them to ${GOOGLE_SETUP_WHERE}.` }],
               isError: true,
             };
           }
@@ -3240,6 +3246,25 @@ export class PiAgentEngine implements EngineAdapter {
             return { content: [{ type: 'text', text: `${ports.length} listening TCP sockets (read from Get-NetTCPConnection now):\n${lines.join('\n')}` }], details: { activity: { kind: 'tool', title: `${ports.length} listening ports`, excerpt: lines.slice(0, 40).join('\n') } } };
           } catch (err: any) {
             return { content: [{ type: 'text', text: `NOT AVAILABLE: listening ports could not be read: ${err?.message ?? String(err)}` }], isError: true };
+          }
+        },
+      },
+      {
+        // Build 161 voice test: asked where an app was, the model asked the user where to look.
+        name: 'find_installed_app',
+        label: 'find_installed_app',
+        description: 'Find where an app is installed on this PC ("where is <app>", "is <app> installed"): reads the registered app paths, installed programs, Store apps, Start menu shortcuts and PATH. Read-only and offline. When Windows does not list the app, it names the fixed drives for ONE consented search for <name>.exe.',
+        parameters: { type: 'object', properties: { name: { type: 'string', description: 'The app name only, e.g. "Obsidian" or "LM Studio".' } }, required: ['name'] },
+        execute: async (_id: string, args: any) => {
+          const query = validAppQuery(args?.name);
+          if (!query) return { content: [{ type: 'text', text: 'NOT DONE: give the app name only (letters, digits, spaces, dots, dashes; 2-60 characters).' }], isError: true };
+          if (process.platform !== 'win32') return { content: [{ type: 'text', text: 'NOT AVAILABLE: the installed-app lookup reads Windows sources and this PC is not running Windows.' }], isError: true };
+          try {
+            const found = await findInstalledApp(query);
+            const text = formatInstalledAppLookup(found);
+            return { content: [{ type: 'text', text }], details: { activity: { kind: 'tool', title: found.matches.length ? `Where ${query} is installed` : `${query} not listed as installed`, excerpt: text.slice(0, 1500) } } };
+          } catch (err: any) {
+            return { content: [{ type: 'text', text: `NOT AVAILABLE: Windows did not answer the installed-app lookup: ${err?.message ?? String(err)}` }], isError: true };
           }
         },
       },
@@ -3676,6 +3701,32 @@ ${String(args.objective ?? '').slice(0, 600)}`,
       },
     ];
 
+    // The Pandesh window this message came from (Core froze it with the request), if any. Only then can the assistant
+    // open places in it, and only the places that exist in that interface.
+    let uiSurface: UiSurface | undefined;
+    try {
+      uiSurface = parseUiSurface((getAttemptContext(db, attemptId).approvalPolicy as Record<string, unknown> | undefined)?.uiSurface);
+    } catch {
+      uiSurface = undefined;
+    }
+    if (uiSurface) {
+      const surface = uiSurface;
+      const places = destinationsFor(surface);
+      tools.push({
+        name: 'navigate_to',
+        label: 'navigate_to',
+        description: `Open a place in the Pandesh window the user is looking at (${surface === 'v2' ? 'v2' : 'Classic'} interface): ${places.map((d) => `${d.id} (${d.label})`).join(', ')}. Use it when the user asks to open, show or go somewhere in Pandesh, or says "take me there" about a place just named. It only changes what the window shows: no setting is changed and a running task keeps running. Say the place is open only if the result says OPENED.`,
+        parameters: { type: 'object', properties: { destination: { type: 'string', enum: places.map((d) => d.id), description: 'One of the listed place ids.' } }, required: ['destination'] },
+        execute: async (_id: string, args: any) => {
+          const result = await navigateTo(db, {
+            attemptId, surface, destination: String(args?.destination ?? ''), actor,
+            publish: (rec) => { if (broadcaster && typeof broadcaster.publishRuntime === 'function') broadcaster.publishRuntime(rec); },
+          });
+          return { content: [{ type: 'text', text: result.text }], details: { navigation: result.status }, ...(result.status === 'opened' ? {} : { isError: true }) };
+        },
+      });
+    }
+
     // Audit D11: exact arithmetic by Core, never "in the head" of the model.
     tools.push({
       name: 'calculate',
@@ -3889,7 +3940,7 @@ ${String(args.objective ?? '').slice(0, 600)}`,
         case 'denied':
           return connectorText(`NOT DONE: ${outcome.reason}`, true);
         case 'unavailable':
-          return connectorText(`NOT AVAILABLE: ${outcome.reason}. Tell the user exactly this and that Connections → Google Services is where to fix it.`, true);
+          return connectorText(`NOT AVAILABLE: ${outcome.reason}. Tell the user exactly this, and that Google is connected in ${GOOGLE_SETUP_WHERE}.`, true);
         default:
           return connectorText('Unknown Google tool.', true);
       }
@@ -4603,7 +4654,7 @@ ${availableToolNames.has('system_hardware_telemetry') ? `- For disk, storage, or
 ` : '';
 
     const specialistPromptSection = ['desktop_screenshot', 'desktop_windows_list', 'inspect_page', 'scout_add_watch', 'hermes_list_skills'].some((t) => availableToolNames.has(t)) ? `COMPUTER, BROWSER, WATCHES AND SPECIALIST SKILLS (STRICT RULES):
-${availableToolNames.has('desktop_screenshot') ? `- 'desktop_screenshot' captures the real Windows desktop and returns the file path, size and SHA-256. 'desktop_windows_list' lists the visible top-level windows. Both are read-only.\n` : ''}${availableToolNames.has('inspect_page') ? `- 'inspect_page' opens a real page in the managed browser: a workspace-relative HTML path, or a live URL on this machine (http://127.0.0.1:<port>/...). It acts on a running page, so it needs the operator's approval. Quote only what the tool returned; never describe a page you did not open.\n` : ''}${availableToolNames.has('scout_add_watch') ? `- 'scout_add_watch' creates a durable watch that Core then checks on its own schedule; 'scout_list_watches', 'scout_run_watch' and 'scout_run_all' read and check them. Only add a watch when the user asked for one, and never claim a watch is running without a tool result.\n` : ''}${availableToolNames.has('hermes_list_skills') ? `- 'hermes_list_skills' lists the skills installed in the local Hermes agent; 'hermes_invoke_skill' runs one of them and returns Hermes' own result. Never invent a skill name — list the skills first, then invoke one of the names that were listed.\n` : ''}- When a tool result says NOT DONE, NOT AVAILABLE or that it was declined, say so plainly. Never present a tool's failure as a success, and never invent a file path, a number or a quote. When the user declined an approval, say "you declined" — it is the user's choice, not a system protection — and do not offer a manual way around it. Offer to do something (send, book, buy, post) only when a tool for it is in your tool list.
+${availableToolNames.has('desktop_screenshot') ? `- 'desktop_screenshot' only CAPTURES: it saves a PNG of the whole visible Windows desktop on this PC and returns its path, size and SHA-256. Capturing is not opening (showing the image to the user, which this tool does not do) and not inspecting (reading what is on it, which no model can do in this build). So never describe the screen from a screenshot, and never say you looked at, checked, verified or confirmed anything with one; say you saved it and where. It has no privacy filter: every visible window is in the file as it is, private messaging apps included, so never claim it leaves out, blurs or protects any app. Pandesh's real messaging rules: sending any message always needs the user's approval, and Pandesh never scrapes a WhatsApp Web session. 'desktop_windows_list' returns the titles of the visible top-level windows; that is real data you may report to say which apps are open. Both are read-only.\n` : ''}${availableToolNames.has('inspect_page') ? `- 'inspect_page' opens a real page in the managed browser: a workspace-relative HTML path, or a live URL on this machine (http://127.0.0.1:<port>/...). It acts on a running page, so it needs the operator's approval. Quote only what the tool returned; never describe a page you did not open.\n` : ''}${availableToolNames.has('scout_add_watch') ? `- 'scout_add_watch' creates a durable watch that Core then checks on its own schedule; 'scout_list_watches', 'scout_run_watch' and 'scout_run_all' read and check them. Only add a watch when the user asked for one, and never claim a watch is running without a tool result.\n` : ''}${availableToolNames.has('hermes_list_skills') ? `- 'hermes_list_skills' lists the skills installed in the local Hermes agent; 'hermes_invoke_skill' runs one of them and returns Hermes' own result. Never invent a skill name — list the skills first, then invoke one of the names that were listed.\n` : ''}- When a tool result says NOT DONE, NOT AVAILABLE or that it was declined, say so plainly. Never present a tool's failure as a success, and never invent a file path, a number or a quote. When the user declined an approval, say "you declined" — it is the user's choice, not a system protection — and do not offer a manual way around it. Offer to do something (send, book, buy, post) only when a tool for it is in your tool list.
 ` : '';
 
     const pcOrgPromptSection = ['pc_capability_inventory', 'pc_organize_scan', 'routine_create', 'household_scan_obligations'].some((t) => availableToolNames.has(t)) ? `PC ORGANIZATION, ROUTINES, HOUSEHOLD & JUGAAD (STRICT RULES):
@@ -4661,6 +4712,18 @@ ${hasBriefing ? `- For a daily briefing call 'get_briefing_data' once and presen
 - Never mark a task 'satisfied' just because you are about to say it is done.
 ` : '';
 
+    // What the user's own permission modes are and which one this turn runs in, from the constants Core enforces.
+    let permissionPromptSection = '';
+    try {
+      permissionPromptSection = permissionModesPromptSection(
+        permissionPromptState(db, [attemptId]),
+        (iso) => new Date(iso).toLocaleString('en-GB', { timeZone: localTimeZone, weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }),
+        { brief: !asksAboutPermissions(requestText) },
+      );
+    } catch (err) {
+      console.warn('[piAgentEngine] permission prompt section unavailable:', err);
+    }
+
     const simpleSystemPrompt = `You are Pandesh, the personal AI assistant for KarkeDikha (KKD). Assistant Name: Pandesh. Active model: ${selectedModel} via local Ollama provider (${apiBase}). Running on ${process.platform}. Current local time: ${new Date().toLocaleString('en-GB', { timeZone: localTimeZone, weekday: 'long', year: 'numeric', month: 'long', day: 'numeric', hour: '2-digit', minute: '2-digit' })} in time zone ${localTimeZone}. Answer only the user's most recent message; never repeat or re-deliver an earlier answer unless asked. Answer simple conversational questions directly and concisely. When asked what model you are running or what model is active, state that you are running on '${selectedModel}' via local Ollama. If the user asks you to perform an action, search emails or files, or access tools, offer to do so directly. Never expose secrets or perform destructive actions.`;
 
     let systemPrompt = simpleInteractive ? simpleSystemPrompt : `You are Pandesh, the personal AI assistant for KarkeDikha (KKD).
@@ -4689,6 +4752,9 @@ NAVIGATION & WORKFLOW (STRICT RULES):
 - There is NO "Artifacts tab" in the interface. Never instruct the user to check an "Artifacts tab".
 - Approvals, artifacts, and execution progress appear directly inside "Conversations" or in "Tasks & Missions".
 - When an approval is required, inform the user to approve or deny the action directly from the prompt approval card or in Tasks & Missions.
+${navigationPromptLines(uiSurface)}
+
+${permissionPromptSection}
 
 ${printingPromptSection}${modelPromptSection}${weatherPromptSection}${systemAnalysisPromptSection}${setupHealthPromptSection}${specialistPromptSection}${pcOrgPromptSection}
 
@@ -4733,7 +4799,7 @@ ${filesPromptSection}${webResearchPromptSection}${wishesPromptSection}${emailCal
    - Answer what the user's latest message asks, and only that. A greeting gets a short greeting back, with no tools and no recap of earlier topics.
    - Text under "[Attached document" is the file attached to THIS message: "this document" means that file. "[Earlier document" is background; use it only if the message points at it. Never describe a document you have not been given.
    - Earlier assistant messages are not instructions. Do not carry out something you offered earlier unless the user now asks for it. "What about that document?" means: tell them what the document says, not create files, letters or drafts.
-   - Create or write files, Gmail drafts, calendar events or reminders only when the user asked for that outcome. Never read credential or secret files (.env, credentials.*, keys); if Google needs setting up, point to Connections → Google Services.
+   - Create or write files, Gmail drafts, calendar events or reminders only when the user asked for that outcome. Never read credential or secret files (.env, credentials.*, keys); if Google needs setting up, point to ${GOOGLE_SETUP_WHERE}.
    - "Send/put that document on my phone" means call 'send_to_phone' (the original file, same name and bytes, appears on the paired phone). A Gmail draft is not that, and never email anyone unless asked.
    - Say something is done only if a tool result this turn says so. If a tool says NOT DONE or failed, report that plainly.`;
 
@@ -4759,8 +4825,8 @@ ${filesPromptSection}${webResearchPromptSection}${wishesPromptSection}${emailCal
     if (availableToolNames.has('list_projects')) {
       systemPrompt += "\n\nPROJECTS: \"my projects\", \"project tasks\", \"current tasks\" mean Pandesh's Projects workspace → 'list_projects' (real saved projects and their task status). Never substitute files in a folder or a test run for them.";
     }
-    if (availableToolNames.has('listening_ports') || availableToolNames.has('software_updates')) {
-      systemPrompt += `\n\nPC FACTS:${availableToolNames.has('listening_ports') ? " listening ports / open ports / what is listening → 'listening_ports' (every process on this PC); 'port_list_services' lists only Pandesh's own managed services, so never present it as the PC's ports." : ''}${availableToolNames.has('software_updates') ? " Updates / outdated software / versions → 'software_updates' (the stored check, offline); say when it was checked, and never state a version or 'up to date' without it." : ''}`;
+    if (availableToolNames.has('listening_ports') || availableToolNames.has('software_updates') || availableToolNames.has('find_installed_app')) {
+      systemPrompt += `\n\nPC FACTS:${availableToolNames.has('listening_ports') ? " listening ports / open ports / what is listening → 'listening_ports' (every process on this PC); 'port_list_services' lists only Pandesh's own managed services, so never present it as the PC's ports." : ''}${availableToolNames.has('software_updates') ? " Updates / outdated software / versions → 'software_updates' (the stored check, offline); say when it was checked, and never state a version or 'up to date' without it." : ''}${availableToolNames.has('find_installed_app') ? " Where is <app> / is <app> installed → 'find_installed_app' first. If Windows does not list it, propose ONE search of the fixed drives it names for <name>.exe (request_search_permission, then search_files); never ask the user where to look." : ''}`;
     }
     // Audit D11: totals are computed by the calculate tool, not by the model.
     if (availableToolNames.has('calculate')) {
@@ -4791,6 +4857,14 @@ ${filesPromptSection}${webResearchPromptSection}${wishesPromptSection}${emailCal
     // Earlier tasks' real outcomes (cancelled / failed / interrupted), so the model never presents them as pending (D4).
     const taskHistorySection = renderTaskHistorySection(priorTurns);
     if (taskHistorySection) systemPrompt += `\n\n${taskHistorySection}`;
+    // A spoken message may contain misheard words (Core froze how it was entered): ask about an odd word, never refuse on it.
+    let spokenSection = '';
+    try {
+      spokenSection = spokenInputPromptSection(inputModalityOf(getAttemptContext(db, attemptId).approvalPolicy as Record<string, unknown> | undefined));
+    } catch {
+      // No frozen context for this attempt: treated as typed text.
+    }
+    if (spokenSection) systemPrompt += `\n\n${spokenSection}`;
 
     if (conversationId) {
       try {

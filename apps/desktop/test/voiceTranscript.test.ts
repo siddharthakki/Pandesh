@@ -12,6 +12,23 @@ describe('voice vocabulary hints', () => {
     expect(correctVoiceVocabulary('read my emails and mail').text).toBe('read my emails and mail');
     expect(correctVoiceVocabulary('a panda picture').text).toBe('a panda picture');
   });
+
+  // Measured 2026-11-10 (Piper speech into the bundled whisper-base.en): "Pandesh" came back as "Pandish" three times
+  // and once as "Pan-dish"; the control sentences came back unchanged and must stay that way.
+  it('joins a name the recognizer split with a hyphen', () => {
+    expect(correctVoiceVocabulary('Pan-dish, we need an auto mode').text).toBe('Pandesh, we need an auto mode');
+    expect(correctVoiceVocabulary('Pan-dish, we need an auto mode').corrections).toEqual(['Pan-dish -> Pandesh']);
+    expect(correctVoiceVocabulary('Pandish. We need an auto mode').text).toBe('Pandesh. We need an auto mode');
+    expect(correctVoiceVocabulary('send the e-mail to my in-box').text).toBe('send the e-mail to my in-box');
+    expect(correctVoiceVocabulary('a well-known self-hosted tool').corrections).toEqual([]);
+  });
+
+  it('leaves the measured control sentences alone', () => {
+    for (const sentence of [
+      'The punishment should fit the crime.', 'I walked down Elm Street yesterday.', 'Panda bears eat bamboo all day.',
+      'Pandas is a Python library for data frames.', 'Show me my calendar for tomorrow morning.', 'Pull llama 3.2 and qwen.',
+    ]) expect(correctVoiceVocabulary(sentence).corrections, sentence).toEqual([]);
+  });
 });
 
 describe('voice transcript review gate', () => {

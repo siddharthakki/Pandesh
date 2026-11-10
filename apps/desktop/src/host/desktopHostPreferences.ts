@@ -36,6 +36,17 @@ export function resolveUiVariant(prefs: Pick<DesktopHostPreferences, 'uiVariant'
   return prefs.uiVariant === 'v2' ? 'v2' : 'classic';
 }
 
+/**
+ * Whether this profile may write or delete the Windows sign-in entry. Only the real profile may: the entry is the
+ * Run value named after Electron's default AppUserModelID ("electron.app.Electron", from the exe's ProductName), which
+ * the installed app and every dev, test or scratch instance share. A test instance starts with "off" and applying it
+ * deleted the installed app's start-at-login entry (found 2026-11-10 before an isolated v2 screenshot run).
+ */
+export function ownsLoginItem(dataDir: string, realDesktopDataDir: string): boolean {
+  const norm = (p: string) => path.resolve(p).replace(/[\\/]+$/, '').toLowerCase();
+  return norm(dataDir) === norm(realDesktopDataDir);
+}
+
 export function hostPreferencesPath(dataDir: string): string {
   return path.join(dataDir, 'host-preferences.json');
 }

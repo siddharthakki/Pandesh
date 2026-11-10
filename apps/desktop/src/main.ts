@@ -19,7 +19,7 @@ import {
   resolveBuildIdentity,
   type DesktopBuildIdentity,
 } from './host/desktopBuildIdentity';
-import { readHostPreferences, resolveUiVariant, writeHostPreferences } from './host/desktopHostPreferences';
+import { ownsLoginItem, readHostPreferences, resolveUiVariant, writeHostPreferences } from './host/desktopHostPreferences';
 import { DESKTOP_CHANNELS, type DesktopAppMetadata, type DesktopUpdateStartResult, type DesktopUpdateStatus } from './ipc';
 import {
   acknowledgeUpdateResult, inspectPackage, launchUpdater, quiesceCore, readCoreReadiness, readUpdateResult,
@@ -290,6 +290,12 @@ function syncTrayFromSession(): void {
 
 function applyOpenAtLogin(enabled: boolean): void {
   prefs = writeHostPreferences(dataDir, { openAtLogin: enabled });
+  // A test or scratch profile keeps its own preference but never writes or deletes the shared Windows entry.
+  if (!ownsLoginItem(dataDir, defaultDesktopDataDir())) {
+    hostLog(`login item left alone: profile ${dataDir} is not the real desktop profile (preference saved: ${enabled ? 'on' : 'off'})`);
+    syncTrayFromSession();
+    return;
+  }
   try {
     app.setLoginItemSettings({
       openAtLogin: enabled,
@@ -735,6 +741,8 @@ async function createWindow(): Promise<void> {
     notifyQueueConfirm: async (input) => showDesktopQueueConfirmNotification(input),
     onQueueConfirmNotificationClick: (id) => showQueueConfirmFromNotification(id),
     deliverNotification: (input) => deliverOutboxNotification(input),
+    // Messages typed in this window may ask the assistant to open places in it (navigate_to).
+    uiSurface: () => resolveUiVariant(prefs),
     notificationChannel: () => ({
       supported: Notification.isSupported(),
       detail: Notification.isSupported() ? 'Windows desktop notifications (toast)' : 'desktop notifications unsupported on this system',
@@ -1033,6 +1041,10 @@ function registerIpc(): void {
     const snapshot = await session.setPermissionMode(mode, parsed);
     sendSnapshot();
     return snapshot;
+  });
+  ipcMain.handle(DESKTOP_CHANNELS.confirmNavigation, async (_event, navigationId: unknown, ok: unknown, detail: unknown, surface: unknown) => {
+    if (!session) throw new Error('desktop session is not started');
+    return session.confirmNavigation(String(navigationId ?? ''), ok === true, typeof detail === 'string' ? detail.slice(0, 300) : undefined, surface === 'classic' || surface === 'v2' ? surface : undefined);
   });
   ipcMain.handle(DESKTOP_CHANNELS.revokeAuthorization, async (_event, id: unknown) => {
     if (!session) throw new Error('desktop session is not started');

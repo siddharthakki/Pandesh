@@ -146,6 +146,9 @@ const desktopApi = {
   setPermissionMode: (mode: DesktopPermissionMode, grant?: DesktopPermissionGrant): Promise<DesktopSnapshot> =>
     ipcRenderer.invoke(DESKTOP_CHANNELS.setPermissionMode, mode, grant),
   revokeAuthorization: (id: string): Promise<DesktopSnapshot> => ipcRenderer.invoke(DESKTOP_CHANNELS.revokeAuthorization, id),
+  /** Tells Core whether this window opened the place the assistant asked for (navigate_to). */
+  confirmNavigation: (navigationId: string, ok: boolean, detail?: string, surface?: 'v2' | 'classic'): Promise<{ recorded: boolean }> =>
+    ipcRenderer.invoke(DESKTOP_CHANNELS.confirmNavigation, navigationId, ok, detail, surface),
   allowInboxOrganization: (): Promise<DesktopGmailStatus> => ipcRenderer.invoke(DESKTOP_CHANNELS.allowInboxOrganization),
   saveGoogleOAuthClient: (clientId: string, clientSecret: string): Promise<DesktopGmailStatus> =>
     ipcRenderer.invoke(DESKTOP_CHANNELS.saveGoogleOAuthClient, clientId, clientSecret),

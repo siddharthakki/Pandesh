@@ -1,0 +1,31 @@
+id	category	text	terms
+n01	names	Remind me to call Priya at five pm	Priya
+n02	names	Send the invoice to Venkatesh tomorrow	Venkatesh
+n03	names	What did Ananya say about the meeting	Ananya
+n04	names	Book a table for Lakshmi and Arjun	Lakshmi|Arjun
+n05	names	Is Rahul free on Thursday	Rahul
+n06	names	Draft an email to Kavya Raghunathan	Kavya|Raghunathan
+n07	names	What is the weather in Thiruvananthapuram today	Thiruvananthapuram
+n08	names	How far is Bengaluru from Pune	Bengaluru|Pune
+m01	mixed	Kal ka weather kya hai	weather
+m02	mixed	Mujhe five baje reminder chahiye	reminder
+m03	mixed	Gmail mein invoice dhundo	Gmail|invoice
+m04	mixed	Mera calendar check karo	calendar
+m05	mixed	Wie ist das Wetter in Stuttgart	Stuttgart
+m06	mixed	Open the Rechnung folder	Rechnung
+t01	technical	Which Ollama models are installed	Ollama
+t02	technical	Pull gemma four with Ollama	gemma|Ollama
+t03	technical	Run npm install and then the TypeScript check	npm|TypeScript
+t04	technical	Open PowerShell as administrator	PowerShell
+t05	technical	Show the Kubernetes pods in the default namespace	Kubernetes|namespace
+t06	technical	Create a GitHub pull request for this branch	GitHub|pull request
+t07	technical	Restart Docker Desktop	Docker
+t08	technical	Open the project in VS Code	VS Code
+p01	product	Pandesh, turn on auto mode	Pandesh
+p02	product	Is Ollaya running on the second server	Ollaya
+p03	product	Pandesh, are these models useful for Pandesh	Pandesh
+p04	product	Hey Pandesh, what is on my calendar	Pandesh
+c01	control	The punishment should fit the crime
+c02	control	Panda bears eat bamboo all day
+c03	control	Pull llama three and run it locally	llama
+c04	control	I walked down Elm Street yesterday
