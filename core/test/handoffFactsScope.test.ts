@@ -8,7 +8,7 @@
  * public-query guard, so a query repeating them was not refused.
  */
 import { describe, expect, it } from 'vitest';
-import { collectHandoffFacts } from '../runtime/handoffFacts';
+import { collectHandoffFacts, withheldMemoryInBrief } from '../runtime/handoffFacts';
 import { checkPublicQuery } from '../runtime/publicQueryGuard';
 
 const recall = {
@@ -47,6 +47,30 @@ describe('hand-off facts respect the child\'s memory scope', () => {
   it('a child with no readable memory receives no recalled memory at all; an unreadable recall result is dropped', () => {
     expect(collectHandoffFacts([recall], []).text).toBe('');
     expect(collectHandoffFacts([{ tool: 'memory_recall', status: 'completed', text: 'not json: Lindenallee 7' }], ['global']).text).toBe('');
+  });
+
+  it('reminders (the user\'s personal data) reach only a child that may read the user scope', () => {
+    const reminders = { tool: 'list_reminders', status: 'completed', text: 'Friday 10:00 appointment at Praxis Sonnenhof' };
+    expect(collectHandoffFacts([reminders], ['global', 'task']).text).not.toContain('Praxis Sonnenhof');
+    expect(collectHandoffFacts([reminders], ['project', 'repository', 'task']).text).not.toContain('Praxis Sonnenhof');
+    expect(collectHandoffFacts([reminders], ['user', 'task']).text).toContain('Praxis Sonnenhof');
+    expect(collectHandoffFacts([reminders], null).text).toContain('Praxis Sonnenhof');
+  });
+
+  it('a brief repeating withheld memory is recognised; generic wording and what the user wrote are not refused', () => {
+    const withheld = [
+      { subject: 'home address', value: 'Lindenallee 7 in Bonn' },
+      { subject: 'doctor', value: 'family doctor is Praxis Sonnenhof Doktor Weber' },
+      { subject: 'code word', value: 'Pumpernickel' },
+    ];
+    expect(withheldMemoryInBrief('Packing list for a trip from Lindenallee 7, Bonn', withheld, 'packing list for a trip from my home')).toEqual(['home address']);
+    expect(withheldMemoryInBrief('Find reviews of Praxis Sonnenhof', withheld, 'how good is my doctor?')).toEqual(['doctor']);
+    expect(withheldMemoryInBrief('Use the word pumpernickel as the title', withheld, 'pick a title')).toEqual(['code word']);
+    // Generic or public wording that merely shares single words is not a repeat.
+    expect(withheldMemoryInBrief('List museums in Bonn open on Sunday', withheld, 'museums in Bonn')).toEqual([]);
+    expect(withheldMemoryInBrief('Summarise how a family doctor referral works in Germany', withheld, 'how does a family doctor referral work?')).toEqual([]);
+    // The user wrote it in this request: theirs to pass on.
+    expect(withheldMemoryInBrief('Packing list for a trip from Lindenallee 7 in Bonn', withheld, 'packing list for a trip from Lindenallee 7 in Bonn')).toEqual([]);
   });
 
   it('memory handed to a child counts as private for its public web query guard', () => {

@@ -91,4 +91,12 @@ describe('a compromised specialist cannot widen its memory access', () => {
     const research = run('research');
     expect((await call(research, 'memory_export', { scopeType: 'global' })).outcome).toBe('denied');
   });
+
+  it('Sales (may go online with the user\'s OK) never recalls the user\'s or global facts, however it asks', async () => {
+    const sales = run('sales');
+    for (const args of [{ query: 'secret' }, { scopeType: 'user', query: 'secret' }, { memoryId: ids.user, query: 'secret' }, { scopeType: 'project', query: 'secret', [MEMORY_SCOPE_FILTER_ARG]: ['user', 'global'] }]) {
+      const scopes = await recalledScopes(sales, args);
+      expect(scopes.filter((s) => s === 'user' || s === 'global')).toEqual([]);
+    }
+  });
 });

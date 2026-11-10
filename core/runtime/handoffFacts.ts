@@ -31,6 +31,8 @@ export function collectHandoffFacts(calls: readonly RecordedCallText[], childRea
     // Research child reads global + task only). Passing the parent's recall on unfiltered bypassed the child's scope.
     const text = call.tool === 'memory_recall' ? recallWithinScopes(call.text, childReadableMemoryScopes) : call.text;
     if (text === null) continue;
+    // Reminders are the user's personal data: only a child that may read the user scope receives them.
+    if (call.tool === 'list_reminders' && childReadableMemoryScopes !== null && !childReadableMemoryScopes.includes('user')) continue;
     const bounded = text.slice(0, 2_500);
     parts.push(`[${call.tool}]\n${bounded}`);
     if (PRIVATE_FACT_TOOLS.test(call.tool)) privateTexts.push(bounded);
@@ -40,6 +42,44 @@ export function collectHandoffFacts(calls: readonly RecordedCallText[], childRea
 
 /** Personal data among the hand-off tools: the child's public-query guard treats it like text read from the user's files. */
 const PRIVATE_FACT_TOOLS = /^(?:memory_recall|list_reminders)$/;
+
+/** Words too common to identify anything on their own. */
+const COMMON_WORDS = new Set(['a', 'an', 'the', 'and', 'or', 'of', 'in', 'on', 'at', 'to', 'for', 'from', 'by', 'with', 'near', 'is', 'are', 'was', 'be', 'as', 'it', 'its', 'this', 'that', 'my', 'our', 'your', 'their']);
+
+function significantWords(text: string): string[] {
+  return text.toLowerCase().replace(/[^\p{L}\p{N}\s]/gu, ' ').split(/\s+/).filter((w) => w && !COMMON_WORDS.has(w));
+}
+
+/** Pairs of consecutive significant words: enough to recognise a name or an address, not a single common word. */
+function wordPairs(text: string): Set<string> {
+  const words = significantWords(text);
+  const pairs = new Set<string>();
+  for (let i = 0; i + 1 < words.length; i += 1) pairs.add(`${words[i]} ${words[i + 1]}`);
+  return pairs;
+}
+
+/**
+ * Stored memory a delegation brief repeats although the child may not read it (Build 161 audit): the delegating model
+ * writes the brief, and could paste a private fact the hand-off filter keeps from the child. A fact counts as repeated
+ * when the brief shares two consecutive significant words with it (or its one distinctive word), unless the user wrote
+ * those words in this request themselves. Returns the subjects of the repeated facts.
+ */
+export function withheldMemoryInBrief(brief: string, withheld: ReadonlyArray<{ subject: string; value: string }>, userMessage: string): string[] {
+  const briefPairs = wordPairs(brief);
+  const userPairs = wordPairs(userMessage);
+  const briefWords = new Set(significantWords(brief));
+  const userWords = new Set(significantWords(userMessage));
+  const repeated: string[] = [];
+  for (const fact of withheld) {
+    const pairs = wordPairs(fact.value);
+    const words = significantWords(fact.value);
+    const hit = pairs.size > 0
+      ? [...pairs].some((pair) => briefPairs.has(pair) && !userPairs.has(pair))
+      : words.length === 1 && words[0].length >= 5 && briefWords.has(words[0]) && !userWords.has(words[0]);
+    if (hit) repeated.push(fact.subject);
+  }
+  return repeated;
+}
 
 /**
  * A recall result reduced to the memory scope types the child may read. Null when nothing may be passed on — including

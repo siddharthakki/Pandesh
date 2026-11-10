@@ -50,7 +50,9 @@ export function registerAgentRoutes(router: Router<ApiContext, ApiResult>, optio
       parentAttemptId: String(b.parentAttemptId ?? ''), toAgentId: String(b.toAgentId ?? ''), brief: String(b.brief ?? ''), grant,
       clientId: ctx.clientId, defaults: options.executor?.contextDefaults(),
       workspaceRoot: typeof b.workspaceRoot === 'string' ? b.workspaceRoot : null,
-      conversation: b.ownConversation === true ? 'own' : 'parent',
+      // Always the child's own conversation (Build 161 audit): run in the delegating conversation, the child's model
+      // received that whole history — including private memory recalled there that the child may not read.
+      conversation: 'own',
     });
     if (started.duplicate) return ok({ handoff: started.handoff, duplicate: true });
     if (options.executor && started.attemptId) void options.executor.execute(started.attemptId).catch(() => { /* the terminal state is recorded durably */ });
