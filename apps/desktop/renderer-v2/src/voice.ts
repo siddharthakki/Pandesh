@@ -9,6 +9,8 @@ import { useEffect, useRef, useState } from 'react';
 import { api, errorText } from './bridge';
 
 export type VoiceState = 'idle' | 'listening' | 'transcribing' | 'speaking' | 'interrupted' | 'error';
+/** What started the turn: the mic button, or the host hearing the wake word (wake.ts). */
+export type VoiceSource = 'mic' | 'wake';
 
 interface CaptureSession { done: Promise<Uint8Array | ArrayBuffer | null>; stop: () => Promise<unknown> }
 interface CaptureModule { startVadUtteranceCapture(opts?: { onState?: (s: string) => void }): CaptureSession; bytesToBase64(b: Uint8Array): string }
@@ -33,6 +35,7 @@ export function useVoice(opts: { onTranscript: (text: string, needsReview: boole
   const [state, setState] = useState<VoiceState>('idle');
   const [detail, setDetail] = useState('');
   const [heard, setHeard] = useState(false);
+  const [source, setSource] = useState<VoiceSource | null>(null);
   const session = useRef<CaptureSession | null>(null);
   const audio = useRef<HTMLAudioElement | null>(null);
   const generation = useRef(0);
@@ -41,21 +44,23 @@ export function useVoice(opts: { onTranscript: (text: string, needsReview: boole
 
   useEffect(() => () => { void session.current?.stop(); audio.current?.pause(); }, []);
 
-  const listen = async () => {
+  const listen = async (from: VoiceSource = 'mic') => {
     const mod = capture();
     if (!mod) { setState('error'); setDetail('The microphone helper did not load.'); return; }
     stopPlayback(false);
     const mine = ++listenGen.current;
-    setHeard(false); setDetail(''); setState('listening');
+    // One id for the whole turn, minted when it starts (as the Classic UI does), so its log lines correlate.
+    const turnId = newVoiceTurnId();
+    console.info(`[voice] turn=${turnId} stage=mic_started mode=vad source=${from} ui=v2`);
+    setSource(from); setHeard(false); setDetail(''); setState('listening');
     try {
       session.current = mod.startVadUtteranceCapture({ onState: (s) => { if (s === 'speech_started') setHeard(true); if (s === 'end_of_speech') setState('transcribing'); } });
       const wav = await session.current.done;
       session.current = null;
       if (mine !== listenGen.current) return; // stopped by the user: discard
       const bytes = wav instanceof Uint8Array ? wav : wav ? new Uint8Array(wav) : null;
-      if (!bytes || bytes.length < 44) { setState('idle'); setDetail('No speech was captured.'); return; }
+      if (!bytes || bytes.length < 44) { setState('idle'); setDetail(from === 'wake' ? 'No question was heard after the wake word.' : 'No speech was captured.'); return; }
       setState('transcribing');
-      const turnId = newVoiceTurnId();
       const r = await vapi.transcribeUtterance(mod.bytesToBase64(bytes), turnId);
       if (mine !== listenGen.current) return;
       setState('idle');
@@ -82,6 +87,8 @@ export function useVoice(opts: { onTranscript: (text: string, needsReview: boole
       const el = new Audio(url);
       audio.current = el;
       el.onended = () => { if (gen === generation.current) { setState('idle'); audio.current = null; void vapi.markPlaybackFinished().catch(() => undefined); } URL.revokeObjectURL(url); };
+      // A playback error must not leave the turn "speaking": that would also keep the wake word paused.
+      el.onerror = () => { if (gen === generation.current) { setState('error'); setDetail('Could not play the spoken reply.'); audio.current = null; void vapi.markPlaybackFinished().catch(() => undefined); } URL.revokeObjectURL(url); };
       await el.play();
     } catch (err) {
       if (gen === generation.current) { setState('error'); setDetail(`Could not speak: ${errorText(err)}`); }
@@ -96,5 +103,5 @@ export function useVoice(opts: { onTranscript: (text: string, needsReview: boole
     if (markInterrupted && wasSpeaking) setState('interrupted');
   };
 
-  return { state, detail, heard, listen, stopListening, speak, stopSpeaking: () => stopPlayback(true), clear: () => { setState('idle'); setDetail(''); }, setVoiceMode: (on: boolean) => vapi.setVoiceMode(on) };
+  return { state, detail, heard, source, listen, stopListening, speak, stopSpeaking: () => stopPlayback(true), clear: () => { setState('idle'); setDetail(''); }, setVoiceMode: (on: boolean) => vapi.setVoiceMode(on) };
 }

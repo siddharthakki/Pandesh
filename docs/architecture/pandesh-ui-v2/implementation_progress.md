@@ -209,3 +209,17 @@ npm ci --ignore-scripts   # then copy native builds from D:\Projects\Pandesh\nod
 node apps/desktop/esbuild.mjs
 # isolated run: KARKEDIKHA_DESKTOP_DATA_DIR=<scratch> KARKEDIKHA_DESKTOP_CDP_PORT=9481 PANDESH_UI_V2=1 node apps/desktop/launch.mjs
 ```
+
+## Wake word in v2 · STATUS: done (2026-11-10; a synthetic voice, not yet a person)
+
+Before, on an isolated profile with the wake word on: the host's detector was ready but received 0 microphone frames while v2 was shown, and the route popover said "Listening (Classic UI monitor)". v2 never called `startWakeMonitor` or `pushWakeAudio`.
+
+- `renderer-v2/src/wake.ts`: `useWakeWord` brings the Classic wiring (`ensureWakeMonitor`, `stopWakeMonitor`, `flushWakePush`, `onVoiceEvent`) into v2. It runs in `App`, so it listens on every view. The wake microphone is open only while the host says the wake word is on and not muted, nothing is being spoken, no task runs, and no voice turn or send is in progress. It reopens 0.5 s after those end. Frames go to the host in order, one request at a time. A `wake_detected` event from frames this page is feeding closes the microphone and opens the chat with a voice turn. Microphone errors, and no frames within 2.5 s, are reported to the host (`reportWakeCapture`) and shown. After an error it tries again in 15 s, or as soon as it may listen again.
+- `voice.ts`: the voice turn id is minted when the turn starts, as in Classic. A wake turn shows "Heard “Hey Jarvis”. Ask your question." A playback error no longer leaves the turn "speaking", which would also keep the wake word paused.
+- `Chat.tsx`: the popover row says what the wake word is really doing. "Listening for “Hey Jarvis”" appears only once frames reach the detector. The other states are warming up, paused (while Pandesh speaks, while a task runs, or during a voice turn), muted, off, or the reason it is not listening. The row has Mute / Unmute and Turn off / Turn on. The composer hint names the phrase only while it listens.
+
+Real-app evidence (isolated profile, gemma4:12b). Chromium's fake microphone played a Piper recording of "Hey Jarvis, what time is it?"; the app code ran unchanged. The run started muted, with 0 frames. Unmute in the popover → the host scored 0.914 (threshold 0.45) → v2 started voice turn `7457112e` → local Whisper (no review) → `transcript_submitted` with that turn id → Core froze `inputModality: "voice"` in the request → the turn was answered. The fake microphone replays the file for every capture, so the sent text began with "Hey Jarvis". During the turn the popover said "Paused while a task runs". After it, the wake microphone reopened ("warming up"), and Mute closed it (the frame count stopped). Windows' start-at-login entry was the same before and after the run.
+
+Tests: `apps/desktop/test/uiV2WakeWordRendererUi.test.ts` (14). Desktop: 668 passed, 3 skipped. Core: 2741 passed, 16 skipped. All three type-checks are clean.
+
+Not done: a person speaking the wake word into a real microphone. The wake word stays paused while a task runs, as in Classic.

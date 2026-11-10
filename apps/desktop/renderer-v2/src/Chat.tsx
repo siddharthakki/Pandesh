@@ -4,6 +4,7 @@ import { Icon, Mark, elapsed, timeOf } from './ui';
 import { ActivityAside } from './Activity';
 import { Markdown } from './markdown';
 import { useVoice } from './voice';
+import type { WakeWord } from './wake';
 import { useComposerControls } from './ComposerControls';
 import { modelLabel as describeModel } from './composerModel';
 
@@ -18,6 +19,13 @@ interface Props {
   /** Text to place in the composer (from a workspace's "Ask Pandesh"). */
   draft?: string | null;
   onDraftUsed?: () => void;
+  /** The wake word's state and switches. Its microphone lives in App, so it listens on every view. */
+  wake?: WakeWord;
+  /** Set when the host heard the wake word: start a voice turn, then call onWakeTurnTaken. */
+  wakeTurn?: { id: number } | null;
+  onWakeTurnTaken?: () => void;
+  /** True while a voice turn captures, transcribes or speaks, or a message is being sent: the wake microphone pauses. */
+  onVoiceBusy?: (busy: boolean) => void;
 }
 
 const ROUTED: Record<string, string> = {
@@ -73,7 +81,7 @@ function pendingDecision(s: Snapshot | null): null | { kind: 'tool' | 'image' | 
   return null;
 }
 
-export function Chat({ snapshot, snapshotError, refresh, narrow, openConversationId, onOpenPalette, onOpenBoard, draft, onDraftUsed }: Props) {
+export function Chat({ snapshot, snapshotError, refresh, narrow, openConversationId, onOpenPalette, onOpenBoard, draft, onDraftUsed, wake, wakeTurn, onWakeTurnTaken, onVoiceBusy }: Props) {
   const [messages, setMessages] = useState<TranscriptMessage[]>([]);
   const [loadedFor, setLoadedFor] = useState<string | null | undefined>(undefined);
   const [live, setLive] = useState<{ attemptId: string | null; text: string }>({ attemptId: null, text: '' });
@@ -294,10 +302,28 @@ export function Chat({ snapshot, snapshotError, refresh, narrow, openConversatio
   const speechReady = snapshot?.localSpeech?.capability === 'available';
   const speechBlocker = String((snapshot?.localSpeech as { blocker?: string } | undefined)?.blocker ?? 'Local speech recognition is not available.');
 
+  // The host heard the wake word: the question is an ordinary voice turn (VAD capture, local Whisper, sent with its
+  // voice turn id so Core knows it was spoken). Classic UI: beginVadUtterance('wake').
+  useEffect(() => {
+    if (!wakeTurn) return;
+    onWakeTurnTaken?.();
+    if (voice.state === 'listening' || voice.state === 'transcribing') return;
+    // The footer notice shows on the home screen too (the transcript notice does not).
+    if (!speechReady) { setControlNotice({ text: `Heard the wake word, but local speech recognition is not available: ${speechBlocker}`, error: true }); return; }
+    void voice.listen('wake');
+  }, [wakeTurn?.id]);
+  const voiceBusy = busy || voice.state === 'listening' || voice.state === 'transcribing' || voice.state === 'speaking';
+  useEffect(() => { onVoiceBusy?.(voiceBusy); }, [voiceBusy]);
+  useEffect(() => () => onVoiceBusy?.(false), []);
+  const wakeStatus = wake?.status;
+  /** The wake failure the person already dismissed (shown again only if the reason changes). */
+  const [wakeFailureSeen, setWakeFailureSeen] = useState<string | null>(null);
+  const wakeAction = (work: () => Promise<void>) => { void work().catch((err) => setControlNotice({ text: `Wake word: ${errorText(err)}`, error: true })); };
+
   const composer = (
     <div className={`composer${text.trim() ? ' has-text' : ''}`}>
       <label className="sr-only" htmlFor="v2-ask">Message Pandesh</label>
-      <textarea id="v2-ask" ref={textarea} rows={1} value={text} placeholder="Ask Pandesh…" disabled={Boolean(coreDown)}
+      <textarea id="v2-ask" ref={textarea} rows={1} value={text} placeholder={wakeStatus?.kind === 'listening' ? `Ask Pandesh… or say “${wakeStatus.phrase}”` : 'Ask Pandesh…'} disabled={Boolean(coreDown)}
         onChange={(e) => { setText(e.target.value); e.target.style.height = 'auto'; e.target.style.height = `${Math.min(e.target.scrollHeight, 200)}px`; }}
         onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) { e.preventDefault(); void send(); } }} />
       <button type="button" className="icon-btn" aria-label="Talk to Pandesh" title={speechReady ? 'Talk to Pandesh (local speech recognition)' : speechBlocker} disabled={!speechReady || Boolean(coreDown)} onClick={() => void voice.listen()}><Icon name="mic" /></button>
@@ -321,7 +347,23 @@ export function Chat({ snapshot, snapshotError, refresh, narrow, openConversatio
           <div className="kv"><span className="k">Outward actions</span><span>{snapshot?.permission?.mode === 'plan' ? 'None: Plan only changes nothing' : snapshot?.permission?.mode === 'auto' ? 'Ask you first, except what Auto covers' : 'Ask you first (approval rules)'}</span></div>
           <div className="kv"><span className="k">Speech</span><span>{speechReady ? `Local recognition ready${(snapshot?.localSpeech as { engine?: string } | undefined)?.engine ? ` (${(snapshot?.localSpeech as { engine?: string }).engine})` : ''}` : speechBlocker}</span></div>
           <div className="kv"><span className="k">Speak replies</span><span><button type="button" className="btn small" onClick={() => void voice.setVoiceMode(!snapshot?.voiceMode).then(refresh)}>{snapshot?.voiceMode ? 'On — turn off' : 'Off — turn on'}</button></span></div>
-          {(snapshot as { wakeWord?: { enabled?: boolean; muted?: boolean } } | null)?.wakeWord?.enabled && <div className="kv"><span className="k">Wake word</span><span>{(snapshot as { wakeWord?: { muted?: boolean } }).wakeWord?.muted ? 'Muted' : 'Listening (Classic UI monitor)'}</span></div>}
+          {wake && snapshot?.wakeWord && (
+            <div className="kv"><span className="k">Wake word</span>
+              <span style={{ display: 'flex', flexDirection: 'column', gap: 6, minWidth: 0 }}>
+                <span>{wake.status.text}</span>
+                {wake.status.kind !== 'unavailable' && (
+                  <span style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                    {wake.status.kind === 'off'
+                      ? <button type="button" className="btn small" onClick={() => wakeAction(() => wake.setEnabled(true))}>Turn on</button>
+                      : <>
+                          <button type="button" className="btn small" onClick={() => wakeAction(() => wake.setMuted(!wake.status.muted))}>{wake.status.muted ? 'Unmute' : 'Mute'}</button>
+                          <button type="button" className="btn small" onClick={() => wakeAction(() => wake.setEnabled(false))}>Turn off</button>
+                        </>}
+                  </span>
+                )}
+              </span>
+            </div>
+          )}
           {snapshot?.modelNote && <div className="kv"><span className="k">Note</span><span>{snapshot.modelNote}</span></div>}
         </div>
       )}
@@ -445,6 +487,7 @@ export function Chat({ snapshot, snapshotError, refresh, narrow, openConversatio
           <div className="footer-inner">
             {!showDecisionBar && controls.panel}
             {controlNotice && <div className={`notice${controlNotice.error ? ' error' : ''}`} role={controlNotice.error ? 'alert' : 'status'} style={{ margin: 0 }}>{controlNotice.text} <button type="button" className="btn link" style={{ minHeight: 0, padding: 0 }} onClick={() => setControlNotice(null)}>OK</button></div>}
+            {wakeStatus?.kind === 'failed' && wakeFailureSeen !== wakeStatus.reason && <div className="notice error" role="alert" style={{ margin: 0 }}>The wake word is not listening: {wakeStatus.reason}. <button type="button" className="btn link" style={{ minHeight: 0, padding: 0 }} onClick={() => setWakeFailureSeen(wakeStatus.reason ?? null)}>OK</button></div>}
             {showDecisionBar && decision ? (
               <div className="decision-bar" role="group" aria-label={`Decide: ${decision.title}`}>
                 <button type="button" className="btn primary" disabled={deciding} onClick={() => void resolve('approved')}>{decision.allowLabel}</button>
@@ -453,7 +496,7 @@ export function Chat({ snapshot, snapshotError, refresh, narrow, openConversatio
             ) : voice.state === 'listening' || voice.state === 'transcribing' ? (
               <div className="composer" role="status" aria-live="polite" style={{ borderColor: 'var(--pulse)', alignItems: 'center', flexWrap: 'wrap', gap: '10px 14px', padding: '12px 14px' }}>
                 <span aria-hidden="true" style={{ display: 'flex', gap: 3, alignItems: 'center', height: 22 }}>{[8, 18, 12, 22, 10].map((h, i) => <span key={i} style={{ width: 3, height: voice.heard ? h : 4, borderRadius: 2, background: 'var(--pulse)' }} />)}</span>
-                <span style={{ flex: '1 1 160px', display: 'flex', flexDirection: 'column' }}><strong style={{ fontWeight: 500 }}>{voice.state === 'listening' ? 'Listening…' : 'Transcribing on this PC…'}</strong><span style={{ fontSize: 14, color: 'var(--muted)' }}>{voice.state === 'listening' ? (voice.heard ? 'Stops when you pause' : 'Speak now') : 'Local Whisper'}</span></span>
+                <span style={{ flex: '1 1 160px', display: 'flex', flexDirection: 'column' }}><strong style={{ fontWeight: 500 }}>{voice.state === 'listening' ? 'Listening…' : 'Transcribing on this PC…'}</strong><span style={{ fontSize: 14, color: 'var(--muted)' }}>{voice.state === 'listening' ? (voice.heard ? 'Stops when you pause' : voice.source === 'wake' ? `Heard “${wakeStatus?.phrase ?? 'Hey Jarvis'}”. Ask your question.` : 'Speak now') : 'Local Whisper'}</span></span>
                 <button type="button" className="btn small" onClick={() => { void voice.stopListening(); textarea.current?.focus(); }}>Type instead</button>
                 {voice.state === 'listening' && <button type="button" className="btn small" onClick={() => void voice.stopListening()}>Stop listening</button>}
               </div>
