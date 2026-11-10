@@ -30,8 +30,8 @@ export const TOOL_GROUPS: Record<string, ToolGroup> = {
   },
   pc: {
     purpose: 'this PC: disks and free space, hardware and GPU, processes, services and listening ports, screen and windows, installed software and where an app is, available software updates and what Pandesh can do',
-    // The last alternative is a short "where is X?" question, which usually asks where an app is installed.
-    pattern: /\b(?:pc|computer|machine|laptop|hardware|specs?|disks?|drives?|free space|storage|ram|cpu|gpu|vram|nvidia|processes?|services?|ports?|screen(?:shot)?|desktop|windows? (?:list|open)|installed|install|software|utilit(?:y|ies)|setup|diagnos\w*|capabilit(?:y|ies)|what can you do|which tools|updates?|outdated|upgrades?|versions?|apps?|applications?|programs?|[\w-]+\.exe)\b|^\s*(?:(?:hey|ok|so)[\s,]+)?(?:pandesh[\s,]+)?where(?:'s|\s+is|\s+are)\s+(?:the\s+|my\s+)?[\w.+-]+(?:\s+[\w.+-]+)?\s*[?.!]*\s*$/i,
+    // Locating an app: "find/where … app|program" (not "write a program"), and a short "where is X?" question.
+    pattern: /\b(?:pc|computer|machine|laptop|hardware|specs?|disks?|drives?|free space|storage|ram|cpu|gpu|vram|nvidia|processes?|services?|ports?|screen(?:shot)?|desktop|windows? (?:list|open)|installed|install|software|utilit(?:y|ies)|setup|diagnos\w*|capabilit(?:y|ies)|what can you do|which tools|updates?|outdated|upgrades?|versions?|[\w-]+\.exe)\b|\b(?:where|find|locate)\b[^.?!]{0,40}\b(?:apps?|applications?|programs?)\b|^\s*(?:(?:hey|ok|so)[\s,]+)?(?:pandesh[\s,]+)?where(?:'s|\s+is|\s+are)\s+(?:the\s+|my\s+)?[\w.+-]+(?:\s+[\w.+-]+)?\s*[?.!]*\s*$/i,
   },
   projects: {
     purpose: "Pandesh's Projects workspace: create a project with tasks, list saved projects",

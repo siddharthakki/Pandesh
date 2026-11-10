@@ -66,6 +66,9 @@ describe('find_installed_app', () => {
     for (const q of ['Where is Obsidian?', 'Pandesh, where is LM Studio', "where's the Ollaya app", 'is obsidian installed?', 'find vlc.exe for me']) {
       expect(groupsForText(q).has('pc'), q).toBe(true);
     }
+    expect(groupsForText('can you find the notes app on this laptop').has('pc')).toBe(true);
     expect(groupsForText('where is the invoice from the plumber that I got in March').has('pc')).toBe(false);
+    expect(groupsForText('write a small program that adds two numbers').has('pc')).toBe(false);
+    expect(groupsForText('build me a todo app in React').has('pc')).toBe(false);
   });
 });
