@@ -135,6 +135,39 @@ function contentChars(m: OpenAiMessage): number {
 
 const sse = (payload: unknown) => `data: ${JSON.stringify(payload)}\n\n`;
 
+/**
+ * True when the text is nothing but complete JSON objects or arrays (optionally inside one code fence): the reply IS
+ * the call. A call followed by prose ("…} Then I will delete the old files") or cut off before its closing brace is
+ * not (Build 161 audit: both were recovered, the second after a repair appended the missing brace).
+ */
+function onlyCompleteJsonValues(text: string): boolean {
+  const body = text.trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '');
+  let i = 0;
+  let values = 0;
+  while (i < body.length) {
+    while (i < body.length && /\s/.test(body[i])) i += 1;
+    if (i >= body.length) break;
+    if (body[i] !== '{' && body[i] !== '[') return false;
+    let depth = 0;
+    let inString = false;
+    let closed = false;
+    for (; i < body.length; i += 1) {
+      const ch = body[i];
+      if (inString) {
+        if (ch === '\\') i += 1;
+        else if (ch === '"') inString = false;
+        continue;
+      }
+      if (ch === '"') inString = true;
+      else if (ch === '{' || ch === '[') depth += 1;
+      else if ((ch === '}' || ch === ']') && --depth === 0) { i += 1; closed = true; break; }
+    }
+    if (!closed) return false;
+    values += 1;
+  }
+  return values > 0;
+}
+
 /** A reply that is exactly one strict-JSON {"name", "arguments"} object (optionally in one code fence) naming an offered tool. */
 function singleInlineCall(text: string, offered: ReadonlySet<string>): { name: string; arguments: Record<string, unknown> } | null {
   const body = text.trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '').trim();
@@ -301,7 +334,9 @@ export function createPiOllamaFetch(options: PiOllamaFetchOptions): typeof fetch
                 // Build 161 audit: qwen2.5-coder:3b wrote correct calls as JSON text in 8 of 9 benchmark tasks; the
                 // transport passed them on as prose, so nothing ran. Recovered only when the reply IS a call to an
                 // offered tool and no native call came; anything else is released unchanged.
-                const recovered = metrics.toolCalls === 0 && inline.mode === 'holding' ? parseInlineToolCalls(inline.held, offeredToolDefs) : { kind: 'none' as const };
+                // Never from a reply the token limit cut off, and only when the reply is nothing but the call(s).
+                const recoverable = metrics.toolCalls === 0 && inline.mode === 'holding' && frame.done_reason !== 'length' && onlyCompleteJsonValues(inline.held);
+                const recovered = recoverable ? parseInlineToolCalls(inline.held, offeredToolDefs) : { kind: 'none' as const };
                 // A well-formed call to an offered tool that only lacks a required argument goes through like a native
                 // call would: the agent loop's own argument validation tells the model what is missing so it can retry
                 // (qwen2.5-coder:3b omitted create_reminder's title). Broken JSON or an unknown tool stays prose.
