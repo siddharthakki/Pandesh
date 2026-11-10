@@ -99,6 +99,7 @@ import {
   isPlaceholderConversationId,
 } from './desktopInteractionRouting';
 import {
+  everydayIntentActs,
   formatLocalInstant,
   hostTimezone,
   parseEverydayIntent,
@@ -2015,7 +2016,7 @@ export class DesktopSession {
           everyday.kind === 'pause_timer' ||
           everyday.kind === 'resume_timer' ||
           everyday.kind === 'query_timer'
-        )) {
+        ) && !(everydayIntentActs(everyday) && await this.planOnlyForNextMessage())) {
           return this.handleTimerIntentDirect(text, everyday, clientOrigin);
         }
       }
@@ -2056,14 +2057,17 @@ export class DesktopSession {
   ): Promise<{ requestId: string; attemptId: string; model: string }> {
     this.modelNote = null;
     // Attachments change what the message means: skip the keyword shortcuts (reminders, weather) that would drop them.
-    const everyday = staged.length === 0 ? parseEverydayIntent(text) : null;
+    const shortcut = staged.length === 0 ? parseEverydayIntent(text) : null;
+    // Plan only: a shortcut that would create, change or run something is skipped and the message goes to Core.
+    const planOnly = await this.planOnlyForNextMessage();
+    const everyday = shortcut && planOnly && everydayIntentActs(shortcut) ? null : shortcut;
     if (everyday) {
       if (everyday.kind === 'daily_brief') {
         return this.handleAssistantBriefIntent(text, clientOrigin);
       }
       return this.handleEverydayIntent(text, everyday, clientOrigin);
     }
-    const media = await this.planMediaRequest(text, staged);
+    const media = planOnly ? null : await this.planMediaRequest(text, staged);
     if (media) {
       const result = await this.handleImageGenerationIntent(text, clientOrigin, media);
       if (media.attachedImage) this.attachmentStaging.release(staged);
@@ -3507,6 +3511,22 @@ export class DesktopSession {
     return null;
   }
 
+  /**
+   * Plan only means nothing is created, changed or run. The host's own shortcuts that act on a message without a Core
+   * turn (notes, reminders, the command queue, timers, image generation) would bypass that, so for a Plan only
+   * conversation they are skipped and the message goes to Core, which freezes Plan only on the turn and plans instead.
+   * The mode is read from Core for the conversation the message goes to, not from the snapshot.
+   */
+  private async planOnlyForNextMessage(): Promise<boolean> {
+    const conversationId = this.selectedConversationId ?? this.voiceConversationId;
+    if (!conversationId) return this.pendingPermission?.mode === 'plan';
+    try {
+      return (await this.requireClient().getConversationPermission(conversationId)).mode === 'plan';
+    } catch {
+      return this.permission.conversationId === conversationId && this.permission.mode === 'plan';
+    }
+  }
+
   /** The permission shown for the selected conversation; a changed selection triggers one refresh from Core. */
   private permissionFor(conversationId: string | null): DesktopPermissionState {
     if (conversationId !== this.permission.conversationId && this.client && conversationId !== this.permissionLookupFailedFor) {
@@ -3559,9 +3579,18 @@ export class DesktopSession {
   /** `workspaceRoot` is the folder selected when the user issued the grant; the grant is bound to it, never to a later one. */
   private async applyPermission(conversationId: string, mode: DesktopPermissionMode, grant?: DesktopPermissionGrant, workspaceRoot: string | null = this.folder): Promise<void> {
     const client = this.requireClient();
-    await client.setConversationPermissionMode(conversationId, mode);
-    if (mode === 'auto' && grant) {
+    if (!(mode === 'auto' && grant)) {
+      await client.setConversationPermissionMode(conversationId, mode);
+      return;
+    }
+    // A grant Core refuses (an unknown category, more than 24 hours) must not leave the conversation switched to Auto.
+    const previous = (await client.getConversationPermission(conversationId).catch(() => null))?.mode ?? 'ask';
+    await client.setConversationPermissionMode(conversationId, 'auto');
+    try {
       await client.grantStandingAuthorization(conversationId, { categories: grant.categories, workspaceRoot, expiresInMinutes: grant.expiresInMinutes });
+    } catch (err) {
+      if (previous !== 'auto') await client.setConversationPermissionMode(conversationId, previous).catch(() => undefined);
+      throw err;
     }
   }
 

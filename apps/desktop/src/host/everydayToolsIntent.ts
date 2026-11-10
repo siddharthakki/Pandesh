@@ -342,6 +342,16 @@ function parseSingleTimerIntent(text: string): EverydayIntent | null {
   return null;
 }
 
+/** Intents whose shortcut creates, changes or runs something. A Plan only conversation never takes these shortcuts. */
+const ACTING_INTENTS: ReadonlySet<EverydayIntent['kind']> = new Set<EverydayIntent['kind']>([
+  'remember_note', 'create_reminder', 'complete_reminder', 'cancel_reminder', 'queue_add',
+  'start_timer', 'stop_timer', 'pause_timer', 'resume_timer',
+]);
+
+export function everydayIntentActs(intent: EverydayIntent): boolean {
+  return ACTING_INTENTS.has(intent.kind);
+}
+
 /**
  * Parse a user utterance into an Everyday Tools intent, or null when the
  * message should continue through ordinary Core chat.
