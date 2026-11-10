@@ -13,12 +13,14 @@
  */
 import { afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { DatabaseSync } from 'node:sqlite';
+import { spawn } from 'node:child_process';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { CoreLauncher, type LauncherOutcome } from '../../../src/core-client/CoreLauncher';
 import { ensureCoreBundle } from '../../../core/test/support/coreBundle';
 import { createPortProcessManager } from '../../../core/runtime/portManager';
+import { DEFAULT_CREATION_TIME_TOLERANCE_MS } from '../../../core/runtime/processOwnership';
 import { DesktopSession } from '../src/host/desktopSession';
 import { setUpdateGate } from '../src/host/desktopUpdate';
 
@@ -102,6 +104,32 @@ function makeLegacyIdentity(dataDir: string): void {
       delete owner.dataDir;
       db.prepare("UPDATE core_metadata SET value = ? WHERE key = 'singleton_owner'").run(JSON.stringify(owner));
     }
+  } finally {
+    db.close();
+  }
+}
+
+/**
+ * PID reuse after a crash: every record the dead Core left (discovery record, lock, database claim, service registry,
+ * ownership ledger) now names `to`, a process that merely got the same number. Recorded start times are kept.
+ */
+function pointStaleRecordsAt(dataDir: string, from: number, to: number): void {
+  const file = (name: string) => path.join(dataDir, name);
+  const rewrite = (name: string, change: (value: any) => unknown) => {
+    if (fs.existsSync(file(name))) fs.writeFileSync(file(name), JSON.stringify(change(JSON.parse(fs.readFileSync(file(name), 'utf8')))));
+  };
+  rewrite('core.json', (record) => ({ ...record, pid: to }));
+  rewrite('core.lock', (lock) => ({ ...lock, pid: to }));
+  rewrite('port-manager-registry.json', (records: Array<{ pid: number | null }>) => records.map((r) => (r.pid === from ? { ...r, pid: to } : r)));
+  rewrite('process-ownership-ledger.json', (ledger: Record<string, { pid: number }>) => {
+    const entry = ledger[String(from)];
+    if (entry) { delete ledger[String(from)]; ledger[String(to)] = { ...entry, pid: to }; }
+    return ledger;
+  });
+  const db = new DatabaseSync(file('core.db'));
+  try {
+    const row = db.prepare("SELECT value FROM core_metadata WHERE key = 'singleton_owner'").get() as { value: string } | undefined;
+    if (row) db.prepare("UPDATE core_metadata SET value = ? WHERE key = 'singleton_owner'").run(JSON.stringify({ ...JSON.parse(row.value), pid: to }));
   } finally {
     db.close();
   }
@@ -254,6 +282,55 @@ describe('one Core per profile (real Core processes)', () => {
     while (isAlive(pidA) && Date.now() < deadline) await new Promise((r) => setTimeout(r, 100));
     expect(isAlive(pidA)).toBe(false);
   }, 60_000);
+
+  it('after a crash, a stale Core PID now used by an unrelated process is never killed, and the profile restarts its own Core', async () => {
+    const dirA = makeDir('pandesh-iso-a-');
+    const a = await launch(dirA, 'crash-token-a');
+    expect(a.state).toBe('connected');
+    if (a.state !== 'connected') return;
+    const pidA = readRecord(dirA).pid;
+
+    const dirB = makeDir('pandesh-iso-b-');
+    fs.writeFileSync(path.join(dirB, 'core.token'), 'crash-token-b');
+    const b = await launch(dirB, 'crash-token-b');
+    expect(b.state).toBe('connected');
+    if (b.state !== 'connected') return;
+    const crashed = readRecord(dirB).pid;
+    expect(JSON.parse(fs.readFileSync(path.join(dirB, 'process-ownership-ledger.json'), 'utf8'))[String(crashed)]).toBeTruthy();
+
+    // A crash runs no exit hook: the discovery record, lock, claim, registry and ledger all stay behind.
+    process.kill(crashed);
+    const gone = Date.now() + 5_000;
+    while (isAlive(crashed) && Date.now() < gone) await new Promise((r) => setTimeout(r, 100));
+    expect(isAlive(crashed)).toBe(false);
+
+    // A PID is handed out again only after its process is gone, and the ownership boundary allows
+    // DEFAULT_CREATION_TIME_TOLERANCE_MS of skew between recorded and observed creation times: a realistic reuse comes
+    // later than that. (Same node.exe on purpose: the executable check cannot tell the two apart, only the time can.)
+    const registry = JSON.parse(fs.readFileSync(path.join(dirB, 'port-manager-registry.json'), 'utf8')) as Array<{ name: string; processStartMs: number | null }>;
+    const recordedStart = registry.find((r) => r.name === 'karkeDikha-core')?.processStartMs ?? Date.now();
+    while (Date.now() < recordedStart + DEFAULT_CREATION_TIME_TOLERANCE_MS + 1_000) await new Promise((r) => setTimeout(r, 100));
+
+    const stranger = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1 << 30)'], { stdio: 'ignore' });
+    try {
+      const reused = stranger.pid as number;
+      pointStaleRecordsAt(dirB, crashed, reused);
+
+      await new DesktopSession({ productRoot: repoRoot, dataDir: dirB }).shutdown({ timeoutMs: 800 });
+      expect(isAlive(reused)).toBe(true);
+      expect(isAlive(pidA)).toBe(true);
+
+      const restarted = await launch(dirB, 'crash-token-b');
+      expect(restarted.state).toBe('connected');
+      if (restarted.state !== 'connected') return;
+      expect(sameDir(restarted.info.dataDir, dirB)).toBe(true);
+      expect(restarted.info.instanceId).not.toBe(b.info.instanceId);
+      expect(isAlive(reused)).toBe(true);
+      expect((await info(portOf(a.baseUrl), 'crash-token-a')).body?.instanceId).toBe(a.info.instanceId);
+    } finally {
+      stranger.kill();
+    }
+  }, 90_000);
 
   it('the update gate of a copied profile never quiesces the original profile\'s Core', async () => {
     const dirA = makeDir('pandesh-iso-a-');
