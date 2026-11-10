@@ -1,6 +1,7 @@
 import { claimedOutputFiles, leadStatusLine, withholdUnsupportedActionClaims } from './actionClaims';
 import { answerTaskStatusQuestion, isTaskStatusQuestion, listPriorTurns, renderTaskHistorySection } from '../domain/conversationTaskHistory';
 import { checkPublicQuery, derivePublicQuery, explicitlyRequestsWebSearch, referencesLocalContent } from './publicQueryGuard';
+import { commandOpinionWarnings, readCommandReviewSettings, recordCommandReview, reviewCommand, warmCommandReview, type CommandOpinion, type CommandReviewOutcome } from './commandSecondOpinion';
 import { checkStatedTotals, evaluateExpression } from './arithmeticCheck';
 import { enforceDeclineWording } from './declineWording';
 import { csvShapeProblem } from './csvShape';
@@ -920,6 +921,9 @@ export class PiAgentEngine implements EngineAdapter {
     }, actor);
 
     const requestText = ctx.currentMessage ?? prompt;
+    // When the owner turned the command second opinion on, load its model now so the first card of the turn does not
+    // wait for a cold start (placeholder text only; fire and forget; a no-op when it is off).
+    warmCommandReview(readCommandReviewSettings(db));
 
     // Fast nonblocking delegation for long-running Gmail contract extraction or control queries
     const routing = routeBackgroundTaskIntent(db, conversationId, requestText);
@@ -1416,7 +1420,22 @@ export class PiAgentEngine implements EngineAdapter {
         mutating: !READ_ONLY_CONSENT_TOOLS.has(toolName),
         workspaceRoot: selectedWorkspace || null,
       });
-      if (permission.decision === 'auto_authorize') {
+      // Optional local second opinion on a command (Ollaya; off unless the owner turned it on). It does not take part in
+      // the decision above: it can only add a warning to the card, or send an Auto approval back to the person. No
+      // answer (off, not running, slow, unreadable) changes nothing. docs/evals/ollaya-decisions.md
+      let secondOpinion: CommandOpinion | null = null;
+      let escalated = false;
+      if (toolName === 'run_checks' && typeof summary.command === 'string') {
+        const command = summary.command;
+        const review = await reviewCommand(readCommandReviewSettings(db), { request: requestText, command }, { signal });
+        if (review) {
+          secondOpinion = review.available && review.opinion.flagged ? review.opinion : null;
+          escalated = permission.decision === 'auto_authorize' && secondOpinion !== null;
+          const outcome: CommandReviewOutcome = !review.available ? 'unavailable' : !review.opinion.flagged ? 'clear' : escalated ? 'escalated' : 'hint';
+          recordCommandReview(db, { attemptId, toolName, command, request: requestText, review, outcome, mode: permission.mode });
+        }
+      }
+      if (permission.decision === 'auto_authorize' && !escalated) {
         let autoApprovalId: string | undefined;
         try {
           mutateWithBroadcast(db, broadcaster, () => {
@@ -1438,17 +1457,33 @@ export class PiAgentEngine implements EngineAdapter {
           // Fall through to the ordinary card: failing to auto-authorize must never authorize anything.
         }
       }
+      if (secondOpinion) {
+        // Core's own rules already called it destructive when the card must always ask; the model would only repeat it.
+        const warnings = commandOpinionWarnings(secondOpinion, summary.alwaysAsk === true);
+        summary = {
+          ...summary,
+          secondOpinion: {
+            model: secondOpinion.model, step: secondOpinion.step, destructive: secondOpinion.destructive,
+            offTaskFlag: secondOpinion.offTaskFlag, destructiveFlag: secondOpinion.destructiveFlag,
+            offTaskThreshold: secondOpinion.offTaskThreshold, destructiveThreshold: secondOpinion.destructiveThreshold,
+          },
+          ...(typeof summary.cardText === 'string' && warnings.length ? { cardText: `${summary.cardText}\n${warnings.join('\n')}` } : {}),
+        };
+      }
       // Auto that still needs the human says why on the card and in the audit trail (e.g. the workspace changed).
+      const effectivePermission = escalated
+        ? { ...permission, decision: 'review' as const, reason: `a second opinion flagged the command; the standing authorization would otherwise have run it (${permission.reason})` }
+        : permission;
       if (permission.mode === 'auto') {
-        const note = `Auto did not cover this: ${permission.reason}`;
-        summary = { ...summary, policyDecision: 'review', policyReason: permission.reason, ...(typeof summary.cardText === 'string' ? { cardText: `${summary.cardText}\n${note}` } : {}) };
+        const note = escalated ? 'Auto would have run this, but a second opinion flagged it, so it waits for you.' : `Auto did not cover this: ${permission.reason}`;
+        summary = { ...summary, policyDecision: 'review', policyReason: effectivePermission.reason, ...(typeof summary.cardText === 'string' ? { cardText: `${summary.cardText}\n${note}` } : {}) };
       }
       let approval: any;
       try {
         mutateWithBroadcast(db, broadcaster, () => {
           transitionAttempt(db, attemptId, { toStatus: 'waiting_for_approval', fenceToken, actor });
           approval = createApproval(db, { attemptId, kind: 'mutation', summary, presentation: summary, actor });
-          if (permission.mode === 'auto') recordPermissionDecision(db, { attemptId, toolName, arguments: summary, decision: permission, approvalId: approval.id });
+          if (permission.mode === 'auto') recordPermissionDecision(db, { attemptId, toolName, arguments: summary, decision: effectivePermission, approvalId: approval.id });
         });
       } catch (err: any) {
         // The request never reached the user. That is a system failure, not a

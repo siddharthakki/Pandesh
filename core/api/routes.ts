@@ -97,6 +97,7 @@ import {
   getDailyBriefRoutine,
 } from '../domain/assistantRoutine';
 import { WATCHDOG_ROUTINE, runWatchdogSoon, scheduleWatchdog, watchdogSchedule } from '../domain/watchdogRoutine';
+import { describeCommandReview, updateCommandReviewSettings } from '../runtime/commandSecondOpinion';
 import { setScheduledTaskEnabled } from '../domain/scheduledTasks';
 import { buildConnectorAdapters } from '../runtime/connectors/connectorDefinitions';
 import { setGmailAccessToken, clearGmailAccessToken } from '../runtime/connectors/gmailAccessTokenStore';
@@ -2041,6 +2042,11 @@ export function buildRouter(
 
   // Sets the next run to now; the scheduler (not this request) then runs it on its next tick.
   router.post('/v1/watchdog/run-soon', (ctx) => ({ status: 200, body: { schedule: runWatchdogSoon(ctx.db) } }));
+
+  // Optional local second opinion on commands (Ollaya decision model). Off by default and advisory only: it can add a
+  // warning to an approval card or send an Auto approval back to the person, never approve. KARKEDIKHA_OLLAYA overrides.
+  router.get('/v1/integrations/ollaya', async (ctx) => ({ status: 200, body: await describeCommandReview(ctx.db) }));
+  router.post('/v1/integrations/ollaya', (ctx) => ({ status: 200, body: { settings: updateCommandReviewSettings(ctx.db, asRecord(ctx.body)) } }));
 
   // --- Pandesh: the one proactive routine (a daily brief) ---
   router.get('/v1/assistant/routine/daily-brief', (ctx) => ({
