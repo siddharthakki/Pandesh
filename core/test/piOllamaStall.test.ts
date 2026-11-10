@@ -92,4 +92,47 @@ describe('model stall watchdog', () => {
     expect(text).toContain('t6');
     expect(text).toContain('[DONE]');
   }, 15_000);
+
+  it('a slow first answer within the first-output allowance (a model still loading) is not cut off', async () => {
+    const baseUrl = await fakeOllama((_req, res) => {
+      setTimeout(() => {
+        res.writeHead(200, { 'content-type': 'application/x-ndjson' });
+        res.write(`${JSON.stringify({ message: { role: 'assistant', content: 'loaded ' }, done: false })}\n`);
+        res.end(`${JSON.stringify({ message: { role: 'assistant', content: '' }, done: true, done_reason: 'stop', eval_count: 1 })}\n`);
+      }, 900); // longer than the 400 ms idle allowance, shorter than the 2 s first-output allowance
+    });
+    const pf = createPiOllamaFetch({ baseUrl, numCtx: () => 8192, think: false, firstOutputTimeoutMs: 2_000, idleTimeoutMs: 400 });
+    const text = await readAll(await pf('http://ignored/v1/chat/completions', { method: 'POST', body: JSON.stringify(request) }));
+    expect(text).toContain('loaded');
+    expect(text).toContain('[DONE]');
+  }, 15_000);
+
+  it('the user\'s Stop ends a waiting call at once, as a cancellation, not as a stall', async () => {
+    const baseUrl = await fakeOllama(() => { /* accepts, never answers */ });
+    const pf = createPiOllamaFetch({ baseUrl, numCtx: () => 8192, think: false, firstOutputTimeoutMs: 5_000, idleTimeoutMs: 5_000 });
+    const stop = new AbortController();
+    setTimeout(() => stop.abort(), 200);
+    const started = Date.now();
+    const error = await pf('http://ignored/v1/chat/completions', { method: 'POST', body: JSON.stringify(request), signal: stop.signal }).then(() => null, (err: Error) => err);
+    expect(error).not.toBeNull();
+    expect(Date.now() - started).toBeLessThan(2_000);
+    expect(`${error!.name} ${error!.message}`).toMatch(/abort/i);
+    expect(error!.message).not.toMatch(/no output from Ollama/i);
+  }, 15_000);
+
+  it('the user\'s Stop during a streaming reply ends it at once, not as a stall', async () => {
+    const baseUrl = await fakeOllama((_req, res) => {
+      res.writeHead(200, { 'content-type': 'application/x-ndjson' });
+      res.write(`${JSON.stringify({ message: { role: 'assistant', content: 'Working on it' }, done: false })}\n`);
+    });
+    const pf = createPiOllamaFetch({ baseUrl, numCtx: () => 8192, think: false, firstOutputTimeoutMs: 5_000, idleTimeoutMs: 5_000 });
+    const stop = new AbortController();
+    const res = await pf('http://ignored/v1/chat/completions', { method: 'POST', body: JSON.stringify(request), signal: stop.signal });
+    setTimeout(() => stop.abort(), 200);
+    const started = Date.now();
+    const error = await readAll(res).then(() => null, (err: Error) => err);
+    expect(error).not.toBeNull();
+    expect(Date.now() - started).toBeLessThan(2_000);
+    expect(error!.message).not.toMatch(/no output from Ollama/i);
+  }, 15_000);
 });
