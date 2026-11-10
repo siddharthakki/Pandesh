@@ -7,6 +7,8 @@ const FETCH_TIMEOUT_MS = 8_000;
 
 export interface WeatherCapabilityOptions {
   fetchImpl?: typeof fetch;
+  /** Clock for the freshness check (tests). */
+  now?: () => number;
 }
 
 export interface GeocodePlace {
@@ -25,7 +27,12 @@ interface GeocodeResult {
 }
 
 interface ForecastResult {
+  /** Seconds the location's local time is ahead of UTC; `current.time` is local wall time without an offset. */
+  utc_offset_seconds?: number;
+  timezone_abbreviation?: string;
   current?: {
+    /** When the provider's current values are for, e.g. "2026-11-10T10:45" (local to the place). */
+    time?: string;
     temperature_2m?: number;
     relative_humidity_2m?: number;
     wind_speed_10m?: number;
@@ -61,6 +68,25 @@ const WEATHER_CODE_LABELS: Record<number, string> = {
 
 function failure(output: string, category: string): ToolExecutionResult {
   return { status: 'failed', exitCode: null, output, resultCategory: category };
+}
+
+/** Current values older than this are reported as old, never passed off as now. */
+export const STALE_AFTER_MINUTES = 180;
+
+/**
+ * Where the numbers come from and for when, so "current" is checkable: the provider's own timestamp for its current
+ * values, and a plain warning when they are old.
+ */
+export function observedNote(forecast: { utc_offset_seconds?: number; timezone_abbreviation?: string; current?: { time?: string } }, nowMs: number): string {
+  const local = forecast.current?.time;
+  if (!local || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/.test(local)) return 'Source: Open-Meteo (live request); the provider gave no time for these values.';
+  const zone = forecast.timezone_abbreviation ? ` ${forecast.timezone_abbreviation}` : ' local time';
+  const observedUtc = Date.parse(`${local.slice(0, 16)}:00Z`) - (forecast.utc_offset_seconds ?? 0) * 1000;
+  const ageMinutes = Math.round((nowMs - observedUtc) / 60_000);
+  const age = Number.isFinite(ageMinutes) && ageMinutes > STALE_AFTER_MINUTES
+    ? ` These values are ${Math.round(ageMinutes / 60)} hours old; say so instead of calling them current.`
+    : '';
+  return `Source: Open-Meteo (live request), values for ${local.slice(0, 16).replace('T', ' ')}${zone}.${age}`;
 }
 
 /** The most extra name lookups a "no such place" answer may make, all to the same geocoder, in parallel. */
@@ -150,6 +176,7 @@ function matchesCountry(result: GeocodePlace, exp: string): boolean {
  * harmless. */
 export function createWeatherCapabilityAdapter(options: WeatherCapabilityOptions = {}): GovernedCapabilityAdapter {
   const fetcher = options.fetchImpl ?? fetch;
+  const nowMs = options.now ?? Date.now;
 
   async function json(url: string): Promise<unknown> {
     const response = await fetcher(url, { signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) });
@@ -205,10 +232,12 @@ export function createWeatherCapabilityAdapter(options: WeatherCapabilityOptions
         const inCountry = expectedCountry ? pool.filter((c) => matchesCountry(c, expectedCountry!)) : pool;
         const closest = closestPlaceNames(cityName, inCountry.length ? inCountry : pool);
         const where = `"${cityName}"${expectedCountry ? ` in ${expectedCountry}` : ''}`;
+        // Worded for the person: the desktop shows this text as it is when it answers a weather question itself.
+        const options = closest.length > 1 ? `${closest.slice(0, -1).join('; ')} or ${closest[closest.length - 1]}` : closest[0];
         return failure(
           closest.length
-            ? `No place called ${where} was found. Closest place names: ${closest.join('; ')}. Ask the user which one they meant (a spoken place name is often misheard); do not pick one yourself.`
-            : `No place called ${where} was found, and no similar-sounding place either. Ask the user to spell the place name or name a nearby larger town.`,
+            ? `No place called ${where} was found. Did you mean ${options}? Say which one, and the weather is looked up for it.`
+            : `No place called ${where} was found, and no similar-sounding place either. Please spell the place name, or name a nearby larger town.`,
           'weather_location_not_found',
         );
       }
@@ -271,7 +300,7 @@ export function createWeatherCapabilityAdapter(options: WeatherCapabilityOptions
         }
       }
 
-      const summary = summaryParts.filter(Boolean).join(', ');
+      const summary = `${summaryParts.filter(Boolean).join(', ')}. ${observedNote(forecast, nowMs())}`;
       return {
         status: 'succeeded',
         exitCode: 0,

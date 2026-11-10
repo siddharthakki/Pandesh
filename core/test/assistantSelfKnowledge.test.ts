@@ -171,8 +171,21 @@ describe('desktop_screenshot says what it is', () => {
     expect(result.status).toBe('succeeded');
     expect(result.output).toMatch(/^Captured the Windows desktop: .+desktop-\d+\.png \(4 bytes, 1920x1080, sha256 [0-9a-f]{64}\)\. /);
     expect(result.output).toContain(SCREENSHOT_CONTENTS_NOTE);
-    expect(SCREENSHOT_CONTENTS_NOTE).toMatch(/Pandesh cannot see what is in this screenshot/);
+    // Capturing, opening and inspecting are kept apart; the tool only captures.
+    expect(SCREENSHOT_CONTENTS_NOTE).toMatch(/^Captured means saved, nothing more: .+neither opened for anyone nor inspected\./);
+    expect(SCREENSHOT_CONTENTS_NOTE).toMatch(/Pandesh cannot inspect it in this build \(no model reads the image/);
+    expect(SCREENSHOT_CONTENTS_NOTE).toMatch(/do not describe, check or verify anything on the screen with it, and never say it shows, confirms or proves something/);
+    expect(SCREENSHOT_CONTENTS_NOTE).toMatch(/The user can open it at the path above/);
     expect(SCREENSHOT_CONTENTS_NOTE).toMatch(/nothing is excluded, blurred or filtered/);
     expect(SCREENSHOT_CONTENTS_NOTE).not.toMatch(/exclude private|messaging apps? (?:are|is) (?:excluded|hidden)/i);
+  });
+
+  it('the system prompt tells the model the tool only captures and never verifies anything', () => {
+    const engine = fs.readFileSync(path.join(__dirname, '../runtime/piAgentEngine.ts'), 'utf8');
+    const line = engine.slice(engine.indexOf("- 'desktop_screenshot' only CAPTURES"), engine.indexOf("Both are read-only.", engine.indexOf("- 'desktop_screenshot' only CAPTURES")));
+    expect(line).toMatch(/Capturing is not opening .+ and not inspecting .+no model can do in this build/);
+    expect(line).toMatch(/never say you looked at, checked, verified or confirmed anything with one; say you saved it and where/);
+    expect(line).toMatch(/never claim it leaves out, blurs or protects any app/);
+    expect(line).toMatch(/Pandesh never scrapes a WhatsApp Web session/);
   });
 });
