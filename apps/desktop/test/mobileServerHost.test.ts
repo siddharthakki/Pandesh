@@ -23,8 +23,8 @@ describe('defaultMobileHost (firewall prompt per test build)', () => {
 
 describe('the host log never records the pairing PIN (Build 161 audit, gate E)', () => {
   it('names where the server listens, without the PIN or the ?pair= link', () => {
-    const line = MobileServer.logLine({ ip: '192.168.2.66', port: 3030 });
-    expect(line).toContain('http://192.168.2.66:3030/');
+    const line = MobileServer.logLine({ ip: '192.0.2.10', port: 3030 });
+    expect(line).toContain('http://192.0.2.10:3030/');
     expect(line).not.toMatch(/pair=|PIN:\s*\w/);
   });
 
