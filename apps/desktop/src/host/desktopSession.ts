@@ -178,8 +178,13 @@ export const AUTO_MODEL = '__auto__';
  * state before the desktop says plainly that the stop was not confirmed. */
 export const CANCEL_CONFIRM_TIMEOUT_MS = 8_000;
 
+/** A navigate_to request older than this is history (replayed on connect), never a live request. Core waits 5 s. */
+export const NAVIGATION_FRESH_MS = 15_000;
+
 export interface DesktopSessionOptions {
   productRoot: string;
+  /** The interface this host's window shows. Messages from the window carry it, so the assistant can open places there. */
+  uiSurface?: () => 'v2' | 'classic' | null;
   dataDir?: string;
   corePath?: string;
   bundledCoreVersion?: string;
@@ -2232,6 +2237,7 @@ export class DesktopSession {
       ...(this.selectedAgentId ? { agentId: this.selectedAgentId } : {}),
       // A voice turn's text is a speech transcript: Core tells the model so it asks about a misheard word.
       ...(voiceTurnId ? { inputModality: 'voice' as const } : {}),
+      ...this.uiSurfaceField(clientOrigin),
       requestedMode,
       conversationId,
       ...(attachmentIds.length > 0 ? { attachmentIds } : {}),
@@ -2584,6 +2590,8 @@ export class DesktopSession {
     const submission = await client.submit({
       currentMessage: text,
       ...(this.selectedAgentId ? { agentId: this.selectedAgentId } : {}),
+      // A side question typed while a task works can still open a place; the task keeps running.
+      ...this.uiSurfaceField(active.clientOrigin ?? 'desktop'),
       requestedMode: 'baat_kar',
       conversationId: active.conversationId,
       requestedProvider: 'ollama',
@@ -4874,7 +4882,35 @@ export class DesktopSession {
     });
   }
 
+  /** Which Pandesh window sends this message (never the phone), so Core lets the assistant open places in it. */
+  private uiSurfaceField(clientOrigin: 'desktop' | 'mobile' = 'desktop'): { uiSurface?: 'v2' | 'classic' } {
+    const surface = clientOrigin === 'desktop' ? (this.options.uiSurface?.() ?? null) : null;
+    return surface ? { uiSurface: surface } : {};
+  }
+
+  /** The window's answer to a navigate_to request, passed to Core, which only then lets the assistant say it is open. */
+  async confirmNavigation(navigationId: string, ok: boolean, detail?: string, surface?: 'v2' | 'classic'): Promise<{ recorded: boolean }> {
+    if (!/^uinav_[\w-]+$/.test(navigationId)) throw new Error('unknown navigation');
+    return this.requireClient().confirmUiNavigation(navigationId, { ok, ...(detail ? { detail } : {}), ...(surface ? { surface } : {}) });
+  }
+
   private async handleRuntimeEvent(event: RuntimeEventRecord): Promise<void> {
+    // navigate_to: Core asks this window to open a registered place. It changes only what the window shows, so it is
+    // passed on whatever task is running; the window confirms back through confirmNavigation.
+    if (event.domain === 'ui_navigation' && event.eventType === 'ui_navigation_requested') {
+      // Core re-sends earlier runtime events when the host connects. A replayed request must never move the window:
+      // only one whose turn can still be waiting for the answer (Core waits 5 s) is acted on.
+      if (!(Date.now() - Date.parse(event.createdAt) <= NAVIGATION_FRESH_MS)) return;
+      const m = (event.metadata ?? {}) as Record<string, unknown>;
+      this.emit({
+        kind: 'navigate',
+        at: event.createdAt,
+        summary: `Opening ${String(m.label ?? 'a place')} in this window`,
+        attemptId: typeof m.attemptId === 'string' ? m.attemptId : undefined,
+        navigation: { id: event.entityId, destination: String(m.destination ?? ''), target: String(m.target ?? ''), label: String(m.label ?? ''), surface: m.surface === 'classic' ? 'classic' : 'v2' },
+      });
+      return;
+    }
     // Core decided an action under the turn's permission mode: show who authorized it, never as the user's click.
     if (event.domain === 'attempt' && (event.eventType === 'permission_auto_authorized' || event.eventType === 'permission_mode_blocked')
       && this.active && this.active.attemptId === event.entityId) {

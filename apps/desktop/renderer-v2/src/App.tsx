@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { api, errorText, useSnapshot, type ConversationEntry } from './bridge';
+import { api, errorText, onDesktopEvent, useSnapshot, type ConversationEntry } from './bridge';
+import { parseV2Target } from './navigationTargets';
 import { Icon, useNarrow, type IconName } from './ui';
 import { Chat } from './Chat';
 import { Board, useTaskOverview, needsYouCount } from './Board';
@@ -11,8 +12,9 @@ import { ToolsHub } from './ToolsHub';
 import { SecondBrain } from './SecondBrain';
 import { Processes } from './Processes';
 import { Workspace, type SpaceId } from './Workspaces';
+import { Connections } from './Connections';
 
-export type View = 'chat' | 'board' | 'team' | 'space' | 'system' | 'software' | 'tools' | 'brain' | 'processes' | 'workspace' | 'radar' | 'revenue';
+export type View = 'chat' | 'board' | 'team' | 'space' | 'system' | 'software' | 'tools' | 'brain' | 'processes' | 'workspace' | 'radar' | 'revenue' | 'connections';
 
 interface PaletteEntry { group: string; label: string; run: () => void }
 
@@ -84,6 +86,7 @@ export function App() {
     variantForced
       ? { name: 'Classic UI is locked off', sub: 'PANDESH_UI_V2=1 is set for this launch; start without it to switch', run: () => {} }
       : { name: 'Use the Classic UI', sub: 'Reloads the window in the existing interface', run: () => void useClassic() },
+    { name: 'Connections', sub: 'Google (Gmail, Calendar): set up and connect', run: () => go('connections') },
     { name: 'Tools & Skills', sub: 'Capabilities, agents × tools, skills, MCP, capability tests', run: () => go('tools') },
     { name: 'Processes', sub: 'What Pandesh started, checked against Windows now', run: () => go('processes') },
     { name: 'Software & Services', sub: 'Ports, installed tools, GitHub projects, updates (read-only)', run: () => go('software') },
@@ -95,6 +98,39 @@ export function App() {
   useEffect(() => { if (pop === 'palette') api.listConversations(false).then(setConversations).catch(() => setConversations([])); }, [pop]);
   const [openConversationId, setOpenConversationId] = useState<string | null>(null);
   const [space, setSpace] = useState<SpaceId>('projects');
+  const [toolsTab, setToolsTab] = useState<{ tab: 'connectors'; n: number } | null>(null);
+  const narrowRef = useRef(narrow);
+  narrowRef.current = narrow;
+
+  // navigate_to: the assistant asked this window to open a registered place. The app's own navigation does it, and the
+  // window confirms only what it then really shows, so Pandesh never says "opened" when it was not. A running task is
+  // not touched: only the view changes.
+  useEffect(() => onDesktopEvent((e) => {
+    const nav = e.navigation;
+    if (e.kind !== 'navigate' || !nav) return;
+    const action = nav.surface === 'v2' ? parseV2Target(nav.target) : { kind: 'unknown' as const, detail: 'this window shows the v2 interface' };
+    if (action.kind === 'view') { if (action.toolsTab) setToolsTab({ tab: action.toolsTab, n: Date.now() }); setPop(null); setView(action.view); }
+    else if (action.kind === 'space') { setSpace(action.space); setPop(null); setView('workspace'); }
+    else if (action.kind === 'menu') setPop(narrowRef.current ? 'spaces' : 'system');
+    else if (action.kind === 'focus') { setPop(null); setView('chat'); }
+    // Confirm from what the window shows once it has re-rendered (checked for up to a second).
+    const shows = (): boolean => {
+      const shown = document.querySelector('.main')?.getAttribute('data-view');
+      if (action.kind === 'view') return shown === action.view;
+      if (action.kind === 'space') return shown === 'workspace';
+      if (action.kind === 'menu') return Boolean(document.querySelector('[role="dialog"][aria-label="System"], [role="dialog"][aria-label="Spaces"]'));
+      if (action.kind === 'focus') { const el = document.getElementById(action.id); el?.focus(); return Boolean(el) && document.activeElement === el; }
+      return false;
+    };
+    let tries = 0;
+    const check = () => {
+      const ok = action.kind !== 'unknown' && shows();
+      if (!ok && action.kind !== 'unknown' && ++tries < 20) { setTimeout(check, 50); return; }
+      const detail = action.kind === 'unknown' ? action.detail : ok ? undefined : 'the window did not switch';
+      void api.confirmNavigation(nav.id, ok, detail, 'v2').catch(() => undefined);
+    };
+    setTimeout(check, 50);
+  }), []);
   const [draft, setDraft] = useState<string | null>(null);
 
   const paletteEntries: PaletteEntry[] = useMemo(() => [
@@ -104,6 +140,7 @@ export function App() {
     { group: 'GO TO', label: 'AI Radar', run: () => go('radar') },
     { group: 'GO TO', label: 'Team', run: () => go('team') },
     { group: 'GO TO', label: 'Tools & Skills', run: () => go('tools') },
+    { group: 'GO TO', label: 'Connections (Google, Gmail, Calendar)', run: () => go('connections') },
     { group: 'GO TO', label: 'Second Brain', run: () => go('brain') },
     { group: 'GO TO', label: 'Processes', run: () => go('processes') },
     { group: 'ACTIONS', label: 'New chat', run: () => { void api.newConversation().then(refresh); setOpenConversationId(null); go('chat'); } },
@@ -138,13 +175,14 @@ export function App() {
         </nav>
       )}
 
-      <div className="main">
+      <div className="main" data-view={view}>
         {view === 'chat' && <Chat snapshot={snapshot} snapshotError={error} refresh={refresh} narrow={narrow} openConversationId={openConversationId} onOpenPalette={() => openPop('palette')} onOpenBoard={() => go('board')} draft={draft} onDraftUsed={() => setDraft(null)} />}
         {view === 'board' && <Board overview={overview} narrow={narrow} onOpenPalette={() => openPop('palette')} onOpenConversation={(id) => { setOpenConversationId(id); go('chat'); }} />}
         {view === 'software' && <Software narrow={narrow} />}
         {view === 'radar' && <Radar onOpenChat={() => { setOpenConversationId(null); refresh(); go('chat'); }} />}
         {view === 'revenue' && <Revenue />}
-        {view === 'tools' && <ToolsHub narrow={narrow} />}
+        {view === 'tools' && <ToolsHub narrow={narrow} initialTab={toolsTab} />}
+        {view === 'connections' && <Connections snapshot={snapshot} refresh={refresh} />}
         {view === 'brain' && <SecondBrain narrow={narrow} />}
         {view === 'processes' && <Processes narrow={narrow} />}
         {view === 'workspace' && <Workspace space={space} narrow={narrow} onAskPandesh={(t) => { setDraft(t); go('chat'); }} />}

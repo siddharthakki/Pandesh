@@ -78,6 +78,8 @@ import { getTaskOutcome, objectiveFromRequest, updateTaskOutcome } from '../doma
 import { classifyRequest } from '../domain/routing';
 import { buildContextPolicy } from '../domain/contextPolicy';
 import { parseInputModality } from '../domain/spokenInput';
+import { parseUiSurface } from '../shared/uiDestinations';
+import { confirmNavigation } from '../domain/uiNavigation';
 import { classifyAttemptRecovery } from '../domain/recovery';
 import { submitRequest } from '../domain/submission';
 import { getAttemptContext } from '../domain/attemptContext';
@@ -1202,6 +1204,7 @@ export function buildRouter(
           idempotencyKey: key,
           attachmentIds: Array.isArray(body.attachmentIds) ? (body.attachmentIds as string[]) : undefined,
           inputModality: parseInputModality(body.inputModality),
+          uiSurface: parseUiSurface(body.uiSurface),
         });
         if (agentId && !submitted.duplicateOfActiveAttempt && !agentScopeForAttempt(ctx.db, submitted.attempt.id)) {
           assignAgentRun(ctx.db, { requestId: submitted.request.id, agentId, conversationRoot: (body.workspaceRoot as string) ?? null });
@@ -2285,6 +2288,22 @@ export function buildRouter(
   }));
 
   // --- M32: Runtime event replay (conversation/request/attempt/invocation/approval stream) ---
+  // The Pandesh window reports whether it opened a place the assistant asked for with navigate_to.
+  router.post('/v1/ui-navigation/:id/confirm', (ctx, match) => {
+    const key = requireIdempotencyKey(ctx);
+    const body = asRecord(ctx.body);
+    return withIdempotency(ctx.db, { key, clientId: ctx.clientId, routeId: `ui-navigation.confirm:${match.params.id}` }, ctx.body, () =>
+      withRuntimeBroadcast(ctx, broadcaster, () => {
+        try {
+          confirmNavigation(ctx.db, { navigationId: match.params.id, ok: body.ok === true, detail: typeof body.detail === 'string' ? body.detail : null, surface: parseUiSurface(body.surface) ?? null, actor: ctx.clientId });
+        } catch (err) {
+          throw new CoreError('not_found', (err as Error).message);
+        }
+        return { status: 200, body: { recorded: true } };
+      }),
+    );
+  });
+
   router.get('/v1/runtime-events', (ctx) => {
     const after = optionalNumber(ctx.query, 'after') ?? 0;
     const limit = Math.min(optionalNumber(ctx.query, 'limit') ?? 200, MAX_LIST_LIMIT);

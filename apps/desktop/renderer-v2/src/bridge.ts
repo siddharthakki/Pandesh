@@ -6,6 +6,7 @@
  */
 import { useEffect, useRef, useState } from 'react';
 import type { PermissionMode, PermissionState } from './composerModel';
+import type { GmailStatus } from './googleModel';
 
 export type ApprovalResolution = 'approved' | 'rejected';
 
@@ -53,12 +54,20 @@ export interface Snapshot {
   folder?: string | null;
   /** Ask / Auto / Plan only for the selected conversation (or the next new one). Core stores and enforces it. */
   permission?: PermissionState;
+  /** Google (Gmail, Calendar) connection status, non-secret. */
+  gmail?: GmailStatus;
+  /** Everyday Tools catalog: Calendar counts as connected only when Core verified it with a live read. */
+  everydayTools?: { catalog?: Array<{ id: string; connectorState?: string; availability?: string }>; [k: string]: unknown };
   modelNote?: string | null;
 }
 
 export interface TranscriptMessage { id: string; role: 'user' | 'assistant' | 'system'; content: string; createdAt: string; model?: string | null; provider?: string | null }
 export interface ConversationEntry { id: string; title: string | null; preview: string | null; state: string; updatedAt: string; archivedAt: string | null; pinnedAt: string | null }
-export interface ActivityEvent { kind: string; at: string; conversationId?: string; messageRole?: string; attemptId?: string; eventType?: string; toolName?: string; summary: string; text?: string }
+export interface ActivityEvent {
+  kind: string; at: string; conversationId?: string; messageRole?: string; attemptId?: string; eventType?: string; toolName?: string; summary: string; text?: string;
+  /** For `navigate`: the place the assistant asked this window to open (navigate_to). */
+  navigation?: { id: string; destination: string; target: string; label: string; surface: 'v2' | 'classic' };
+}
 export interface TaskRow {
   attemptId: string; requestId: string; conversationId: string | null; kind: string; status: string; title: string;
   provider: string | null; model: string | null; worker: string; activity: string; createdAt: string; startedAt: string | null;
@@ -79,6 +88,17 @@ export interface DesktopApi {
   listModels(): Promise<string[]>;
   setPermissionMode(mode: PermissionMode, grant?: { categories: string[]; expiresInMinutes: number }): Promise<Snapshot>;
   revokeAuthorization(id: string): Promise<Snapshot>;
+  /** Google: the same calls the Classic Google card makes. */
+  connectGmail(): Promise<GmailStatus>;
+  cancelGoogleConnect(): Promise<GmailStatus>;
+  retryGmailProbe(): Promise<GmailStatus>;
+  disconnectGmail(): Promise<GmailStatus>;
+  allowInboxOrganization(): Promise<GmailStatus>;
+  saveGoogleOAuthClient(clientId: string, clientSecret: string): Promise<GmailStatus>;
+  clearGoogleOAuthClient(): Promise<GmailStatus>;
+  importGoogleOAuthClientFile(): Promise<{ cancelled: boolean; status?: GmailStatus }>;
+  /** Tells Core whether this window opened the place the assistant asked for (navigate_to). */
+  confirmNavigation(navigationId: string, ok: boolean, detail?: string, surface?: 'v2' | 'classic'): Promise<{ recorded: boolean }>;
   cancel(): Promise<void>;
   cancelTask(attemptId: string): Promise<{ requested: boolean }>;
   resumeTask(attemptId: string): Promise<{ attemptId: string }>;

@@ -127,6 +127,8 @@ export const BASE_TOOLS = new Set([
   // Challenge (Project Birch): "When and where is the Project Birch review?" in a new chat searched files and said
   // nothing was known, because recall was only offered when the request said "remember"/"memory". Read-only.
   'memory_recall',
+  // Only defined when the message came from a Pandesh window; one small definition, needed for "take me there".
+  'navigate_to',
 ]);
 
 export const NATIVE_GROUP: Record<string, string> = {

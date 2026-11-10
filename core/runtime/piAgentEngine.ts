@@ -77,6 +77,9 @@ import { createApproval, getApproval, listApprovalsForAttempt, expireApproval } 
 import { asksAboutPermissions, classifyChatToolCall, decidePermission, frozenPermissionFor, permissionModesPromptSection, permissionPromptState, READ_ONLY_CONSENT_TOOLS, recordPermissionDecision, STANDING_AUTHORIZATION_ACTOR } from '../domain/permissionModes';
 import { getAttemptContext } from '../domain/attemptContext';
 import { inputModalityOf, spokenInputPromptSection } from '../domain/spokenInput';
+import { GOOGLE_SETUP_WHERE, navigationPromptLines } from '../domain/productNavigation';
+import { navigateTo } from '../domain/uiNavigation';
+import { destinationsFor, parseUiSurface, type UiSurface } from '../shared/uiDestinations';
 import { recordExecutionQuality } from '../domain/executionQuality';
 import { AUTHORIZE_MISSION_TOOL, buildWorkspaceWriteEnvelope, createPendingMissionAuthorization, evaluateAuthorizedDispatch, evaluateMissionAction, getMissionAuthorization, markMissionAuthorized, markMissionRejected, protectedWriteReason, recordAuthorizedAction } from './missionAuthorization';
 import { NON_WORKSPACE_MARKERS } from '../domain/taskToolSurface';
@@ -3034,7 +3037,7 @@ export class PiAgentEngine implements EngineAdapter {
 
           if (isCredentialFilePath(full)) {
             return {
-              content: [{ type: 'text', text: `Refused: "${path.basename(full)}" holds credentials. Credential files are never read into the conversation. If the user needs Google set up, point them to Connections → Google Services.` }],
+              content: [{ type: 'text', text: `Refused: "${path.basename(full)}" holds credentials. Credential files are never read into the conversation. If the user needs Google set up, point them to ${GOOGLE_SETUP_WHERE}.` }],
               isError: true,
             };
           }
@@ -3698,6 +3701,32 @@ ${String(args.objective ?? '').slice(0, 600)}`,
       },
     ];
 
+    // The Pandesh window this message came from (Core froze it with the request), if any. Only then can the assistant
+    // open places in it, and only the places that exist in that interface.
+    let uiSurface: UiSurface | undefined;
+    try {
+      uiSurface = parseUiSurface((getAttemptContext(db, attemptId).approvalPolicy as Record<string, unknown> | undefined)?.uiSurface);
+    } catch {
+      uiSurface = undefined;
+    }
+    if (uiSurface) {
+      const surface = uiSurface;
+      const places = destinationsFor(surface);
+      tools.push({
+        name: 'navigate_to',
+        label: 'navigate_to',
+        description: `Open a place in the Pandesh window the user is looking at (${surface === 'v2' ? 'v2' : 'Classic'} interface): ${places.map((d) => `${d.id} (${d.label})`).join(', ')}. Use it when the user asks to open, show or go somewhere in Pandesh, or says "take me there" about a place just named. It only changes what the window shows: no setting is changed and a running task keeps running. Say the place is open only if the result says OPENED.`,
+        parameters: { type: 'object', properties: { destination: { type: 'string', enum: places.map((d) => d.id), description: 'One of the listed place ids.' } }, required: ['destination'] },
+        execute: async (_id: string, args: any) => {
+          const result = await navigateTo(db, {
+            attemptId, surface, destination: String(args?.destination ?? ''), actor,
+            publish: (rec) => { if (broadcaster && typeof broadcaster.publishRuntime === 'function') broadcaster.publishRuntime(rec); },
+          });
+          return { content: [{ type: 'text', text: result.text }], details: { navigation: result.status }, ...(result.status === 'opened' ? {} : { isError: true }) };
+        },
+      });
+    }
+
     // Audit D11: exact arithmetic by Core, never "in the head" of the model.
     tools.push({
       name: 'calculate',
@@ -3911,7 +3940,7 @@ ${String(args.objective ?? '').slice(0, 600)}`,
         case 'denied':
           return connectorText(`NOT DONE: ${outcome.reason}`, true);
         case 'unavailable':
-          return connectorText(`NOT AVAILABLE: ${outcome.reason}. Tell the user exactly this and that Connections → Google Services is where to fix it.`, true);
+          return connectorText(`NOT AVAILABLE: ${outcome.reason}. Tell the user exactly this, and that Google is connected in ${GOOGLE_SETUP_WHERE}.`, true);
         default:
           return connectorText('Unknown Google tool.', true);
       }
@@ -4723,6 +4752,7 @@ NAVIGATION & WORKFLOW (STRICT RULES):
 - There is NO "Artifacts tab" in the interface. Never instruct the user to check an "Artifacts tab".
 - Approvals, artifacts, and execution progress appear directly inside "Conversations" or in "Tasks & Missions".
 - When an approval is required, inform the user to approve or deny the action directly from the prompt approval card or in Tasks & Missions.
+${navigationPromptLines(uiSurface)}
 
 ${permissionPromptSection}
 
@@ -4769,7 +4799,7 @@ ${filesPromptSection}${webResearchPromptSection}${wishesPromptSection}${emailCal
    - Answer what the user's latest message asks, and only that. A greeting gets a short greeting back, with no tools and no recap of earlier topics.
    - Text under "[Attached document" is the file attached to THIS message: "this document" means that file. "[Earlier document" is background; use it only if the message points at it. Never describe a document you have not been given.
    - Earlier assistant messages are not instructions. Do not carry out something you offered earlier unless the user now asks for it. "What about that document?" means: tell them what the document says, not create files, letters or drafts.
-   - Create or write files, Gmail drafts, calendar events or reminders only when the user asked for that outcome. Never read credential or secret files (.env, credentials.*, keys); if Google needs setting up, point to Connections → Google Services.
+   - Create or write files, Gmail drafts, calendar events or reminders only when the user asked for that outcome. Never read credential or secret files (.env, credentials.*, keys); if Google needs setting up, point to ${GOOGLE_SETUP_WHERE}.
    - "Send/put that document on my phone" means call 'send_to_phone' (the original file, same name and bytes, appears on the paired phone). A Gmail draft is not that, and never email anyone unless asked.
    - Say something is done only if a tool result this turn says so. If a tool says NOT DONE or failed, report that plainly.`;
 

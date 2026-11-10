@@ -741,6 +741,8 @@ async function createWindow(): Promise<void> {
     notifyQueueConfirm: async (input) => showDesktopQueueConfirmNotification(input),
     onQueueConfirmNotificationClick: (id) => showQueueConfirmFromNotification(id),
     deliverNotification: (input) => deliverOutboxNotification(input),
+    // Messages typed in this window may ask the assistant to open places in it (navigate_to).
+    uiSurface: () => resolveUiVariant(prefs),
     notificationChannel: () => ({
       supported: Notification.isSupported(),
       detail: Notification.isSupported() ? 'Windows desktop notifications (toast)' : 'desktop notifications unsupported on this system',
@@ -1039,6 +1041,10 @@ function registerIpc(): void {
     const snapshot = await session.setPermissionMode(mode, parsed);
     sendSnapshot();
     return snapshot;
+  });
+  ipcMain.handle(DESKTOP_CHANNELS.confirmNavigation, async (_event, navigationId: unknown, ok: unknown, detail: unknown, surface: unknown) => {
+    if (!session) throw new Error('desktop session is not started');
+    return session.confirmNavigation(String(navigationId ?? ''), ok === true, typeof detail === 'string' ? detail.slice(0, 300) : undefined, surface === 'classic' || surface === 'v2' ? surface : undefined);
   });
   ipcMain.handle(DESKTOP_CHANNELS.revokeAuthorization, async (_event, id: unknown) => {
     if (!session) throw new Error('desktop session is not started');

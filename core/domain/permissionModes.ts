@@ -678,6 +678,8 @@ const CHAT_READ_TOOLS: ReadonlySet<string> = new Set([
   'dev_stories_status', 'list_reminders', 'list_commitments', 'list_scheduled_tasks', 'get_briefing_data', 'web_research',
   'find_duplicate_files', 'list_directory', 'get_project_context', 'read_file', 'search_recent_projects', 'list_printers',
   'wish_status', 'calculate',
+  // Reads what Windows lists as installed; opens a place in the Pandesh window (changes nothing, stops nothing).
+  'find_installed_app', 'navigate_to',
 ]);
 /** Pandesh's own record of what this turn did; it changes nothing outside the turn. */
 const CHAT_BOOKKEEPING_TOOLS: ReadonlySet<string> = new Set(['update_task_outcome']);
