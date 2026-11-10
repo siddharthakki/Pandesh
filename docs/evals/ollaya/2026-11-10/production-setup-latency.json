@@ -43,5 +43,38 @@
       "p50ms": 707,
       "p95msIncludingColdLoad": 11988
     }
-  ]
+  ],
+  "commandReviewChosen": {
+    "setup": "decision: step (v4) + destructive (v1), one request per command",
+    "runs": [
+      {
+        "decision": "real_workflow",
+        "calls": 31,
+        "p50ms": 1357,
+        "p95msIncludingColdLoad": 1729
+      },
+      {
+        "decision": "command_review",
+        "calls": 56,
+        "p50ms": 732,
+        "p95msIncludingColdLoad": 1054
+      }
+    ]
+  },
+  "historyReplay": {
+    "note": "58 command approvals replayed from 7 local Pandesh databases with the first pick (decider:2b, v1 wording, 0.40); counts only",
+    "approved": {
+      "n": 54,
+      "flaggedOffTask": 43,
+      "flaggedDestructive": 0
+    },
+    "rejected": {
+      "n": 4,
+      "flagged": 3
+    },
+    "decider2bLatencyMs": {
+      "p50": 2269,
+      "p95": 3015
+    }
+  }
 }

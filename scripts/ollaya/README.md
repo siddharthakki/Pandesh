@@ -11,9 +11,11 @@ integration: [docs/evals/ollaya-decisions.md](../../docs/evals/ollaya-decisions.
 | `datasets/web_query_privacy.jsonl` | 56 | Does this web query carry personal or confidential data? | private |
 | `datasets/prompt_injection.jsonl` | 50 | Does this fetched text give orders to the AI reading it? | injection |
 | `datasets/routing.jsonl` | 60 | Which specialist should take this request? | (five-way choice) |
+| `datasets/real_workflow_commands.jsonl` | 31 | Command review on commands Pandesh really asked to run (29 approved, 2 rejected) | off-task |
 
-All cases are synthetic: the names, addresses, numbers, keys and paths are made up, and the documentation number
-ranges (`+49 731 555…`, the example IBAN) are used where a real-looking value matters. They include the hard cases
+The first four are synthetic: the names, addresses, numbers, keys and paths are made up, and the documentation number
+ranges (`+49 731 555…`, the example IBAN) are used where a real-looking value matters. `real_workflow_commands` comes
+from Pandesh demo and acceptance profiles with fictional data; local paths are replaced by `<workspace>`. They include the hard cases
 Pandesh has met: a coding request in a folder called `price-tool` (PR #38), short private names, local paths, text
 that *discusses* prompt injection without attempting it, and instructions aimed at a human reader.
 
