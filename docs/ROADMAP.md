@@ -31,5 +31,4 @@ The last published installers (Build 144 and earlier) predate v2. No v2 installe
 
 ## Later
 
-- Human-tested voice and wake word in v2
 - MCP server registry and embedded terminals

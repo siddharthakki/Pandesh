@@ -142,7 +142,7 @@ the same records. More in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 ## 🧰 What it does today
 
-Everything below runs in the current source build and is covered by recorded runs or screenshots in
+Everything below runs in the current source build. Most of it is shown in the recorded runs and screenshots in
 [`docs/media`](docs/media/README.md).
 
 | Feature | What it does |
@@ -156,6 +156,7 @@ Everything below runs in the current source build and is covered by recorded run
 | 🖥️ **Software & Services** | A read-only inventory of installed tools, ports, local repositories and available updates. It never installs anything. |
 | 🩺 **Reliability watchdog** | Once scheduled, it runs the test suites and five live scenarios on an isolated profile every two days and tells you only what changed. [How it works](docs/WATCHDOG.md) |
 | 📡 **AI Radar** | Official releases and security advisories of local-AI tools (Ollama, llama.cpp, Aider, OpenCode, Qwen Code, MCP and more), compared with what is installed. Investigate, prepare an update or dismiss; nothing installs itself. |
+| 🎙️ **Voice** | Talk to Pandesh and hear it answer. Speech recognition (Whisper) and speech output (Piper, Pocket TTS) run locally on your PC. |
 | 💼 **Revenue team** | Sales, Marketing, Social Media and a Reviewer research public leads, write offers and drafts, and check them. Nothing is sent: drafts wait for your approval, and only you record responses, orders and money. |
 | ☀️ **One morning briefing** | Calendar, mail and decisions, plus a short "Pandesh at work" section with only what changed in the watchdog, AI Radar and revenue pipeline. |
 | 🐼 **Classic UI** | The previous interface is still there; switch from the tray or the System menu. |
@@ -252,13 +253,11 @@ Real-speech and local-TTS tests are skipped unless their models are staged (`nod
 | **Unattended consequential work** (writing, running, sending, spending) | ⛔ Not safe yet |
 
 **Next:** a packaged v2 installer on Electron 45, with an upgrade and rollback test against a copy of a real profile,
-and the first results of the revenue pilot. **Later:** human-tested voice and wake word in v2, an MCP server registry
-and embedded terminals. See the [roadmap](docs/ROADMAP.md).
+and the first results of the revenue pilot. **Later:** an MCP server registry and embedded terminals. See the
+[roadmap](docs/ROADMAP.md).
 
-**Still experimental:**
+**Known limits:**
 
-- **Voice:** the microphone opens and local speech engines (Whisper, Piper, Pocket TTS) are wired up, but speaking to
-  Pandesh hasn't been tested by a human yet. The wake word only works in the Classic UI.
 - **Customer Support** is still a placeholder agent. The revenue agents research and draft only; they can't send,
   publish or spend.
 - **Models vary from run to run.** In the recorded demos the build-an-app task succeeded in 2 of 3 attempts with
