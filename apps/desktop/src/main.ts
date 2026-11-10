@@ -19,7 +19,7 @@ import {
   resolveBuildIdentity,
   type DesktopBuildIdentity,
 } from './host/desktopBuildIdentity';
-import { readHostPreferences, resolveUiVariant, writeHostPreferences } from './host/desktopHostPreferences';
+import { ownsLoginItem, readHostPreferences, resolveUiVariant, writeHostPreferences } from './host/desktopHostPreferences';
 import { DESKTOP_CHANNELS, type DesktopAppMetadata, type DesktopUpdateStartResult, type DesktopUpdateStatus } from './ipc';
 import {
   acknowledgeUpdateResult, inspectPackage, launchUpdater, quiesceCore, readCoreReadiness, readUpdateResult,
@@ -290,6 +290,12 @@ function syncTrayFromSession(): void {
 
 function applyOpenAtLogin(enabled: boolean): void {
   prefs = writeHostPreferences(dataDir, { openAtLogin: enabled });
+  // A test or scratch profile keeps its own preference but never writes or deletes the shared Windows entry.
+  if (!ownsLoginItem(dataDir, defaultDesktopDataDir())) {
+    hostLog(`login item left alone: profile ${dataDir} is not the real desktop profile (preference saved: ${enabled ? 'on' : 'off'})`);
+    syncTrayFromSession();
+    return;
+  }
   try {
     app.setLoginItemSettings({
       openAtLogin: enabled,
