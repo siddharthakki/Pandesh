@@ -22,6 +22,7 @@ const OWN_OUTPUT_TOOLS = /^(?:write_file|propose_file_change|propose_text_edit|u
 const OPENCODE_BUDGET_MS = 6 * 60_000;
 import { collectHandoffFacts, withheldMemoryInBrief } from './handoffFacts';
 import { memoryOutsideScopes } from '../domain/memory';
+import { realLocation, reallyInside } from '../platform/realLocation';
 import { checkWrittenOutput, ungroundedValues, type OutputCheck } from './outputChecks';
 import { expectedOutputFiles, inventedDates, suggestedCommandProblems, thirdPartyImportProblems, unfinishedRequestedSteps } from './taskCompletion';
 import { discoverCodingAgents, housekeepingRoot, spawnPlan } from './codingAgents';
@@ -1205,14 +1206,13 @@ export class PiAgentEngine implements EngineAdapter {
       return { kind: code ? 'code' : 'document', title: path.basename(full), ...(rel ? { path: rel } : {}), ...extra };
     }
 
+    /**
+     * Whether a path lies inside an authorized root — where it really lands, not how it is spelled (Build 161 audit: a
+     * junction inside the workspace that pointed elsewhere was authorized by its spelling, so its target was read
+     * without asking). Another spelling of an authorized folder (an 8.3 name, a junction to it) stays authorized.
+     */
     function isPathAuthorized(targetPath: string): boolean {
-      const norm = path.resolve(targetPath).toLowerCase();
-      for (const root of authorizedSearchRoots) {
-        const normRoot = path.resolve(root).toLowerCase();
-        if (norm === normRoot || norm.startsWith(normRoot + path.sep.toLowerCase()) || norm.startsWith(normRoot + '/')) {
-          return true;
-        }
-      }
+      for (const root of authorizedSearchRoots) if (reallyInside(targetPath, root)) return true;
       return false;
     }
 
@@ -1245,7 +1245,9 @@ export class PiAgentEngine implements EngineAdapter {
     }
 
     async function ensureSearchPermission(targetRoots: string[], purpose: string): Promise<SearchPermissionOutcome> {
-      const unauthRoots = targetRoots.map(r => path.resolve(r)).filter(r => !isPathAuthorized(r));
+      // The card names where the folder really is: a junction inside the workspace that points elsewhere is asked about
+      // under its real location, never under the workspace's spelling.
+      const unauthRoots = targetRoots.map(r => realLocation(r)).filter(r => !isPathAuthorized(r));
       if (unauthRoots.length === 0) return { outcome: 'granted' };
 
       // Check if existing approval for this attempt is already approved

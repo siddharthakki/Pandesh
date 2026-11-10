@@ -59,4 +59,21 @@ describe('agent folder scope covers every path argument', () => {
     expect(checkPathArguments(research, { documentPath: path.join(root, 'cv.pdf') }).allowed).toBe(false);
     expect(checkPathArguments(research, { dirPath: root }).allowed).toBe(false);
   });
+
+  it.runIf(process.platform === 'win32')('holds where a path really lands: a junction inside the folder that points outside is refused; another spelling of an inside path is allowed', () => {
+    const outside = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-path-outside-'));
+    try {
+      fs.writeFileSync(path.join(outside, 'private.txt'), 'x');
+      fs.symlinkSync(outside, path.join(root, 'link'), 'junction');
+      const coding = deriveScope(def('coding'), root, chiefDelegationScope(root), null);
+      expect(checkPathArguments(coding, { filePath: path.join(root, 'link', 'private.txt') }).allowed).toBe(false);
+      expect(checkPathArguments(coding, { dirPath: 'link' }).allowed).toBe(false);
+      expect(checkPathArguments(coding, { filePath: path.join(root, 'link', 'not-yet-there.txt') }).allowed).toBe(false);
+      fs.writeFileSync(path.join(root, 'notes.txt'), 'x');
+      expect(checkPathArguments(coding, { filePath: path.join(root, 'notes.txt').toUpperCase() }).allowed).toBe(true);
+    } finally {
+      fs.rmSync(path.join(root, 'link'), { force: true, recursive: false });
+      fs.rmSync(outside, { recursive: true, force: true });
+    }
+  });
 });
