@@ -130,7 +130,8 @@ export function permissionStatus(p: PermissionState | null | undefined): StatusL
   const lines: StatusLine[] = [];
   if (p.activeTurnMode && p.activeTurnMode !== p.mode) {
     lines.push({ text: `The running task keeps ${PERMISSION_LABELS[p.activeTurnMode]}, fixed when it started; your change applies to the next message.` });
-  } else if (p.activeTurnMode) {
+  } else if (p.activeTurnMode && p.activeTurnMode !== 'ask') {
+    // A task running in the default Ask mode needs no line: the panel would otherwise appear on every message.
     lines.push({ text: `This task runs in ${PERMISSION_LABELS[p.activeTurnMode]} mode.` });
   }
   if (p.mode === 'plan') lines.push({ text: 'Plan only: Pandesh researches and plans. Nothing is created, changed, sent or run.' });

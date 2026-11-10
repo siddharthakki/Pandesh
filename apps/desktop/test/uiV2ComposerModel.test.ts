@@ -103,4 +103,9 @@ describe('UI v2 composer — permission mode', () => {
     expect(permissionStatus(permission({ mode: 'plan', activeTurnMode: 'ask' }))[0].text)
       .toBe('The running task keeps Ask permission, fixed when it started; your change applies to the next message.');
   });
+
+  it('stays out of the way while a task runs in the default Ask mode', () => {
+    expect(permissionStatus(permission({ mode: 'ask', activeTurnMode: 'ask' }))).toEqual([]);
+    expect(permissionStatus(permission({ mode: 'plan', activeTurnMode: 'plan' }))[0].text).toBe('This task runs in Plan only mode.');
+  });
 });
