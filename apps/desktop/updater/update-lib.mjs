@@ -189,6 +189,39 @@ export function readInstalled(installRoot) {
   return { version: identity.version, buildNumber: identity.buildNumber, electron };
 }
 
+/**
+ * What the OS says about a live process: its executable and creation time. Read-only (one CIM query for one PID).
+ * Null when the process is gone or the OS will not disclose it.
+ */
+export function readProcessIdentity(pid, spawnSyncImpl = spawnSync) {
+  if (!Number.isInteger(pid) || pid <= 0) return null;
+  try {
+    const script = `$p = Get-CimInstance Win32_Process -Filter "ProcessId = ${pid}" -ErrorAction SilentlyContinue; `
+      + 'if ($p) { @{ exe = $p.ExecutablePath; created = $(if ($p.CreationDate) { $p.CreationDate.ToUniversalTime().ToString("o") } else { $null }) } | ConvertTo-Json -Compress }';
+    const out = spawnSyncImpl('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', script], { encoding: 'utf8', windowsHide: true, timeout: 10_000 });
+    const text = String(out?.stdout ?? '').trim();
+    if (!text) return null;
+    const parsed = JSON.parse(text);
+    const creationTimeMs = parsed.created ? Date.parse(parsed.created) : NaN;
+    return { executablePath: parsed.exe ? String(parsed.exe) : null, creationTimeMs: Number.isFinite(creationTimeMs) ? creationTimeMs : null };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The updater's force-stop rule. A PID taken from a file (core.json) or remembered from a spawn may by now belong to
+ * something else: Windows recycles PIDs, and a copied profile's core.json names another profile's Core. A process may
+ * be force-stopped only while it still IS the expected program (same executable) and was created no earlier than
+ * `notBeforeMs` (minus a small clock tolerance). Missing identity is a refusal, never a permission.
+ */
+export function mayForceStop(identity, expectedExecutable, notBeforeMs) {
+  if (!identity || !identity.executablePath || identity.creationTimeMs === null || identity.creationTimeMs === undefined) return false;
+  if (!Number.isFinite(notBeforeMs)) return false;
+  const same = path.resolve(identity.executablePath).toLowerCase() === path.resolve(expectedExecutable).toLowerCase();
+  return same && identity.creationTimeMs >= notBeforeMs - 2_000;
+}
+
 /** Highest applied Core migration in the user's database, 0 when there is no database yet. */
 export async function readDbSchema(dataDir) {
   const file = path.join(dataDir, 'core.db');

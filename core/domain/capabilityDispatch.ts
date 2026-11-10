@@ -48,7 +48,7 @@ import type { GovernedCapabilityRegistry } from '../runtime/governedCapability';
 import { LocalAutonomySecurityKernel } from '../security/kernel';
 import type { ExecutionGrant } from '../security/types';
 import { decidePermission, recordPermissionDecision, STANDING_AUTHORIZATION_ACTOR } from './permissionModes';
-import { agentScopeForAttempt, allowedMemoryScopes, checkEgress, checkMemoryArguments, checkPathArguments, isToolAllowed, recordScopeRefusal } from './agents';
+import { agentScopeForAttempt, allowedMemoryScopes, checkEgress, checkMemoryArguments, checkPathArguments, getAgentDefinition, isToolAllowed, recordScopeRefusal } from './agents';
 import { MEMORY_SCOPE_FILTER_ARG } from './memory';
 import { parseBaselineIdentity, type WriteBaselineIdentity, type WriteProposalPresentation } from '../runtime/writeProposal';
 import {
@@ -361,10 +361,36 @@ export function listCapabilityActions(
       invocation: matchedInvocation
         ? { id: matchedInvocation.id, status: matchedInvocation.status, evidence: matchedInvocation.evidence, exitCode: matchedInvocation.exitCode }
         : null,
+      requestedBy: requestingAgent(db, approval.attemptId),
     };
   });
 
   return { attemptId: attemptIds[0], actions };
+}
+
+/**
+ * The specialist an approval came from, or null when Pandesh itself asked (Build 161 audit: a delegated agent's card
+ * appeared in the person's conversation without saying which agent wanted to act). The approval may sit on the agent's
+ * own attempt, on an anchor that attempt owns, or on the unowned anchor of the agent's own conversation.
+ */
+function requestingAgent(db: CoreDatabase, attemptId: string): { agentId: string; agentName: string } | null {
+  try {
+    const parentId = db.get<{ parentAttemptId: string | null }>('SELECT parentAttemptId FROM attempts WHERE id = ?', [attemptId])?.parentAttemptId ?? null;
+    const scope = agentScopeForAttempt(db, attemptId) ?? (parentId ? agentScopeForAttempt(db, parentId) : null);
+    const agentId = scope?.agentId ?? db.get<{ toAgentId: string }>(
+      `SELECT h.toAgentId AS toAgentId
+         FROM attempts anchor
+         JOIN requests ar ON ar.id = anchor.requestId AND ar.routeReason = 'm38_capability_dispatch'
+         JOIN requests cr ON cr.conversationId = ar.correlationId
+         JOIN agent_handoffs h ON h.childRequestId = cr.id
+        WHERE anchor.id = ? LIMIT 1`,
+      [attemptId],
+    )?.toAgentId ?? null;
+    if (!agentId || agentId === 'chief') return null;
+    return { agentId, agentName: getAgentDefinition(db, agentId).name };
+  } catch {
+    return null;
+  }
 }
 
 export interface DispatchCapabilityInput {

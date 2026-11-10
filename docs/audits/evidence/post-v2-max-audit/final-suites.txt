@@ -1,0 +1,35 @@
+# Final verification pass — HEAD e88bdc5 (after the last code change), 2026-11-10 06:41–06:50 local, this machine (Node 24, 4 workers)
+# (an identical pass on 8df8bd4 at 06:22–06:30 gave the same results before F29 was found and fixed)
+start 2026-11-10T06:41:54.6087207+01:00 head e88bdc5
+tsc-core exit=0 seconds=7 end=2026-11-10T06:42:01.7482144+01:00
+tsc-root exit=0 seconds=6 end=2026-11-10T06:42:08.0674197+01:00
+tsc-renderer-v2 exit=0 seconds=3 end=2026-11-10T06:42:10.6793071+01:00
+core exit=0 seconds=126 end=2026-11-10T06:44:16.7857363+01:00
+core-timing exit=0 seconds=8 end=2026-11-10T06:44:25.2037359+01:00
+desktop exit=0 seconds=36 end=2026-11-10T06:45:01.5862053+01:00
+src exit=1 seconds=299 end=2026-11-10T06:50:00.2742023+01:00
+ALL DONE 2026-11-10T06:50:00.2762026+01:00
+
+## core
+ Test Files  270 passed | 8 skipped (278)
+      Tests  2679 passed | 16 skipped (2695)
+   Duration  124.47s (transform 8.96s, setup 68.35s, import 58.09s, tests 313.24s, environment 30ms)
+
+## core-timing
+ Test Files  2 passed (2)
+      Tests  42 passed (42)
+   Duration  6.88s (transform 838ms, setup 971ms, import 468ms, tests 8.49s, environment 0ms)
+
+## desktop
+ Test Files  87 passed | 1 skipped (88)
+      Tests  632 passed | 3 skipped (635)
+   Duration  34.78s (transform 4.08s, setup 22.58s, import 8.44s, tests 56.25s, environment 29.97s)
+
+## src
+ FAIL  src/test/suite/m12RetrievalIntegrationPackaging.test.ts > M12 retrieval, integration, git isolation, and packaged runtime > packages into a test-owned temporary directory and loads runtime dependencies without repository-local fallback
+ Test Files  1 failed | 351 passed | 4 skipped (356)
+      Tests  1 failed | 3417 passed | 34 skipped | 2 todo (3454)
+   Duration  296.80s (transform 14.84s, setup 85.45s, import 73.60s, tests 918.40s, environment 35.92s)
+
+## src failure classification
+m12RetrievalIntegrationPackaging 'packages into a test-owned temporary directory…': vsce's npm-ls dependency check fails on the junctioned node_modules tree (missing/extraneous packages). Reproduced identically on Build 160 source (abb0cc4) with the same modules; the branch changes no dependency manifest; CI does not run src/test/suite. Environment, not a regression.

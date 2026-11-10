@@ -6,6 +6,7 @@
 import { execFile, spawn } from 'node:child_process';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
+import { lifecycleAddress, probeOwnedCore } from '../../../../src/core-client/coreOwnership';
 
 export interface UpdateInspection {
   ok: true;
@@ -94,13 +95,19 @@ export function inspectPackage(opts: { productRoot: string; dataDir: string; nod
 
 async function coreCall<T>(dataDir: string, route: string, method: 'GET' | 'POST', body?: unknown): Promise<T | null> {
   try {
-    const record = JSON.parse(fs.readFileSync(path.join(dataDir, 'core.json'), 'utf8')) as { port?: number };
     const token = fs.readFileSync(path.join(dataDir, 'core.token'), 'utf8').trim();
-    if (!record.port || !token) return null;
-    const attempt = () => fetch(`http://127.0.0.1:${record.port}${route}`, {
+    if (!token) return null;
+    // Only this profile's own Core: a copied core.json + core.token would otherwise pause (quiesce) the ORIGINAL
+    // profile's Core. The address in the body makes Core itself refuse a call meant for another instance.
+    const ownership = await probeOwnedCore({ dataDir, token, timeoutMs: 4000 });
+    if (ownership.state !== 'owned') return null;
+    const payload = method === 'POST'
+      ? { ...(body && typeof body === 'object' ? body as Record<string, unknown> : {}), ...lifecycleAddress(ownership.info, dataDir) }
+      : undefined;
+    const attempt = () => fetch(`${ownership.baseUrl}${route}`, {
       method,
       headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-      body: body === undefined ? undefined : JSON.stringify(body),
+      body: payload === undefined ? undefined : JSON.stringify(payload),
       signal: AbortSignal.timeout(4000),
     });
     const res = await attempt().catch(() => attempt()); // a pooled keep-alive socket may have been closed by Core

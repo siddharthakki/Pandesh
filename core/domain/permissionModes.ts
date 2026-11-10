@@ -214,14 +214,39 @@ function dependenciesAboveWorkspace(workspaceRoot: string): string | null {
   }
 }
 
-/** Whether Pandesh itself recorded writing a file under the workspace (including node_modules) since `sinceIso`. */
+/**
+ * The comparable spelling of a path: its nearest existing ancestor resolved by the OS (8.3 short names, junctions,
+ * symbolic links, subst drives), the rest appended, case-folded. A file that no longer exists still resolves through
+ * its folder.
+ */
+function canonicalPathSpelling(p: string): string {
+  const tail: string[] = [];
+  let current = path.resolve(p);
+  for (;;) {
+    try {
+      return path.join(fs.realpathSync.native(current), ...[...tail].reverse()).toLowerCase();
+    } catch {
+      const parent = path.dirname(current);
+      if (parent === current) return path.resolve(p).toLowerCase();
+      tail.push(path.basename(current));
+      current = parent;
+    }
+  }
+}
+
+/**
+ * Whether Pandesh itself recorded writing a file under the workspace (including node_modules) since `sinceIso`.
+ * Build 161 audit: the grant stores the canonical workspace path, a write record keeps the spelling it was given; a
+ * lexical prefix test missed a write recorded through an 8.3 short name (GitHub's runners) or a junction, and the grant
+ * then auto-authorized code Pandesh had just changed. Both sides are compared in their canonical spelling, and a match
+ * under either spelling counts.
+ */
 function pandeshWroteUnder(db: CoreDatabase, workspaceRoot: string, sinceIso: string): boolean {
-  const prefix = path.resolve(workspaceRoot).toLowerCase();
+  const lexical = path.resolve(workspaceRoot).toLowerCase();
+  const canonical = canonicalPathSpelling(workspaceRoot);
+  const under = (p: string, root: string) => p === root || p.startsWith(root + path.sep);
   return db.all<{ absolutePath: string }>('SELECT absolutePath FROM artifacts WHERE createdAt >= ?', [sinceIso])
-    .some((a) => {
-      const p = path.resolve(a.absolutePath).toLowerCase();
-      return p === prefix || p.startsWith(prefix + path.sep);
-    });
+    .some((a) => under(path.resolve(a.absolutePath).toLowerCase(), lexical) || under(canonicalPathSpelling(a.absolutePath), canonical));
 }
 
 function canonicalDir(p: string): string | null {

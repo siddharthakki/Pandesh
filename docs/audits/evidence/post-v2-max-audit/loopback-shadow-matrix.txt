@@ -1,0 +1,4 @@
+[::] dual-stack (this machine's Ollama)  stub bind accepted             127.0.0.1 -> STUB               [::1] -> REAL
+0.0.0.0 (OLLAMA_HOST=0.0.0.0)            stub bind accepted             127.0.0.1 -> STUB               [::1] -> error ECONNREFUSED
+127.0.0.1 (Ollama default)               stub bind refused (EADDRINUSE) 127.0.0.1 -> REAL               [::1] -> error ECONNREFUSED
+[::] IPv6-only                           stub bind accepted             127.0.0.1 -> STUB               [::1] -> REAL

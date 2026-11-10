@@ -790,7 +790,7 @@ async function createWindow(): Promise<void> {
     });
     await mobileServer.start();
     const info = mobileServer.getPairingInfo();
-    hostLog(`Pandesh Mobile server running at ${info.url} (PIN: ${info.code})`);
+    hostLog(MobileServer.logLine(info));
   } catch (err) {
     hostLog(`mobile server start failed: ${(err as Error).message}`);
   }

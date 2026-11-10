@@ -158,6 +158,14 @@ afterEach(async () => {
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
+/**
+ * The validation loops run several model turns, approvals and resumes against a real executor. They take ~0.2 s here
+ * and 3–4 s on a normal CI run, but 17–39 s on a loaded Windows runner (Build 161 PR: unrelated files slowed up to 7×
+ * in the same run), past the 30 s these tests used to set themselves. CI's own limit for Core tests is 120 s; a hang
+ * still fails, runner load no longer does.
+ */
+const VALIDATION_LOOP_TIMEOUT_MS = 120_000;
+
 describe('A. validation completion invariant', () => {
   it('validation PASS may complete, with the success record', async () => {
     backend = new ScriptedBackend((request) => (hasToolResult(request) ? { content: 'Changed note.txt.' } : propose('note.txt', 'line one\nline two changed\nline three\n')));
@@ -171,7 +179,7 @@ describe('A. validation completion invariant', () => {
     const types = eventTypes(turn.attemptId);
     expect(types).toContain('final_verification_recorded');
     expect(types).not.toContain('validation_repair_started');
-  }, 30000);
+  }, VALIDATION_LOOP_TIMEOUT_MS);
 
   it('validation FAIL cannot complete: bounded repair, then the existing exhausted failure, and no success event', async () => {
     validate = () => ({ status: 'failed', exitCode: 1, output: 'error TS2322: compile broke' });
@@ -195,7 +203,7 @@ describe('A. validation completion invariant', () => {
     expect(assistant).toContain('NOT complete');
     // The model was told to repair, with the failure still in front of it.
     expect(backend.requests.some((request) => sawMarker(request, REPAIR_MARKER))).toBe(true);
-  }, 30000);
+  }, VALIDATION_LOOP_TIMEOUT_MS);
 
   it('failed validation enters repair, and a repair that passes validation then completes', async () => {
     validate = (cwd) => (fs.readFileSync(path.join(cwd, 'note.txt'), 'utf8').includes('BROKEN')
@@ -219,7 +227,7 @@ describe('A. validation completion invariant', () => {
     expect(countOf(types, 'validation_repair_started')).toBe(1);
     expect(types).not.toContain('validation_repair_exhausted');
     expect(types).toContain('final_verification_recorded');
-  }, 30000);
+  }, VALIDATION_LOOP_TIMEOUT_MS);
 });
 
 describe('B. suspicious whole-file replacement guard', () => {

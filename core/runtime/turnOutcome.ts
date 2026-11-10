@@ -152,12 +152,15 @@ export function evaluateTurnOutcome(calls: readonly TurnToolCall[]): TurnOutcome
 
   for (const [tool, call] of completed) {
     const full = resultText(call.result);
-    // A hand-off's own status is its first line ("RESULT FROM THE … AGENT (completed …)" or "NOT DONE: …"). The rest is
-    // the specialist's report, which may legitimately say "declined", "rejected" or "awaiting approval" about its
-    // subject (live revenue run 2026-11-09: a completed offer was judged "did not happen" for that reason).
-    const text = tool === 'delegate_to_agent' ? full.split('\n')[0] : full;
     const errored = Boolean((call.result as ToolResultShape | undefined)?.isError);
-    if (REFUSED_PATTERN.test(text)) {
+    // A refusal is what a tool says about itself: its first line, or the text of an error result. The rest of a result
+    // is its output — a hand-off's report (live revenue run 2026-11-09: a completed offer was judged "did not happen"),
+    // a test run, a file name — which may legitimately say "declined", "refused" or "denied" about its subject (Build 161
+    // audit: a passing test run that printed "connection refused" was reported as refused). A result that declares its
+    // own success is performed.
+    const declaredSuccess = !errored && (call.result as { details?: { success?: unknown } } | undefined)?.details?.success === true;
+    const text = tool === 'delegate_to_agent' || !errored ? full.split('\n')[0] : full;
+    if (!declaredSuccess && REFUSED_PATTERN.test(text)) {
       if (!refused.includes(tool)) refused.push(tool);
     } else if (errored) {
       if (!failed.includes(tool)) failed.push(tool);

@@ -43,12 +43,19 @@ to, executes it, records the result and decides what the turn actually achieved.
   without your choice.
 - **Scoped agents.** Delegation can only narrow permissions. "Never" tools stay unavailable, and "always asks" actions
   (install, push) always ask.
+- **Scoped memory.** Each agent recalls only the memory scopes its profile declares, and a hand-off passes on only the
+  facts the receiving agent may read. Core refuses a hand-off brief that repeats a stored fact the receiver may not read.
 - **Fail-closed approvals.** An unanswered or expired approval means no action.
 
 ## Known gaps
 
-- Agent `memoryScopes` are declared per agent but not yet enforced on memory recall.
-- Each conversation keeps a governed-capability anchor attempt in state `running`, and those anchors are never closed.
-- Electron 33 is end-of-life, and upgrading it is the next release blocker.
+- `task` and `project` memory is not yet bound to a task or project id.
+- Agent limits (`maxSteps`, `maxWallSeconds`) are declared per agent but not enforced.
+- Private text in a web query is recognised by four-word overlap, so a two- or three-word private name in a short query
+  is not caught, and the hand-off brief check is a word-pair heuristic. Internet-capable specialists don't receive
+  user-scope memory or reminders.
+- URL arguments of network tools are not checked for private text.
+
+The full list, with the risk of each, is in the [Build 161 audit](audits/POST_V2_MAX_AUDIT.md#j-residual-risks-not-fixed-in-build-161).
 
 See also: [UI v2 design documents](architecture/pandesh-ui-v2/), [acceptance runs](architecture/pandesh-ui-v2/real-world-challenge/README.md).

@@ -142,8 +142,11 @@ describe('Pandesh P0 — Nonblocking Background Task Delegation Suite', () => {
     });
     const elapsedMs = Date.now() - startTime;
 
-    // 1. Immediately frees the conversation (fast non-blocking return)
-    expect(elapsedMs).toBeLessThan(500);
+    // 1. Immediately frees the conversation: the turn returns without doing the extraction. Asserted on what happened,
+    // not on a wall-clock budget — `elapsedMs < 500` failed on GitHub's 2-vCPU runners at 1061 ms although the turn
+    // did no background work (Build 161 audit). The generous bound only catches a real hang.
+    expect(searchCalled).toBe(false);
+    expect(elapsedMs).toBeLessThan(15_000);
     expect(result.success).toBe(true);
     expect(result.reply).toBe("I've started your Gmail contract extraction. It may take some time. I'll notify you when it's finished. You can continue chatting.");
 

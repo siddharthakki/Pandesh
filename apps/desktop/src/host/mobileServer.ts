@@ -147,6 +147,15 @@ export class MobileServer {
     return '127.0.0.1';
   }
 
+  /**
+   * The line the host log records for a started server: where it listens, never the pairing PIN. The PIN persists
+   * across starts and pairs a phone from the LAN; written into desktop-host.log on every start it was readable by any
+   * local process and by Pandesh's own file tools (Build 161 audit).
+   */
+  public static logLine(info: Pick<MobilePairingInfo, 'ip' | 'port'>): string {
+    return `Pandesh Mobile server running at http://${info.ip}:${info.port}/ (pairing PIN shown in the app, not logged)`;
+  }
+
   public getPairingInfo(): MobilePairingInfo {
     // A loopback-only instance is not reachable from a phone; do not advertise a LAN address it does not listen on.
     const ip = this.host === '0.0.0.0' || this.host === '::' ? this.getPrimaryIp() : this.host;

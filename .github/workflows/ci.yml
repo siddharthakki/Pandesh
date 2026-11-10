@@ -13,18 +13,15 @@ concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
-# Seven Core test files exercise wall-clock behaviour (lease expiry, security-grant windows, a live headless browser,
-# real git worktrees) that failed on GitHub's 2-vCPU windows-latest runners even with 120 s budgets, while passing on
-# developer machines and in the scheduled watchdog (docs/WATCHDOG.md), which runs the full suite. They run here in a
-# separate, non-blocking job so their results stay visible instead of being dropped.
+# Build 161 audit: five of the seven files once listed here were not timing problems. GitHub's Windows runners expose
+# TEMP as an 8.3 short path (C:\Users\RUNNER~1\...), and four product checks compared a short spelling with the full one
+# (a standing authorization that failed open, a governed write refused as "outside the workspace", a Kandev worktree
+# "of a different repository"); the fifth asserted a 500 ms wall clock. Reproduced locally with TEMP set to a short
+# path, fixed, and back in the required job. What remains here depends on the runner itself: a live headless browser
+# (missionVerification) and runtime.test.ts, which has not failed since but stays visible until it is proven stable.
 env:
   TIMING_SENSITIVE: >-
-    core/test/backgroundTaskDelegation.test.ts
-    core/test/governedNewFileCreation.test.ts
-    core/test/kandevStoryAcceptance.test.ts
-    core/test/m53ReadEvidence.test.ts
     core/test/missionVerification.test.ts
-    core/test/permissionModes.test.ts
     core/test/runtime.test.ts
 
 jobs:

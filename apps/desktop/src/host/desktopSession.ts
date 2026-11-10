@@ -5,6 +5,7 @@ import * as path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { CoreLauncher, defaultCorePath } from '../../../../src/core-client/CoreLauncher';
 import { CoreClient } from '../../../../src/core-client/CoreClient';
+import { discardForeignDiscoveryRecord, lifecycleAddress, probeOwnedCore } from '../../../../src/core-client/coreOwnership';
 import type { RuntimeEventRecord, RuntimeTokenFrame, ConnectorId, ApprovalRecord, CapabilityDispatchResult } from '../../../../core/shared/wireTypes';
 import {
   assertLocalModelInstalled,
@@ -2915,61 +2916,71 @@ export class DesktopSession {
       }
     }
 
-    // 2. Authenticated shutdown of child Core process
-    const discoveryPath = path.join(this.dataDir, 'core.json');
-    let coreRecord: { pid?: number; port?: number; instanceId?: string } | undefined;
-    try {
-      if (fs.existsSync(discoveryPath)) {
-        coreRecord = JSON.parse(fs.readFileSync(discoveryPath, 'utf8'));
+    // 2. Authenticated shutdown of THIS profile's Core. core.json and
+    //    core.token are plain files: a copied profile carries both, and
+    //    "the record points there and the token works" would stop the ORIGINAL
+    //    profile's Core (Build 160 rehearsal incident). Only a Core that
+    //    proves it serves this data directory is asked to stop.
+    const ownership = await probeOwnedCore({ dataDir: this.dataDir, token: this.token, timeoutMs: 2_000 });
+    if (ownership.state === 'foreign') {
+      this.options.log?.(
+        `core.json names Core ${ownership.info.instanceId} on port ${ownership.record.port}, which serves another profile; leaving it running`,
+      );
+      discardForeignDiscoveryRecord(this.dataDir, ownership.record);
+    } else if (ownership.state === 'unauthenticated') {
+      this.options.log?.(
+        `The Core on port ${ownership.record.port} rejected this profile's token; it cannot be proven to be ours, so it is left running`,
+      );
+    } else if (ownership.state !== 'absent') {
+      const coreRecord = ownership.record;
+      if (ownership.state === 'owned') {
+        try {
+          this.options.log?.(
+            `Requesting authenticated Core shutdown at port ${coreRecord.port} (instance=${ownership.info.instanceId})`,
+          );
+          const res = await fetch(`${ownership.baseUrl}/v1/core/shutdown`, {
+            method: 'POST',
+            headers: {
+              Authorization: `Bearer ${this.token}`,
+              'Content-Type': 'application/json',
+              'Idempotency-Key': `shutdown-desktop-${Date.now()}`,
+              'X-Client-Id': this.clientId,
+            },
+            // Core refuses (409) a shutdown that names another instance or profile.
+            body: JSON.stringify(lifecycleAddress(ownership.info, this.dataDir)),
+          });
+          if (!res.ok && res.status !== 202) this.options.log?.(`Core refused the shutdown request (HTTP ${res.status})`);
+        } catch (err) {
+          this.options.log?.(`Core shutdown request error: ${(err as Error).message}`);
+        }
+      } else {
+        this.options.log?.(`Core recorded on port ${coreRecord.port} is not answering; checking whether its process is still running`);
       }
-    } catch {}
 
-    if (coreRecord?.port) {
-      try {
-        this.options.log?.(
-          `Requesting authenticated Core shutdown at port ${coreRecord.port} (instance=${coreRecord.instanceId ?? 'unknown'})`,
-        );
-        await fetch(`http://127.0.0.1:${coreRecord.port}/v1/core/shutdown`, {
-          method: 'POST',
-          headers: {
-            Authorization: `Bearer ${this.token}`,
-            'Content-Type': 'application/json',
-            'Idempotency-Key': `shutdown-desktop-${Date.now()}`,
-            'X-Client-Id': this.clientId,
-          },
-          body: '{}',
-        });
-      } catch (err) {
-        this.options.log?.(`Core shutdown request error: ${(err as Error).message}`);
-      }
-
-      // Wait for Core process to exit
+      // Wait for the Core process to exit.
+      const pidAlive = (pid: number) => {
+        if (!Number.isInteger(pid) || pid <= 0) return false;
+        try {
+          process.kill(pid, 0);
+          return true;
+        } catch {
+          return false;
+        }
+      };
       const deadline = Date.now() + timeoutMs;
-      while (Date.now() < deadline) {
-        const stillExists = fs.existsSync(discoveryPath);
-        let pidAlive = false;
-        if (coreRecord.pid && Number.isInteger(coreRecord.pid) && coreRecord.pid > 0) {
-          try {
-            process.kill(coreRecord.pid, 0);
-            pidAlive = true;
-          } catch {
-            pidAlive = false;
-          }
-        }
-        if (!stillExists && !pidAlive) {
-          this.options.log?.(`Verified Core process ${coreRecord.pid ?? ''} has exited`);
-          break;
-        }
+      while (Date.now() < deadline && pidAlive(coreRecord.pid)) {
         await new Promise((r) => setTimeout(r, 150));
       }
+      if (!pidAlive(coreRecord.pid)) this.options.log?.(`Verified Core process ${coreRecord.pid} has exited`);
 
-      // If still alive after timeout, check PortProcessManager for verified owned cleanup.
-      // The port manager verifies ownership (provenance + creation time +
-      // executable path) before terminating anything; an unproven target is
-      // refused, so this can never close an unrelated application.
-      if (coreRecord.pid) {
+      // If still alive after timeout, ask the PortProcessManager for verified owned cleanup.
+      // The ownership boundary verifies provenance recorded by THIS profile,
+      // creation time and executable path before terminating anything; an
+      // unproven target — including one named only by a copied ledger — is
+      // refused, so this can never close an unrelated application or another
+      // profile's Core.
+      if (pidAlive(coreRecord.pid)) {
         try {
-          process.kill(coreRecord.pid, 0);
           this.options.log?.(`Core process ${coreRecord.pid} did not exit within ${timeoutMs}ms; checking owned service cleanup`);
           const portManager = createPortProcessManager({ dataDir: this.dataDir });
           const stopped = await portManager.stopOwned('karkeDikha-core');

@@ -153,6 +153,10 @@ describe('Chief → specialist delegation', () => {
     const approval = createApproval(db, { attemptId: started.attemptId!, kind: 'mutation', summary: { toolName: 'run_checks', cardText: 'run node calc.test.js' }, actor: 'test' } as never);
     const listed = listCapabilityActions(db, { correlationId: parent.request.conversationId!, clientId: 'test-client' });
     expect(listed.actions.find((a) => a.approvalId === approval.id)).toMatchObject({ attemptId: started.attemptId, toolName: 'run_checks' });
+    // Build 161 audit: the card shows WHICH agent is asking, not only what.
+    expect(listed.actions.find((a) => a.approvalId === approval.id)?.requestedBy).toEqual({ agentId: 'coding', agentName: 'Coding' });
+    const own = createApproval(db, { attemptId: parent.attempt.id, kind: 'mutation', summary: { toolName: 'write_file' }, actor: 'test' } as never);
+    expect(listCapabilityActions(db, { correlationId: parent.request.conversationId!, clientId: 'test-client' }).actions.find((a) => a.approvalId === own.id)?.requestedBy).toBeNull();
     const other = submit('unrelated');
     expect(listCapabilityActions(db, { correlationId: other.request.conversationId!, clientId: 'test-client' }).actions.some((a) => a.approvalId === approval.id)).toBe(false);
   });
@@ -179,6 +183,7 @@ describe('Chief → specialist delegation', () => {
     expect(pending.outcome).toBe('approval_required');
     const listed = listCapabilityActions(db, { correlationId: parent.request.conversationId!, clientId: 'test-client' });
     expect(listed.actions.some((a) => a.attemptId === pending.attemptId && a.actionable)).toBe(true);
+    expect(listed.actions.find((a) => a.attemptId === pending.attemptId)?.requestedBy).toEqual({ agentId: 'personal', agentName: 'Personal' });
     const other = submit('unrelated');
     expect(listCapabilityActions(db, { correlationId: other.request.conversationId!, clientId: 'test-client' }).actions.some((a) => a.attemptId === pending.attemptId)).toBe(false);
   });

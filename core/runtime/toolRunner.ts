@@ -34,10 +34,15 @@ import type { ExecutionGrant } from '../security/types';
 import { LocalAutonomySecurityKernel } from '../security/kernel';
 import { createSanitizedChildEnvironment } from '../security/childEnvironment';
 
-/** True when `candidate` really resolves (symlinks included) inside `root`. */
+/**
+ * True when `candidate` really resolves (symlinks included) inside `root`. Both sides go through the OS resolver:
+ * the JavaScript `realpathSync` keeps 8.3 short names (C:\Users\RUNNER~1\…) while a path recovered from disk is spelled
+ * in full, so an approved write into a new folder was refused as "outside the workspace" (Build 161 audit; the CI-only
+ * governedNewFileCreation / m53ReadEvidence failures).
+ */
 function isInsideWorkspace(root: string, candidate: string): boolean {
   try {
-    const rel = path.relative(fs.realpathSync(root), fs.realpathSync(candidate));
+    const rel = path.relative(fs.realpathSync.native(root), fs.realpathSync.native(candidate));
     return rel === '' || (!rel.startsWith('..') && !path.isAbsolute(rel));
   } catch {
     return false;

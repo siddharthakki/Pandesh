@@ -1094,7 +1094,14 @@ interface ReconciledWorktree { branch: string; head: string; ahead: number; file
 function reconcileWorktree(spec: DevStorySpec, session: KandevSession): ReconciledWorktree | { error: string } {
   const worktree = session.worktree_path;
   if (!worktree || !fs.existsSync(path.join(worktree, '.git'))) return { error: 'the worker has no worktree on disk' };
-  const norm = (p: string) => path.resolve(p).replace(/\\/g, '/').toLowerCase();
+  // Compared where the paths really are: git reports the repository's full spelling, a story may hold an 8.3 short
+  // or junction spelling of the same folder (Build 161 audit; the CI-only kandevStoryAcceptance failure). A junction
+  // that points elsewhere now resolves to where it points, which only makes these checks stricter.
+  const norm = (p: string) => {
+    let resolved = path.resolve(p);
+    try { resolved = fs.realpathSync.native(resolved); } catch { /* compared as spelled */ }
+    return resolved.replace(/\\/g, '/').toLowerCase();
+  };
   if (!norm(worktree).startsWith(`${norm(path.join(kandevHome(), 'tasks'))}/`)) return { error: 'the worktree is not one of Kandev\'s task worktrees' };
   const common = git(worktree, ['rev-parse', '--path-format=absolute', '--git-common-dir']).out;
   if (!common || norm(common) !== norm(path.join(spec.repoPath, '.git'))) return { error: 'the worktree belongs to a different repository than this story\'s' };

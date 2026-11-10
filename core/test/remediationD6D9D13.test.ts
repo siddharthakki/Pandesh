@@ -40,6 +40,21 @@ describe('D6: idle conversation capability anchors', () => {
     // Idempotent within the new generation.
     expect(ensureCapabilityAttempt(db, { correlationId: 'conv_a', actor: 'core', clientId: 'desktop' })).toBe(second);
   });
+
+  // Build 161 audit: production held anchors parked in waiting_for_approval whose approvals had all expired.
+  it('also settles an anchor left waiting after every approval on it was answered or expired, but never one still pending', () => {
+    const stuck = ensureCapabilityAttempt(db, { correlationId: 'conv_stuck', actor: 'core', clientId: 'desktop' });
+    const live = ensureCapabilityAttempt(db, { correlationId: 'conv_live', actor: 'core', clientId: 'desktop' });
+    const now = new Date().toISOString();
+    for (const [anchor, status] of [[stuck, 'expired'], [live, 'pending']] as const) {
+      db.run("UPDATE attempts SET status = 'waiting_for_approval' WHERE id = ?", [anchor]);
+      db.run(`INSERT INTO approvals (id, attemptId, kind, status, requestedAt, resolvedAt, summary, revision) VALUES (?, ?, 'mutation', ?, ?, ?, '{}', 1)`,
+        [`appr_${anchor}`, anchor, status, now, status === 'pending' ? null : now]);
+    }
+    expect(settleIdleCapabilityAnchorsOnBoot(db)).toEqual([stuck]);
+    expect(getAttempt(db, stuck).status).toBe('completed');
+    expect(getAttempt(db, live).status).toBe('waiting_for_approval');
+  });
 });
 
 describe('D9: Auto routing only selects what is installed', () => {

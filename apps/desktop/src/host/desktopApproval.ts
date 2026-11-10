@@ -27,7 +27,8 @@ export function toDesktopApprovalCard(action: CapabilityActionRestoreEntry): Des
     approvalId: action.approvalId,
     gate: action.kind,
     toolName: action.toolName,
-    scope: scopeSummary(action),
+    // Build 161 audit: a delegated agent's card says which agent is asking.
+    scope: `${action.requestedBy ? `${action.requestedBy.agentName} agent asks: ` : ''}${scopeSummary(action)}`,
     paths: affectedPaths(action),
     detail: scopeDetail(action),
   };

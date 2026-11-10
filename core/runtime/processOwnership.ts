@@ -39,6 +39,7 @@ import * as crypto from 'node:crypto';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { createSanitizedChildEnvironment } from '../security/childEnvironment';
+import { sameDataDir } from '../env/dataDir';
 
 /** What the OS can tell us about a live process. */
 export interface ProcessIdentitySnapshot {
@@ -70,6 +71,13 @@ export interface OwnershipProvenance {
   recordedAt: string;
   /** Which internal component recorded it. */
   source: string;
+  /**
+   * The profile (data directory) whose ledger recorded the launch. A ledger
+   * copied along with a profile still carries the original owner token, so
+   * the token alone cannot tell "Pandesh started it" from "the profile I was
+   * copied from started it". Absent on records written by Build 160 and earlier.
+   */
+  dataDir?: string;
 }
 
 /** What the caller believes about the process it wants to terminate. */
@@ -132,6 +140,12 @@ export function verifyProcessOwnership(input: {
   provenance: OwnershipProvenance | null;
   /** The owner token of the verifier; a provenance record from another owner is not ours. */
   currentOwnerToken: string;
+  /**
+   * The verifier's data directory. When given, the provenance must have been
+   * recorded for this same profile: a record without a profile binding, or
+   * from another profile's (copied) ledger, is refused.
+   */
+  currentDataDir?: string;
   creationTimeToleranceMs?: number;
   spawnWindowBeforeMs?: number;
   spawnWindowAfterMs?: number;
@@ -153,6 +167,14 @@ export function verifyProcessOwnership(input: {
   }
   if (provenance.pid !== expectation.pid) {
     return refuse('provenance_mismatch', `ownership provenance for pid ${expectation.pid} records a different pid (${provenance.pid})`);
+  }
+  if (input.currentDataDir !== undefined) {
+    if (!provenance.dataDir) {
+      return refuse('provenance_mismatch', `ownership provenance for pid ${expectation.pid} names no profile (recorded by an older build); it cannot prove this profile started the process`);
+    }
+    if (!sameDataDir(provenance.dataDir, input.currentDataDir)) {
+      return refuse('provenance_mismatch', `ownership provenance for pid ${expectation.pid} was recorded by another profile (a copied ledger); this profile did not start it`);
+    }
   }
   if (!identity) {
     return refuse('identity_unavailable', `could not read the identity of pid ${expectation.pid}; missing identity information is a refusal`);
@@ -298,16 +320,32 @@ function identityQueryScript(pid: number): string {
   ].join('\n');
 }
 
+/**
+ * No usable answer from the OS: the query printed nothing (it does so for a process that is gone, but also when it
+ * timed out or failed) or something unreadable. Whether the process exists is checked directly, so a slow query is not
+ * mistaken for "not running" (Build 161 PR #47 CI: a cold PowerShell on a loaded runner timed out, the live Core was
+ * reported gone, and its service record was dropped as stale). A live process with an unreadable identity is
+ * "identity unavailable": still a refusal — nothing is killed — but the record is kept for a later attempt.
+ */
+function unreadableIdentity(pid: number): ProcessIdentitySnapshot {
+  let alive = false;
+  try {
+    process.kill(pid, 0);
+    alive = true;
+  } catch (err) {
+    alive = (err as NodeJS.ErrnoException).code === 'EPERM';
+  }
+  return { pid, alive, executablePath: null, creationTimeMs: null, commandLine: null };
+}
+
 function parseIdentityOutput(pid: number, output: string): ProcessIdentitySnapshot {
   const trimmed = output.trim();
-  if (!trimmed) {
-    return { pid, alive: false, executablePath: null, creationTimeMs: null, commandLine: null };
-  }
+  if (!trimmed) return unreadableIdentity(pid);
   let parsed: { pid?: number; exe?: string | null; cmd?: string | null; created?: string | null };
   try {
     parsed = JSON.parse(trimmed) as typeof parsed;
   } catch {
-    return { pid, alive: false, executablePath: null, creationTimeMs: null, commandLine: null };
+    return unreadableIdentity(pid);
   }
   const creationTimeMs = parsed.created ? Date.parse(parsed.created) : NaN;
   return {
@@ -362,6 +400,8 @@ export function createWindowsProcessIdentityProviderSync(
  */
 export function createWindowsProcessIdentityProvider(
   spawnImpl: typeof spawn = spawn,
+  /** How long the OS query may take before the identity counts as unreadable (a refusal, never a permission). */
+  timeoutMs: number = IDENTITY_QUERY_TIMEOUT_MS,
 ): ProcessIdentityProvider {
   return async (pid: number): Promise<ProcessIdentitySnapshot> => {
     if (!Number.isInteger(pid) || pid <= 0) {
@@ -387,7 +427,7 @@ export function createWindowsProcessIdentityProvider(
         const timer = setTimeout(() => {
           try { child.kill(); } catch { /* best effort */ }
           finish('');
-        }, IDENTITY_QUERY_TIMEOUT_MS);
+        }, timeoutMs);
         timer.unref?.();
         child.stdout?.on('data', (chunk: Buffer) => { out += chunk.toString('utf8'); });
         child.stderr?.on('data', () => { /* ignore */ });
@@ -470,6 +510,7 @@ export function createProcessOwnershipBoundary(
         executablePath: input.executablePath ?? null,
         recordedAt: new Date(now()).toISOString(),
         source: input.source,
+        dataDir: options.dataDir,
       };
       return ledger.record(provenance);
     },
@@ -487,6 +528,7 @@ export function createProcessOwnershipBoundary(
         identity,
         provenance,
         currentOwnerToken: options.ownerToken,
+        currentDataDir: options.dataDir,
       });
     },
 
@@ -503,6 +545,7 @@ export function createProcessOwnershipBoundary(
         identity,
         provenance,
         currentOwnerToken: options.ownerToken,
+        currentDataDir: options.dataDir,
       });
       if (!verdict.verified) {
         return { terminated: false, reason: verdict.reason, verdict };

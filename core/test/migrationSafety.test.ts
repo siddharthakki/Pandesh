@@ -1,0 +1,133 @@
+/**
+ * P0 (Build 161 audit): schema upgrades must be reversible and a newer schema must never be run by an older Core.
+ *
+ * - Core migrated an existing database on first start without any backup (the `migration-backups` folder was defined
+ *   but never used); only the in-app updater copied core.db, the full installer did not. A faulty migration had no
+ *   automatic way back.
+ * - runMigrations applied only the migrations it knew and silently ignored newer ones already recorded, so an older
+ *   build ran on a newer database (the rollback instructions could only say "never do this").
+ */
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { DatabaseSync } from 'node:sqlite';
+import * as fs from 'node:fs';
+import * as os from 'node:os';
+import * as path from 'node:path';
+import { openDatabase } from '../db/connection';
+import { MIGRATIONS } from '../db/migrations';
+import { openCoreDatabase } from '../db/openCore';
+import { CoreDatabaseFailedError } from '../db/preflight';
+
+let dir: string;
+const latest = MIGRATIONS[MIGRATIONS.length - 1].version;
+beforeEach(() => { dir = fs.mkdtempSync(path.join(os.tmpdir(), 'migration-safety-')); });
+afterEach(() => { fs.rmSync(dir, { recursive: true, force: true }); });
+
+/** A database exactly as the previous build left it: every migration but the last. */
+function previousBuildDatabase(file: string): void {
+  const db = openDatabase(file);
+  for (const m of MIGRATIONS.slice(0, -1)) {
+    db.exec(m.sql);
+    db.run('INSERT OR IGNORE INTO schema_migrations (version, description, appliedAt, checksum) VALUES (?, ?, ?, ?)', [m.version, m.description, new Date().toISOString(), 'test']);
+  }
+  db.run("INSERT INTO conversations (id, mode, title, createdAt, updatedAt, revision) VALUES ('conv_keep', 'baat_kar', 'keep me', '2026-11-09T00:00:00Z', '2026-11-09T00:00:00Z', 1)");
+  db.close();
+}
+
+function schemaOf(file: string): number {
+  const db = new DatabaseSync(file, { readOnly: true });
+  try { return Number((db.prepare('SELECT MAX(version) AS v FROM schema_migrations').get() as { v: number }).v); } finally { db.close(); }
+}
+
+describe('schema upgrade safety', () => {
+  it('takes a verified backup of the previous schema before migrating an existing database', () => {
+    const file = path.join(dir, 'core.db');
+    previousBuildDatabase(file);
+    const { db, migrationsApplied } = openCoreDatabase(file);
+    db.close();
+    expect(migrationsApplied).toEqual([latest]);
+    const backups = fs.readdirSync(path.join(dir, 'migration-backups')).filter((f) => f.endsWith('.db'));
+    expect(backups).toHaveLength(1);
+    const backup = path.join(dir, 'migration-backups', backups[0]);
+    expect(backups[0]).toContain(`schema${latest - 1}`);
+    expect(schemaOf(backup)).toBe(latest - 1);
+    const copy = new DatabaseSync(backup, { readOnly: true });
+    expect(copy.prepare("SELECT title FROM conversations WHERE id = 'conv_keep'").get()).toEqual({ title: 'keep me' });
+    expect(Object.values(copy.prepare('PRAGMA quick_check').get() as object)[0]).toBe('ok');
+    copy.close();
+    expect(schemaOf(file)).toBe(latest);
+  });
+
+  it('keeps only the newest backups, by age (not by name)', () => {
+    const file = path.join(dir, 'core.db');
+    const backups = path.join(dir, 'migration-backups');
+    fs.mkdirSync(backups);
+    const old = (name: string, ageMin: number) => {
+      fs.writeFileSync(path.join(backups, name), 'old');
+      const t = new Date(Date.now() - ageMin * 60_000);
+      fs.utimesSync(path.join(backups, name), t, t);
+    };
+    old('core-schema100-2026-01-01T00-00-00-000Z.db', 30); // sorts before "schema46" by name, but is the newest old one
+    old('core-schema45-2026-01-01T00-00-00-000Z.db', 90);
+    old('core-schema44-2026-01-01T00-00-00-000Z.db', 120);
+    previousBuildDatabase(file);
+    openCoreDatabase(file, { keepBackups: 2 }).db.close();
+    const left = fs.readdirSync(backups).sort();
+    expect(left).toHaveLength(2);
+    expect(left.some((n) => n.startsWith(`core-schema${latest - 1}-`))).toBe(true);
+    expect(left).toContain('core-schema100-2026-01-01T00-00-00-000Z.db');
+  });
+
+  it('a backup that cannot be taken blocks the upgrade: nothing is migrated and the database is unchanged', () => {
+    const file = path.join(dir, 'core.db');
+    previousBuildDatabase(file);
+    fs.writeFileSync(path.join(dir, 'migration-backups'), 'a file where the backup folder should be');
+    const before = fs.readFileSync(file);
+    expect(() => openCoreDatabase(file)).toThrow(CoreDatabaseFailedError);
+    expect(() => openCoreDatabase(file)).toThrow(/could not take a verified backup.*Nothing was migrated/);
+    expect(schemaOf(file)).toBe(latest - 1);
+    expect(fs.readFileSync(file).equals(before)).toBe(true);
+  });
+
+  it('the backup restores on its own: as a fresh copy it upgrades again, and put back in place it is the previous build\'s database', () => {
+    const file = path.join(dir, 'core.db');
+    previousBuildDatabase(file);
+    const { db, preMigrationBackup } = openCoreDatabase(file);
+    db.close();
+    expect(preMigrationBackup).toBeTruthy();
+    // Independent of the original and its WAL: a copy elsewhere opens, upgrades and keeps the data.
+    const elsewhere = path.join(dir, 'restore-test', 'core.db');
+    fs.mkdirSync(path.dirname(elsewhere));
+    fs.copyFileSync(preMigrationBackup!, elsewhere);
+    const restored = openCoreDatabase(elsewhere);
+    expect(restored.migrationsApplied).toEqual([latest]);
+    expect(restored.db.get("SELECT title FROM conversations WHERE id = 'conv_keep'")).toEqual({ title: 'keep me' });
+    restored.db.close();
+    // Rollback in place: the upgraded database is replaced by the backup, which an older build reads as its own.
+    for (const suffix of ['', '-wal', '-shm']) fs.rmSync(`${file}${suffix}`, { force: true });
+    fs.copyFileSync(preMigrationBackup!, file);
+    expect(schemaOf(file)).toBe(latest - 1);
+    const rolledBack = new DatabaseSync(file, { readOnly: true });
+    expect(rolledBack.prepare("SELECT title FROM conversations WHERE id = 'conv_keep'").get()).toEqual({ title: 'keep me' });
+    rolledBack.close();
+  });
+
+  it('takes no backup for a new database or one already at the current schema', () => {
+    const file = path.join(dir, 'core.db');
+    openCoreDatabase(file).db.close();
+    openCoreDatabase(file).db.close();
+    expect(fs.existsSync(path.join(dir, 'migration-backups'))).toBe(false);
+  });
+
+  it('refuses a database written by a newer Pandesh, and changes nothing in it', () => {
+    const file = path.join(dir, 'core.db');
+    openCoreDatabase(file).db.close();
+    const raw = new DatabaseSync(file);
+    raw.prepare('INSERT INTO schema_migrations (version, description, appliedAt, checksum) VALUES (?, ?, ?, ?)').run(latest + 1, 'from a newer build', new Date().toISOString(), 'x');
+    raw.close();
+    const before = fs.readFileSync(file);
+    expect(() => openCoreDatabase(file)).toThrow(CoreDatabaseFailedError);
+    expect(() => openCoreDatabase(file)).toThrow(/newer Pandesh/);
+    expect(schemaOf(file)).toBe(latest + 1);
+    expect(fs.readFileSync(file).equals(before)).toBe(true);
+  });
+});

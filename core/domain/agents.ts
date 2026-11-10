@@ -15,10 +15,12 @@
  * authorization. The scope is frozen into `agent_runs` when the request is
  * created, so a later edit of a definition never changes a run in flight.
  */
+import * as fs from 'node:fs';
 import * as path from 'node:path';
 import type { CoreDatabase } from '../db/connection';
 import { CoreError } from './errors';
 import { newId, nowIso } from './ids';
+import { reallyInside } from '../platform/realLocation';
 
 export type MemoryAccess = 'read' | 'read_write';
 export type Egress = 'none' | 'approval' | { domains: string[] };
@@ -203,20 +205,43 @@ export function isToolAllowed(scope: EffectiveScope, toolName: string): { allowe
 }
 
 const PATH_KEYS = ['path', 'filePath', 'file', 'directory', 'dir', 'folder', 'root', 'roots', 'source', 'destination', 'target', 'cwd', 'paths', 'workspace'];
+/**
+ * Every argument NAMED like a filesystem location is checked, not only the fixed list above: the tools' own parameters
+ * are dirPath, searchRoots, searchRoot, projectPath, workspacePath, documentPath, repoPath (Build 161 audit — these
+ * skipped the gate), and a model may use file_path or outputFile.
+ */
+const PATH_KEY_PATTERN = /(?:path|paths|dir|dirs|directory|directories|folder|folders|root|roots|file|files)$/i;
+/** Named like a path but not a filesystem location (Windows Task Scheduler folder, e.g. "\\"). */
+const NON_FILESYSTEM_PATH_KEYS = new Set(['taskPath']);
 
-function looksLikePath(v: string): boolean { return /^(?:[A-Za-z]:[\\/]|\\\\|\/|\.{1,2}[\\/])/.test(v) || v.includes('\\') || v.includes('/'); }
+function isPathKey(key: string): boolean {
+  return !NON_FILESYSTEM_PATH_KEYS.has(key) && (PATH_KEYS.includes(key) || PATH_KEY_PATTERN.test(key));
+}
 
+/** Drive-relative ("C:notes.txt"), UNC, rooted, "." / ".." and anything with a separator. */
+function looksLikePath(v: string): boolean { return /^(?:[A-Za-z]:|\\\\|\/|\.{1,2}(?:[\\/]|$))/.test(v) || v.includes('\\') || v.includes('/'); }
+
+/**
+ * Inside the root where the path really lands, not by its spelling (Build 161 audit): a junction inside an agent's
+ * folder that points elsewhere passed this gate and then reached a card that could widen the agent's scope; another
+ * spelling of an allowed folder (an 8.3 name) was refused.
+ */
 function inside(p: string, root: string): boolean {
-  const rel = path.relative(root, p);
-  return rel === '' || (!rel.startsWith('..') && !path.isAbsolute(rel));
+  return reallyInside(p, root);
 }
 
 /** Every path-like argument must resolve inside the allowed roots of every layer that restricts paths. */
 export function checkPathArguments(scope: EffectiveScope, args: Record<string, unknown>): { allowed: true } | { allowed: false; reason: string } {
   const candidates: string[] = [];
-  for (const k of PATH_KEYS) {
+  for (const k of Object.keys(args).filter(isPathKey)) {
     const v = args[k];
-    for (const s of Array.isArray(v) ? v : [v]) if (typeof s === 'string' && s.trim() && looksLikePath(s.trim())) candidates.push(s.trim());
+    for (const s of Array.isArray(v) ? v : [v]) {
+      if (typeof s !== 'string' || !s.trim()) continue;
+      const value = s.trim();
+      // A bare name is a path too when it names something in the folder: "link" may be a junction that leads out of it.
+      const namesAnEntry = Boolean(scope.conversationRoot) && !/[\r\n]/.test(value) && fs.existsSync(path.resolve(scope.conversationRoot as string, value));
+      if (looksLikePath(value) || namesAnEntry) candidates.push(value);
+    }
   }
   if (candidates.length === 0) return { allowed: true };
   for (const raw of candidates) {

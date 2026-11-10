@@ -745,6 +745,16 @@ export function recallMemories(db: CoreDatabase, input: RecallMemoriesInput = {}
   return { entries, recalledAt };
 }
 
+/**
+ * Stored facts an agent limited to `readableScopes` may not read (Build 161 audit): what a delegation brief must not
+ * carry to it. Forgotten facts are already blanked and are left out.
+ */
+export function memoryOutsideScopes(db: CoreDatabase, readableScopes: readonly string[]): Array<{ subject: string; value: string }> {
+  const outside = readableScopes.length ? ` AND scopeType NOT IN (${readableScopes.map(() => '?').join(', ')})` : '';
+  return db.all<{ subject: string; displayValue: string }>(`SELECT subject, displayValue FROM memory_facts WHERE state <> 'forgotten'${outside}`, [...readableScopes])
+    .map((row) => ({ subject: String(row.subject), value: String(row.displayValue) }));
+}
+
 // ---------------------------------------------------------------------------
 // Contradiction resolution
 // ---------------------------------------------------------------------------
