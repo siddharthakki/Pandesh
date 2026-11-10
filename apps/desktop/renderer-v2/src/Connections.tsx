@@ -1,12 +1,14 @@
 import React, { useRef, useState } from 'react';
 import { api, errorText, type Snapshot } from './bridge';
 import { NOT_CONNECTED, SETUP_STEPS, STATE_LABEL, googleActions, googleState, serviceRows, type Busy, type Tone } from './googleModel';
+import { PhoneCard } from './Phone';
 
 const TONE: Record<Tone, string> = { ok: 'var(--verified)', busy: 'var(--pulse)', warn: 'var(--attention)', neutral: 'var(--muted)' };
 
 /**
- * Connections: set up and connect Google (Gmail, Calendar) from v2, through the same host calls as the Classic Google
- * card. The OAuth client is imported from its JSON file or pasted here and goes into encrypted storage on this PC.
+ * Connections: pair a phone (Pandesh Mobile, Phone.tsx), and set up and connect Google (Gmail, Calendar) from v2,
+ * through the same host calls as the Classic Google card. The OAuth client is imported from its JSON file or pasted
+ * here and goes into encrypted storage on this PC.
  */
 export function Connections({ snapshot, refresh }: { snapshot: Snapshot | null; refresh: () => void }) {
   const [busy, setBusy] = useState<Busy>(null);
@@ -69,6 +71,7 @@ export function Connections({ snapshot, refresh }: { snapshot: Snapshot | null; 
         <button type="button" className="btn small" disabled={blocked} onClick={() => void run('checking', () => api.retryGmailProbe())}>Check again</button>
       </div>
       <div className="board" style={{ display: 'flex', flexDirection: 'column', gap: 12, maxWidth: 760 }}>
+        <PhoneCard />
         <section className="card" aria-label="Google">
           <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
             <span className="title" style={{ fontSize: 16 }}>Google</span>

@@ -93,6 +93,7 @@ export function App() {
       ? { name: 'Classic UI is locked off', sub: 'PANDESH_UI_V2=1 is set for this launch; start without it to switch', run: () => {} }
       : { name: 'Use the Classic UI', sub: 'Reloads the window in the existing interface', run: () => void useClassic() },
     { name: 'Connections', sub: 'Google (Gmail, Calendar): set up and connect', run: () => go('connections') },
+    { name: 'Phone', sub: 'Pair a phone with Pandesh (in Connections): QR code, secure link, paired phones', run: () => go('connections') },
     { name: 'Tools & Skills', sub: 'Capabilities, agents × tools, skills, MCP, capability tests', run: () => go('tools') },
     { name: 'Processes', sub: 'What Pandesh started, checked against Windows now', run: () => go('processes') },
     { name: 'Software & Services', sub: 'Ports, installed tools, GitHub projects, updates (read-only)', run: () => go('software') },
