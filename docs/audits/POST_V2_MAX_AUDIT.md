@@ -2,7 +2,7 @@
 
 **Date:** 2026-11-09/10 · **Auditor:** Claude (Opus 5.5), independent · **Branch:** `fix/post-v2-max-audit` from `origin/main` cb9a28b (candidate build commit `e88bdc5`) · **PR:** opened from this branch (not merged, not deployed)
 
-**Verdict: HOTFIX READY FOR OWNER APPROVAL** — subject to the pull request's first CI run being green. Deployment of Build 161 needs the owner's separate approval.
+**Verdict: HOTFIX READY FOR OWNER APPROVAL** — subject to the pull request's CI being green on its final head. Deployment of Build 161 needs the owner's separate approval and an installer rebuilt from the merged head (§G).
 
 Build 160 (installed, unchanged) contains the P0 defects below. All of them are fixed on the branch with failing-before / passing-after regressions. Nothing was installed, deployed or changed in production. The installation, the profile and the schedules are untouched, and the production database was only byte-copied while Pandesh was not running.
 
@@ -167,6 +167,8 @@ Real Core path: an isolated Core, `/v1/submit` + `/v1/attempts/:id/execute`, a f
 
 Built with the existing packaging path (`npm run desktop:package`, `npm run desktop:installer`, Inno Setup 6.7.3 as pinned) from a **clean worktree at `e88bdc5`**. Nothing was installed into `E:\Pandesh`; the production profile was only byte-copied, while Pandesh was not running.
 
+**This candidate predates two later Core changes** made for the pull request's CI (`9aba956`, `c38c5b2`: how an unanswered identity query is read, F32). It is the evidence for the rehearsal below, not the installer to deploy: rebuild from the merged head and repeat the package and installer smoke before any deployment.
+
 | Check | Result |
 |---|---|
 | Build identity | v0.1.8 **Build 161**, `buildKind: release`, channel alpha, commit `e88bdc5`, `sourceState: clean`, built 2026-11-10 05:50Z; Electron 45.2.3 |
@@ -186,7 +188,7 @@ Built with the existing packaging path (`npm run desktop:package`, `npm run desk
 
 ## H. Final verification (one pass after the last code change, HEAD `e88bdc5`, this machine)
 
-The pass was run on `8df8bd4` and, after the rehearsal found F29, once more on `e88bdc5`; the numbers below are the second run.
+The pass was run on `8df8bd4` and, after the rehearsal found F29, once more on `e88bdc5`; the numbers below are the second run. Code changed afterwards only for the pull request's CI (`9aba956`, `c38c5b2`); after the last of these the type checks and both required suites ran again: 3/3 clean; Core 2,681 passed, 16 skipped, 0 failed; desktop 632 passed, 3 skipped, 0 failed.
 
 | Suite | Result |
 |---|---|
@@ -196,7 +198,7 @@ The pass was run on `8df8bd4` and, after the rehearsal found F29, once more on `
 | Desktop (`apps/desktop/test`, as CI; real Ollama answering the model list, no stub) | **87 files passed, 1 skipped; 632 tests passed, 3 skipped, 0 failed** (35 s). The skipped file is `pocketTtsSession` (runs only with the optional Pocket TTS engine). Baseline 618/618 in 84 files (fe7c8b6); the difference is new regression tests |
 | `src/test/suite` (editor-extension tests, not run by CI) | 351 files passed, 4 skipped; **3,417 tests passed, 34 skipped, 2 todo, 1 failed**. The failure, `m12RetrievalIntegrationPackaging` "packages into a test-owned temporary directory…", is **environmental**: `vsce package` runs `npm ls`, which reports missing/extraneous packages in the junctioned `node_modules` tree. The same command fails identically on Build 160 source (`abb0cc4`) with the same modules, and the branch changes no dependency manifest. |
 | The 5 reclassified CI files with `TEMP` = an 8.3 short path | 5/5 files, 68 tests passed |
-| CI on GitHub (PR #47) | First runs exposed three runner-only problems, each reproduced or explained and fixed: the multi-turn validation-loop tests set their own 30 s limit and timed out on a loaded runner (3–4 s normally; aligned to CI's 120 s); `clone-profile-for-rehearsal.mjs` started with a `#!` line that breaks the module import on CI's CRLF checkout (reproduced locally, removed); a cold PowerShell missed the 5 s identity deadline (F32, plus a bounded retry in the isolation test). The non-blocking `timing-sensitive` job's live-browser negative case flaked once (an earlier check read the page before it updated; that job failed on every recent `main` run too) |
+| CI on GitHub (PR #47) | First runs exposed three runner-only problems, each reproduced or explained and fixed: the multi-turn validation-loop tests set their own 30 s limit and timed out on a loaded runner (3–4 s normally; aligned to CI's 120 s); `clone-profile-for-rehearsal.mjs` started with a `#!` line that breaks the module import on CI's CRLF checkout (reproduced locally, removed); a cold PowerShell missed the 5 s identity deadline (F32). On the third run the isolation test's own-stop step missed it again, retry included, so that step now gives the query 25 s and one more try (Core's default stays 5 s); if Windows still cannot disclose the identity, the test reports that instead of failing, and the refusals it checks first need no identity (that path was exercised locally with a 1 ms deadline). The non-blocking `timing-sensitive` job's live-browser negative case flaked once (an earlier check read the page before it updated; that job failed on every recent `main` run too) |
 
 ---
 
