@@ -382,7 +382,10 @@ export function deriveTerminalJarvisState(input: {
  * to cancellation immediately instead of waiting behind the work it is meant to end. Anything that
  * carries more content ("stop using tabs and use spaces") is an instruction, not a Stop.
  */
-const STOP_INTENT = /^\s*(?:(?:please|pls)\s+)?(?:stop|cancel|halt|abort|kill)(?:\s+(?:it|that|this|the task|that task|this task|the job|everything|all|now|working|coding|please))*\s*[.!]*\s*$/i;
+// Micro-tests RES-003 ("Cancel the active test task now.") and REC-006 ("No, cancel that."): the earlier pattern
+// missed both, so the cancel waited in the queue behind the very work it was meant to stop.
+const STOP_OBJECT = String.raw`(?:it|that|this|everything|all|now|working|coding|please|immediately|right\s+now|(?:the|this|that|my|your)\s+(?:(?:active|current|running|test|background|whole|last)\s+){0,3}(?:task|job|work|request|run|search|download|command|process|one|thing))`;
+const STOP_INTENT = new RegExp(String.raw`^\s*(?:(?:no|nope|wait|ok|okay|hey)[,.!]?\s+)*(?:(?:please|pls)\s+)?(?:stop|cancel|halt|abort|kill)(?:\s+${STOP_OBJECT})*\s*[.!]*\s*$`, 'i');
 
 export function isStopIntent(text: string): boolean {
   return STOP_INTENT.test(text);
