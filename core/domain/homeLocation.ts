@@ -30,5 +30,7 @@ export function readHomeLocation(db: CoreDatabase): string | null {
 
 export function homeLocationFact(place: string | null): string {
   if (!place) return '';
-  return `HOME LOCATION (stored by the user in memory): ${place}. For local questions (weather, events, shops, opening hours, routes, distances, transport, "near me", "nearby", "this city") use this place unless the user names another one. Never infer a place from the time zone; if neither this nor the user names a place, ask.`;
+  // Verification on the fix build: listing "weather" first made the model look up the weather for unrelated local
+  // questions (LOC-008, LOC-010, LOC-012, LOC-021). The place is a default, not a reason to call a tool.
+  return `HOME LOCATION (stored by the user in memory): ${place}. When a question needs a place and the user names none ("near me", "nearby", "this weekend", events, shops, opening hours, routes, transport, weather), use this place. Never infer a place from the time zone; if neither this nor the user names a place, ask. This is only a default place: do not look anything up (weather included) that the user did not ask about.`;
 }

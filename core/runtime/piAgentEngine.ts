@@ -3288,6 +3288,14 @@ export class PiAgentEngine implements EngineAdapter {
           // Micro-tests DRV-010 and DRV-012: a rename request became 321 identical writes that left the file empty, and
           // an empty write named like a folder made a 0-byte file reported as a folder. Checked before anyone is asked.
           const guard = writeGuard(full, args.content);
+          // Fix-build verification (REC-014): a file that already holds exactly the requested text is the requested
+          // end state. Reporting it as an error made Core say "NOT DONE ... could not do it" and the next turn told the
+          // user the file was never created. Nothing is written and no approval is needed, but it is not a failure.
+          if (guard?.reason === 'the file already has this text') {
+            // Same audit record as before (the write was not performed); only the result is no longer an error.
+            safeRecordRuntimeEvent(db, broadcaster, attemptId, 'file_write_refused', { path: full, reason: guard.reason }, actor);
+            return { content: [{ type: 'text', text: `${guard.text} The file is already as requested: ${full}` }] };
+          }
           if (guard) return refuse(guard.text, guard.reason);
 
           const grant = await authorizeFileWrite(full, args.content);
