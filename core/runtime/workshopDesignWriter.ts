@@ -54,7 +54,7 @@ export async function writeDesign(description: string, options: WriterOptions): 
 
 export async function reviseDesign(html: string, instruction: string, options: WriterOptions): Promise<{ ok: true; html: string; summary: string } | { ok: false; error: string }> {
   const schema = { type: 'object', properties: { replacements: { type: 'array', items: { type: 'object', properties: { find: { type: 'string' }, replace: { type: 'string' } }, required: ['find', 'replace'] } } }, required: ['replacements'] };
-  const system = `${PAGE_RULES}\nYou change an existing page as asked, with the smallest exact edits: each "find" is text copied exactly from the page (unique, a whole line or CSS rule is best) and "replace" is its new text.`;
+  const system = `${PAGE_RULES}\nYou change an existing page as asked, with the smallest exact edits: each "find" is text copied exactly from the page (unique, a whole line or CSS rule is best) and "replace" is its new text. If what you change is also set inside an @media rule (for example a smaller heading size for phones), change it there too, in proportion, so the change shows at every screen size.`;
   options.onStage?.(`Changing the page with ${options.model} on this PC`);
   let history: Array<{ role: string; content: string }> = [];
   let last = 'no answer';

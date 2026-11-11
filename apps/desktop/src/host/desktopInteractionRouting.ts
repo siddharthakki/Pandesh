@@ -46,9 +46,14 @@ export const READ_ONLY_FOLDER_BLOCK = 'This folder is read-only for Pandesh, so 
 const FILE_CREATION_VERB = /\b(write|create|save|generate|make)\b/i;
 const FILE_CREATION_NOUN = /\b(file|script|program|module|app|application)\b|\.\w{1,6}(?=[\s,.!?;:]|$)/i;
 
+/** A slideshow or promo video made from pictures is a Workshop video (create_video), not a file in a repository: the
+ * file names in such a message ("stall-1.png") are its inputs, not something to write. */
+const WORKSHOP_VIDEO_REQUEST = /\b(?:slide ?shows?|promo(?:tional)? (?:video|clip|reel)s?)\b/i;
+
 export function detectFileCreationIntent(text: string): boolean {
   const trimmed = text.trim();
   if (!trimmed) return false;
+  if (WORKSHOP_VIDEO_REQUEST.test(trimmed)) return false;
   return FILE_CREATION_VERB.test(trimmed) && FILE_CREATION_NOUN.test(trimmed);
 }
 

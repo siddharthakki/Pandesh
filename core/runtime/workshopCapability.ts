@@ -137,6 +137,22 @@ function simulationOf(db: CoreDatabase, artifactId: string): SimulationSpec {
   return parsed.value;
 }
 
+/** Headings measured in the Design preview before and after a change, in words; says so when nothing visible changed. */
+export function describeMeasuredPage(before: Record<string, unknown> | null, after: Record<string, unknown> | null): string | null {
+  type H = { tag?: unknown; fontSizePx?: unknown };
+  const heads = (s: Record<string, unknown> | null): H[] => (s && Array.isArray(s.headings) ? (s.headings as H[]).slice(0, 4) : []);
+  const b = heads(before); const a = heads(after);
+  if (!a.length) return after ? 'Measured in the preview: the page shows no headings.' : 'The preview did not report the page after the change (the window did not answer).';
+  const vp = (after?.viewport ?? {}) as { width?: unknown; height?: unknown };
+  const where = `${String(after?.device ?? 'current size')}, ${Number(vp.width) || '?'}×${Number(vp.height) || '?'} px`;
+  const parts = a.map((h, i) => {
+    const was = b.find((x, j) => x.tag === h.tag && (j === i || b.filter((y) => y.tag === h.tag).length === 1));
+    return `${String(h.tag)} ${was ? `${Number(was.fontSizePx)}px → ` : ''}${Number(h.fontSizePx)}px`;
+  });
+  const unchanged = b.length > 0 && a.every((h, i) => b[i] && b[i].tag === h.tag && Number(b[i].fontSizePx) === Number(h.fontSizePx));
+  return `Measured in the preview (${where}): ${parts.join('; ')}.${unchanged ? ' The rendered headings did NOT change at this size (a rule for this screen size may override the edit); tell the user exactly that, do not say the change is visible, and offer to change that rule too.' : ''}`;
+}
+
 /** Parameters, measured results (Core runs the same deterministic model the window animates) and assumptions. */
 function simulationSummary(spec: SimulationSpec): string {
   const p = spec.params;
@@ -162,6 +178,14 @@ export function createWorkshopCapabilityAdapter(options: WorkshopCapabilityOptio
   function activity(summary: WorkshopSummary, artifactId: string, action: string): ToolExecutionResult['activity'] {
     const v = summary.versions.find((x) => x.artifactId === artifactId);
     return { kind: 'workshop', title: `${WORKSHOP_TYPE_LABEL[summary.type]}: ${summary.title}`, artifactIds: [artifactId], workshop: { workshopId: summary.workshopId, type: summary.type, action, ...(v ? { version: v.number } : {}) } };
+  }
+
+  /** What the window's viewer measures right now (null when the window does not answer). */
+  async function inspectInWindow(ctx: ToolExecutionContext, workshopId: string, artifactId: string): Promise<Record<string, unknown> | null> {
+    const r = await requestWorkshopCommand(db, {
+      conversationId: ctx.correlationId ?? null, attemptId: ctx.attemptId ?? null, workshopId, artifactId, action: 'inspect', args: {}, actor: 'core:workshop', publish: options.publish, timeoutMs: options.commandTimeoutMs,
+    });
+    return r.status === 'done' ? (r.state ?? null) : null;
   }
 
   async function finishVersion(ctx: ToolExecutionContext, workshopId: string, artifactId: string, action: string, lead: string): Promise<ToolExecutionResult> {
@@ -350,6 +374,8 @@ export function createWorkshopCapabilityAdapter(options: WorkshopCapabilityOptio
     }
     if (summary.type === 'design') {
       const html = readWorkshopVersion(db, base.artifactId).bytes.toString('utf8');
+      const shownNow = conversationId ? workshopFocus(db, conversationId) : null;
+      const pageBefore = shownNow?.open && shownNow.workshopId === summary.workshopId ? await inspectInWindow(ctx, summary.workshopId, base.artifactId) : undefined;
       let next: { ok: true; html: string; summary: string } | { ok: false; errors: string[] };
       let revisedBy: string | null = null;
       if (Array.isArray(a.replacements) || typeof a.html === 'string') {
@@ -376,15 +402,25 @@ export function createWorkshopCapabilityAdapter(options: WorkshopCapabilityOptio
         notes: ['Shown in a sandboxed, offline preview: no network, no forms, no access to Pandesh.'],
         actor: 'core:workshop', clientId: null,
       });
-      return finishVersion(ctx, summary.workshopId, artifact.id, 'edit', `CHANGED: ${next.summary} (${added} line(s) added, ${removed} removed). Earlier versions are kept.`);
+      const result = await finishVersion(ctx, summary.workshopId, artifact.id, 'edit', `CHANGED: ${next.summary} (${added} line(s) added, ${removed} removed). Earlier versions are kept.`);
+      // What the person sees, measured in the preview before and after, so the reply cannot claim a change that does
+      // not show at the size on screen (a phone-size rule can override the edited one).
+      if (result.status === 'succeeded' && pageBefore !== undefined) {
+        const after = await inspectInWindow(ctx, summary.workshopId, artifact.id);
+        const line = describeMeasuredPage(pageBefore, after);
+        if (line) result.output += `\n${line}`;
+      }
+      return result;
     }
     if (summary.type === 'video') {
       const recipe = parseVideoRecipe(base.meta.recipe);
       if (!recipe.ok) return fail('NOT CHANGED: this video has no recipe (it was made before the Workshop), so Pandesh cannot render it again. It can make a new slideshow from the pictures.', 'workshop_not_rerenderable');
       const set = (a.set && typeof a.set === 'object' && !Array.isArray(a.set) ? a.set : {}) as Record<string, unknown>;
       const pickArg = (key: string) => (a[key] !== undefined ? a[key] : set[key]);
+      // The shape as models also pass it ({"action":"vertical"}, {"orientation":"portrait"}) or only in the request's words.
+      const shapeWords = [a.orientation, a.format, a.shape, a.action, a.value, a.instruction, a.summary].find((v) => aspectFromText(v) !== null);
       const result = applyVideoChanges(recipe.value, {
-        aspect: pickArg('aspect'), totalSeconds: pickArg('totalSeconds'), secondsPerScene: pickArg('secondsPerScene'), fit: pickArg('fit'), captions: pickArg('captions'),
+        aspect: pickArg('aspect') ?? (shapeWords === undefined ? undefined : aspectFromText(shapeWords)), totalSeconds: pickArg('totalSeconds'), secondsPerScene: pickArg('secondsPerScene'), fit: pickArg('fit'), captions: pickArg('captions'),
         title: typeof set.title === 'string' ? set.title : undefined,
       });
       if (!result.ok) return fail(`NOT CHANGED: ${result.errors.join('; ')}.`, 'workshop_invalid_edit');

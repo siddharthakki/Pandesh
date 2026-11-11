@@ -117,7 +117,9 @@ async function inspect(conversationId) {
 }
 
 const results = {};
+const ONLY = args.only ? new Set(String(args.only).split(',')) : null;
 async function step(id, title, fn) {
+  if (ONLY && !ONLY.has(id)) return;
   const dir = path.join(OUT, id);
   fs.mkdirSync(dir, { recursive: true });
   const record = { id, title, startedAt: new Date().toISOString(), screenshots: [], facts: {} };
@@ -184,7 +186,7 @@ async function moreScenarios(cdp) {
     record.facts.inspection = state;
     record.screenshots.push(await cdp.screenshot(path.join(dir, 'after.png')));
     const h1 = state?.headings?.find((h) => h.tag === 'h1') ?? state?.headings?.[0];
-    const contact = state?.buttons?.find((b) => /contact|call|email|message|reach/i.test(b.text));
+    const contact = state?.buttons?.find((b) => /contact|call|email|message|reach|touch|talk|book|order/i.test(b.text) || /contact|mailto:|tel:/i.test(b.href ?? ''));
     ctx.h1 = h1?.fontSizePx;
     return h1 && contact
       ? { observation: `Written by ${ws[0].versions[0].meta.engine.model} on this PC; the sandboxed preview reports ${h1.tag} "${h1.text}" at ${h1.fontSizePx}px and "${contact.text}" (${contact.tag}). ${(r.ms / 1000).toFixed(0)} s.` }
@@ -294,7 +296,8 @@ async function main() {
 
   await step('WSH-105', 'Change one named component in plain language', async ({ dir, record }) => {
     const before = await inspect(ctx.conversationId);
-    const target = before.meshes.find((m) => !/gear/i.test(m.name)) ?? before.meshes[0];
+    // A part that is not already metal, so the change is a real one (a description-built model may already use steel).
+    const target = before.meshes.find((m) => !/gear/i.test(m.name) && m.material?.metallic !== 1) ?? before.meshes.find((m) => m.material?.metallic !== 1) ?? before.meshes.find((m) => !/gear/i.test(m.name)) ?? before.meshes[0];
     const text = `Make the ${target.name} brushed steel.`;
     const since = new Date().toISOString();
     const r = await say(cdp, text);

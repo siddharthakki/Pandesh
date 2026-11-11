@@ -87,6 +87,14 @@ describe('detectFileCreationIntent', () => {
   ])('does not flag ordinary questions: %s', (text) => {
     expect(detectFileCreationIntent(text)).toBe(false);
   });
+
+  it.each([
+    'Create a five-second promotional slideshow from these three test images: D:\\pics\\stall-1.png, D:\\pics\\stall-2.png, D:\\pics\\stall-3.png',
+    'make a slideshow of a.jpg and b.jpg',
+    'Create a promo video from photo.png',
+  ])('a slideshow from pictures is a Workshop video, not a file to write: %s', (text) => {
+    expect(detectFileCreationIntent(text)).toBe(false);
+  });
 });
 
 describe('detectImageGenerationIntent', () => {

@@ -608,8 +608,13 @@ export function applySceneEdits(scene: Scene3D, edits: unknown): { ok: true; sce
     }
   });
   if (errors.length) return { ok: false, errors: [...new Set(errors)].slice(0, 12), ...(candidates ? { candidates } : {}) };
-  if (!changes.length) return { ok: false, errors: ['the edits changed nothing'] };
-  return { ok: true, scene: next, changes, warnings: [] };
+  // A change to what something already is would make an empty version and a false "updated": say what it already is.
+  const real = changes.filter((c) => c.from !== c.to);
+  if (!real.length) {
+    const already = changes.slice(0, 4).map((c) => `${c.name} already has ${c.field} ${c.to}`);
+    return { ok: false, errors: [already.length ? `nothing would change: ${already.join('; ')}` : 'the edits changed nothing'] };
+  }
+  return { ok: true, scene: next, changes: real, warnings: [] };
 }
 
 /** A component back in the input shape (for re-validation). */

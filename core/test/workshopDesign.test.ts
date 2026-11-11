@@ -12,7 +12,7 @@ import type { CoreDatabase } from '../db/connection';
 import { createConversation } from '../domain/conversations';
 import { submitRequest } from '../domain/submission';
 import { listWorkshops, readWorkshopVersion, recordWorkshopFocus } from '../domain/workshops';
-import { createWorkshopCapabilityAdapter } from '../runtime/workshopCapability';
+import { createWorkshopCapabilityAdapter, describeMeasuredPage } from '../runtime/workshopCapability';
 import { MAX_DESIGN_BYTES, applyDesignEdits, checkDesignHtml, designTitle, lineDiff } from '../shared/workshop/design';
 import type { ToolExecutionResult } from '../runtime/toolRunner';
 
@@ -81,6 +81,17 @@ describe('a design page: what it needs, and the only edits that can be made to i
     expect(designTitle(PAGE)).toBe('Kha ke dikha');
     expect(designTitle('<main><h1>Hello <em>there</em></h1></main>')).toBe('Hello there');
     expect(designTitle('<main></main>')).toBe('Untitled page');
+  });
+});
+
+describe('what the preview measured, in words', () => {
+  const state = (sizes: number[], device = 'phone', w = 390, h = 844) => ({ device, viewport: { width: w, height: h }, headings: sizes.map((s, i) => ({ tag: i === 0 ? 'h1' : 'h2', fontSizePx: s })) });
+  it('reports before → after, and says plainly when nothing visible changed at this size', () => {
+    expect(describeMeasuredPage(state([48, 24], 'desktop', 1280, 800), state([64, 24], 'desktop', 1280, 800))).toBe('Measured in the preview (desktop, 1280×800 px): h1 48px → 64px; h2 24px → 24px.');
+    const same = describeMeasuredPage(state([36]), state([36]));
+    expect(same).toMatch(/^Measured in the preview \(phone, 390×844 px\): h1 36px → 36px\. The rendered headings did NOT change at this size/);
+    expect(describeMeasuredPage(null, state([36]))).toBe('Measured in the preview (phone, 390×844 px): h1 36px.');
+    expect(describeMeasuredPage(state([36]), null)).toMatch(/did not report the page after the change/);
   });
 });
 

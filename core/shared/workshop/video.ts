@@ -133,7 +133,9 @@ export function applyVideoChanges(recipe: VideoRecipe, change: VideoChange): { o
     else { next.scenes.forEach((s, i) => { s.caption = list[i]; }); changes.push(list.some(Boolean) ? 'captions changed' : 'captions removed'); }
   }
   if (errors.length) return { ok: false, errors };
-  if (!changes.length) return { ok: false, errors: ['that is already how the video is'] };
+  const named = (['aspect', 'totalSeconds', 'secondsPerScene', 'fit', 'captions'] as const).filter((k) => change[k] !== undefined).length + (typeof change.title === 'string' && change.title.trim() ? 1 : 0);
+  if (!named) return { ok: false, errors: ['no change was named: give aspect (vertical, square or landscape), totalSeconds, secondsPerScene, fit or captions'] };
+  if (!changes.length) return { ok: false, errors: [`that is already how the video is (${VIDEO_ASPECTS[recipe.aspect].label} ${recipe.width}×${recipe.height}, ${recipeDuration(recipe)} s)`] };
   return { ok: true, recipe: next, changes };
 }
 

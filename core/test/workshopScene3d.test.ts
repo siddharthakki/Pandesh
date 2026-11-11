@@ -103,6 +103,13 @@ describe('component-level edits', () => {
     expect(scene.components.find((c) => c.id === 'case')!.material.preset).toBe('iron');
   });
 
+  it('refuses a change to what a part already is, saying what it already has (no empty version, no false "updated")', () => {
+    const scene = valid(gearPair());
+    const r = applySceneEdits(scene, [{ op: 'set_material', target: 'the outer case', material: 'iron' }]);
+    expect(r.ok).toBe(false);
+    expect(!r.ok && r.errors[0]).toMatch(/^nothing would change: Outer case already has material /);
+  });
+
   it('fails the whole change on any bad edit, and never guesses an ambiguous target', () => {
     const scene = valid(gearPair());
     const r = applySceneEdits(scene, [{ op: 'set_color', target: 'Drive gear', color: 'blue' }, { op: 'set_material', target: 'gear', material: 'gold' }]);

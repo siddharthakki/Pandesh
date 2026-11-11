@@ -43,7 +43,11 @@ describe('a video recipe', () => {
     const vertical = applyVideoChanges(recipe(), { aspect: 'vertical' });
     expect(vertical.ok && vertical.recipe).toMatchObject({ aspect: 'vertical', width: 1080, height: 1920, secondsPerScene: 1.667 });
     expect(vertical.ok && vertical.changes).toEqual(['Landscape 1920×1080 → Vertical 1080×1920']);
-    expect(applyVideoChanges(recipe(), { aspect: 'landscape' }).ok).toBe(false);
+    const same = applyVideoChanges(recipe(), { aspect: 'landscape' });
+    expect(same.ok === false && same.errors[0]).toMatch(/^that is already how the video is \(Landscape 1920×1080, 5\.001 s\)/);
+    // Nothing named is not "already so": it says what can be changed.
+    const none = applyVideoChanges(recipe(), {});
+    expect(none.ok === false && none.errors[0]).toMatch(/^no change was named: give aspect/);
     expect(applyVideoChanges(recipe(), { aspect: 'diagonal' }).ok).toBe(false);
     const longer = applyVideoChanges(recipe(), { totalSeconds: 9 });
     expect(longer.ok && longer.recipe.secondsPerScene).toBe(3);
