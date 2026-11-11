@@ -35,6 +35,7 @@ const bridge = {
   setMobileAccess: vi.fn(async (mode: MobilePairing['access']) => ({ ...view, access: mode })),
   resumeMobilePairing: vi.fn(async () => ({ ...view, pairingPausedUntil: null })),
   openExternalUrl: vi.fn(async (_url: string) => ({ opened: true })),
+  copyToClipboard: vi.fn(async (_text: string) => ({ copied: true })),
   onEvent: () => () => undefined,
 };
 let PhoneCard: typeof import('../renderer-v2/src/Phone').PhoneCard;
@@ -108,6 +109,33 @@ describe('Connections → Phone', () => {
     expect(bridge.openExternalUrl).toHaveBeenCalledWith('https://tailscale.com/download');
     fireEvent.click(screen.getByRole('button', { name: 'Open the DNS page' }));
     expect(bridge.openExternalUrl).toHaveBeenCalledWith('https://login.tailscale.com/admin/dns');
+  });
+
+  it('Copy link and Copy write through the host, since the app window refuses navigator.clipboard', async () => {
+    // As in the app: the window allows pages only the microphone, so the browser clipboard is refused.
+    const writeText = vi.fn(async () => { throw new DOMException('Write permission denied.', 'NotAllowedError'); });
+    Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true });
+    try {
+      mount();
+      await screen.findByText('ABCD-EFGH');
+      fireEvent.click(screen.getByRole('button', { name: 'Copy link' }));
+      await waitFor(() => expect(bridge.copyToClipboard).toHaveBeenCalledWith(WIFI));
+      expect(await screen.findByText('Link copied.')).toBeTruthy();
+      fireEvent.click(screen.getByRole('button', { name: 'Copy' }));
+      await waitFor(() => expect(bridge.copyToClipboard).toHaveBeenCalledWith('tailscale serve --bg http://127.0.0.1:3030'));
+      expect(await screen.findByText('Command copied.')).toBeTruthy();
+      expect(writeText).not.toHaveBeenCalled();
+    } finally {
+      Reflect.deleteProperty(navigator, 'clipboard');
+    }
+  });
+
+  it('says so when the host cannot copy', async () => {
+    bridge.copyToClipboard.mockRejectedValueOnce(new Error('clipboard busy'));
+    mount();
+    await screen.findByText('ABCD-EFGH');
+    fireEvent.click(screen.getByRole('button', { name: 'Copy link' }));
+    expect(await screen.findByText('Could not copy. Select the text and copy it.')).toBeTruthy();
   });
 
   it('with phone access off, shows no code and no QR', async () => {

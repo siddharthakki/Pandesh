@@ -158,6 +158,9 @@ export interface DesktopApi {
   retryCoreConnection(): Promise<Snapshot | null>;
   household(action: string, args?: Record<string, unknown>): Promise<unknown>;
   openExternalUrl(url: string): Promise<{ opened: boolean }>;
+  /** Writes text to the clipboard from the host. The app window grants pages no clipboard permission, so
+   *  `navigator.clipboard` is refused there. */
+  copyToClipboard?(text: string): Promise<{ copied: boolean }>;
   listArtifacts(conversationId?: string): Promise<ArtifactView[]>;
   loadArtifactPreview(artifactId: string): Promise<{ artifact: ArtifactView; dataUrl: string; fileUrl?: string }>;
   openArtifactFile(artifactId: string): Promise<{ opened: boolean }>;
