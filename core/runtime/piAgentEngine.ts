@@ -74,7 +74,7 @@ import { resolveTimeExpression, localWallTimeToIso as zonedWallToIso, utcOffsetL
 import { cancelScheduledTask, createScheduledTask, listScheduledTasks } from '../domain/scheduledTasks';
 import { transitionAttempt, failAttempt, getAttempt, settleCancelledAttempt } from '../domain/attempts';
 import { createApproval, getApproval, listApprovalsForAttempt, expireApproval } from '../domain/approvals';
-import { asksAboutPermissions, classifyChatToolCall, decidePermission, frozenPermissionFor, permissionModesPromptSection, permissionPromptState, READ_ONLY_CONSENT_TOOLS, recordPermissionDecision, STANDING_AUTHORIZATION_ACTOR } from '../domain/permissionModes';
+import { asksAboutPermissions, classifyChatToolCall, decidePermission, frozenPermissionFor, frozenWorkspaceAccess, permissionModesPromptSection, permissionPromptState, READ_ONLY_CONSENT_TOOLS, readOnlyWorkspaceRefusal, recordPermissionDecision, STANDING_AUTHORIZATION_ACTOR, WORKSPACE_CHANGE_TOOLS } from '../domain/permissionModes';
 import { getAttemptContext } from '../domain/attemptContext';
 import { inputModalityOf, spokenInputPromptSection } from '../domain/spokenInput';
 import { GOOGLE_SETUP_WHERE, navigationPromptLines } from '../domain/productNavigation';
@@ -1424,6 +1424,7 @@ export class PiAgentEngine implements EngineAdapter {
       });
       if (permission.decision === 'auto_authorize') {
         let autoApprovalId: string | undefined;
+        let vetoed = false;
         try {
           mutateWithBroadcast(db, broadcaster, () => {
             const auto = createApproval(db, {
@@ -1435,9 +1436,12 @@ export class PiAgentEngine implements EngineAdapter {
               initialResolution: 'approved',
               resolvedBy: STANDING_AUTHORIZATION_ACTOR,
             });
+            // Core's own veto (a read-only folder, Plan Only) can turn the record into a rejection: honour it.
+            if (auto.status !== 'approved') { vetoed = true; return; }
             recordPermissionDecision(db, { attemptId, toolName, arguments: summary, decision: permission, approvalId: auto.id });
             autoApprovalId = auto.id;
           });
+          if (vetoed) return { outcome: 'rejected' };
           return { outcome: 'approved', approvalId: autoApprovalId };
         } catch (err: any) {
           console.error('[piAgentEngine] Failed to record a standing-authorization approval:', err);
@@ -1512,6 +1516,9 @@ export class PiAgentEngine implements EngineAdapter {
       const notDone = (reason: string, text: string): WriteGrant => ({ ok: false, reason, text });
       if (frozenPermissionFor(db, [attemptId]).mode === 'plan') {
         return notDone('Plan Only', 'NOT DONE (Plan Only mode): write_file would change something, so nothing was written. Describe this step in the plan instead.');
+      }
+      if (frozenWorkspaceAccess(db, [attemptId]) === 'read') {
+        return notDone('read-only folder', 'NOT DONE (read-only folder): the user let Pandesh read this folder but not change it, so nothing was written. Describe the change instead; the user can allow changes and ask again.');
       }
       const bytes = Buffer.byteLength(content, 'utf8');
       const rel = workspaceRelative(full);
@@ -4950,6 +4957,28 @@ ${filesPromptSection}${webResearchPromptSection}${wishesPromptSection}${emailCal
         };
       }
       systemPrompt += '\n\nPLAN ONLY MODE: research, read and reason, then give the user a concrete step-by-step plan. Do not create, change, send, schedule, print or run anything that changes state; such tools are refused in this mode.';
+    }
+
+    // A read-only workspace (frozen on this turn): tools that would change files or run programs are refused at
+    // execution, whatever the model asks or Auto covers. Plain read commands (dir, git status) still run.
+    if (frozenWorkspaceAccess(db, [attemptId]) === 'read') {
+      for (let i = 0; i < tools.length; i += 1) {
+        const tool = tools[i];
+        if (!WORKSPACE_CHANGE_TOOLS.has(tool.name)) continue;
+        const original = tool.execute;
+        tools[i] = {
+          ...tool,
+          execute: async (id: string, args: any, ...rest: any[]) => {
+            const a = (args && typeof args === 'object') ? args : {};
+            const reason = readOnlyWorkspaceRefusal(tool.name, a, selectedWorkspace || null);
+            if (!reason) return original(id, args, ...rest);
+            const decision = { decision: 'deny' as const, mode: frozenPermissionFor(db, [attemptId]).mode, reason };
+            try { mutateWithBroadcast(db, broadcaster, () => recordPermissionDecision(db, { attemptId, toolName: tool.name, arguments: a, decision })); } catch {}
+            return { content: [{ type: 'text', text: `NOT DONE (read-only folder): ${reason} Describe the change instead; the user can allow changes and ask again.` }], isError: true };
+          },
+        };
+      }
+      systemPrompt += `\n\nREAD-ONLY FOLDER: the user let Pandesh read ${selectedWorkspace ?? 'the selected folder'} but not change it. Read, list and search its files freely. Do not create, change or delete files and do not run programs (plain read commands such as dir or git status are fine); those tools are refused. If the user asks for a change, describe it and say they can allow changes with the folder menu next to the message box.`;
     }
 
     // M10: an explicit single-choice request gets an explicit single-choice rule (see choiceConstraint.ts).

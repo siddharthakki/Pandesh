@@ -16,6 +16,7 @@ const P = {
   stop: 'M7 7h10v10H7z',
   check: 'M5 12.5l4.5 4.5L19 7.5',
   plus: 'M12 5v14M5 12h14',
+  folder: 'M3.5 7.5A1.5 1.5 0 015 6h4l2 2h8a1.5 1.5 0 011.5 1.5v8A1.5 1.5 0 0119 19H5a1.5 1.5 0 01-1.5-1.5z',
 };
 export type IconName = keyof typeof P;
 

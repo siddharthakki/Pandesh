@@ -33,6 +33,9 @@ import {
   type DesktopCloudState,
   type DesktopUpdateStartResult,
   type DesktopUpdateStatus,
+  type DesktopFolderCheck,
+  type DesktopFolderMention,
+  type DesktopWorkspaceAccess,
 } from './ipc';
 
 const desktopApi = {
@@ -44,6 +47,17 @@ const desktopApi = {
     ipcRenderer.invoke(DESKTOP_CHANNELS.setFolder, folder),
   clearFolder: (): Promise<DesktopSnapshot | null> =>
     ipcRenderer.invoke(DESKTOP_CHANNELS.clearFolder),
+  /** The native folder dialog: returns the chosen folder (or null) and changes nothing. */
+  chooseFolder: (options?: { title?: string; purpose?: 'workspace' | 'second_brain' }): Promise<{ folder: string } | null> =>
+    ipcRenderer.invoke(DESKTOP_CHANNELS.chooseFolder, options ?? {}),
+  checkWorkspaceFolder: (folder: string): Promise<DesktopFolderCheck> =>
+    ipcRenderer.invoke(DESKTOP_CHANNELS.checkWorkspaceFolder, folder),
+  useWorkspace: (folder: string, access: { read: boolean; write: boolean }, source: 'picker' | 'chat' | 'recent'): Promise<DesktopSnapshot | null> =>
+    ipcRenderer.invoke(DESKTOP_CHANNELS.useWorkspace, folder, access, source),
+  setWorkspaceAccess: (access: DesktopWorkspaceAccess): Promise<DesktopSnapshot | null> =>
+    ipcRenderer.invoke(DESKTOP_CHANNELS.setWorkspaceAccess, access),
+  inspectFolderMention: (text: string): Promise<DesktopFolderMention | null> =>
+    ipcRenderer.invoke(DESKTOP_CHANNELS.inspectFolderMention, text),
   submitTask: (goal: string, worker?: string, voiceTurnId?: string, cloudApproved?: boolean): Promise<DesktopSubmitResult> =>
     ipcRenderer.invoke(DESKTOP_CHANNELS.submitTask, goal, worker, voiceTurnId, cloudApproved),
   selectWorker: (worker: string): Promise<DesktopSnapshot | null> =>

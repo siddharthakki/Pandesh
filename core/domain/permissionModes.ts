@@ -332,6 +332,10 @@ export function freezeRequestPermission(db: CoreDatabase, input: {
   const clientPolicy = { ...(input.clientPolicy ?? {}) };
   const strippedKeys = CORE_OWNED_POLICY_KEYS.filter((k) => Object.hasOwn(clientPolicy, k));
   for (const k of strippedKeys) delete clientPolicy[k];
+  // The folder's access level can only narrow a turn: anything but exactly 'read_write' is frozen as 'read'.
+  if (Object.hasOwn(clientPolicy, 'workspaceAccess')) {
+    clientPolicy.workspaceAccess = clientPolicy.workspaceAccess === 'read_write' ? 'read_write' : 'read';
+  }
   const conversationId = input.conversationId ?? null;
   const mode = conversationId ? getConversationPermissionMode(db, conversationId) : 'ask';
   const authorizationIds = conversationId && mode === 'auto'
@@ -609,6 +613,11 @@ export function decidePermission(db: CoreDatabase, input: {
 }): PermissionDecision {
   const permission = frozenPermissionFor(db, input.attemptIds);
   const mode = permission.mode;
+  // A read-only folder refuses before any mode is applied: not even an Auto authorization can change it.
+  if (input.mutating && frozenWorkspaceAccess(db, input.attemptIds) === 'read') {
+    const refusal = readOnlyWorkspaceRefusal(input.toolName, input.arguments, input.workspaceRoot ?? null);
+    if (refusal) return { decision: 'deny', mode, reason: refusal };
+  }
   if (mode === 'plan') {
     return input.mutating
       ? { decision: 'deny', mode, reason: `Plan Only: ${input.toolName} would change something, so it was not done. Nothing was changed.` }
@@ -713,13 +722,80 @@ export function planOnlyApprovalVeto(db: CoreDatabase, input: { attemptId: strin
   return { reason: `Plan Only: ${String(input.summary.toolName ?? input.kind)} would change something, so it was not done. Nothing was changed.` };
 }
 
+// ------------------------------------------------------------------ the workspace folder's access level
+
+/**
+ * How far the person let Pandesh into the selected folder, chosen when the folder became the workspace:
+ *  - `read`:       open, list and search the files there. Nothing is written and no program is run, whatever the mode
+ *                  or a standing authorization says (plain read commands such as dir and git status still run).
+ *  - `read_write`: Pandesh may also ask to create and change files and run programs; each still needs the person's
+ *                  approval card, or an authorization they granted.
+ * The desktop sends it with every request that has a workspace, and Core freezes it with the request like the mode, so
+ * a later change never alters a running turn. A request without it (older clients, routines) keeps today's behaviour.
+ */
+export type WorkspaceAccess = 'read' | 'read_write';
+export const READ_ONLY_WORKSPACE_ACTOR = 'core:workspace_access:read_only';
+
+/** Tools that create or change files, or run programs, in a folder. A read-only workspace refuses all of them. */
+export const WORKSPACE_CHANGE_TOOLS: ReadonlySet<string> = new Set([
+  'write_file', 'propose_file_change', 'propose_text_edit', 'authorize_mission', 'run_command', 'run_checks',
+  'workspace_validation', 'delegate_to_opencode', 'delegate_to_coding_agent', 'file_modification',
+]);
+
+/**
+ * The narrowest access frozen on any of these attempts: one layer that is read-only makes the action read-only.
+ * Attempts without the key (older requests, routines, unknown ids) are read and write, as before.
+ */
+export function frozenWorkspaceAccess(db: CoreDatabase, attemptIds: Array<string | null | undefined>): WorkspaceAccess {
+  for (const id of attemptIds) {
+    if (!id) continue;
+    try {
+      if ((getAttemptContext(db, id).approvalPolicy as Record<string, unknown> | undefined)?.workspaceAccess === 'read') return 'read';
+    } catch {
+      // No frozen context for this identity (e.g. a capability anchor): keep looking.
+    }
+  }
+  return 'read_write';
+}
+
+/**
+ * Why this call may not run while the workspace is read-only, or null when it may (a tool that changes no file, or a
+ * plain read command such as dir or git status).
+ */
+export function readOnlyWorkspaceRefusal(toolName: string, args: Record<string, unknown>, workspaceRoot: string | null): string | null {
+  const targetFiles = Array.isArray(args.targetFiles) ? args.targetFiles.filter((f) => typeof f === 'string' && f) : [];
+  if (!WORKSPACE_CHANGE_TOOLS.has(toolName) && targetFiles.length === 0) return null;
+  if (toolName === 'run_command' || toolName === 'run_checks') {
+    const command = String(args.command ?? '');
+    const dir = [args.workingDirectory, args.workspacePath].find((d): d is string => typeof d === 'string' && Boolean(d)) ?? workspaceRoot;
+    if (command && dir && classifyWorkspaceCommand(command, dir, {}).category === 'workspace_read_commands') return null;
+    return `Read-only folder: the person let Pandesh read this folder but not change it, so ${toolName} was not run. Nothing was changed. Only the person can allow changes, from the folder menu next to the message box.`;
+  }
+  return `Read-only folder: the person let Pandesh read this folder but not change it, so ${toolName} was not done. Nothing was changed. Only the person can allow changes, from the folder menu next to the message box.`;
+}
+
+/**
+ * Safety net for every approval site, next to Plan Only's: while the turn's workspace is read-only, an approval to
+ * change files, run a program or deliver a change is recorded as already rejected by Core, so no click can approve it.
+ */
+export function readOnlyWorkspaceApprovalVeto(db: CoreDatabase, input: { attemptId: string; kind: string; summary: Record<string, unknown> }): { reason: string } | null {
+  if (input.kind !== 'mutation' && input.kind !== 'delivery') return null;
+  const toolName = String(input.summary.toolName ?? '');
+  if (READ_ONLY_CONSENT_TOOLS.has(toolName)) return null;
+  const scope = typeof input.summary.scopeIdentity === 'string' ? input.summary.scopeIdentity : null;
+  if (frozenWorkspaceAccess(db, [scope, input.attemptId]) !== 'read') return null;
+  if (input.kind === 'delivery') return { reason: 'Read-only folder: delivering a change was not done, because the person let Pandesh read this folder but not change it. Nothing was changed.' };
+  const reason = readOnlyWorkspaceRefusal(toolName || input.kind, input.summary, null);
+  return reason ? { reason } : null;
+}
+
 /** Records that Core, not a person, authorized an action, with everything needed to audit why. */
 export function recordPermissionDecision(db: CoreDatabase, input: { attemptId: string; toolName: string; arguments: Record<string, unknown>; decision: PermissionDecision; approvalId?: string | null }): void {
   recordRuntimeEvent(db, {
     domain: 'attempt',
     entityId: input.attemptId,
     eventType: input.decision.decision === 'auto_authorize' ? 'permission_auto_authorized' : input.decision.decision === 'deny' ? 'permission_mode_blocked' : 'permission_review_required',
-    actor: input.decision.decision === 'deny' ? PLAN_ONLY_ACTOR : STANDING_AUTHORIZATION_ACTOR,
+    actor: input.decision.decision === 'deny' ? (input.decision.reason.startsWith('Read-only folder') ? READ_ONLY_WORKSPACE_ACTOR : PLAN_ONLY_ACTOR) : STANDING_AUTHORIZATION_ACTOR,
     metadata: {
       toolName: input.toolName,
       argumentsDigest: sha256(JSON.stringify(input.arguments ?? {})).slice(0, 32),

@@ -14,8 +14,8 @@ import { submitRequest } from '../domain/submission';
 import { getAttemptContext } from '../domain/attemptContext';
 import { createApproval } from '../domain/approvals';
 import {
-  classifyChatToolCall, createStandingAuthorization, decidePermission, frozenPermissionFor, revokeStandingAuthorization,
-  setConversationPermissionMode, listStandingAuthorizations, PLAN_ONLY_ACTOR,
+  classifyChatToolCall, createStandingAuthorization, decidePermission, frozenPermissionFor, frozenWorkspaceAccess, revokeStandingAuthorization,
+  setConversationPermissionMode, listStandingAuthorizations, PLAN_ONLY_ACTOR, READ_ONLY_WORKSPACE_ACTOR, readOnlyWorkspaceRefusal,
 } from '../domain/permissionModes';
 
 let dir: string;
@@ -313,5 +313,69 @@ describe('Plan Only', () => {
     expect(classifyChatToolCall('gmail_search', {}, new Set(['gmail_search']), ws)).toBe('read');
     expect(classifyChatToolCall('run_checks', { command: 'git status' }, none, ws)).toBe('read');
     expect(classifyChatToolCall('run_checks', { command: 'npm test' }, none, ws)).toBe('mutating');
+  });
+});
+
+describe('A read-only workspace folder', () => {
+  const ro = (text = 'look') => submit(text, { profile: 'p', workspaceAccess: 'read' }).attempt.id;
+
+  it('freezes the access the desktop sent; anything but read_write narrows to read, and no key keeps today\'s behaviour', () => {
+    const readOnly = ro();
+    const readWrite = submit('change', { profile: 'p', workspaceAccess: 'read_write' }).attempt.id;
+    const odd = submit('odd', { profile: 'p', workspaceAccess: 'everything' }).attempt.id;
+    const legacy = submit('legacy').attempt.id;
+    expect(frozenWorkspaceAccess(db, [readOnly])).toBe('read');
+    expect(frozenWorkspaceAccess(db, [readWrite])).toBe('read_write');
+    expect(frozenWorkspaceAccess(db, [odd])).toBe('read');
+    expect((getAttemptContext(db, odd).approvalPolicy as Record<string, unknown>).workspaceAccess).toBe('read');
+    expect(frozenWorkspaceAccess(db, [legacy])).toBe('read_write');
+    // One read-only layer makes the action read-only.
+    expect(frozenWorkspaceAccess(db, [readWrite, readOnly])).toBe('read');
+    expect(frozenWorkspaceAccess(db, [null, 'att_unknown', legacy])).toBe('read_write');
+  });
+
+  it('refuses file changes and programs even under an Auto authorization; plain read commands and other work are untouched', () => {
+    setConversationPermissionMode(db, conversationId, 'auto', 'desktop');
+    grant(['workspace_validation', 'workspace_read_commands', 'workspace_git_commit']);
+    const attemptId = ro();
+    expect(cmd(attemptId, 'npm test')).toMatchObject({ decision: 'deny' });
+    expect(cmd(attemptId, 'npm test').reason).toMatch(/^Read-only folder/);
+    expect(cmd(attemptId, 'git commit -m "x"').decision).toBe('deny');
+    expect(cmd(attemptId, 'git status --short')).toMatchObject({ decision: 'auto_authorize', category: 'workspace_read_commands' });
+    expect(decidePermission(db, { attemptIds: [attemptId], toolName: 'propose_file_change', arguments: { path: 'a.ts' }, mutating: true, workspaceRoot: ws }).decision).toBe('deny');
+    expect(decidePermission(db, { attemptIds: [attemptId], toolName: 'write_file', arguments: { filePath: 'a.ts' }, mutating: true, workspaceRoot: ws }).decision).toBe('deny');
+    expect(decidePermission(db, { attemptIds: [attemptId], toolName: 'gmail_send_draft', arguments: {}, mutating: true }).decision).toBe('review');
+    expect(decidePermission(db, { attemptIds: [attemptId], toolName: 'read_file', arguments: {}, mutating: false }).decision).toBe('review');
+    // The same commands in a read-and-write turn are Auto's to decide, as before.
+    const readWrite = submit('change', { profile: 'p', workspaceAccess: 'read_write' }).attempt.id;
+    expect(cmd(readWrite, 'npm test').decision).toBe('auto_authorize');
+  });
+
+  it('is a safety net at every approval site: changes, programs and deliveries are born rejected; other approvals are untouched', () => {
+    const attemptId = ro();
+    const write = createApproval(db, { attemptId, kind: 'mutation', summary: { toolName: 'write_file', path: 'a.txt' }, actor: 'pi' });
+    expect(write.status).toBe('rejected');
+    const ev = db.get<{ actor: string }>("SELECT actor FROM runtime_events WHERE eventType = 'approval_resolved' AND entityId = ?", [write.id]);
+    expect(ev!.actor).toBe(READ_ONLY_WORKSPACE_ACTOR);
+    const born = (summary: Record<string, unknown>, kind: 'mutation' | 'delivery' = 'mutation') => createApproval(db, { attemptId, kind, summary, actor: 'pi' }).status;
+    expect(born({ toolName: 'run_checks', command: 'npm test', workingDirectory: ws })).toBe('rejected');
+    expect(born({ toolName: 'authorize_mission' })).toBe('rejected');
+    expect(born({ toolName: 'delegate_to_opencode' })).toBe('rejected');
+    expect(born({ toolName: 'terminal', targetFiles: ['app.py'] })).toBe('rejected'); // a Hermes card that names files
+    expect(born({ toolName: 'commit' }, 'delivery')).toBe('rejected');
+    // Even an approval a caller records as already approved (Auto) cannot get through.
+    expect(createApproval(db, { attemptId, kind: 'mutation', summary: { toolName: 'run_checks', command: 'npm test', workingDirectory: ws }, actor: 'auto', initialResolution: 'approved', resolvedBy: 'auto' }).status).toBe('rejected');
+    expect(born({ toolName: 'run_checks', command: 'git status', workingDirectory: ws })).toBe('pending');
+    expect(born({ toolName: 'gmail_send_draft' })).toBe('pending');
+    expect(born({ toolName: 'web_research', query: 'x' })).toBe('pending');
+    const readWrite = submit('change', { profile: 'p', workspaceAccess: 'read_write' }).attempt.id;
+    expect(createApproval(db, { attemptId: readWrite, kind: 'mutation', summary: { toolName: 'write_file', path: 'a.txt' }, actor: 'pi' }).status).toBe('pending');
+  });
+
+  it('names the refusal in plain words for the model, and lets plain read commands through', () => {
+    expect(readOnlyWorkspaceRefusal('run_checks', { command: 'dir', workspacePath: ws }, null)).toBeNull();
+    expect(readOnlyWorkspaceRefusal('run_checks', { command: 'node build.js' }, ws)).toMatch(/not change it, so run_checks was not run/);
+    expect(readOnlyWorkspaceRefusal('write_file', { filePath: 'x' }, ws)).toMatch(/folder menu/);
+    expect(readOnlyWorkspaceRefusal('create_reminder', {}, ws)).toBeNull();
   });
 });
