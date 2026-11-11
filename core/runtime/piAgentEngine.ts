@@ -5046,7 +5046,7 @@ When the user asks to continue, resume, or check progress/updates, resume this w
     // read earlier in this conversation, bounded.
     try {
       if (conversationId) {
-        const earlier = listEarlierReads(db, conversationId, { excludeRequestId: requestId });
+        const earlier = listEarlierReads(db, conversationId, { excludeRequestId: requestId, workspaceRoot: selectedWorkspace || undefined });
         const section = renderEarlierReadsSection(earlier);
         if (section) {
           addTurnFact(section);

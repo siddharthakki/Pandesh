@@ -61,6 +61,28 @@ describe('files read earlier in a conversation', () => {
     expect(reads.map((r) => [r.target, r.content])).toEqual([['notes.md', 'new text']]);
   });
 
+  it('re-reads a text file whose stored output was cut off (fix-build verification of JOB-011: "30 No")', () => {
+    const conv = conversation();
+    const ws = fs.mkdtempSync(path.join(dir, 'ws-'));
+    fs.writeFileSync(path.join(ws, 'pm-role-ulm.md'), `\uFEFF${POSTING}\n`);
+    // What Core stored: an excerpt cut mid-word, as in the verification run.
+    turnWithTool(conv, 'read_file', { filePath: 'pm-role-ulm.md' }, POSTING.slice(0, POSTING.indexOf('30 No') + 5));
+    const reads = listEarlierReads(db, conv, { workspaceRoot: ws });
+    expect(reads[0].source).toBe('file');
+    const section = renderEarlierReadsSection(reads);
+    expect(section).toContain('Application deadline: 30 November 2026.');
+    expect(section).toContain('Apply at: https://careers.example.com/danube-digital/pm-ulm');
+    expect(section).toContain('current text of the file');
+  });
+
+  it('labels a stored excerpt as possibly cut when the file cannot be re-read', () => {
+    const conv = conversation();
+    turnWithTool(conv, 'document_read', { path: 'D:\\gone\\offer.pdf' }, 'Delivery within 3 working days; payment within 1');
+    const reads = listEarlierReads(db, conv, { readFile: () => null });
+    expect(reads[0].source).toBe('excerpt');
+    expect(renderEarlierReadsSection(reads)).toMatch(/may be cut off, so read the file again/);
+  });
+
   it('is bounded and empty when nothing was read', () => {
     const conv = conversation();
     expect(renderEarlierReadsSection(listEarlierReads(db, conv))).toBe('');

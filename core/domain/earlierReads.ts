@@ -8,14 +8,45 @@
  * conversation and returns a short, bounded section with the latest content of each file read there, so follow-up
  * questions are answered from what the file said, not from memory of a summary.
  */
+import * as fs from 'node:fs';
+import * as path from 'node:path';
 import type { CoreDatabase } from '../db/connection';
 
 /** Tools whose successful output is the content of a local file or document. */
 const READ_TOOLS = ['read_file', 'document_read', 'document_ocr'] as const;
+/** Plain-text files up to this size are re-read from disk: Core stores only an excerpt of each tool output. */
+const MAX_REREAD_BYTES = 64 * 1024;
 
-export interface EarlierRead { tool: string; target: string; at: string; content: string }
+export interface EarlierRead {
+  tool: string; target: string; at: string; content: string;
+  /** 'file' = the file's current text, re-read now; 'excerpt' = Core's stored excerpt of the earlier output (may be cut). */
+  source: 'file' | 'excerpt';
+}
 
-export function listEarlierReads(db: CoreDatabase, conversationId: string, options: { excludeRequestId?: string; limit?: number } = {}): EarlierRead[] {
+/**
+ * Verification of the first version (fix build eb57bfd, JOB-011): Core keeps only ~500 characters of a tool's output,
+ * so the carried posting ended at "Application deadline: 30 No" and the "Apply at" line was missing. A text file the
+ * model read in this conversation is therefore re-read from disk (same file, same conversation, size-capped).
+ */
+function rereadText(target: string, workspaceRoot: string | undefined, readFile: (p: string) => string | null): string | null {
+  if (!/^[\w\s.\\/:()'&+,-]+\.(?:md|txt|csv|json|ya?ml|ini|cfg|conf|log|py|js|ts|tsx|jsx|html?|css|xml|sql|toml|env\.example)$/i.test(target)) return null;
+  const abs = path.isAbsolute(target) ? target : workspaceRoot ? path.resolve(workspaceRoot, target) : null;
+  if (!abs) return null;
+  const text = readFile(abs);
+  return text == null ? null : text.replace(/^﻿/, '');
+}
+
+function defaultReadFile(p: string): string | null {
+  try {
+    const st = fs.statSync(p);
+    if (!st.isFile() || st.size > MAX_REREAD_BYTES) return null;
+    return fs.readFileSync(p, 'utf8');
+  } catch {
+    return null;
+  }
+}
+
+export function listEarlierReads(db: CoreDatabase, conversationId: string, options: { excludeRequestId?: string; limit?: number; workspaceRoot?: string; readFile?: (p: string) => string | null } = {}): EarlierRead[] {
   const rows = db.all<{ toolName: string; argsSummary: string; evidence: string; at: string }>(
     `SELECT ti.toolName AS toolName, ti.argsSummary AS argsSummary, ti.evidence AS evidence, COALESCE(ti.endedAt, ti.startedAt) AS at
        FROM tool_invocations ti
@@ -43,7 +74,10 @@ export function listEarlierReads(db: CoreDatabase, conversationId: string, optio
     } catch { content = ''; }
     if (!content.trim() || /^(?:NOT DONE|NOT OPENED|Error)/i.test(content.trim())) continue;
     seen.add(key);
-    out.push({ tool: row.toolName, target, at: row.at, content });
+    const fresh = row.toolName === 'read_file' ? rereadText(target, options.workspaceRoot, options.readFile ?? defaultReadFile) : null;
+    out.push(fresh != null
+      ? { tool: row.toolName, target, at: row.at, content: fresh, source: 'file' }
+      : { tool: row.toolName, target, at: row.at, content, source: 'excerpt' });
     if (out.length >= (options.limit ?? 6)) break;
   }
   return out;
@@ -58,11 +92,12 @@ export function renderEarlierReadsSection(reads: readonly EarlierRead[], limits:
   let used = 0;
   for (const r of reads) {
     const body = r.content.length > per ? `${r.content.slice(0, per)}\n[... cut; read the file again for the rest]` : r.content;
-    const block = `--- ${r.target} (${r.tool}, ${r.at})\n${body}`;
+    const label = r.source === 'file' ? 'current text of the file' : `excerpt of the earlier ${r.tool} output; it may be cut off, so read the file again for anything not shown`;
+    const block = `--- ${r.target} (${label})\n${body}`;
     if (used + block.length > total) break;
     parts.push(block);
     used += block.length;
   }
   if (parts.length === 0) return '';
-  return 'FILES READ EARLIER IN THIS CONVERSATION (exact text your tools returned then; it may have changed since). Answer questions about these files from this text or read them again; never say a file lacks something without checking it here or re-reading it:\n' + parts.join('\n');
+  return 'FILES READ EARLIER IN THIS CONVERSATION. Answer questions about these files from this text or read them again; never say a file lacks something unless its full text is shown here or you re-read it:\n' + parts.join('\n');
 }
