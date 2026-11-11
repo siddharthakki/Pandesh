@@ -15,6 +15,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { createServer } from 'node:http';
+import { spawnSync } from 'node:child_process';
 
 const args = Object.fromEntries(process.argv.slice(2).reduce((acc, a, i, all) => (a.startsWith('--') ? [...acc, [a.slice(2), all[i + 1] && !all[i + 1].startsWith('--') ? all[i + 1] : true]] : acc), []));
 const PROFILE = path.resolve(String(args.profile ?? ''));
@@ -511,9 +512,128 @@ async function designScenario(cdp) {
   });
 }
 
+// ------------------------------------------------------------------------------------------ scenario: Video slideshow
+/** Three synthetic test pictures (FFmpeg's own test patterns), made for this run in the isolated profile. */
+function testPictures() {
+  const dir = path.join(PROFILE, '..', 'test-images');
+  fs.mkdirSync(dir, { recursive: true });
+  const sources = { 'stall-1.png': 'testsrc2=s=1600x1200', 'stall-2.png': 'smptehdbars=s=1600x1200', 'stall-3.png': 'mandelbrot=s=1600x1200' };
+  return Object.entries(sources).map(([name, src]) => {
+    const file = path.join(dir, name);
+    if (!fs.existsSync(file)) {
+      const r = spawnSync('ffmpeg', ['-v', 'error', '-f', 'lavfi', '-i', src, '-frames:v', '1', file]);
+      if (r.status !== 0) throw new Error(`could not make ${name}: ${String(r.stderr)}`);
+    }
+    return file;
+  });
+}
+function ffprobe(file) {
+  const r = spawnSync('ffprobe', ['-v', 'error', '-select_streams', 'v:0', '-show_entries', 'stream=width,height,codec_name:format=duration', '-of', 'json', file], { encoding: 'utf8' });
+  const j = JSON.parse(r.stdout);
+  return { width: j.streams[0].width, height: j.streams[0].height, codec: j.streams[0].codec_name, duration: Math.round(Number(j.format.duration) * 100) / 100 };
+}
+
+async function videoScenario(cdp) {
+  const ctx = {};
+  const latestFile = async () => {
+    const w = (await http('GET', `/v1/workshops?conversationId=${ctx.conversationId}`)).workshops.find((x) => x.type === 'video');
+    const a = await http('GET', `/v1/artifacts/${w.latestArtifactId}`);
+    return { w, file: a.absolutePath, sha256: a.sha256 };
+  };
+  const playerState = async () => (await inspect(ctx.conversationId)).state;
+
+  await test('WSH-040', '"Create a five-second promotional slideshow from these three test images": a verified MP4 plays in the Workshop', async ({ dir, record }) => {
+    const pictures = testPictures();
+    const conv = await http('POST', '/v1/conversations', { mode: 'baat_kar', title: 'Video acceptance' });
+    ctx.conversationId = conv.id;
+    await cdp.eval(`window.desktop.openConversation(${JSON.stringify(conv.id)}, true).then(() => true)`);
+    await sleep(800);
+    const r = await governed(conv.id, 'create_video', { images: pictures, totalSeconds: 5, title: 'Kha ke dikha promo' }, record);
+    record.facts.output = outputOf(r);
+    if (r.toolInvocation?.status !== 'succeeded') throw new Error(outputOf(r));
+    await waitFor(() => cdp.eval(`(() => { const v = document.querySelector('.ws-video video'); return v && v.readyState >= 1 ? true : null; })()`), 20_000, 'the video player');
+    const state = await playerState();
+    const { file, sha256 } = await latestFile();
+    const probed = ffprobe(file);
+    record.facts.player = state; record.facts.ffprobe = probed; record.facts.sha256 = sha256;
+    record.screenshots.push(await cdp.screenshot(path.join(dir, 'slideshow.png')));
+    if (probed.width !== 1920 || probed.height !== 1080 || probed.codec !== 'h264' || Math.abs(probed.duration - 5) > 0.15) throw new Error(`ffprobe: ${JSON.stringify(probed)}`);
+    if (state?.videoWidth !== 1920 || state?.videoHeight !== 1080 || Math.abs(Number(state?.durationSeconds) - 5) > 0.15) throw new Error(`player: ${JSON.stringify(state)}`);
+    return { observation: `${outputOf(r).split('\n')[0].slice(0, 140)}; FFprobe (run by this test on the saved file): ${probed.width}×${probed.height} ${probed.codec}, ${probed.duration} s; the window's player reports ${state.videoWidth}×${state.videoHeight}, ${state.durationSeconds} s.` };
+  });
+
+  await test('WSH-041', '"Play it", "pause": the player really advances, then holds', async ({ dir, record }) => {
+    const play = await dispatch(ctx.conversationId, 'workshop_view', { action: 'play' });
+    await sleep(800);
+    const pause = await dispatch(ctx.conversationId, 'workshop_view', { action: 'pause' });
+    const at1 = (await playerState())?.currentTimeSeconds;
+    await sleep(800);
+    const at2 = (await playerState())?.currentTimeSeconds;
+    record.facts = { play: outputOf(play), pause: outputOf(pause), at1, at2 };
+    record.screenshots.push(await cdp.screenshot(path.join(dir, 'paused.png')));
+    if (!/^DONE/.test(outputOf(play)) || !/^DONE/.test(outputOf(pause)) || !(at1 > 0) || at1 !== at2) throw new Error(JSON.stringify(record.facts));
+    return { observation: `${outputOf(play).slice(0, 110)}; paused and held at ${at2} s.` };
+  });
+
+  await test('WSH-042', '"Make it vertical": v2 rendered again from the same pictures at 1080×1920, same length', async ({ dir, record }) => {
+    const before = await latestFile();
+    const r = await governed(ctx.conversationId, 'workshop_edit', { aspect: 'vertical', summary: 'Make it vertical' }, record);
+    record.facts.output = outputOf(r);
+    if (r.toolInvocation?.status !== 'succeeded') throw new Error(outputOf(r));
+    await waitFor(async () => /v2 of 2/.test(await cdp.eval(`document.querySelector('#ws-version')?.selectedOptions?.[0]?.textContent ?? ''`)), 20_000, 'version 2 on screen');
+    await waitFor(async () => (await playerState())?.videoHeight === 1920, 15_000, 'the vertical video in the player');
+    await waitFor(() => cdp.eval(`!document.querySelector('.ws-panel > .ws-progress')`), 5_000, 'the finished render\'s progress line to clear');
+    const state = await playerState();
+    const after = await latestFile();
+    const probed = ffprobe(after.file);
+    const v1Again = ffprobe(before.file);
+    record.facts.player = state; record.facts.ffprobe = probed; record.facts.v1Unchanged = v1Again;
+    record.screenshots.push(await cdp.screenshot(path.join(dir, 'vertical.png')));
+    if (probed.width !== 1080 || probed.height !== 1920 || Math.abs(probed.duration - 5) > 0.15) throw new Error(`ffprobe: ${JSON.stringify(probed)}`);
+    if (v1Again.width !== 1920) throw new Error('version 1 changed');
+    return { observation: `${outputOf(r).split('\n')[0].slice(0, 150)}; FFprobe: v2 ${probed.width}×${probed.height}, ${probed.duration} s; v1 still ${v1Again.width}×${v1Again.height}; player ${state.videoWidth}×${state.videoHeight}.` };
+  });
+
+  await test('WSH-043', 'Compare v1 with v2: both videos side by side', async ({ dir, record }) => {
+    const r = await dispatch(ctx.conversationId, 'workshop_view', { action: 'compare', version: '1', compareWith: '2' });
+    await waitFor(() => cdp.eval(`document.querySelectorAll('.ws-compare video').length === 2`), 10_000, 'two players in the comparison');
+    await waitFor(() => cdp.eval(`[...document.querySelectorAll('.ws-compare video')].every((v) => v.readyState >= 1)`), 10_000, 'both videos loaded');
+    const sizes = await cdp.eval(`[...document.querySelectorAll('.ws-compare video')].map((v) => v.videoWidth + '×' + v.videoHeight)`);
+    const captions = await cdp.eval(`[...document.querySelectorAll('.ws-compare figcaption')].map((f) => f.textContent)`);
+    record.facts = { output: outputOf(r), sizes, captions };
+    record.screenshots.push(await cdp.screenshot(path.join(dir, 'compare.png')));
+    await cdp.eval(`([...document.querySelectorAll('.ws-compare button')].find((b) => /Done comparing/.test(b.textContent))?.click(), true)`);
+    if (!/^DONE/.test(outputOf(r)) || sizes[0] !== '1920×1080' || sizes[1] !== '1080×1920') throw new Error(JSON.stringify(record.facts));
+    return { observation: `Side by side: ${captions.join(' | ')} (players measure ${sizes.join(' and ')}).` };
+  });
+
+  await test('WSH-044', 'The viewer\'s own "Square 1:1" button renders v3 through Core (the person\'s click is the decision)', async ({ dir, record }) => {
+    await cdp.eval(`([...document.querySelectorAll('.ws-video .ws-toolbar button')].find((b) => /Square/.test(b.textContent))?.click(), true)`);
+    await waitFor(async () => /v3 of 3/.test(await cdp.eval(`document.querySelector('#ws-version')?.selectedOptions?.[0]?.textContent ?? ''`)), 30_000, 'version 3 on screen');
+    await waitFor(async () => (await playerState())?.videoHeight === 1080 && (await playerState())?.videoWidth === 1080, 15_000, 'the square video');
+    const after = await latestFile();
+    const probed = ffprobe(after.file);
+    const summary = after.w.versions[after.w.versions.length - 1].meta.op.summary;
+    record.facts = { ffprobe: probed, summary };
+    record.screenshots.push(await cdp.screenshot(path.join(dir, 'square.png')));
+    if (probed.width !== 1080 || probed.height !== 1080 || Math.abs(probed.duration - 5) > 0.15) throw new Error(JSON.stringify(probed));
+    return { observation: `"${summary}"; FFprobe: ${probed.width}×${probed.height}, ${probed.duration} s.` };
+  });
+}
+
 async function main() {
   fs.mkdirSync(OUT, { recursive: true });
   if (args.reopen) return reopen(String(args.reopen));
+  if (args.scenario === 'video') {
+    const cdp = await Cdp.attach();
+    await cdp.send('Page.bringToFront').catch(() => undefined);
+    await videoScenario(cdp);
+    fs.writeFileSync(path.join(OUT, 'results.json'), JSON.stringify(results, null, 2));
+    cdp.ws.close();
+    const failed = Object.values(results).filter((r) => r.status !== 'PASS');
+    console.log(`\n${Object.keys(results).length - failed.length}/${Object.keys(results).length} passed`);
+    process.exit(failed.length ? 1 : 0);
+  }
   if (args.scenario === 'design') {
     const cdp = await Cdp.attach();
     await cdp.send('Page.bringToFront').catch(() => undefined);

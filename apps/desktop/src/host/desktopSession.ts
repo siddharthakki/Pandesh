@@ -168,6 +168,7 @@ import type {
 import { isWorkshopViewAction, workshopMetaOf } from '../../../../core/shared/workshop/model';
 import { parseSceneFile } from '../../../../core/shared/workshop/scene3d';
 import { parseSimulationFile } from '../../../../core/shared/workshop/simulation';
+import { parseVideoRecipe } from '../../../../core/shared/workshop/video';
 import {
   OpenWakeWordEngine,
   probeDesktopWakeWord,
@@ -3792,7 +3793,10 @@ export class DesktopSession {
       if (record.byteSize > 24 * 1024 * 1024) throw new Error('Image is too large for an in-app preview');
       return { type: 'image', artifactId: record.id, dataUrl: `data:${record.mimeType};base64,${bytes.toString('base64')}` };
     }
-    if (meta.type === 'video') return { type: 'video', artifactId: record.id, fileUrl: pathToFileURL(record.absolutePath).toString() };
+    if (meta.type === 'video') {
+      const recipe = parseVideoRecipe(meta.recipe);
+      return { type: 'video', artifactId: record.id, fileUrl: pathToFileURL(record.absolutePath).toString(), recipe: recipe.ok ? recipe.value : null };
+    }
     if (meta.type === 'design') return { type: 'design', artifactId: record.id, html: bytes.toString('utf8') };
     const simulation = parseSimulationFile(bytes.toString('utf8'));
     if (!simulation.ok) throw new Error(`The simulation could not be read: ${simulation.errors.join('; ')}`);

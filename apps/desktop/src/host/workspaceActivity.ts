@@ -35,7 +35,7 @@ export function activityKindForTool(toolName: string, preview?: ToolActivity | n
   if (toolName.startsWith('browser_') || toolName === 'inspect_page' || toolName === 'web_research') return 'browser';
   if (toolName === 'image_generate') return 'image';
   if (toolName === 'video_generate') return 'video';
-  if (toolName === 'build_3d_model' || toolName === 'create_simulation' || toolName === 'create_design' || toolName.startsWith('workshop_')) return 'workshop';
+  if (toolName === 'build_3d_model' || toolName === 'create_simulation' || toolName === 'create_design' || toolName === 'create_video' || toolName.startsWith('workshop_')) return 'workshop';
   if (CODE_TOOLS.has(toolName)) return 'code';
   if (toolName === 'read_file' || toolName === 'read_file_outside_workspace' || toolName === 'gmail_read_attachment') return 'document';
   return 'tool';
@@ -87,6 +87,7 @@ export function activityTitle(toolName: string, args: Record<string, unknown> = 
     case 'create_simulation': return `Running a simulation: ${clip(args.title, 60) || 'customer queue'}`;
     case 'build_3d_model': return `Building a 3D model: ${clip(args.description ?? args.title, 70) || 'from parts'}`;
     case 'create_design': return `Designing a page: ${clip(args.description ?? args.title, 70) || 'from the source given'}`;
+    case 'create_video': return `Rendering a video: ${clip(args.title, 60) || `${Array.isArray(args.images) ? args.images.length : ''} picture slideshow`.trim()}`;
     case 'workshop_edit': return `Changing the Workshop model${args.workshopTitle ? `: ${clip(args.workshopTitle, 60)}` : ''}`;
     case 'workshop_restore': return 'Undo in the Workshop';
     case 'workshop_export': return 'Exporting the 3D model (GLB)';

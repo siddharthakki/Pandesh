@@ -63,7 +63,15 @@ export interface WorkshopMeta {
   notes?: string[];
   /** Set on an export: the version it was exported from. */
   exportOf?: string | null;
+  /**
+   * What a rendered version was made from, so it can be made again with one thing changed (a video's pictures by
+   * digest, timing and size). Plain JSON, at most 16 KB; each type validates its own (e.g. shared/workshop/video.ts).
+   */
+  recipe?: Record<string, unknown>;
 }
+
+/** Copies of a person's pictures that a workshop renders from: kept as Core artifacts, never shown as workshops. */
+export const WORKSHOP_SOURCE = 'workshop_source';
 
 const ID = /^[A-Za-z0-9_-]{1,100}$/;
 
@@ -115,6 +123,12 @@ export function sanitizeWorkshopMeta(raw: unknown): WorkshopMeta | null {
     if (notes.length) meta.notes = notes;
   }
   if (typeof r.exportOf === 'string' && ID.test(r.exportOf)) meta.exportOf = r.exportOf;
+  if (r.recipe && typeof r.recipe === 'object' && !Array.isArray(r.recipe)) {
+    try {
+      const json = JSON.stringify(r.recipe);
+      if (json.length <= 16_000) meta.recipe = JSON.parse(json) as Record<string, unknown>;
+    } catch { /* not plain JSON: left out */ }
+  }
   return meta;
 }
 
@@ -139,6 +153,7 @@ export interface WorkshopArtifactLike {
 export function workshopMetaOf(artifact: WorkshopArtifactLike): WorkshopMeta | null {
   const meta = sanitizeWorkshopMeta(artifact.metadata?.workshop);
   if (meta) return meta;
+  if (artifact.source === WORKSHOP_SOURCE) return null;
   if (artifact.kind === 'image' && artifact.mimeType.startsWith('image/') && artifact.source !== 'browser_screenshot' && artifact.source !== 'user_attachment') {
     return legacyMeta(artifact, 'image');
   }

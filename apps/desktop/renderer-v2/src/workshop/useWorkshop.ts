@@ -100,6 +100,8 @@ export function useWorkshop(conversationId: string | null, coreReady = true) {
       return;
     }
     const pinsVersion = cmd.action === 'open' || cmd.action === 'show_version' || cmd.action === 'compare';
+    // Core asks to open a version when the work that was in progress has finished.
+    if (cmd.action === 'open') setProgress(null);
     setUi((cur) => ({
       workshopId: cmd.workshopId,
       artifactId: pinsVersion ? cmd.artifactId : cur?.workshopId === cmd.workshopId ? cur.artifactId : null,
@@ -114,7 +116,8 @@ export function useWorkshop(conversationId: string | null, coreReady = true) {
     mounted += 1;
     for (const cmd of waiting.splice(0)) if (Date.now() - cmd.receivedAt < COMMAND_FRESH_MS) handle(cmd);
     const off = onDesktopEvent((e) => {
-      if (e.kind === 'workshop_changed' && (!e.conversationId || e.conversationId === conv.current)) void refresh();
+      // A new version means the work that was in progress has finished: its last stage is no longer news.
+      if (e.kind === 'workshop_changed' && (!e.conversationId || e.conversationId === conv.current)) { setProgress(null); void refresh(); }
       if (e.kind === 'workshop_progress' && e.workshop) setProgress({ workshopId: e.workshop.workshopId, stage: e.workshop.stage ?? e.summary, index: e.workshop.index, total: e.workshop.total, at: e.at });
       if (e.kind === 'workshop_command' && e.workshopCommand) handle(e.workshopCommand);
     });

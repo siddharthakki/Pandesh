@@ -16,12 +16,15 @@ import {
   listWorkshops,
   readWorkshopVersion,
   recordWorkshopFocus,
+  recordWorkshopProgress,
   writeWorkshopVersion,
 } from '../domain/workshops';
 import { verifyGlb, glbNodeNames } from '../shared/workshop/glb';
 import { WORKSHOP_MIME } from '../shared/workshop/model';
 import { applySceneEdits, parseSceneFile } from '../shared/workshop/scene3d';
 import { applySimulationChanges, parseSimulationFile, runQueue } from '../shared/workshop/simulation';
+import { applyVideoChanges, parseVideoRecipe } from '../shared/workshop/video';
+import { picturesOf, renderRecipe } from '../runtime/workshopVideo';
 import type { EventBroadcaster } from '../ws/broadcaster';
 import type { ApiContext, ApiResult } from './context';
 import type { Router } from './router';
@@ -92,7 +95,7 @@ export function registerWorkshopRoutes(router: Router<ApiContext, ApiResult>, op
   });
 
   /** An edit a person made with the Workshop's own controls (their click is the decision). */
-  router.post('/v1/workshops/:id/versions', (ctx, match) => {
+  router.post('/v1/workshops/:id/versions', async (ctx, match) => {
     requireHost(ctx);
     const b = body(ctx);
     const workshop = getWorkshop(ctx.db, match.params.id);
@@ -100,6 +103,34 @@ export function registerWorkshopRoutes(router: Router<ApiContext, ApiResult>, op
     const parentId = str(b.parentArtifactId, 100) ?? latest.artifactId;
     if (parentId !== latest.artifactId) {
       throw new CoreError('conflict', `the workshop has a newer version (v${latest.number}) than the one this edit was made on; reload and try again`);
+    }
+    if (workshop.type === 'video') {
+      // The viewer's shape buttons: the same recipe rules and checks as "make it vertical" from a conversation.
+      const recipe = parseVideoRecipe(latest.meta.recipe);
+      if (!recipe.ok) throw new CoreError('invalid_request', 'this video has no recipe (it was made before the Workshop), so it cannot be rendered again');
+      const set = (b.set && typeof b.set === 'object' && !Array.isArray(b.set) ? b.set : {}) as Record<string, unknown>;
+      const changed = applyVideoChanges(recipe.value, { aspect: set.aspect, totalSeconds: set.totalSeconds, secondsPerScene: set.secondsPerScene, fit: set.fit, captions: set.captions });
+      if (!changed.ok) throw new CoreError('invalid_request', changed.errors.join('; '));
+      const conversationId = str(b.conversationId, 100) ?? workshop.conversationId;
+      const progress = (stage: string) => recordWorkshopProgress(ctx.db, { workshopId: workshop.workshopId, conversationId, attemptId: null, stage, actor: ctx.actor, publish: (e) => options.broadcaster.publishRuntime(e) });
+      const rendered = await renderRecipe(changed.recipe, picturesOf(ctx.db, changed.recipe), { dataDir: options.dataDir, onStage: progress });
+      if (!rendered.ok) throw new CoreError('conflict', `the new render did not pass Core's checks: ${rendered.checks.filter((c) => c.startsWith('FAIL')).join('; ')}`);
+      const now = getWorkshop(ctx.db, workshop.workshopId);
+      if (now.latestArtifactId !== latest.artifactId) throw new CoreError('conflict', 'another version was saved while this one was rendering; reload and try again');
+      return broadcast(ctx, () => {
+        const { artifact, meta } = writeWorkshopVersion(ctx.db, {
+          dataDir: options.dataDir, conversationId,
+          type: 'video', workshopId: workshop.workshopId, parentArtifactId: latest.artifactId, title: changed.recipe.title,
+          bytes: rendered.bytes, extension: 'mp4', mimeType: WORKSHOP_MIME.mp4, kind: 'video',
+          op: { kind: 'render', summary: `Changed in the Workshop: ${changed.changes.join('; ')}`.slice(0, 380) },
+          engine: { tool: 'workshop window', engine: 'FFmpeg (libx264), checked with FFprobe', model: null, provider: 'local', costUsd: 0 },
+          verification: { ok: true, checks: rendered.checks.slice(0, 12) },
+          notes: ['Rendered again from the same copies of the pictures (each checked by SHA-256); nothing else changed.'],
+          recipe: changed.recipe as unknown as Record<string, unknown>,
+          actor: ctx.actor, clientId: ctx.clientId,
+        });
+        return { status: 201, body: { artifact, meta } };
+      });
     }
     if (workshop.type === 'simulation') {
       // The Lab's own sliders, saved as a version: the same rules as a change from a conversation.

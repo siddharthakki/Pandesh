@@ -10,13 +10,14 @@ import type { FolderCheck, FolderMention, RecentWorkspace, WorkspaceAccess, Work
 import type { WorkshopCommand, WorkshopSummary } from '../../../../core/shared/workshop/model';
 import type { Scene3D } from '../../../../core/shared/workshop/scene3d';
 import type { SimulationSpec } from '../../../../core/shared/workshop/simulation';
+import type { VideoRecipe } from '../../../../core/shared/workshop/video';
 
 export type { WorkshopSummary, WorkshopCommand };
 /** One workshop version's content, verified and re-validated by the host before the window sees it. */
 export type WorkshopContent =
   | { type: '3d'; artifactId: string; scene: Scene3D }
   | { type: 'image'; artifactId: string; dataUrl: string }
-  | { type: 'video'; artifactId: string; fileUrl: string }
+  | { type: 'video'; artifactId: string; fileUrl: string; recipe: VideoRecipe | null }
   | { type: 'design'; artifactId: string; html: string }
   | { type: 'simulation'; artifactId: string; spec: SimulationSpec };
 export type WorkshopCommandEvent = WorkshopCommand & { conversationId: string | null };

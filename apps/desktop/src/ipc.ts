@@ -828,7 +828,7 @@ export interface DesktopArtifactPreview {
 export type DesktopWorkshopContent =
   | { type: '3d'; artifactId: string; scene: import('../../../core/shared/workshop/scene3d').Scene3D }
   | { type: 'image'; artifactId: string; dataUrl: string }
-  | { type: 'video'; artifactId: string; fileUrl: string }
+  | { type: 'video'; artifactId: string; fileUrl: string; recipe: import('../../../core/shared/workshop/video').VideoRecipe | null }
   | { type: 'design'; artifactId: string; html: string }
   | { type: 'simulation'; artifactId: string; spec: import('../../../core/shared/workshop/simulation').SimulationSpec };
 

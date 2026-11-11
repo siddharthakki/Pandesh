@@ -14,6 +14,7 @@ import { Viewer3D } from './Viewer3D';
 import { ImageViewer } from './ImageViewer';
 import { SimulationLab } from './SimulationLab';
 import { DesignPreview } from './DesignPreview';
+import { VideoWorkshop } from './VideoWorkshop';
 import type { CommandOutcome, ViewerHandle } from './viewerTypes';
 import type { WorkshopState } from './useWorkshop';
 
@@ -173,6 +174,12 @@ export function WorkshopPanel({ conversationId, workshop, narrow }: Props) {
               <figure><img src={content.dataUrl} alt={`Version ${version.number}`} /><figcaption>v{version.number} · {version.meta.op.summary.slice(0, 80)}</figcaption></figure>
             </div>
           )}
+          {content?.type === 'video' && compareContent?.type === 'video' && (
+            <div className="ws-side-by-side">
+              <figure><video src={compareContent.fileUrl} controls muted preload="metadata" aria-label={`Version ${compareVersion.number}`} /><figcaption>v{compareVersion.number}{compareContent.recipe ? ` · ${compareContent.recipe.width}×${compareContent.recipe.height}` : ''}</figcaption></figure>
+              <figure><video src={content.fileUrl} controls muted preload="metadata" aria-label={`Version ${version.number}`} /><figcaption>v{version.number}{content.recipe ? ` · ${content.recipe.width}×${content.recipe.height}` : ''}</figcaption></figure>
+            </div>
+          )}
           <div className="actions">
             <button type="button" className="btn small" onClick={() => { const a = compareId; setCompareId(version.artifactId); show(a); }}>Swap</button>
             <button type="button" className="btn small" onClick={() => setCompareId(null)}>Done comparing</button>
@@ -189,7 +196,7 @@ export function WorkshopPanel({ conversationId, workshop, narrow }: Props) {
         )}
         {summary && version && loaded && content?.type === 'image' && <ImageViewer ref={viewer} src={content.dataUrl} title={summary.title} />}
         {summary && version && loaded && content?.type === 'video' && (
-          <div className="ws-media"><video src={content.fileUrl} controls style={{ maxWidth: '100%', maxHeight: '100%' }} aria-label={summary.title} /></div>
+          <VideoWorkshop ref={viewer} fileUrl={content.fileUrl} title={summary.title} recipe={content.recipe} onSave={(set, what) => onEdit({ set }, what)} />
         )}
         {summary && version && loaded && content?.type === 'simulation' && (
           <SimulationLab ref={viewer} spec={content.spec} compareSpec={compareContent?.type === 'simulation' ? compareContent.spec : null}

@@ -34,7 +34,7 @@ const MAX_VERSION_BYTES = 64 * 1024 * 1024;
  * count as one-version workshops of their own (their workshop id is the artifact id).
  */
 export function listWorkshopArtifacts(db: CoreDatabase, filter: { conversationId?: string | null; workshopId?: string | null; limit?: number } = {}): ArtifactRecord[] {
-  const where = ["(json_extract(metadataJson, '$.workshop.workshopId') IS NOT NULL OR kind IN ('image', 'video'))", "source NOT IN ('browser_screenshot', 'user_attachment')"];
+  const where = ["(json_extract(metadataJson, '$.workshop.workshopId') IS NOT NULL OR kind IN ('image', 'video'))", "source NOT IN ('browser_screenshot', 'user_attachment', 'workshop_source')"];
   const params: unknown[] = [];
   if (filter.conversationId) { where.push('conversationId = ?'); params.push(filter.conversationId); }
   if (filter.workshopId) { where.push("(json_extract(metadataJson, '$.workshop.workshopId') = ? OR id = ?)"); params.push(filter.workshopId, filter.workshopId); }
@@ -91,6 +91,8 @@ export interface WriteWorkshopVersionInput {
   verification?: { ok: boolean; checks: string[] };
   notes?: string[];
   exportOf?: string | null;
+  /** What a rendered version was made from (WorkshopMeta.recipe). */
+  recipe?: Record<string, unknown>;
   actor: string;
   clientId?: string | null;
 }
@@ -114,8 +116,10 @@ export function writeWorkshopVersion(db: CoreDatabase, input: WriteWorkshopVersi
     ...(input.verification ? { verification: input.verification } : {}),
     ...(input.notes?.length ? { notes: input.notes } : {}),
     ...(input.exportOf ? { exportOf: input.exportOf } : {}),
+    ...(input.recipe ? { recipe: input.recipe } : {}),
   });
   if (!meta) throw new CoreError('invalid_request', 'invalid workshop metadata');
+  if (input.recipe && !meta.recipe) throw new CoreError('invalid_request', 'the recipe is not plain JSON under 16 KB');
   const dir = path.join(input.dataDir, 'workshop', workshopId);
   fs.mkdirSync(dir, { recursive: true });
   const stamp = nowIso().replace(/[-:.]/g, '').replace('T', '-').slice(0, 15);
