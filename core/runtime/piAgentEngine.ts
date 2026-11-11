@@ -5005,7 +5005,8 @@ When the user asks to continue, resume, or check progress/updates, resume this w
           },
         };
       }
-      systemPrompt += `\n\nREAD-ONLY FOLDER: the user let Pandesh read ${selectedWorkspace ?? 'the selected folder'} but not change it. Read, list and search its files freely. Do not create, change or delete files and do not run programs (plain read commands such as dir or git status are fine); those tools are refused. If the user asks for a change, describe it and say they can allow changes with the folder menu next to the message box.`;
+      // Per-turn, so it travels in the turn's state block and the system prompt stays identical between messages.
+      addTurnFact(`READ-ONLY FOLDER: the user let Pandesh read ${selectedWorkspace ?? 'the selected folder'} but not change it. Read, list and search its files freely. Do not create, change or delete files and do not run programs (plain read commands such as dir or git status are fine); those tools are refused. If the user asks for a change, describe it and say they can allow changes with the folder menu next to the message box.`);
     }
 
     // M10: an explicit single-choice request gets an explicit single-choice rule (see choiceConstraint.ts).
