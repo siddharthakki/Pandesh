@@ -2,7 +2,11 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import * as crypto from 'node:crypto';
 import type { CoreDatabase } from '../db/connection';
-import { registerArtifact } from '../domain/artifacts';
+import { getArtifact, registerArtifact } from '../domain/artifacts';
+import { newId } from '../domain/ids';
+import { getWorkshop, workshopFocus } from '../domain/workshops';
+import { sanitizeWorkshopMeta, workshopMetaOf } from '../shared/workshop/model';
+import type { ArtifactRecord } from '../shared/wireTypes';
 import type { GovernedCapabilityAdapter } from './governedCapability';
 import type { ModelToolCall } from './modelBackend';
 import type { ToolExecutionContext, ToolExecutionResult } from './toolRunner';
@@ -378,27 +382,76 @@ export function createImageStudioCapabilityAdapter(options: ImageStudioCapabilit
     }
   }
 
-  /** A previously generated image artifact, usable as a Studio reference
-   * (Studio resolves references by file name inside its output folder). */
-  function referenceFileName(artifactId: unknown): string | null {
-    let targetId = artifactId;
-    if (targetId === undefined || targetId === null || targetId === '') {
-      // Find the latest ready image artifact in the database to bind follow-up edits
-      if (options.db) {
-        try {
-          const latest = options.db.get<{ id: string; absolutePath: string; kind: string }>(
-            "SELECT id, absolutePath, kind FROM artifacts WHERE kind = 'image' AND availability = 'ready' ORDER BY createdAt DESC LIMIT 1"
-          );
-          if (latest) targetId = latest.id;
-        } catch {}
-      }
-    }
+  /** The image open in this conversation's Workshop (what "it" means on screen), or null. */
+  function imageOnScreen(conversationId: string | null): { artifactId: string; title: string; version: number } | null {
+    if (!conversationId) return null;
+    try {
+      const focus = workshopFocus(options.db, conversationId);
+      if (!focus?.open || !focus.workshopId) return null;
+      const shown = getWorkshop(options.db, focus.workshopId);
+      const id = focus.artifactId ?? shown.latestArtifactId;
+      const v = shown.versions.find((x) => x.artifactId === id);
+      return shown.type === 'image' && v ? { artifactId: id, title: shown.title, version: v.number } : null;
+    } catch { return null; }
+  }
+
+  /**
+   * The picture a change starts from (Studio resolves references by file name inside its output folder): the one
+   * named, else the image open in this conversation's Workshop, else none. Never an image from another conversation
+   * or one the person is not looking at. (prepare() freezes the choice into the approval card.)
+   */
+  function resolveReference(artifactId: unknown, conversationId: string | null): { fileName: string; artifact: ArtifactRecord } | null {
+    const targetId = typeof artifactId === 'string' && artifactId.trim() ? artifactId.trim() : imageOnScreen(conversationId)?.artifactId ?? null;
     if (!targetId) return null;
-    const row = options.db.get<{ absolutePath: string; kind: string }>('SELECT absolutePath, kind FROM artifacts WHERE id = ?', [String(targetId)]);
-    if (!row || row.kind !== 'image') throw new Error('reference must be an existing image artifact');
+    let row: ArtifactRecord;
+    try { row = getArtifact(options.db, targetId); } catch { throw new Error('reference must be an existing image artifact'); }
+    if (row.kind !== 'image') throw new Error('reference must be an existing image artifact');
     const resolved = path.resolve(row.absolutePath);
     if (!fs.existsSync(resolved)) throw new Error('reference image file does not exist');
-    return path.basename(resolved);
+    return { fileName: path.basename(resolved), artifact: row };
+  }
+
+  /** Width and height from a PNG or JPEG header, or null when the bytes are neither. */
+  function pictureSize(file: string): { format: 'PNG' | 'JPEG'; width: number; height: number } | null {
+    try {
+      const b = fs.readFileSync(file);
+      if (b.length > 24 && b.readUInt32BE(0) === 0x89504e47 && b.toString('ascii', 12, 16) === 'IHDR') return { format: 'PNG', width: b.readUInt32BE(16), height: b.readUInt32BE(20) };
+      if (b.length > 4 && b[0] === 0xff && b[1] === 0xd8) {
+        for (let i = 2; i + 9 < b.length;) {
+          if (b[i] !== 0xff) { i += 1; continue; }
+          const marker = b[i + 1];
+          const length = b.readUInt16BE(i + 2);
+          if (marker >= 0xc0 && marker <= 0xcf && marker !== 0xc4 && marker !== 0xc8 && marker !== 0xcc) return { format: 'JPEG', height: b.readUInt16BE(i + 5), width: b.readUInt16BE(i + 7) };
+          i += 2 + length;
+        }
+      }
+    } catch { /* unreadable */ }
+    return null;
+  }
+
+  /**
+   * The Workshop entry for a generated picture: a change of a Workshop image is that image's next version; anything
+   * else starts a workshop of its own. Said honestly: img2img redraws the whole picture.
+   */
+  function imageWorkshopMeta(input: { reference: { artifact: ArtifactRecord } | null; workshopId: string; prompt: string; checkpoint: string; file: string; width: number; height: number; recipe: Record<string, unknown>; denoise: number }) {
+    const refMeta = input.reference ? workshopMetaOf(input.reference.artifact) : null;
+    const size = pictureSize(input.file);
+    const sizeOk = Boolean(size && size.width === input.width && size.height === input.height);
+    return sanitizeWorkshopMeta({
+      v: 1, type: 'image',
+      workshopId: refMeta?.type === 'image' ? refMeta.workshopId : input.workshopId,
+      parentArtifactId: refMeta?.type === 'image' ? input.reference!.artifact.id : null,
+      op: { kind: input.reference ? 'refine' : 'generate', summary: input.prompt.slice(0, 380) },
+      engine: { tool: 'image_generate', engine: `ComfyUI · ${input.checkpoint}`.slice(0, 120), model: null, provider: 'local', costUsd: 0 },
+      verification: {
+        ok: sizeOk,
+        checks: [size ? `${sizeOk ? 'PASS' : 'FAIL'} a ${size.width}×${size.height} ${size.format} (asked for ${input.width}×${input.height}), read from the file's own header` : 'FAIL the file is not a PNG or JPEG Pandesh can read'],
+      },
+      notes: input.reference
+        ? [`Drawn again from ${refMeta?.type === 'image' ? 'the previous version' : `the picture "${input.reference.artifact.title.slice(0, 60)}"`} with the new prompt (img2img, strength ${input.denoise}). The whole picture was regenerated, so details beyond the change can differ.`]
+        : [],
+      recipe: input.recipe,
+    });
   }
 
   /** Video and SDXL do not fit beside a ~18 GB chat model in 24 GB VRAM:
@@ -424,7 +477,7 @@ export function createImageStudioCapabilityAdapter(options: ImageStudioCapabilit
       seconds = numberArg(args.seconds, 4, 1, 8);
       width = Math.round(numberArg(args.width, 768, 256, 1280) / 32) * 32;
       height = Math.round(numberArg(args.height, 512, 256, 1280) / 32) * 32;
-      startImage = referenceFileName(args.startArtifactId);
+      startImage = resolveReference(args.startArtifactId, ctx.correlationId ?? null)?.fileName ?? null;
     } catch (error) {
       return failure(error instanceof Error ? error.message : String(error), 'invalid_arguments');
     }
@@ -494,10 +547,12 @@ export function createImageStudioCapabilityAdapter(options: ImageStudioCapabilit
     const negativePrompt = typeof args.negativePrompt === 'string' ? args.negativePrompt.replace(/\s+/g, ' ').trim().slice(0, 1_500) : '';
     let width: number; let height: number; let steps: number; let cfg: number; let seed: number;
     let outputCount: number; let denoise: number; let reference: string | null;
+    let referenceRecord: { fileName: string; artifact: ArtifactRecord } | null;
     try {
       outputCount = Math.round(numberArg(args.outputCount, 1, 1, 4));
       denoise = numberArg(args.denoise, 0.6, 0.05, 1);
-      reference = referenceFileName(args.referenceArtifactId);
+      referenceRecord = resolveReference(args.referenceArtifactId, ctx.correlationId ?? null);
+      reference = referenceRecord?.fileName ?? null;
       width = numberArg(args.width, 1024, 64, 4096);
       height = numberArg(args.height, 1024, 64, 4096);
       steps = numberArg(args.steps, 20, 1, 150);
@@ -538,6 +593,8 @@ export function createImageStudioCapabilityAdapter(options: ImageStudioCapabilit
         ? options.db.get('SELECT id FROM conversations WHERE id = ?', [ctx.correlationId])
         : undefined;
       const artifactIds: string[] = [];
+      // One Workshop line for this generation: the next version(s) of the reference's workshop, or a new one.
+      const newWorkshopId = newId('ws');
       for (const image of response.images.slice(0, outputCount)) {
         const fileName = path.basename(String(image.path ?? ''));
         const absolutePath = path.resolve(outputRoot, fileName);
@@ -548,12 +605,15 @@ export function createImageStudioCapabilityAdapter(options: ImageStudioCapabilit
         if (!['.png', '.jpg', '.jpeg'].includes(extension)) {
           return failure('Image Studio returned an unsupported image format', 'image_studio_invalid_output');
         }
+        const usedCheckpoint = response.used_checkpoint || checkpoint || null;
+        const recipe = { prompt, negativePrompt: negativePrompt || null, seed: image.seed ?? seed, checkpoint: usedCheckpoint, width, height, steps, cfg, referenceArtifactId: referenceRecord?.artifact.id ?? null, denoise: reference ? denoise : null };
+        const workshop = imageWorkshopMeta({ reference: referenceRecord, workshopId: newWorkshopId, prompt, checkpoint: usedCheckpoint ?? 'unknown checkpoint', file: absolutePath, width, height, recipe, denoise });
         const artifact = registerArtifact(options.db, {
           conversationId: conversationExists ? ctx.correlationId : null,
           attemptId: ctx.attemptId ?? null,
           kind: 'image', title: prompt.slice(0, 120), mimeType: extension === '.png' ? 'image/png' : 'image/jpeg',
           absolutePath, source: 'image-generation-studio',
-          metadata: { prompt, seed: image.seed ?? seed, checkpoint: response.used_checkpoint || checkpoint || null, width, height, steps, cfg, reference, denoise: reference ? denoise : null },
+          metadata: { prompt, seed: image.seed ?? seed, checkpoint: usedCheckpoint, width, height, steps, cfg, reference, denoise: reference ? denoise : null, ...(workshop ? { workshop } : {}) },
           actor: 'core:image-studio', clientId: null,
         });
         artifactIds.push(artifact.id);
@@ -620,7 +680,7 @@ export function createImageStudioCapabilityAdapter(options: ImageStudioCapabilit
       },
       {
         name: 'image_generate',
-        description: 'Generate 1-4 still images through the configured local Image Generation Studio, optionally from a reference image artifact (edit / variations, strength via denoise). Consequential and approval-gated. checkpoint must be a name from image_list_checkpoints.',
+        description: 'Generate 1-4 still images through the configured local Image Generation Studio, optionally from a reference image artifact (edit / variations, strength via denoise). To change a picture ("make the background darker"), pass the full new prompt and referenceArtifactId of that picture (the one open in the Workshop is used when none is named; never one from another conversation), denoise 0.35-0.6: the result is the next version of that picture in the Workshop, and the whole picture is redrawn. A square image is width = height (1024). Consequential and approval-gated. checkpoint must be a name from image_list_checkpoints.',
         parameters: { type: 'object', properties: { prompt: { type: 'string' }, negativePrompt: { type: 'string' }, checkpoint: { type: 'string' }, width: { type: 'number' }, height: { type: 'number' }, steps: { type: 'number' }, cfg: { type: 'number' }, seed: { type: 'number' }, outputCount: { type: 'number' }, referenceArtifactId: { type: 'string' }, denoise: { type: 'number' } }, required: ['prompt', 'checkpoint'] },
       },
       {
@@ -634,6 +694,12 @@ export function createImageStudioCapabilityAdapter(options: ImageStudioCapabilit
       ? { state: running ? 'degraded' : 'available', reason: running ? 'one image generation is already running' : undefined, checkedAt: new Date().toISOString() }
       : { state: 'degraded', reason: `the Image Studio app is not installed at ${studioRoot}; the direct ComfyUI tools still work when ComfyUI is running`, checkedAt: new Date().toISOString() },
     redactArguments: (_toolName, args) => ({ ...args, prompt: typeof args.prompt === 'string' ? args.prompt.slice(0, MAX_PROMPT_CHARS) : '' }),
+    /** A change of "it" names the picture on screen on the approval card, so the person sees which one changes. */
+    async prepare(toolName, args, context) {
+      if (toolName !== 'image_generate' || (typeof args.referenceArtifactId === 'string' && args.referenceArtifactId.trim())) return args;
+      const shown = imageOnScreen(context?.correlationId ?? null);
+      return shown ? { ...args, referenceArtifactId: shown.artifactId, changes: `the picture open in the Workshop: "${shown.title.slice(0, 80)}", version ${shown.version}` } : args;
+    },
     run,
   };
 }
