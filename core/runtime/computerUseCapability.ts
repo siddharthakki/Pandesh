@@ -11,7 +11,10 @@
  *
  * `desktop_screenshot` captures the real screen (the Windows desktop, not a
  * rendering of it) and `desktop_windows_list` reports the real visible
- * top-level windows. Both are read-only.
+ * top-level windows. Neither changes anything, but both read everything the
+ * person has open, other apps and private conversations included, so both ask
+ * first: an approval card for every call, in every mode (micro-tests NAV-013 and
+ * NAV-014 found them capturing the screen to answer "which Pandesh view is open").
  */
 import * as fs from 'node:fs';
 import * as path from 'node:path';
@@ -21,7 +24,8 @@ import type { ModelToolCall } from './modelBackend';
 import type { ToolExecutionResult } from './toolRunner';
 import { runPowerShellScript } from './windowsShellExec';
 
-const READ_ONLY_TOOLS = new Set(['desktop_screenshot', 'desktop_windows_list']);
+/** Tools that read the person's whole screen or every window title: never run without their OK. */
+export const SCREEN_READING_TOOLS: ReadonlySet<string> = new Set(['desktop_screenshot', 'desktop_windows_list']);
 const MAX_OUTPUT_CHARS = 24_000;
 
 /**
@@ -149,16 +153,17 @@ try {
     definitions: () => [
       {
         name: 'desktop_screenshot',
-        description: 'Capture the real Windows desktop (every visible window, nothing filtered) as a PNG on this PC and return its path, size and SHA-256. Pandesh cannot see what is in the image in this build. Read-only.',
+        description: 'Capture the real Windows desktop (every visible window, nothing filtered) as a PNG on this PC and return its path, size and SHA-256. Pandesh cannot see what is in the image in this build. Changes nothing, but asks the user first every time. Only when the user asks for a screenshot of their screen; never to find out what Pandesh itself shows.',
         parameters: { type: 'object', properties: {}, required: [] },
       },
       {
         name: 'desktop_windows_list',
-        description: 'List the visible top-level Windows windows (title and owning process id). Read-only.',
+        description: 'List the visible top-level Windows windows (title and owning process id). Changes nothing, but asks the user first every time. Only when the user asks which apps or windows are open; never to find out what Pandesh itself shows.',
         parameters: { type: 'object', properties: {}, required: [] },
       },
     ],
-    classify: (toolName) => (READ_ONLY_TOOLS.has(toolName) ? 'read_only' : 'consequential'),
+    // Both tools read the person's whole screen: consequential, so dispatch asks before every call and no Auto grant covers it.
+    classify: () => 'consequential',
     health: () => ({
       state: process.platform === 'win32' ? 'available' : 'unavailable',
       reason: process.platform === 'win32' ? undefined : 'the Windows computer surface is Windows-only',

@@ -243,6 +243,90 @@ describe('Plan Only', () => {
   }, 60_000);
 });
 
+describe('write_file guards (micro-tests DRV-010, DRV-012)', () => {
+  it('never empties a file that has text, and asks nobody about it', async () => {
+    fs.writeFileSync(path.join(ws, 'notes (1).txt'), 'Printer: the toner is in the second drawer.\n');
+    human(() => 'approved');
+    steps = [write('notes (1).txt', ''), write('notes (1).txt', ''), write('notes (1).txt', '  \n')];
+    const { attemptId } = await turn('Rename "notes (1).txt" to printer-notes.txt');
+    expect(asked).toEqual([]);
+    expect(fs.readFileSync(path.join(ws, 'notes (1).txt'), 'utf8')).toBe('Printer: the toner is in the second drawer.\n');
+    const events = writeEvents(attemptId);
+    expect(events.length).toBeGreaterThan(0);
+    expect(events.every((e) => e.type === 'file_write_refused')).toBe(true);
+    expect(events[0].reason).toBe('the write would erase the file');
+  }, 60_000);
+
+  it('does not rewrite a file with the text it already holds, so a loop of identical writes stops', async () => {
+    human(() => 'approved');
+    steps = [write('a.txt', 'same text\n'), write('a.txt', 'same text\n'), write('a.txt', 'same text\n')];
+    const { attemptId } = await turn('Write a.txt');
+    expect(asked).toEqual(['authorize_mission']);
+    expect(fs.readFileSync(path.join(ws, 'a.txt'), 'utf8')).toBe('same text\n');
+    const events = writeEvents(attemptId);
+    expect(events[0]).toMatchObject({ type: 'file_write_authorized' });
+    expect(events.slice(1).every((e) => e.type === 'file_write_refused' && e.reason === 'the file already has this text')).toBe(true);
+  }, 60_000);
+
+  it('an empty write named like a folder creates nothing', async () => {
+    human(() => 'approved');
+    steps = [write('Sandbox Notes', '')];
+    const { attemptId } = await turn('Create a folder called Sandbox Notes');
+    expect(asked).toEqual([]);
+    expect(fs.existsSync(path.join(ws, 'Sandbox Notes'))).toBe(false);
+    expect(writeEvents(attemptId)[0]).toMatchObject({ type: 'file_write_refused', reason: 'an empty file named like a folder' });
+  }, 60_000);
+
+  it('an empty file with an extension (an __init__.py) is still allowed', async () => {
+    human(() => 'approved');
+    steps = [write('pkg/__init__.py', '')];
+    await turn('Make pkg a Python package');
+    expect(fs.readFileSync(path.join(ws, 'pkg', '__init__.py'), 'utf8')).toBe('');
+  }, 60_000);
+});
+
+describe('an approval for a file that changed while its card was open (micro-test PER-019)', () => {
+  it('the folder card: approving after the file changed writes nothing and says why', async () => {
+    const stale = path.join(ws, 'stale.txt');
+    fs.writeFileSync(stale, 'version 1\n');
+    human((tool) => {
+      if (tool === 'authorize_mission') fs.writeFileSync(stale, 'edited by the person while the card was open\n');
+      return 'approved';
+    });
+    steps = [write('stale.txt', 'version 2 from Pandesh\n')];
+    const { attemptId } = await turn('Update stale.txt to version 2');
+    expect(asked).toEqual(['authorize_mission']);
+    expect(fs.readFileSync(stale, 'utf8')).toBe('edited by the person while the card was open\n');
+    expect(writeEvents(attemptId).at(-1)).toMatchObject({ type: 'file_write_refused', reason: 'the file changed while the approval card was open' });
+  }, 60_000);
+
+  it('the single-file card outside the workspace: the same', async () => {
+    const target = path.join(outside, 'report.md');
+    fs.writeFileSync(target, '# Report v1\n');
+    human((tool) => {
+      if (tool === 'write_file') fs.writeFileSync(target, '# Report, edited meanwhile\n');
+      return 'approved';
+    });
+    steps = [
+      { tool: { name: 'request_search_permission', args: { proposedRoots: [outside], purpose: 'update the report', accessLevel: 'read_only' } } },
+      write(target, '# Report v2\n'),
+    ];
+    const { attemptId } = await turn('Update the report in that folder', { workspace: null });
+    expect(asked).toEqual(['request_search_permission', 'write_file']);
+    expect(fs.readFileSync(target, 'utf8')).toBe('# Report, edited meanwhile\n');
+    expect(writeEvents(attemptId).at(-1)).toMatchObject({ type: 'file_write_refused', reason: 'the file changed while the approval card was open' });
+  }, 60_000);
+
+  it('an unchanged file is written as approved', async () => {
+    const target = path.join(ws, 'steady.txt');
+    fs.writeFileSync(target, 'version 1\n');
+    human(() => 'approved');
+    steps = [write('steady.txt', 'version 2\n')];
+    await turn('Update steady.txt');
+    expect(fs.readFileSync(target, 'utf8')).toBe('version 2\n');
+  }, 60_000);
+});
+
 describe('A read-only workspace folder', () => {
   it('writes nothing, runs no program and shows no card, even under every Auto authorization; plain read commands still run', async () => {
     setConversationPermissionMode(db, conversationId, 'auto', 'test');

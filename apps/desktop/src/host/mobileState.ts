@@ -38,6 +38,8 @@ const TOOL_WORDS: Record<string, { title: string; allow: string; why?: string }>
   delegate_to_opencode: { title: 'Let OpenCode work in this folder', allow: 'Allow OpenCode in this folder', why: 'OpenCode can create and change files and run commands there' },
   delegate_to_coding_agent: { title: 'Let a coding agent work in this folder', allow: 'Allow this coding agent here', why: 'It can create and change files there; the card says whether it runs locally or in the cloud' },
   authorize_mission: { title: 'Change files in this folder', allow: 'Allow file changes in this folder' },
+  desktop_screenshot: { title: 'Take a screenshot of your whole screen', allow: 'Allow this screenshot', why: 'It saves a picture of everything on your screen, other apps included' },
+  desktop_windows_list: { title: 'List the windows you have open', allow: 'Allow listing your windows', why: 'It reads the title of every open window, other apps included' },
   write_file: { title: 'Write a file', allow: 'Allow writing this file' },
   run_command: { title: 'Run a command', allow: 'Allow running this command' },
   run_check: { title: 'Run a check', allow: 'Allow running this check' },

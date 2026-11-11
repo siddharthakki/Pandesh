@@ -140,6 +140,25 @@ describe('the chat model can actually reach the governed capabilities', () => {
     expect(byName.get('hermes_list_skills')).toBe(false);
     expect(byName.get('hermes_invoke_skill')).toBe(true);
     expect(byName.get('scout_add_watch')).toBe(true);
+    // They change nothing, but they read everything the user has open (micro-tests NAV-013, NAV-014).
+    expect(byName.get('desktop_screenshot')).toBe(true);
+    expect(byName.get('desktop_windows_list')).toBe(true);
+  });
+
+  it('a screenshot or window list waits for the user\'s OK and captures nothing before it', async () => {
+    let ran = 0;
+    const counting = new GovernedCapabilityRegistry().register(createComputerUseCapabilityAdapter({
+      dataDir, runScript: async () => { ran += 1; return { succeeded: true, exitCode: 0, output: '[]' }; },
+    }));
+    const bridge = buildPiCapabilityBridge({
+      db, registry: counting, correlationId: 'conv-screen', clientId: 'test-client', cwd: dir, actor: 'test', capabilityIds: ['computer-use'],
+    });
+    for (const toolName of ['desktop_screenshot', 'desktop_windows_list']) {
+      const outcome = await bridge!.dispatch(toolName, {});
+      expect(outcome.outcome).toBe('approval_required');
+    }
+    expect(ran).toBe(0);
+    expect(fs.existsSync(path.join(dataDir, '.tmp', 'karkedikha-desktop'))).toBe(false);
   });
 
   it('dispatches a read-only diagnostic through the governed fabric and records the evidence', async () => {
