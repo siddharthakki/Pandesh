@@ -167,6 +167,7 @@ import type {
 } from '../ipc';
 import { isWorkshopViewAction, workshopMetaOf } from '../../../../core/shared/workshop/model';
 import { parseSceneFile } from '../../../../core/shared/workshop/scene3d';
+import { parseSimulationFile } from '../../../../core/shared/workshop/simulation';
 import {
   OpenWakeWordEngine,
   probeDesktopWakeWord,
@@ -3793,7 +3794,9 @@ export class DesktopSession {
     }
     if (meta.type === 'video') return { type: 'video', artifactId: record.id, fileUrl: pathToFileURL(record.absolutePath).toString() };
     if (meta.type === 'design') return { type: 'design', artifactId: record.id, html: bytes.toString('utf8') };
-    return { type: 'simulation', artifactId: record.id, spec: JSON.parse(bytes.toString('utf8')) as unknown };
+    const simulation = parseSimulationFile(bytes.toString('utf8'));
+    if (!simulation.ok) throw new Error(`The simulation could not be read: ${simulation.errors.join('; ')}`);
+    return { type: 'simulation', artifactId: record.id, spec: simulation.value };
   }
 
   /** Tells Core what the Workshop shows in this conversation, so "it" in chat means the thing on screen. */
@@ -3809,8 +3812,14 @@ export class DesktopSession {
   }
 
   /** An edit made with the Workshop's own controls: Core applies it to the current version and keeps both. */
-  async saveWorkshopEdit(workshopId: string, parentArtifactId: string, conversationId: string | null, edits: unknown[]): Promise<{ artifactId: string }> {
-    const result = await this.requireClient().saveWorkshopVersion(workshopId, { conversationId, parentArtifactId, edits });
+  async saveWorkshopEdit(workshopId: string, parentArtifactId: string, conversationId: string | null, change: unknown): Promise<{ artifactId: string }> {
+    // 3D: a list of component edits. Simulation: { set } and/or { adjust } parameter changes.
+    const payload = Array.isArray(change)
+      ? { edits: change }
+      : change && typeof change === 'object'
+        ? { set: (change as { set?: Record<string, unknown> }).set, adjust: (change as { adjust?: Record<string, unknown> }).adjust }
+        : { edits: [] };
+    const result = await this.requireClient().saveWorkshopVersion(workshopId, { conversationId, parentArtifactId, ...payload });
     return { artifactId: result.artifact.id };
   }
 

@@ -22,6 +22,7 @@ import type { ModelToolCall, ModelToolDefinition } from './modelBackend';
 import type { ToolExecutionContext, ToolExecutionResult } from './toolRunner';
 import { WORKSHOP_MIME, WORKSHOP_TYPE_LABEL, isWorkshopViewAction, versionLabel, type WorkshopSummary, type WorkshopType } from '../shared/workshop/model';
 import { applySceneEdits, describeScene, parseSceneFile, validateScene, type Scene3D } from '../shared/workshop/scene3d';
+import { applySimulationChanges, describeMetrics, parseSimulationFile, queueAssumptions, runQueue, validateSimulation, type SimulationSpec } from '../shared/workshop/simulation';
 import {
   getWorkshop,
   listWorkshops,
@@ -67,7 +68,7 @@ export function localModelFor(db: CoreDatabase, conversationId: string | null): 
 }
 
 /** The workshop types this build can create and edit from a conversation. */
-export const CREATABLE_TYPES: readonly WorkshopType[] = ['3d'];
+export const CREATABLE_TYPES: readonly WorkshopType[] = ['3d', 'simulation'];
 
 const ok = (output: string, category: string, extra: Partial<ToolExecutionResult> = {}): ToolExecutionResult => ({ status: 'succeeded', exitCode: 0, output, resultCategory: category, ...extra });
 const fail = (output: string, category: string): ToolExecutionResult => ({ status: 'failed', exitCode: null, output, resultCategory: category });
@@ -93,7 +94,32 @@ function describeVersion(db: CoreDatabase, summary: WorkshopSummary, artifactId:
       return `${head}\nThe version file could not be read: ${(err as Error).message}`;
     }
   }
+  if (summary.type === 'simulation') {
+    try {
+      const spec = simulationOf(db, v.artifactId);
+      return `${head}\n${simulationSummary(spec)}`;
+    } catch (err) {
+      return `${head}\nThe version file could not be read: ${(err as Error).message}`;
+    }
+  }
   return head;
+}
+
+function simulationOf(db: CoreDatabase, artifactId: string): SimulationSpec {
+  const parsed = parseSimulationFile(readWorkshopVersion(db, artifactId).bytes.toString('utf8'));
+  if (!parsed.ok) throw new Error(parsed.errors.join('; '));
+  return parsed.value;
+}
+
+/** Parameters, measured results (Core runs the same deterministic model the window animates) and assumptions. */
+function simulationSummary(spec: SimulationSpec): string {
+  const p = spec.params;
+  const m = runQueue(p).metrics;
+  return [
+    `Parameters: a customer every ${p.arrivalEveryMinutes} min (${p.arrivalPattern}), serving ${p.serviceMinutes} min (${p.servicePattern}), ${p.counters} counter(s), ${p.durationMinutes} min of arrivals, seed ${p.seed}${p.maxQueue !== null ? `, people leave when ${p.maxQueue} are waiting` : ''}.`,
+    `Simulated result: ${describeMetrics(m)}`,
+    `Assumptions: ${queueAssumptions(p).join(' ')}`,
+  ].join('\n');
 }
 
 export function createWorkshopCapabilityAdapter(options: WorkshopCapabilityOptions): GovernedCapabilityAdapter {
@@ -157,6 +183,21 @@ export function createWorkshopCapabilityAdapter(options: WorkshopCapabilityOptio
       });
       return finishVersion(ctx, meta.workshopId, artifact.id, 'create', `CREATED: version 1 of a new 3D workshop.${v.warnings.length ? ` Warnings: ${v.warnings.join(' ')}` : ''}`);
     }
+    if (type === 'simulation') {
+      const v = validateSimulation({ title: a.title, params: a });
+      if (!v.ok) return fail(`NOT CREATED: ${v.errors.join('; ')}.`, 'workshop_invalid_simulation');
+      const run = runQueue(v.value.params);
+      const { artifact, meta } = writeWorkshopVersion(db, {
+        dataDir, conversationId, attemptId: ctx.attemptId ?? null, type: 'simulation', title: v.value.title,
+        bytes: Buffer.from(JSON.stringify(v.value, null, 2), 'utf8'), extension: 'json', mimeType: WORKSHOP_MIME.simulation, kind: 'document',
+        op: { kind: 'create', summary: `Created "${v.value.title}"` },
+        engine: { tool: 'create_simulation', engine: 'pandesh queue simulation (seeded discrete events)', model: null, provider: 'local', costUsd: 0 },
+        verification: { ok: true, checks: [`PASS simulated ${run.metrics.arrived} customers with seed ${v.value.params.seed}; the same seed gives the same result`] },
+        notes: ['Simulated outcome under the stated assumptions, not a prediction of a real day.'],
+        actor: 'core:workshop', clientId: null,
+      });
+      return finishVersion(ctx, meta.workshopId, artifact.id, 'create', 'CREATED: version 1 of a new simulation. Quote the simulated numbers below exactly and say they are a simulation, not a forecast.');
+    }
     return fail('NOT CREATED: unsupported type', 'workshop_type_unsupported');
   }
 
@@ -192,6 +233,25 @@ export function createWorkshopCapabilityAdapter(options: WorkshopCapabilityOptio
         actor: 'core:workshop', clientId: null,
       });
       return finishVersion(ctx, summary.workshopId, artifact.id, 'edit', `CHANGED (${target.via === 'on_screen' ? 'the workshop open in the window' : target.via === 'only_one' ? 'the only matching workshop in this conversation' : 'the workshop named'}): ${changeText}. Earlier versions are kept.`);
+    }
+    if (summary.type === 'simulation') {
+      let spec: SimulationSpec;
+      try { spec = simulationOf(db, base.artifactId); } catch (err) { return fail(`NOT CHANGED: ${(err as Error).message}`, 'workshop_unreadable'); }
+      const result = applySimulationChanges(spec, { set: a.set, adjust: a.adjust, title: a.title });
+      if (!result.ok) return fail(`NOT CHANGED: ${result.errors.join('; ')}.`, 'workshop_invalid_edit');
+      const before = runQueue(spec.params).metrics;
+      const after = runQueue(result.spec.params).metrics;
+      const changeText = result.changes.map((c) => `${c.field} ${c.from} → ${c.to}`).join('; ');
+      const { artifact } = writeWorkshopVersion(db, {
+        dataDir, conversationId, attemptId: ctx.attemptId ?? null, type: 'simulation', workshopId: summary.workshopId, parentArtifactId: base.artifactId,
+        title: result.spec.title, bytes: Buffer.from(JSON.stringify(result.spec, null, 2), 'utf8'), extension: 'json', mimeType: WORKSHOP_MIME.simulation, kind: 'document',
+        op: { kind: 'edit', summary: changeText.slice(0, 300) },
+        engine: { tool: 'workshop_edit', engine: 'pandesh queue simulation (seeded discrete events)', model: null, provider: 'local', costUsd: 0 },
+        verification: { ok: true, checks: [`PASS re-ran the simulation: average wait ${before.averageWaitMinutes} → ${after.averageWaitMinutes} min, longest queue ${before.maxQueueLength} → ${after.maxQueueLength}`] },
+        notes: ['Simulated outcome under the stated assumptions, not a prediction of a real day.'],
+        actor: 'core:workshop', clientId: null,
+      });
+      return finishVersion(ctx, summary.workshopId, artifact.id, 'edit', `CHANGED: ${changeText}. Re-simulated with the same seed: average wait ${before.averageWaitMinutes} → ${after.averageWaitMinutes} min; longest queue ${before.maxQueueLength} → ${after.maxQueueLength}; served ${before.served} → ${after.served}. Earlier versions are kept.`);
     }
     return fail(`NOT CHANGED: editing ${summary.type} workshops from a conversation is not supported in this build.`, 'workshop_type_unsupported');
   }
@@ -332,7 +392,8 @@ export function createWorkshopCapabilityAdapter(options: WorkshopCapabilityOptio
       switch (call.name) {
         case 'workshop_status': return await status(call, ctx);
         case 'workshop_view': return await view(call, ctx);
-        case 'build_3d_model': return await create(call, ctx);
+        case 'build_3d_model': return await create({ ...call, arguments: { ...(call.arguments ?? {}), type: '3d' } }, ctx);
+        case 'create_simulation': return await create({ ...call, arguments: { ...(call.arguments ?? {}), type: 'simulation' } }, ctx);
         case 'workshop_edit': return await edit(call, ctx);
         case 'workshop_restore': return await restore(call, ctx);
         case 'workshop_export': return await exportVersion(call, ctx);
@@ -372,9 +433,14 @@ export function createWorkshopCapabilityAdapter(options: WorkshopCapabilityOptio
       parameters: { type: 'object', properties: { description: { type: 'string', description: 'what to build, in the user\'s words' }, title: { type: 'string', description: 'a short name (optional)' }, components: { type: 'array', items: component, description: 'optional: the parts yourself instead of a description' } }, required: ['description'] },
     },
     {
+      name: 'create_simulation',
+      description: 'Run a customer-queue simulation in the Pandesh Simulation Lab (a stall or shop: customers arrive, one shared queue, serving counters) and open it in the window. Example: "a food stall with one serving counter, customers arriving every two minutes, service taking three minutes" → {"title":"Food stall","arrivalEveryMinutes":2,"serviceMinutes":3,"counters":1}. Optional: durationMinutes (default 120), arrivalPattern/servicePattern "random" (default) or "fixed", seed, maxQueue. The result quotes measured waits and queue lengths; it is a simulation, not a forecast. Approval-gated.',
+      parameters: { type: 'object', properties: { title: { type: 'string' }, arrivalEveryMinutes: { type: 'number' }, serviceMinutes: { type: 'number' }, counters: { type: 'number' }, durationMinutes: { type: 'number' }, arrivalPattern: { type: 'string', enum: ['random', 'fixed'] }, servicePattern: { type: 'string', enum: ['random', 'fixed'] }, seed: { type: 'number' }, maxQueue: { type: 'number' } }, required: ['arrivalEveryMinutes', 'serviceMinutes', 'counters'] },
+    },
+    {
       name: 'workshop_edit',
-      description: 'Change the workshop open in the window (or the one named) as a NEW version; only what the edits name changes, earlier versions are kept. 3D edits: [{"op":"set_material","target":"Outer case","material":"brushed_steel"}], {"op":"set_color","target":"Base plate","color":"blue"}, {"op":"move","target":"Drive gear","by":[0,10,0]}, {"op":"add","component":{"name":"Driven gear","kind":"gear","params":{"teeth":12,"thickness":6},"meshWith":"gear_a","material":"brass"}}, {"op":"remove","target":"Shaft"}, rotate(target, rotation), set_params(target, params), rename(target, name), set_title(title). target is a component name from workshop_status, or "kind:gear" / "group:<name>". If the name could mean several components, ask the user. Approval-gated.',
-      parameters: { type: 'object', properties: { workshop: { type: 'string', description: 'optional; defaults to the one open in the window' }, edits: { type: 'array', items: { type: 'object' } }, summary: { type: 'string', description: "the user's request in a few words" } }, required: ['edits'] },
+      description: 'Change the workshop open in the window (or the one named) as a NEW version; only what the edits name changes, earlier versions are kept. 3D: edits = [{"op":"set_material","target":"Outer case","material":"brushed_steel"}], {"op":"set_color","target":"Base plate","color":"blue"}, {"op":"move","target":"Drive gear","by":[0,10,0]}, {"op":"add","component":{"name":"Driven gear","kind":"gear","params":{"teeth":12,"thickness":6},"meshWith":"gear_a","material":"brass"}}, {"op":"remove","target":"Shaft"}, rotate, set_params, rename, set_title; target is a component name from workshop_status (ask the user when a name fits several). Simulation: set = {"counters":2} or adjust = {"arrivalRateTimes":2} ("double the arrival rate"), {"addCounters":1} ("add another counter"), {"serviceTimeTimes":0.5}. Approval-gated.',
+      parameters: { type: 'object', properties: { workshop: { type: 'string', description: 'optional; defaults to the one open in the window' }, edits: { type: 'array', items: { type: 'object' }, description: '3D edits' }, set: { type: 'object', description: 'simulation: new parameter values' }, adjust: { type: 'object', description: 'simulation: arrivalRateTimes, serviceTimeTimes, addCounters, durationTimes' }, summary: { type: 'string', description: "the user's request in a few words" } }, required: [] },
     },
     {
       name: 'workshop_restore',
@@ -383,7 +449,7 @@ export function createWorkshopCapabilityAdapter(options: WorkshopCapabilityOptio
     },
     {
       name: 'workshop_view',
-      description: 'Change only what the Workshop window shows; nothing is saved. Actions: open, close, fullscreen, exit_fullscreen, rotate (turntable), stop_rotation, explode (pull apart), assemble (put back together), labels_on, labels_off, reset_camera, camera (value: front|top|side|iso), focus (component), isolate (component), show_all, show_version (version: number|"previous"), compare (version, compareWith). Reports DONE only when the window confirms. Read-only.',
+      description: 'Change only what the Workshop window shows; nothing is saved. Actions: open, close, fullscreen, exit_fullscreen, show_version (version: number|"previous"), compare (version, compareWith). 3D: rotate (turntable), stop_rotation, explode (pull apart), assemble (put back together), labels_on, labels_off, reset_camera, camera (value: front|top|side|iso), focus (component), isolate (component), show_all. Simulation: play, pause, reset, speed (value: 1|2|5|10|30), show_metric (value: wait|queue|utilization). Reports DONE only when the window confirms. Read-only.',
       parameters: { type: 'object', properties: { action: { type: 'string' }, workshop: { type: 'string' }, component: { type: 'string' }, value: { type: 'string' }, version: { type: 'string' }, compareWith: { type: 'string' } }, required: ['action'] },
     },
     {

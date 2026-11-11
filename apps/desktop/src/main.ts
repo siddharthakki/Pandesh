@@ -1540,7 +1540,8 @@ function registerIpc(): void {
   });
   ipcMain.handle(DESKTOP_CHANNELS.saveWorkshopEdit, async (_event, workshopId: unknown, parentArtifactId: unknown, conversationId: unknown, edits: unknown) => {
     if (!session) throw new Error('desktop session is not started');
-    return session.saveWorkshopEdit(String(workshopId ?? ''), String(parentArtifactId ?? ''), typeof conversationId === 'string' ? conversationId : null, Array.isArray(edits) ? edits : []);
+    // 3D edits arrive as a list, simulation changes as { set, adjust }; Core validates either before saving.
+    return session.saveWorkshopEdit(String(workshopId ?? ''), String(parentArtifactId ?? ''), typeof conversationId === 'string' ? conversationId : null, Array.isArray(edits) || (edits && typeof edits === 'object') ? edits : []);
   });
   ipcMain.handle(DESKTOP_CHANNELS.exportWorkshopGlb, async (_event, workshopId: unknown, sourceArtifactId: unknown, conversationId: unknown, bytes: unknown, expectedNodes: unknown) => {
     if (!session) throw new Error('desktop session is not started');

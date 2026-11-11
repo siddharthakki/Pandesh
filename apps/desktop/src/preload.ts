@@ -258,7 +258,7 @@ const desktopApi = {
     ipcRenderer.invoke(DESKTOP_CHANNELS.focusWorkshop, conversationId, workshopId, artifactId, open),
   confirmWorkshopCommand: (commandId: string, ok: boolean, detail?: string, state?: Record<string, unknown>): Promise<{ recorded: boolean }> =>
     ipcRenderer.invoke(DESKTOP_CHANNELS.confirmWorkshopCommand, commandId, ok, detail, state),
-  saveWorkshopEdit: (workshopId: string, parentArtifactId: string, conversationId: string | null, edits: unknown[]): Promise<{ artifactId: string }> =>
+  saveWorkshopEdit: (workshopId: string, parentArtifactId: string, conversationId: string | null, edits: unknown): Promise<{ artifactId: string }> =>
     ipcRenderer.invoke(DESKTOP_CHANNELS.saveWorkshopEdit, workshopId, parentArtifactId, conversationId, edits),
   exportWorkshopGlb: (workshopId: string, sourceArtifactId: string, conversationId: string | null, bytes: Uint8Array, expectedNodes: string[]): Promise<{ verified: boolean; artifactId: string | null; checks: string[]; byteSize: number }> =>
     ipcRenderer.invoke(DESKTOP_CHANNELS.exportWorkshopGlb, workshopId, sourceArtifactId, conversationId, bytes, expectedNodes),

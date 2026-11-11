@@ -103,7 +103,7 @@ export function selectCapabilitiesForIntent(requestText?: string): readonly stri
   }
 
   // The Workshop: 3D models and their follow-ups (rotate, pull apart, change a component, export).
-  if (/\b(?:3-?d|three[- ]d|workshop|assembl(?:y|ies)|gears?|gearbox|mechanism|mechanical|exploded?|explode|pull (?:it|them|this) apart|put (?:it|them) back|reassembl\w*|turntable|glb|gltf)\b/i.test(text)) {
+  if (/\b(?:3-?d|three[- ]d|workshop|assembl(?:y|ies)|gears?|gearbox|mechanism|mechanical|exploded?|explode|pull (?:it|them|this) apart|put (?:it|them) back|reassembl\w*|turntable|glb|gltf|simulat\w*|queues?|serving counters?|arrival rate|waiting times?)\b/i.test(text)) {
     caps.add('workshop');
   }
 

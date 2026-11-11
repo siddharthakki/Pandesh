@@ -58,6 +58,7 @@ const TOOL_WORDS: Record<string, { title: string; allow: string; why?: string }>
   gmail_send: { title: 'Send an email', allow: 'Allow sending this email' },
   web_research: { title: 'Search the web', allow: 'Allow this web search', why: 'It goes online (public web only)' },
   governed_research: { title: 'Search the web', allow: 'Allow this web search', why: 'It goes online (public web only)' },
+  create_simulation: { title: 'Run a simulation in the Workshop', allow: 'Allow the simulation', why: 'It saves a new simulation on this PC; nothing goes online' },
   build_3d_model: { title: 'Build a 3D model in the Workshop', allow: 'Allow building it', why: 'It saves a new Workshop file on this PC; nothing goes online' },
   workshop_edit: { title: 'Change it in the Workshop', allow: 'Allow this change', why: 'It saves a new version on this PC; the earlier version is kept' },
   workshop_restore: { title: 'Undo in the Workshop', allow: 'Allow undo', why: 'It makes an earlier version current again as a new version; nothing is deleted' },

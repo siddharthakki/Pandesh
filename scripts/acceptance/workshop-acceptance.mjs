@@ -179,9 +179,112 @@ async function reopen(file) {
   process.exit(Object.values(results).every((r) => r.status === 'PASS') ? 0 : 1);
 }
 
+/** A consequential Workshop call as the assistant makes it: the approval, then the same call again (it now runs). */
+async function governed(conversationId, toolName, toolArgs, record) {
+  const first = await dispatch(conversationId, toolName, toolArgs);
+  if (first.outcome === 'executed') return first;
+  if (first.outcome !== 'approval_required') throw new Error(`${toolName}: ${first.outcome} ${first.reason ?? ''}`);
+  record.facts[`${toolName}Approval`] = first.approval?.summary?.arguments;
+  await http('POST', `/v1/assistant/approvals/${first.approval.id}/resolve`, { resolution: 'approved' });
+  await sleep(500);
+  return dispatch(conversationId, toolName, toolArgs);
+}
+
+async function simulationScenario(cdp) {
+  const ctx = {};
+  const labState = async () => (await cdp.eval(`(() => { const m = [...document.querySelectorAll('.ws-sim-side .ws-metric')].map((e) => [e.querySelector('.meta')?.textContent, e.querySelector('strong')?.textContent]); return { metrics: Object.fromEntries(m), minute: document.querySelector('.ws-sim .ws-toolbar .meta')?.textContent ?? '' }; })()`));
+
+  await test('WSH-020', '"Simulate a food stall with one serving counter, customers every two minutes, service three minutes": a working Simulation Lab', async ({ dir, record }) => {
+    const conv = await http('POST', '/v1/conversations', { mode: 'baat_kar', title: 'Simulation acceptance' });
+    ctx.conversationId = conv.id;
+    await cdp.eval(`window.desktop.openConversation(${JSON.stringify(conv.id)}, true).then(() => true)`);
+    await sleep(800);
+    const r = await governed(conv.id, 'create_simulation', { title: 'Food stall', arrivalEveryMinutes: 2, serviceMinutes: 3, counters: 1 }, record);
+    record.facts.output = outputOf(r);
+    if (r.toolInvocation?.status !== 'succeeded') throw new Error(outputOf(r));
+    await waitFor(() => cdp.eval(`Boolean(document.querySelector('.ws-sim canvas.ws-sim-canvas'))`), 20_000, 'the Simulation Lab');
+    await sleep(600);
+    const lab = await labState();
+    record.facts.lab = lab;
+    record.screenshots.push(await cdp.screenshot(path.join(dir, 'lab.png')));
+    const avg = /average wait ([\d.]+) min/.exec(outputOf(r))?.[1];
+    if (!avg || !String(lab.metrics['Average wait']).startsWith(Number(avg).toFixed(1))) throw new Error(`Core said average wait ${avg}, the Lab shows ${lab.metrics['Average wait']}`);
+    return { observation: `Core's simulated result (${outputOf(r).match(/Simulated result: [^\n]+/)?.[0].slice(0, 160)}) matches the Lab (average wait ${lab.metrics['Average wait']}).` };
+  });
+
+  await test('WSH-021', 'Play, speed up, pause: the stall animates through simulated minutes and stops when paused', async ({ dir, record }) => {
+    for (const [action, value] of [['play'], ['speed', '30']]) {
+      const r = await dispatch(ctx.conversationId, 'workshop_view', { action, ...(value ? { value } : {}) });
+      if (!/^DONE/.test(outputOf(r))) throw new Error(outputOf(r));
+    }
+    await sleep(1500);
+    const pause = await dispatch(ctx.conversationId, 'workshop_view', { action: 'pause' });
+    const at1 = (await labState()).minute;
+    await sleep(1000);
+    const at2 = (await labState()).minute;
+    record.facts = { pause: outputOf(pause), at1, at2 };
+    record.screenshots.push(await cdp.screenshot(path.join(dir, 'paused.png')));
+    if (!/^DONE/.test(outputOf(pause)) || at1 !== at2 || /minute 0\.0 of/.test(at1)) throw new Error(`minute ${at1} then ${at2}`);
+    return { observation: `${outputOf(pause).slice(0, 140)}; clock stayed at "${at2}".` };
+  });
+
+  await test('WSH-022', '"Show average waiting time": the Lab highlights the measured value', async ({ record }) => {
+    const r = await dispatch(ctx.conversationId, 'workshop_view', { action: 'show_metric', value: 'wait' });
+    const highlighted = await cdp.eval(`document.querySelector('.ws-metric.highlight')?.textContent ?? ''`);
+    record.facts = { output: outputOf(r), highlighted };
+    if (!/^DONE/.test(outputOf(r)) || !/Average wait/.test(highlighted)) throw new Error(`${outputOf(r)} / ${highlighted}`);
+    return { observation: `${highlighted} highlighted; ${outputOf(r).slice(0, 160)}` };
+  });
+
+  await test('WSH-023', '"Add a second counter": re-simulated as a new version with the same seed, waits drop', async ({ dir, record }) => {
+    const before = (await labState()).metrics['Average wait'];
+    const r = await governed(ctx.conversationId, 'workshop_edit', { adjust: { addCounters: 1 }, summary: 'Add a second counter' }, record);
+    record.facts.output = outputOf(r);
+    await waitFor(async () => /v2 of 2/.test(await cdp.eval(`document.querySelector('#ws-version')?.selectedOptions?.[0]?.textContent ?? ''`)), 15_000, 'version 2 on screen');
+    await sleep(500);
+    const after = (await labState()).metrics['Average wait'];
+    record.facts.before = before; record.facts.after = after;
+    record.screenshots.push(await cdp.screenshot(path.join(dir, 'two-counters.png')));
+    if (!(parseFloat(after) < parseFloat(before))) throw new Error(`average wait ${before} → ${after}`);
+    return { observation: `${outputOf(r).split('\n')[0].slice(0, 200)}; Lab: average wait ${before} → ${after}.` };
+  });
+
+  await test('WSH-024', 'A what-if slider re-runs the model at once and is saved only on "Save as new version"', async ({ record }) => {
+    const before = (await labState()).metrics['Average wait'];
+    await cdp.eval(`(() => { const s = [...document.querySelectorAll('.ws-slider')].find((l) => /Serving takes/.test(l.textContent)).querySelector('input'); const set = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set; set.call(s, '6'); s.dispatchEvent(new Event('input', { bubbles: true })); s.dispatchEvent(new Event('change', { bubbles: true })); return true; })()`);
+    await sleep(400);
+    const draft = (await labState()).metrics['Average wait'];
+    const versionsBefore = (await http('GET', `/v1/workshops?conversationId=${ctx.conversationId}`)).workshops[0].versions.length;
+    await cdp.eval(`[...document.querySelectorAll('.ws-sim .ws-toolbar button')].find((b) => /Save as new version/.test(b.textContent)).click(), true`);
+    const w = await waitFor(async () => { const x = (await http('GET', `/v1/workshops?conversationId=${ctx.conversationId}`)).workshops[0]; return x.versions.length > versionsBefore ? x : null; }, 15_000, 'a saved version');
+    record.facts = { before, draft, versions: w.versions.map((v) => v.meta.op.summary) };
+    if (!(parseFloat(draft) > parseFloat(before))) throw new Error(`slider did not change the measured wait (${before} → ${draft})`);
+    return { observation: `Serving 3 → 6 min: average wait ${before} → ${draft} at once; saved as v${w.versions.length} ("${w.versions[w.versions.length - 1].meta.op.summary}").` };
+  });
+
+  await test('WSH-025', 'Scenario comparison: v1 (one counter) against v2 (two counters)', async ({ dir, record }) => {
+    const r = await dispatch(ctx.conversationId, 'workshop_view', { action: 'compare', version: '1', compareWith: '2' });
+    await sleep(800);
+    const table = await cdp.eval(`document.querySelector('.ws-compare-table')?.innerText ?? ''`);
+    record.facts = { output: outputOf(r), table };
+    record.screenshots.push(await cdp.screenshot(path.join(dir, 'compare.png')));
+    if (!/^DONE/.test(outputOf(r)) || !/Average wait/.test(table)) throw new Error(`${outputOf(r)} / ${table}`);
+    return { observation: table.replace(/\s+/g, ' ').slice(0, 200) };
+  });
+}
+
 async function main() {
   fs.mkdirSync(OUT, { recursive: true });
   if (args.reopen) return reopen(String(args.reopen));
+  if (args.scenario === 'simulation') {
+    const cdp = await Cdp.attach();
+    await simulationScenario(cdp);
+    fs.writeFileSync(path.join(OUT, 'results.json'), JSON.stringify(results, null, 2));
+    cdp.ws.close();
+    const failed = Object.values(results).filter((r) => r.status !== 'PASS');
+    console.log(`\n${Object.keys(results).length - failed.length}/${Object.keys(results).length} passed`);
+    process.exit(failed.length ? 1 : 0);
+  }
   const cdp = await Cdp.attach();
   await cdp.send('Page.bringToFront').catch(() => undefined);
   // The model this profile uses when a test does reach it: the production default, never a larger one.

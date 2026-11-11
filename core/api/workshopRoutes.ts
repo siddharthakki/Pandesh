@@ -21,6 +21,7 @@ import {
 import { verifyGlb, glbNodeNames } from '../shared/workshop/glb';
 import { WORKSHOP_MIME } from '../shared/workshop/model';
 import { applySceneEdits, parseSceneFile } from '../shared/workshop/scene3d';
+import { applySimulationChanges, parseSimulationFile, runQueue } from '../shared/workshop/simulation';
 import type { EventBroadcaster } from '../ws/broadcaster';
 import type { ApiContext, ApiResult } from './context';
 import type { Router } from './router';
@@ -99,6 +100,29 @@ export function registerWorkshopRoutes(router: Router<ApiContext, ApiResult>, op
     const parentId = str(b.parentArtifactId, 100) ?? latest.artifactId;
     if (parentId !== latest.artifactId) {
       throw new CoreError('conflict', `the workshop has a newer version (v${latest.number}) than the one this edit was made on; reload and try again`);
+    }
+    if (workshop.type === 'simulation') {
+      // The Lab's own sliders, saved as a version: the same rules as a change from a conversation.
+      const current = parseSimulationFile(readWorkshopVersion(ctx.db, latest.artifactId).bytes.toString('utf8'));
+      if (!current.ok) throw new CoreError('conflict', `the current version could not be read: ${current.errors.join('; ')}`);
+      const changed = applySimulationChanges(current.value, { set: b.set, adjust: b.adjust });
+      if (!changed.ok) throw new CoreError('invalid_request', changed.errors.join('; '));
+      const before = runQueue(current.value.params).metrics;
+      const after = runQueue(changed.spec.params).metrics;
+      return broadcast(ctx, () => {
+        const { artifact, meta } = writeWorkshopVersion(ctx.db, {
+          dataDir: options.dataDir,
+          conversationId: str(b.conversationId, 100) ?? workshop.conversationId,
+          type: 'simulation', workshopId: workshop.workshopId, parentArtifactId: latest.artifactId, title: changed.spec.title,
+          bytes: Buffer.from(JSON.stringify(changed.spec, null, 2), 'utf8'), extension: 'json', mimeType: WORKSHOP_MIME.simulation, kind: 'document',
+          op: { kind: 'edit', summary: `Saved from the Lab: ${changed.changes.map((c) => `${c.field} ${c.from} → ${c.to}`).join('; ')}`.slice(0, 380) },
+          engine: { tool: 'workshop window', engine: 'pandesh queue simulation (seeded discrete events)', model: null, provider: 'local', costUsd: 0 },
+          verification: { ok: true, checks: [`PASS re-ran the simulation: average wait ${before.averageWaitMinutes} → ${after.averageWaitMinutes} min`] },
+          notes: ['Simulated outcome under the stated assumptions, not a prediction of a real day.'],
+          actor: ctx.actor, clientId: ctx.clientId,
+        });
+        return { status: 201, body: { artifact, meta } };
+      });
     }
     if (workshop.type !== '3d') throw new CoreError('invalid_request', `${workshop.type} workshops are not edited through this route`);
     const { bytes } = readWorkshopVersion(ctx.db, latest.artifactId);

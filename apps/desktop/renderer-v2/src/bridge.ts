@@ -9,6 +9,7 @@ import type { GmailStatus } from './googleModel';
 import type { FolderCheck, FolderMention, RecentWorkspace, WorkspaceAccess, WorkspaceView } from './folderModel';
 import type { WorkshopCommand, WorkshopSummary } from '../../../../core/shared/workshop/model';
 import type { Scene3D } from '../../../../core/shared/workshop/scene3d';
+import type { SimulationSpec } from '../../../../core/shared/workshop/simulation';
 
 export type { WorkshopSummary, WorkshopCommand };
 /** One workshop version's content, verified and re-validated by the host before the window sees it. */
@@ -17,7 +18,7 @@ export type WorkshopContent =
   | { type: 'image'; artifactId: string; dataUrl: string }
   | { type: 'video'; artifactId: string; fileUrl: string }
   | { type: 'design'; artifactId: string; html: string }
-  | { type: 'simulation'; artifactId: string; spec: unknown };
+  | { type: 'simulation'; artifactId: string; spec: SimulationSpec };
 export type WorkshopCommandEvent = WorkshopCommand & { conversationId: string | null };
 
 export type ApprovalResolution = 'approved' | 'rejected';
@@ -197,7 +198,7 @@ export interface DesktopApi {
   loadWorkshopVersion(artifactId: string): Promise<WorkshopContent>;
   focusWorkshop(conversationId: string, workshopId: string | null, artifactId: string | null, open: boolean): Promise<{ recorded: boolean }>;
   confirmWorkshopCommand(commandId: string, ok: boolean, detail?: string, state?: Record<string, unknown>): Promise<{ recorded: boolean }>;
-  saveWorkshopEdit(workshopId: string, parentArtifactId: string, conversationId: string | null, edits: unknown[]): Promise<{ artifactId: string }>;
+  saveWorkshopEdit(workshopId: string, parentArtifactId: string, conversationId: string | null, change: unknown[] | { set?: Record<string, unknown>; adjust?: Record<string, unknown> }): Promise<{ artifactId: string }>;
   exportWorkshopGlb(workshopId: string, sourceArtifactId: string, conversationId: string | null, bytes: Uint8Array, expectedNodes: string[]): Promise<{ verified: boolean; artifactId: string | null; checks: string[]; byteSize: number }>;
   saveWorkshopFile(artifactId: string): Promise<{ saved: boolean; path: string | null }>;
   onEvent(listener: (event: ActivityEvent) => void): () => void;

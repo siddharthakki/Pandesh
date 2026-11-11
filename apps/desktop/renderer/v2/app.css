@@ -304,3 +304,22 @@ kbd { font-family: var(--font-mono); font-size: 12px; color: var(--muted); borde
 .ws-image-stage img { max-width: 100%; max-height: 100%; transform-origin: center; user-select: none; }
 .ws-media { flex: 1 1 auto; min-height: 0; display: flex; align-items: center; justify-content: center; padding: 12px; background: var(--canvas); }
 @media (max-width: 1180px) { .ws-tree { flex-basis: 170px; } .ws-inspector { flex-basis: 210px; } }
+/* Simulation Lab */
+.ws-sim { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
+.ws-sim-body { flex: 1 1 auto; min-height: 0; display: flex; }
+.ws-sim-main { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: 8px; padding: 12px; overflow-y: auto; background: var(--canvas); }
+.ws-sim-canvas { width: 100%; height: 230px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); }
+.ws-sim-chart { width: 100%; height: 110px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); }
+.ws-sim-side { flex: 0 0 290px; overflow-y: auto; padding: 10px 12px; border-left: 1px solid var(--line); font-size: 14px; }
+.ws-sim-side h4 { margin: 10px 0 6px; font-size: 12.5px; color: var(--muted); letter-spacing: 0.04em; text-transform: uppercase; }
+.ws-metrics { display: grid; grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); gap: 6px; }
+.ws-metric { display: flex; flex-direction: column; padding: 6px 9px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); }
+.ws-metric strong { font-size: 16px; font-variant-numeric: tabular-nums; }
+.ws-metric.highlight { border-color: var(--pulse); box-shadow: 0 0 0 1px var(--pulse) inset; }
+.ws-slider { display: flex; flex-direction: column; gap: 2px; margin: 6px 0; font-size: 13.5px; }
+.ws-slider input { width: 100%; accent-color: var(--pulse); }
+.ws-assumptions { margin-top: 10px; font-size: 13px; color: var(--muted); }
+.ws-assumptions ul { margin: 6px 0 0; padding-left: 18px; }
+.ws-compare-table { width: 100%; margin-top: 8px; border-collapse: collapse; font-size: 13px; }
+.ws-compare-table th, .ws-compare-table td { padding: 3px 6px; border-bottom: 1px solid var(--line); text-align: right; }
+.ws-compare-table th:first-child, .ws-compare-table td:first-child { text-align: left; color: var(--muted); }

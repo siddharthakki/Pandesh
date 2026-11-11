@@ -828,7 +828,7 @@ export type DesktopWorkshopContent =
   | { type: 'image'; artifactId: string; dataUrl: string }
   | { type: 'video'; artifactId: string; fileUrl: string }
   | { type: 'design'; artifactId: string; html: string }
-  | { type: 'simulation'; artifactId: string; spec: unknown };
+  | { type: 'simulation'; artifactId: string; spec: import('../../../core/shared/workshop/simulation').SimulationSpec };
 
 export type DesktopWorkshopSummary = import('../../../core/shared/workshop/model').WorkshopSummary;
 

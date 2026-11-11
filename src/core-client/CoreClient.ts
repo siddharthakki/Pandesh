@@ -551,7 +551,7 @@ export class CoreClient {
   }
 
   /** An edit the person made with the Workshop's own controls. */
-  async saveWorkshopVersion(workshopId: string, input: { conversationId?: string | null; parentArtifactId: string; edits: unknown[] }): Promise<{ artifact: ArtifactRecord }> {
+  async saveWorkshopVersion(workshopId: string, input: { conversationId?: string | null; parentArtifactId: string; edits?: unknown[]; set?: Record<string, unknown>; adjust?: Record<string, unknown> }): Promise<{ artifact: ArtifactRecord }> {
     return this.requestAsHost(`/v1/workshops/${encodeURIComponent(workshopId)}/versions`, { method: 'POST', body: input });
   }
 

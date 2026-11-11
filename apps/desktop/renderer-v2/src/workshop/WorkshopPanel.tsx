@@ -11,6 +11,7 @@ import { WORKSHOP_TYPE_LABEL, type WorkshopVersion } from '../../../../../core/s
 import { diffScenes, type Scene3D } from '../../../../../core/shared/workshop/scene3d';
 import { Viewer3D } from './Viewer3D';
 import { ImageViewer } from './ImageViewer';
+import { SimulationLab } from './SimulationLab';
 import type { CommandOutcome, ViewerHandle } from './viewerTypes';
 import type { WorkshopState } from './useWorkshop';
 
@@ -107,7 +108,7 @@ export function WorkshopPanel({ conversationId, workshop, narrow }: Props) {
   }
 
   const show = (id: string | null) => { if (ui) setUi({ ...ui, artifactId: id }); };
-  const onEdit = async (edits: unknown[], what: string) => {
+  const onEdit = async (edits: unknown[] | { set?: Record<string, unknown> }, what: string) => {
     if (!summary || !version) return;
     try {
       const { artifactId: next } = await api.saveWorkshopEdit(summary.workshopId, version.artifactId, conversationId, edits);
@@ -182,7 +183,11 @@ export function WorkshopPanel({ conversationId, workshop, narrow }: Props) {
         {summary && version && loaded && content?.type === 'video' && (
           <div className="ws-media"><video src={content.fileUrl} controls style={{ maxWidth: '100%', maxHeight: '100%' }} aria-label={summary.title} /></div>
         )}
-        {summary && version && loaded && (content?.type === 'design' || content?.type === 'simulation') && (
+        {summary && version && loaded && content?.type === 'simulation' && (
+          <SimulationLab ref={viewer} spec={content.spec} compareSpec={compareContent?.type === 'simulation' ? compareContent.spec : null}
+            onSave={(set, what) => onEdit({ set }, `Simulation: ${what}`)} />
+        )}
+        {summary && version && loaded && content?.type === 'design' && (
           <div className="notice" style={{ margin: 16 }}>This {WORKSHOP_TYPE_LABEL[summary.type]} version is saved, but this build has no viewer for it yet.</div>
         )}
         {drawer && summary && version && (
