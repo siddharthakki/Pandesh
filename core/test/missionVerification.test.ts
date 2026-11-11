@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import * as fs from 'node:fs';
+import * as http from 'node:http';
+import type { AddressInfo } from 'node:net';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { spawnSync } from 'node:child_process';
@@ -469,6 +471,36 @@ describe('live host browser negative cases', () => {
       expect(result.ok).toBe(false);
       expect(result.summary).toMatch(/visible #results|display=grid/);
     } finally {
+      try { fs.rmSync(dir, { recursive: true, force: true }); } catch { /* browser profile may still be unlocking */ }
+    }
+  }, 60_000);
+
+  it('acts on a page only after its late module script has attached the handlers', async () => {
+    if (!browserBin) return;
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'kdk-verify-live-late-module-'));
+    // The calculator's module script arrives 1.5 s late, as on a slow machine. The parser reaches 'interactive'
+    // long before the script runs, so a verifier that acts then presses Calculate before the submit handler
+    // exists: the form really submits, and the results stay empty.
+    const lateScripts = http.createServer((req, res) => {
+      const body = fs.readFileSync(path.join(dir, 'src', 'app.js'));
+      setTimeout(() => {
+        res.writeHead(200, { 'Content-Type': 'text/javascript', 'Access-Control-Allow-Origin': '*', 'Cache-Control': 'no-store' });
+        res.end(body);
+      }, 1_500);
+    });
+    await new Promise<void>((resolve) => lateScripts.listen(0, '127.0.0.1', () => resolve()));
+    try {
+      writeCalculator(dir, 'working');
+      const { port } = lateScripts.address() as AddressInfo;
+      const page = path.join(dir, 'index.html');
+      fs.writeFileSync(page, fs.readFileSync(page, 'utf8').replace('src="src/app.js"', `src="http://127.0.0.1:${port}/src/app.js"`));
+      const result = await runMissionVerification({ workspaceRoot: dir, browserBin });
+      if (result.unavailable) return;
+      expect(result.summary).toMatch(/passed/);
+      expect(result.ok).toBe(true);
+    } finally {
+      lateScripts.closeAllConnections();
+      await new Promise((resolve) => lateScripts.close(resolve));
       try { fs.rmSync(dir, { recursive: true, force: true }); } catch { /* browser profile may still be unlocking */ }
     }
   }, 60_000);

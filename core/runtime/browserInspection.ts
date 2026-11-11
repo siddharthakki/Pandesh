@@ -337,6 +337,36 @@ export async function evaluate(cdp: CdpSession, sessionId: string, expression: s
   return inner?.value;
 }
 
+/**
+ * Waits until a navigated page has finished loading: `document.readyState` is
+ * 'complete' on a document other than the tab's initial about:blank. Returns
+ * false when the deadline passes first; the caller then goes on with the page
+ * as it is.
+ *
+ * 'interactive' is not enough. Deferred and module scripts
+ * (`<script type="module">`, as Vite builds them) run only after the parser
+ * reaches 'interactive', and stylesheets may still be loading, so a page acted
+ * on then has no handlers yet and its computed styles can be wrong. Right after
+ * Page.navigate the renderer may also still answer for the old about:blank,
+ * which is already 'complete'. `allowBlank` accepts about:blank, for a
+ * navigation that may really end there (such as history.back()).
+ */
+export async function waitForPageReady(
+  cdp: CdpSession,
+  sessionId: string,
+  options: { timeoutMs: number; intervalMs?: number; allowBlank?: boolean },
+): Promise<boolean> {
+  const deadline = Date.now() + options.timeoutMs;
+  for (;;) {
+    // A document being swapped out may not answer; that counts as not loaded yet.
+    const state = await evaluate(cdp, sessionId, '[document.readyState, location.href]').catch(() => null);
+    const [readyState, href] = Array.isArray(state) ? state.map(String) : ['', ''];
+    if (readyState === 'complete' && (options.allowBlank || href !== 'about:blank')) return true;
+    if (Date.now() >= deadline) return false;
+    await sleep(options.intervalMs ?? 100);
+  }
+}
+
 function keyEventParams(key: string): { key: string; code: string; text: string; windowsVirtualKeyCode: number } {
   if (key === 'Enter') return { key: 'Enter', code: 'Enter', text: '\r', windowsVirtualKeyCode: 13 };
   if (key === ' ' || key === 'Space') return { key: ' ', code: 'Space', text: ' ', windowsVirtualKeyCode: 32 };
@@ -615,12 +645,7 @@ async function withInspectedPage<T>(
       mobile: request.viewportWidth <= 500,
     }, sessionId);
     await cdp.send('Page.navigate', { url: pageUrl }, sessionId);
-    const deadline = Date.now() + 10_000;
-    while (Date.now() < deadline) {
-      const ready = await evaluate(cdp, sessionId, 'document.readyState');
-      if (ready === 'complete' || ready === 'interactive') break;
-      await sleep(100);
-    }
+    await waitForPageReady(cdp, sessionId, { timeoutMs: 10_000 });
     await evaluate(cdp, sessionId, 'window.__kdkVerificationLoadedAt = Date.now()');
     return await fn(cdp, sessionId, pageUrl);
   } finally {
