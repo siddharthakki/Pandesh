@@ -1,5 +1,6 @@
 import { claimedOutputFiles, leadStatusLine, withholdUnsupportedActionClaims } from './actionClaims';
 import { answerTaskStatusQuestion, isTaskStatusQuestion, listPriorTurns, renderTaskHistorySection } from '../domain/conversationTaskHistory';
+import { listEarlierReads, renderEarlierReadsSection } from '../domain/earlierReads';
 import { checkPublicQuery, derivePublicQuery, explicitlyRequestsWebSearch, referencesLocalContent } from './publicQueryGuard';
 import { commandOpinionWarnings, readCommandReviewSettings, recordCommandReview, reviewCommand, warmCommandReview, type CommandOpinion, type CommandReviewOutcome } from './commandSecondOpinion';
 import { queryPrivacySummary, queryPrivacyWarning, readQueryPrivacySettings, recordQueryPrivacyReview, reviewQueryPrivacy, warmQueryPrivacy, type QueryPrivacyOpinion } from './queryPrivacySecondOpinion';
@@ -5039,6 +5040,19 @@ When the user asks to continue, resume, or check progress/updates, resume this w
     // Earlier tasks' real outcomes (cancelled / failed / interrupted), so the model never presents them as pending (D4).
     const taskHistorySection = renderTaskHistorySection(priorTurns);
     addTurnFact(taskHistorySection);
+    // Micro-test cluster C4 (D-JOB-1): tool results are not part of the history, so a file read two turns ago was
+    // "reviewed" from memory and its deadline, salary and link reported missing. Carry the latest content of each file
+    // read earlier in this conversation, bounded.
+    try {
+      if (conversationId) {
+        const earlier = listEarlierReads(db, conversationId, { excludeRequestId: requestId });
+        const section = renderEarlierReadsSection(earlier);
+        if (section) {
+          addTurnFact(section);
+          safeRecordRuntimeEvent(db, broadcaster, attemptId, 'earlier_reads_carried', { files: earlier.length, chars: section.length }, actor);
+        }
+      }
+    } catch { /* history continuity is best effort; the turn still runs */ }
     // A spoken message may contain misheard words (Core froze how it was entered): ask about an odd word, never refuse on it.
     let spokenSection = '';
     try {
