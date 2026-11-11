@@ -26,6 +26,18 @@ describe('gap 1: finish what was asked', () => {
   it('a plain question is never "unfinished"', () => {
     expect(unfinishedRequestedSteps('How much free RAM do I have?', '35 GB free.', ['system_hardware_telemetry'], true)).toEqual([]);
   });
+  it('pointing to a control in the app is not a fix handed back (micro-test D-PER-1)', () => {
+    const ask = 'Turn on Auto mode for web searches.';
+    for (const reply of [
+      'You can change the permission mode with the menu next to the message box.',
+      'You should update this in Settings, under Connections.',
+      'Please change your Google account password in your account settings.',
+      'You can switch it off with the toggle on the Phone card.',
+    ]) expect(unfinishedRequestedSteps(ask, reply, [], true)).toEqual([]);
+    // A fix in a file the model could write is still handed back, and still flagged.
+    expect(unfinishedRequestedSteps(ask, 'You should fix the typo in config.json yourself.', [], true)).toHaveLength(1);
+    expect(unfinishedRequestedSteps(ask, 'You can correct line 12 of the script.', [], true)).toHaveLength(1);
+  });
 });
 
 describe('gap 4: suggested commands are checked against the folder', () => {

@@ -17,6 +17,15 @@ const PROGRESS_WORDS = /\b(?:status|progress|update|how (?:far|many|much)|done y
 const IMPERATIVE = /^\s*(?:please\s+)?(?:move|archive|label|organi[sz]e|delete|apply|start|create|run|continue|proceed|go|do|make|send|process)\b/i;
 const BARE_FOLLOW_UP = /^\s*(?:status|update(?: me)?|progress|and\s*\??|so\s*\??|any (?:news|update|progress)\s*\??|(?:is it |are you )?(?:still )?(?:not )?(?:done|finished|ready)(?: yet)?\s*\??|a?still not d\w+\s*\??)\s*[?!.]*\s*$/i;
 
+/**
+ * A request to change a reminder goes to the assistant and its reminder tools, never to the list. Micro-test D-REM-1:
+ * "Change my stretch reminder to 6 PM" and "Pause my recurring recycling reminder" were answered with the list and
+ * nothing changed.
+ */
+const REMINDER_CHANGE = /\b(?:create|add|set|delete|cancel|remove|change|move|reschedul\w*|pause|resume|stop|edit|update|rename|snooze|postpone|delay|disable|enable|turn\s+(?:off|on)|complete|finish|mark|done)\b/i;
+/** A question about one reminder's details is answered by the assistant ("What time zone is this reminder in?", REM-021). */
+const REMINDER_DETAIL = /\b(?:time\s*zone|timezone|why|how\s+(?:do|does|can|often)|(?:this|that|the\s+\w+)\s+reminder\b(?!s))/i;
+
 /** Which status topics a short request is asking about; null when it is not one of these questions. */
 export function classifyStatusRequest(text: string, hasRecentGmailWork = false): StatusTopic[] | null {
   const t = String(text || '').trim();
@@ -24,7 +33,7 @@ export function classifyStatusRequest(text: string, hasRecentGmailWork = false):
   const topics: StatusTopic[] = [];
   const asksQuestion = /\?|\b(?:how|why|what|which|show|list|tell|explain|configur\w*|status|enabled|working|didn.?t|did not|never)\b/i.test(t);
   if (/\bnotif\w*\b/i.test(t) && asksQuestion && !/\b(?:send|create|write|draft)\b/i.test(t)) topics.push('notifications');
-  if (/\b(?:reminders?)\b/i.test(t) && /\b(?:show|list|what|which|any|my|open|upcoming|pending)\b/i.test(t) && !/\bremind me\b/i.test(t) && !/\b(?:create|add|set|delete|cancel|remove)\b/i.test(t)) topics.push('reminders');
+  if (/\b(?:reminders?)\b/i.test(t) && /\b(?:show|list|what|which|any|my|open|upcoming|pending)\b/i.test(t) && !/\bremind me\b/i.test(t) && !REMINDER_CHANGE.test(t) && !REMINDER_DETAIL.test(t)) topics.push('reminders');
   if (/\b(?:what|which)\b[^.?!]{0,40}\b(?:tasks?|jobs?|work)\b[^.?!]{0,30}\b(?:running|active|pending|doing|have)\b|\b(?:running|active|background|pending) (?:tasks?|jobs?)\b|\bwhat are you (?:doing|working on|running)\b/i.test(t)) topics.push('tasks');
   if (GMAIL_WORDS.test(t) && PROGRESS_WORDS.test(t) && asksQuestion && !IMPERATIVE.test(t)) topics.push('gmail');
   if (topics.length === 0 && hasRecentGmailWork && BARE_FOLLOW_UP.test(t)) topics.push('gmail');
@@ -92,20 +101,49 @@ function describeTasks(db: CoreDatabase, nowMs: number): string {
   return lines.join('\n');
 }
 
-function describeReminders(db: CoreDatabase): string {
-  const rows = db.all<{ title: string; dueAt: string; status: string }>(
-    `SELECT title, dueAt, status FROM everyday_reminders WHERE status = 'scheduled' ORDER BY dueAt LIMIT 10`,
+/** The PC's own time zone (Core runs on the person's PC), e.g. Europe/Berlin. */
+function localTimeZone(): string {
+  try { return Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC'; } catch { return 'UTC'; }
+}
+
+/** The local calendar day of an instant in `timeZone`, as YYYY-MM-DD. */
+function localDay(ms: number, timeZone: string): string {
+  return new Intl.DateTimeFormat('en-CA', { timeZone, year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date(ms));
+}
+
+/**
+ * The upcoming reminders, in local time with the zone named (micro-test REM-021 saw raw UTC). "due today" or "due
+ * tomorrow" keeps only that day (REM-009 got every open reminder for "Show reminders due today").
+ */
+function describeReminders(db: CoreDatabase, nowMs: number, request: string, timeZone = localTimeZone()): string {
+  const rows = db.all<{ title: string; dueAt: string; status: string; timezone: string | null }>(
+    `SELECT title, dueAt, status, timezone FROM everyday_reminders WHERE status = 'scheduled' ORDER BY dueAt LIMIT 50`,
   );
-  if (rows.length === 0) return '**Reminders:** you have no upcoming reminders.';
-  return ['**Your upcoming reminders:**', '', ...rows.map((r) => `- ${r.dueAt}: ${r.title}`)].join('\n');
+  const zoneOf = (r: { timezone: string | null }) => (r.timezone && isTimeZone(r.timezone) ? r.timezone : timeZone);
+  const day = /\btomorrow\b/i.test(request) ? localDay(nowMs + 24 * 3600_000, timeZone) : /\btoday\b/i.test(request) ? localDay(nowMs, timeZone) : null;
+  const shown = (day ? rows.filter((r) => Number.isFinite(Date.parse(r.dueAt)) && localDay(Date.parse(r.dueAt), timeZone) === day) : rows).slice(0, 10);
+  const when = day === null ? '' : /\btomorrow\b/i.test(request) ? ' due tomorrow' : ' due today';
+  if (shown.length === 0) return `**Reminders:** you have no upcoming reminders${when}.`;
+  const zones = [...new Set(shown.map(zoneOf))];
+  const local = (iso: string, zone: string) => {
+    const ms = Date.parse(iso);
+    if (!Number.isFinite(ms)) return iso;
+    return new Intl.DateTimeFormat('en-GB', { timeZone: zone, weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }).format(new Date(ms));
+  };
+  const header = `**Your upcoming reminders${when}**${zones.length === 1 ? ` (times in ${zones[0]})` : ''}:`;
+  return [header, '', ...shown.map((r) => `- ${local(r.dueAt, zoneOf(r))}${zones.length === 1 ? '' : ` (${zoneOf(r)})`}: ${r.title}`)].join('\n');
+}
+
+function isTimeZone(zone: string): boolean {
+  try { new Intl.DateTimeFormat('en-GB', { timeZone: zone }); return true; } catch { return false; }
 }
 
 /** The full, factual answer for the requested topics. */
-export function composeStatusAnswer(db: CoreDatabase, topics: StatusTopic[], nowMs: number = Date.now()): string {
+export function composeStatusAnswer(db: CoreDatabase, topics: StatusTopic[], nowMs: number = Date.now(), request = ''): string {
   const parts: string[] = [];
   if (topics.includes('gmail')) parts.push(describeGmail(db, nowMs));
   if (topics.includes('tasks')) parts.push(describeTasks(db, nowMs));
-  if (topics.includes('reminders')) parts.push(describeReminders(db));
+  if (topics.includes('reminders')) parts.push(describeReminders(db, nowMs, request));
   if (topics.includes('notifications') || topics.includes('gmail')) parts.push(describeNotifications(notificationReport(db, nowMs)));
   return parts.join('\n\n');
 }

@@ -51,6 +51,20 @@ const CATEGORIES: ActionClaimCategory[] = [
     label: 'reminder change',
   },
   {
+    // Micro-tests D-TSK-1 and D-TSK-4 (TSK-001, TSK-002, TSK-017, GML-010): "I've created the task 'Review insurance
+    // letter' and marked it as in progress" and "I've updated the task with a deadline of Friday" after only
+    // update_task_outcome (the turn's own bookkeeping) or resolve_time. A to-do changes only through a tool that stores
+    // one: a project's tasks, a commitment, a scheduled task or a reminder.
+    kind: 'task',
+    object: /\b(?:tasks?|to-?dos?|checklists?|sub-?tasks?)\b/i,
+    verbs: '',
+    // The to-do must be what was changed, named or within two words of the verb ("I've updated the README with the
+    // task list" is a file change; "I've completed the tasks you asked for" is the generic execution claim below).
+    claim: /\bi(?:'ve|\s+have)?\s+(?:(?:now|just|already|successfully|also)\s+)*(?:created|added|updated|marked|renamed|moved|split|assigned|linked|archived|reopened|prioriti[sz]ed)\s+(?:(?:a|an|the|your|this|that|new|it|them)\s+)?(?:"[^"]{1,80}"\s+|“[^”]{1,80}”\s+|[\w'-]+\s+){0,2}?(?:tasks?|to-?dos?|checklists?|sub-?tasks?)\b|\b(?:tasks?|to-?dos?|checklists?)\b[^.!?]{0,60}?\b(?:has|have)\s+(?:now\s+|already\s+|successfully\s+)*been\s+(?:successfully\s+)?(?:created|added|updated|marked|renamed|moved|split|assigned|linked|archived|reopened)\b|\bmarked\s+(?:it|them|the\s+task|this\s+task|that\s+task)\s+as\s+(?:done|complete|completed|finished|in\s+progress)\b/i,
+    tools: /^(?:create_project|create_commitment|update_commitment|schedule_task|cancel_scheduled_task|create_reminder|dismiss_reminder)$|^dev_stor/i,
+    label: 'task change',
+  },
+  {
     kind: 'calendar',
     object: /\b(?:calendar|events?|appointments?|meetings?|invites?)\b/i,
     verbs: 'added|created|scheduled|booked|moved|rescheduled|updated|cancell?ed|deleted|removed',
@@ -67,6 +81,19 @@ const CATEGORIES: ActionClaimCategory[] = [
     verbs: 'sent|emailed|forwarded|delivered|posted|replied|messaged|texted',
     tools: /send|reply|comment|post|jugaad/i,
     label: 'message send',
+  },
+  {
+    // Micro-test D-GML-2 (GML-011, GML-019): gmail_search FAILED, yet the reply said 'I see that there is a "test
+    // newsletter" in your Gmail' and 'I found some mentions of "Alex" in your Gmail, but I don't have permission to read
+    // the messages'. What is in the mailbox is known only from a mailbox read that succeeded. Negations are part of the
+    // claim pattern ("I couldn't find", "I see no", "there are no"), so a later "but I don't have permission" in the same
+    // sentence does not excuse the claim before it.
+    kind: 'mailbox',
+    object: /\b(?:gmail|inbox|mailbox|e-?mails?|mail)\b/i,
+    verbs: '',
+    claim: /\bi\s+(?:can\s+|could\s+)?(?:see|found|noticed|spotted)\s+(?!no\b|nothing\b|none\b|(?:that\s+)?you\b)[^.!?]{0,80}?\bin\s+your\s+(?:gmail|inbox|mailbox|e-?mails?|mail)\b|\bi(?:'ve|\s+have)\s+found\s+(?!no\b|nothing\b|none\b)[^.!?]{0,80}?\bin\s+your\s+(?:gmail|inbox|mailbox|e-?mails?|mail)\b|\bthere\s+(?:is|are)\s+(?!no\b|nothing\b|none\b)[^.!?]{0,80}?\bin\s+your\s+(?:gmail|inbox|mailbox)\b|\byour\s+(?:gmail|inbox|mailbox)\s+(?:has|contains|shows)\s+(?!no\b|nothing\b)/i,
+    tools: /^gmail_(?:search|read_thread|read_attachment|analyze_inbox|task_next_batch|task_status|plan_changes)$/i,
+    label: 'mailbox read',
   },
   {
     kind: 'memory',
@@ -105,12 +132,23 @@ const CATEGORIES: ActionClaimCategory[] = [
   {
     // Alpha review: "I have opened the file in my internal System View" while the only page tool had been refused.
     kind: 'open',
-    object: /[\w.-]+\.(?:pdf|md|txt|html?|png|jpe?g|svg|gif|webp)\b|\b(?:files?|pages?|dashboard|browser)\b/i,
+    object: /[\w.-]+\.(?:pdf|md|txt|html?|png|jpe?g|svg|gif|webp)\b|\b(?:files?|browser)\b/i,
     verbs: 'opened|launched|displayed',
     // F13g: "I cannot confirm that the file has been opened" is the honest opposite of a claim.
     exclude: /\b(?:cannot|can't|could\s*not|couldn't|unable|not|never|wasn't|was\s+not|please\s+open)\b/i,
     tools: /^open_local_file$|^inspect_page$|^browser_open_site$/i,
     label: 'file opening',
+  },
+  {
+    // Micro-test D-NAV-1 (ten tests): "I've opened the Connections page" after navigate_to had really switched the
+    // window was marked "Not done: no file opening". Opening a place in Pandesh (a page, view, tab, section or menu) is
+    // supported by a navigate_to the window confirmed, or by a page tool; a file still needs a file or page tool above.
+    kind: 'navigation',
+    object: /\b(?:pages?|views?|screens?|tabs?|sections?|menus?|panels?|dashboard|settings|board|connections)\b/i,
+    verbs: 'opened|launched|displayed|switched|navigated|brought up|taken you|took you',
+    exclude: /\b(?:cannot|can't|could\s*not|couldn't|unable|not|never|wasn't|was\s+not|please\s+open)\b/i,
+    tools: /^navigate_to$|^open_local_file$|^inspect_page$|^browser_open_site$/i,
+    label: 'navigation',
   },
   {
     // Alpha e2e T7: "The test was rerun after the fix, and it passed successfully" with no run after the fix. Supported

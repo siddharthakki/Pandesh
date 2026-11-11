@@ -17,7 +17,20 @@ import type { SyncRunner } from './outputChecks';
 const WANTS_OPEN = /\bopen\s+(?:it|them|this|that|the\s+(?:file|report|page|dashboard|result|html)|[^.?!]{0,40}\bin\s+(?:my|the)\s+browser)\b|\bshow\s+(?:it|me\s+the\s+(?:page|dashboard|report))\b/i;
 const WANTS_VERIFY = /\b(?:verify|validate|check\s+(?:that\s+)?it\s+works|make\s+sure\s+it\s+works|test\s+it)\b/i;
 const HANDS_BACK_FIX = /\b(?:you\s+(?:should|need\s+to|can|could|may\s+want\s+to|will\s+need\s+to)\s+(?:correct|fix|change|update|edit|replace|adjust)|please\s+(?:correct|fix|change|update|edit|adjust))\b/i;
+/** What the hand-back is about must be something a file write can fix: a named file, code, a line or a value in one. */
+const FILE_FIX_CONTEXT = /[\w-]+\.(?:py|js|ts|tsx|jsx|mjs|cjs|html?|css|json|md|txt|csv|ya?ml|toml|ini|cfg|xml|sql|sh|ps1|bat)\b|\b(?:code|script|function|line\s+\d+|files?|source|stylesheet|template|formula|cells?)\b/i;
+/**
+ * Micro-test D-PER-1 (six tests): "You can change the permission mode with the menu next to the message box" was taken
+ * for a fix handed back, and Core told the model to "make that correction now with write_file". A control in the app,
+ * an account or Windows is changed there by the person; no file write can do it.
+ */
+const UI_CONTROL = /\b(?:menus?|buttons?|toggles?|switch(?:es)?|settings?|permissions?|modes?|tabs?|panels?|dialogs?|cards?|tray|connections?|accounts?|sign[\s-]?in|passwords?|preferences?|windows\s+settings|control\s+panel|in\s+the\s+app)\b/i;
 const PRODUCED = /^(?:write_file|propose_file_change|propose_text_edit|delegate_to_opencode|delegate_to_agent|delegate_to_coding_agent)$/;
+
+/** A sentence that hands back to the user a fix Pandesh could make in a file itself. */
+function handsBackFileFix(reply: string): boolean {
+  return reply.split(/(?<=[.!?])\s+|\n+/).some((s) => HANDS_BACK_FIX.test(s) && FILE_FIX_CONTEXT.test(s) && !UI_CONTROL.test(s));
+}
 
 export function unfinishedRequestedSteps(request: string, reply: string, succeededTools: readonly string[], canWrite: boolean): string[] {
   const produced = succeededTools.some((t) => PRODUCED.test(t));
@@ -28,7 +41,7 @@ export function unfinishedRequestedSteps(request: string, reply: string, succeed
   if (produced && WANTS_VERIFY.test(request) && !succeededTools.some((t) => /^(?:read_file|run_checks|inspect_page)$/.test(t))) {
     steps.push('the user asked you to verify the result, and nothing checked it: read the file back with read_file (or run a real check) and compare it with the source data');
   }
-  if (canWrite && HANDS_BACK_FIX.test(reply)) {
+  if (canWrite && handsBackFileFix(reply)) {
     steps.push('your reply tells the user to fix something you can fix yourself: make that correction now with write_file');
   }
   return steps;
