@@ -7,6 +7,13 @@ export const DESKTOP_CHANNELS = {
   pickFolder: 'desktop:pickFolder',
   setFolder: 'desktop:setFolder',
   clearFolder: 'desktop:clearFolder',
+  /** The native folder dialog only: returns the chosen path and changes nothing. */
+  chooseFolder: 'desktop:chooseFolder',
+  /** Workspace folder with the person's access choice (v2 folder card): check, use, change access, chat mentions. */
+  checkWorkspaceFolder: 'desktop:checkWorkspaceFolder',
+  useWorkspace: 'desktop:useWorkspace',
+  setWorkspaceAccess: 'desktop:setWorkspaceAccess',
+  inspectFolderMention: 'desktop:inspectFolderMention',
   submitTask: 'desktop:submitTask',
   selectWorker: 'desktop:selectWorker',
   selectProvider: 'desktop:selectProvider',
@@ -555,10 +562,51 @@ export interface DesktopPermissionState {
   activeTurnMode?: DesktopPermissionMode | null;
 }
 
+/** How far the person let Pandesh into the workspace folder (host/workspaceAccess.ts; Core enforces 'read'). */
+export type DesktopWorkspaceAccess = 'read' | 'read_write';
+
+/** The workspace folder and what Pandesh may do there. */
+export interface DesktopWorkspaceView {
+  folder: string;
+  access: DesktopWorkspaceAccess;
+  grantedAt: string | null;
+  /** How it became the workspace; `earlier_build` = chosen before access levels existed (it kept full access). */
+  source: 'picker' | 'chat' | 'recent' | 'earlier_build';
+}
+
+export interface DesktopRecentWorkspace {
+  folder: string;
+  access: DesktopWorkspaceAccess;
+  lastUsedAt: string;
+}
+
+/** Whether a folder can be the workspace (host/workspaceAccess.ts FolderCheck). */
+export interface DesktopFolderCheck {
+  folder: string;
+  state: 'ok' | 'missing' | 'not_a_folder' | 'refused' | 'unreadable';
+  reason?: string;
+  warning?: string;
+  readable: boolean;
+  writable: boolean;
+}
+
+/** A message named a folder that is not the workspace: the window asks before making it one. */
+export interface DesktopFolderMention {
+  folder: string;
+  spelled: string;
+  check: DesktopFolderCheck;
+  /** The access the person last chose for this folder, if it is a recent one. */
+  rememberedAccess: DesktopWorkspaceAccess | null;
+}
+
 export interface DesktopSnapshot {
   coreState: DesktopCoreState;
   coreDetail?: string;
   folder: string | null;
+  /** The workspace folder with its access level (null when none is selected). */
+  workspace?: DesktopWorkspaceView | null;
+  /** Folders used before, newest first, with the access last chosen for each. */
+  recentWorkspaces?: DesktopRecentWorkspace[];
   model: string | null;
   /** True when the next local submit delegates model choice to Core. */
   modelIsAuto: boolean;
@@ -1148,6 +1196,8 @@ export const RENDERER_VISIBLE_KEYS: readonly (keyof DesktopSnapshot)[] = [
   'coreState',
   'coreDetail',
   'folder',
+  'workspace',
+  'recentWorkspaces',
   'model',
   'modelAvailable',
   'installedModels',

@@ -126,6 +126,26 @@ kbd { font-family: var(--font-mono); font-size: 12px; color: var(--muted); borde
 .ctl-select.mode-auto { border-color: var(--attention); color: var(--ink); }
 .ctl-select.mode-plan { border-color: var(--verified); color: var(--ink); }
 .ctl-select option, .ctl-select optgroup { background: var(--surface); color: var(--ink); }
+/* The workspace folder: chip under the composer, its menu, and the card that asks before a folder is used */
+.folder-wrap { position: relative; flex: 0 1 auto; min-width: 0; display: flex; }
+.folder-chip { display: inline-flex; align-items: center; gap: 6px; height: 30px; max-width: 240px; min-width: 0; padding: 0 10px 0 8px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); color: var(--muted); font-size: 13px; }
+.folder-chip .label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.folder-chip:hover:not(:disabled), .folder-chip[aria-expanded="true"] { color: var(--ink); }
+.folder-chip.read-only { border-color: var(--verified); color: var(--ink); }
+.folder-chip.none { border-style: dashed; }
+.narrow .folder-chip { max-width: 160px; }
+.folder-menu { width: 380px; max-height: min(70vh, 560px); overflow-y: auto; z-index: 30; }
+.folder-current { display: flex; flex-direction: column; gap: 4px; padding: 4px 14px 10px; font-size: 14px; }
+.folder-current .path { font-family: var(--font-mono); font-size: 13px; overflow-wrap: anywhere; }
+.folder-current .note { color: var(--muted); font-size: 13.5px; }
+.menu-item .sub { overflow-wrap: anywhere; }
+.folder-card dl { grid-template-columns: 110px minmax(0, 1fr); }
+.folder-access { margin: 4px 16px 10px; padding: 0; border: 0; display: flex; flex-direction: column; gap: 8px; font-size: 14.5px; }
+.folder-access legend { padding: 0 0 6px; font-weight: 600; font-size: 14px; }
+.folder-access label { display: flex; align-items: flex-start; gap: 8px; }
+.folder-access label.disabled { color: var(--faint); }
+.folder-access input { margin-top: 5px; flex: 0 0 auto; }
+.folder-error { margin: 0 16px 10px; }
 .perm-panel { display: flex; flex-direction: column; gap: 10px; padding: 10px 14px; border: 1px solid var(--line); border-radius: 14px; background: var(--surface); font-size: 14px; }
 .perm-status { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
 .perm-status > li { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; }

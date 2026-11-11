@@ -6,6 +6,7 @@ import { Markdown } from './markdown';
 import { useVoice } from './voice';
 import type { WakeWord } from './wake';
 import { useComposerControls } from './ComposerControls';
+import { useFolderControl } from './FolderControl';
 import { modelLabel as describeModel } from './composerModel';
 
 interface Props {
@@ -175,11 +176,29 @@ export function Chat({ snapshot, snapshotError, refresh, narrow, openConversatio
   const heldTranscript = useRef<{ text: string; voiceTurnId: string } | null>(null);
   const send = async (spoken?: string, voiceTurnId?: string) => {
     const goal = (spoken ?? text).trim();
-    if (!goal || busy) return;
+    if (!goal || busy || folder.asking) return;
     const held = heldTranscript.current;
     heldTranscript.current = null;
     // Core is told a message was spoken, so it can ask about a misheard word instead of acting on it.
     const turnId = voiceTurnId ?? (spoken === undefined && held && held.text.trim() === goal ? held.voiceTurnId : undefined);
+    // A message that names a folder by its full path: ask whether that folder becomes the workspace (and with which
+    // access) before it is sent. While a task runs, the message goes on as before (it is queued or steers the task).
+    if (!snapshot?.running) {
+      setBusy(true);
+      const asking = await folder.askAboutMention(goal, turnId);
+      setBusy(false);
+      if (asking) {
+        setNotice(null);
+        setText('');
+        if (textarea.current) textarea.current.style.height = 'auto';
+        return;
+      }
+    }
+    await submitNow(goal, turnId);
+  };
+
+  /** Sends one message to the host (which routes it to Core). */
+  const submitNow = async (goal: string, turnId?: string) => {
     setBusy(true);
     setNotice(null);
     setDeclined(false);
@@ -276,6 +295,11 @@ export function Chat({ snapshot, snapshotError, refresh, narrow, openConversatio
   const needs = brief?.length ?? 0;
   const [controlNotice, setControlNotice] = useState<{ text: string; error?: boolean } | null>(null);
   const controls = useComposerControls({ snapshot, refresh, onNotice: setControlNotice, disabled: Boolean(coreDown) || !snapshot });
+  const folder = useFolderControl({
+    snapshot, refresh, onNotice: setControlNotice, disabled: Boolean(coreDown) || !snapshot,
+    onSendHeld: (held, turnId) => submitNow(held, turnId),
+    onRestoreText: (held) => { setText(held); setTimeout(() => textarea.current?.focus(), 0); },
+  });
 
   const awaitingSpokenAnswer = useRef<string | null>(null);
   const voice = useVoice({
@@ -328,7 +352,7 @@ export function Chat({ snapshot, snapshotError, refresh, narrow, openConversatio
         onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) { e.preventDefault(); void send(); } }} />
       <button type="button" className="icon-btn" aria-label="Talk to Pandesh" title={speechReady ? 'Talk to Pandesh (local speech recognition)' : speechBlocker} disabled={!speechReady || Boolean(coreDown)} onClick={() => void voice.listen()}><Icon name="mic" /></button>
       {runningHere && <button type="button" className="icon-btn" title="Stop the running task" aria-label="Stop the running task" onClick={() => void stop()}><Icon name="stop" /></button>}
-      <button type="button" className={`icon-btn send-btn${text.trim() ? ' ready' : ''}`} title="Send (Enter)" aria-label="Send" disabled={!text.trim() || busy} onClick={() => void send()}><Icon name="send" /></button>
+      <button type="button" className={`icon-btn send-btn${text.trim() && !folder.asking ? ' ready' : ''}`} title={folder.asking ? 'Answer the folder question first' : 'Send (Enter)'} aria-label="Send" disabled={!text.trim() || busy || folder.asking} onClick={() => void send()}><Icon name="send" /></button>
     </div>
   );
 
@@ -486,6 +510,9 @@ export function Chat({ snapshot, snapshotError, refresh, narrow, openConversatio
         <div className="footer">
           <div className="footer-inner">
             {!showDecisionBar && controls.panel}
+            {!showDecisionBar && folder.card}
+            {/* On the home screen there is no transcript to hold a send error, so it shows here. */}
+            {idle && notice && <div className={`notice${notice.error ? ' error' : ''}`} role={notice.error ? 'alert' : 'status'} style={{ margin: 0 }}>{notice.text} <button type="button" className="btn link" style={{ minHeight: 0, padding: 0 }} onClick={() => setNotice(null)}>OK</button></div>}
             {controlNotice && <div className={`notice${controlNotice.error ? ' error' : ''}`} role={controlNotice.error ? 'alert' : 'status'} style={{ margin: 0 }}>{controlNotice.text} <button type="button" className="btn link" style={{ minHeight: 0, padding: 0 }} onClick={() => setControlNotice(null)}>OK</button></div>}
             {wakeStatus?.kind === 'failed' && wakeFailureSeen !== wakeStatus.reason && <div className="notice error" role="alert" style={{ margin: 0 }}>The wake word is not listening: {wakeStatus.reason}. <button type="button" className="btn link" style={{ minHeight: 0, padding: 0 }} onClick={() => setWakeFailureSeen(wakeStatus.reason ?? null)}>OK</button></div>}
             {showDecisionBar && decision ? (
@@ -516,6 +543,7 @@ export function Chat({ snapshot, snapshotError, refresh, narrow, openConversatio
             )}
             {!showDecisionBar && (
               <div className="composer-controls">
+                {folder.chip}
                 {controls.controls}
                 <span className="grow" />
                 {route}

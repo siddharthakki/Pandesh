@@ -925,6 +925,40 @@ function registerIpc(): void {
     sendSnapshot();
     return snap;
   });
+  ipcMain.handle(DESKTOP_CHANNELS.chooseFolder, async (_event, options?: { title?: unknown; purpose?: unknown }) => {
+    if (!window) return null;
+    const purpose = options?.purpose === 'second_brain' ? 'second_brain' : 'workspace';
+    const current = session?.snapshot().folder ?? null;
+    const result = await dialog.showOpenDialog(window, {
+      title: purpose === 'second_brain' ? 'Choose a folder for Second Brain to read' : 'Choose a workspace folder for Pandesh',
+      ...(current ? { defaultPath: current } : {}),
+      properties: ['openDirectory'],
+    });
+    if (result.canceled || result.filePaths.length === 0) return null;
+    return { folder: result.filePaths[0] };
+  });
+  ipcMain.handle(DESKTOP_CHANNELS.checkWorkspaceFolder, async (_event, folder: unknown) => {
+    if (!session) throw new Error('desktop session is not started');
+    return session.checkWorkspaceFolder(String(folder ?? ''));
+  });
+  ipcMain.handle(DESKTOP_CHANNELS.useWorkspace, async (_event, folder: unknown, access: unknown, source: unknown) => {
+    if (!session) throw new Error('desktop session is not started');
+    const a = (access && typeof access === 'object' ? access : {}) as { read?: unknown; write?: unknown };
+    const from = source === 'chat' || source === 'recent' ? source : 'picker';
+    const snap = session.useWorkspace(String(folder ?? ''), { read: a.read === true, write: a.write === true }, from);
+    sendSnapshot();
+    return snap;
+  });
+  ipcMain.handle(DESKTOP_CHANNELS.setWorkspaceAccess, async (_event, access: unknown) => {
+    if (!session) throw new Error('desktop session is not started');
+    const snap = session.setWorkspaceAccess(access === 'read' ? 'read' : access === 'read_write' ? 'read_write' : (String(access) as never));
+    sendSnapshot();
+    return snap;
+  });
+  ipcMain.handle(DESKTOP_CHANNELS.inspectFolderMention, async (_event, text: unknown) => {
+    if (!session) return null;
+    return session.inspectFolderMention(String(text ?? ''));
+  });
   ipcMain.handle(DESKTOP_CHANNELS.submitTask, async (_event, goal: string, worker?: string, voiceTurnId?: string, cloudApproved?: boolean) => {
     if (!session) throw new Error('desktop session is not started');
     // Work is running: the composer stays usable. Stop wording acts now; anything else is persisted and queued.

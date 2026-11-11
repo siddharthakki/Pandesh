@@ -6,6 +6,7 @@
 import { useEffect, useRef, useState } from 'react';
 import type { PermissionMode, PermissionState } from './composerModel';
 import type { GmailStatus } from './googleModel';
+import type { FolderCheck, FolderMention, RecentWorkspace, WorkspaceAccess, WorkspaceView } from './folderModel';
 
 export type ApprovalResolution = 'approved' | 'rejected';
 
@@ -51,6 +52,10 @@ export interface Snapshot {
   } | null;
   /** The selected workspace folder, if any (Auto's workspace categories are bound to it). */
   folder?: string | null;
+  /** The workspace folder with what Pandesh may do there (read only, or read and write). */
+  workspace?: WorkspaceView | null;
+  /** Folders used before, newest first, with the access last chosen for each. */
+  recentWorkspaces?: RecentWorkspace[];
   /** Ask / Auto / Plan only for the selected conversation (or the next new one). Core stores and enforces it. */
   permission?: PermissionState;
   /** Google (Gmail, Calendar) connection status, non-secret. */
@@ -158,6 +163,16 @@ export interface DesktopApi {
   openArtifactFile(artifactId: string): Promise<{ opened: boolean }>;
   openArtifactFolder(artifactId: string): Promise<{ opened: boolean }>;
   openWorkspaceFolder(): Promise<{ opened: boolean }>;
+  /** The native folder dialog only: the chosen folder, or null. Changes nothing. */
+  chooseFolder(options?: { title?: string; purpose?: 'workspace' | 'second_brain' }): Promise<{ folder: string } | null>;
+  /** Whether a folder can be the workspace, and what the person should know first. */
+  checkWorkspaceFolder(folder: string): Promise<FolderCheck>;
+  /** The person's answer on the folder card: this folder, with Read (required) and Write as ticked. */
+  useWorkspace(folder: string, access: { read: boolean; write: boolean }, source: 'picker' | 'chat' | 'recent'): Promise<Snapshot | null>;
+  setWorkspaceAccess(access: WorkspaceAccess): Promise<Snapshot | null>;
+  clearFolder(): Promise<Snapshot | null>;
+  /** A message that names a folder (not the workspace) by its full path, or null. */
+  inspectFolderMention(text: string): Promise<FolderMention | null>;
   onEvent(listener: (event: ActivityEvent) => void): () => void;
   setWakeWordEnabled(enabled: boolean): Promise<Snapshot | null>;
   setWakeWordMuted(muted: boolean): Promise<Snapshot | null>;
