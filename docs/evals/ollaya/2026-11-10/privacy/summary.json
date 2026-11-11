@@ -1,0 +1,2012 @@
+{
+  "binary": [
+    {
+      "model": "decider:2b",
+      "decision": "web_query_privacy",
+      "scorer": "v8.private",
+      "n": 56,
+      "auc": 0.9304846938775511,
+      "aucTest": 0.9336734693877551,
+      "at50": {
+        "t": 0.5,
+        "tp": 0,
+        "fp": 0,
+        "pos": 28,
+        "neg": 28,
+        "recall": 0,
+        "precision": null,
+        "fpr": 0
+      },
+      "at80": {
+        "t": 0.8,
+        "tp": 0,
+        "fp": 0,
+        "pos": 28,
+        "neg": 28,
+        "recall": 0,
+        "precision": null,
+        "fpr": 0
+      },
+      "band": {
+        "flaggedCaution": 0,
+        "falseFlags": 0,
+        "abstain": 0.16071428571428573
+      },
+      "devThreshold": 0.0045,
+      "swapThreshold": 0.006,
+      "test": {
+        "t": 0.0045,
+        "tp": 13,
+        "fp": 3,
+        "pos": 14,
+        "neg": 14,
+        "recall": 0.9285714285714286,
+        "precision": 0.8125,
+        "fpr": 0.21428571428571427,
+        "recallCI": [
+          0.6853073044604219,
+          0.9872781138877085
+        ],
+        "precisionCI": [
+          0.5699064013154177,
+          0.9340852122641324
+        ]
+      },
+      "outOfFold": {
+        "tp": 24,
+        "fp": 4,
+        "pos": 28,
+        "n": 56,
+        "recall": 0.8571428571428571,
+        "precision": 0.8571428571428571,
+        "recallCI": [
+          0.6850982695512267,
+          0.9430108706929821
+        ],
+        "precisionCI": [
+          0.6850982695512267,
+          0.9430108706929821
+        ]
+      },
+      "meetsBar": false,
+      "misses": [
+        "wq38",
+        "wq33",
+        "wq37",
+        "wq45"
+      ],
+      "falseAlarms": [
+        "wq18",
+        "wq24",
+        "wq26",
+        "wq23"
+      ]
+    },
+    {
+      "model": "decider:2b",
+      "decision": "web_query_privacy",
+      "scorer": "v9.private",
+      "n": 56,
+      "auc": 0.9477040816326531,
+      "aucTest": 1,
+      "at50": {
+        "t": 0.5,
+        "tp": 0,
+        "fp": 0,
+        "pos": 28,
+        "neg": 28,
+        "recall": 0,
+        "precision": null,
+        "fpr": 0
+      },
+      "at80": {
+        "t": 0.8,
+        "tp": 0,
+        "fp": 0,
+        "pos": 28,
+        "neg": 28,
+        "recall": 0,
+        "precision": null,
+        "fpr": 0
+      },
+      "band": {
+        "flaggedCaution": 0,
+        "falseFlags": 0,
+        "abstain": 0.03571428571428571
+      },
+      "devThreshold": 0.057,
+      "swapThreshold": 0.017,
+      "test": {
+        "t": 0.057,
+        "tp": 9,
+        "fp": 0,
+        "pos": 14,
+        "neg": 14,
+        "recall": 0.6428571428571429,
+        "precision": 1,
+        "fpr": 0,
+        "recallCI": [
+          0.3876400468214042,
+          0.8365550926279727
+        ],
+        "precisionCI": [
+          0.7008472464490407,
+          1
+        ]
+      },
+      "outOfFold": {
+        "tp": 20,
+        "fp": 4,
+        "pos": 28,
+        "n": 56,
+        "recall": 0.7142857142857143,
+        "precision": 0.8333333333333334,
+        "recallCI": [
+          0.529403642629825,
+          0.8474618415167003
+        ],
+        "precisionCI": [
+          0.6414652961213058,
+          0.9332143199927109
+        ]
+      },
+      "meetsBar": false,
+      "misses": [
+        "wq34",
+        "wq38",
+        "wq44",
+        "wq46",
+        "wq54",
+        "wq31",
+        "wq37",
+        "wq55"
+      ],
+      "falseAlarms": [
+        "wq09",
+        "wq17",
+        "wq23",
+        "wq25"
+      ]
+    },
+    {
+      "model": "decider:2b",
+      "decision": "web_query_privacy",
+      "scorer": "v3v8.private",
+      "n": 56,
+      "auc": 0.9923469387755102,
+      "aucTest": 0.9897959183673469,
+      "at50": {
+        "t": 0.5,
+        "tp": 23,
+        "fp": 0,
+        "pos": 28,
+        "neg": 28,
+        "recall": 0.8214285714285714,
+        "precision": 1,
+        "fpr": 0
+      },
+      "at80": {
+        "t": 0.8,
+        "tp": 19,
+        "fp": 0,
+        "pos": 28,
+        "neg": 28,
+        "recall": 0.6785714285714286,
+        "precision": 1,
+        "fpr": 0
+      },
+      "band": {
+        "flaggedCaution": 0.6785714285714286,
+        "falseFlags": 0,
+        "abstain": 0.17857142857142858
+      },
+      "devThreshold": 0.1825,
+      "swapThreshold": 0.2943,
+      "test": {
+        "t": 0.1825,
+        "tp": 14,
+        "fp": 2,
+        "pos": 14,
+        "neg": 14,
+        "recall": 1,
+        "precision": 0.875,
+        "fpr": 0.14285714285714285,
+        "recallCI": [
+          0.7846829880728186,
+          1
+        ],
+        "precisionCI": [
+          0.6397666856325173,
+          0.9650232506629428
+        ]
+      },
+      "outOfFold": {
+        "tp": 27,
+        "fp": 2,
+        "pos": 28,
+        "n": 56,
+        "recall": 0.9642857142857143,
+        "precision": 0.9310344827586207,
+        "recallCI": [
+          0.8228742388150135,
+          0.9936676435024582
+        ],
+        "precisionCI": [
+          0.7803505240414808,
+          0.9808791359020055
+        ]
+      },
+      "meetsBar": true,
+      "misses": [
+        "wq31"
+      ],
+      "falseAlarms": [
+        "wq06",
+        "wq28"
+      ]
+    },
+    {
+      "model": "decider:2b",
+      "decision": "web_query_privacy",
+      "scorer": "v1.private",
+      "n": 56,
+      "auc": 0.9821428571428571,
+      "aucTest": 1,
+      "at50": {
+        "t": 0.5,
+        "tp": 4,
+        "fp": 0,
+        "pos": 28,
+        "neg": 28,
+        "recall": 0.14285714285714285,
+        "precision": 1,
+        "fpr": 0
+      },
+      "at80": {
+        "t": 0.8,
+        "tp": 0,
+        "fp": 0,
+        "pos": 28,
+        "neg": 28,
+        "recall": 0,
+        "precision": null,
+        "fpr": 0
+      },
+      "band": {
+        "flaggedCaution": 0,
+        "falseFlags": 0,
+        "abstain": 0.16071428571428573
+      },
+      "devThreshold": 0.0483,
+      "swapThreshold": 0.0276,
+      "test": {
+        "t": 0.0483,
+        "tp": 12,
+        "fp": 0,
+        "pos": 14,
+        "neg": 14,
+        "recall": 0.8571428571428571,
+        "precision": 1,
+        "fpr": 0,
+        "recallCI": [
+          0.600580922361363,
+          0.9599069262620787
+        ],
+        "precisionCI": [
+          0.7574992425007574,
+          1
+        ]
+      },
+      "outOfFold": {
+        "tp": 25,
+        "fp": 2,
+        "pos": 28,
+        "n": 56,
+        "recall": 0.8928571428571429,
+        "precision": 0.9259259259259259,
+        "recallCI": [
+          0.7280377463234293,
+          0.9628823079452005
+        ],
+        "precisionCI": [
+          0.7663002270926937,
+          0.9794457783026165
+        ]
+      },
+      "meetsBar": false,
+      "misses": [
+        "wq34",
+        "wq36",
+        "wq37"
+      ],
+      "falseAlarms": [
+        "wq17",
+        "wq23"
+      ]
+    },
+    {
+      "model": "decider:2b",
+      "decision": "web_query_privacy",
+      "scorer": "v2.private",
+      "n": 56,
+      "auc": 0.9470663265306123,
+      "aucTest": 1,
+      "at50": {
+        "t": 0.5,
+        "tp": 0,
+        "fp": 0,
+        "pos": 28,
+        "neg": 28,
+        "recall": 0,
+        "precision": null,
+        "fpr": 0
+      },
+      "at80": {
+        "t": 0.8,
+        "tp": 0,
+        "fp": 0,
+        "pos": 28,
+        "neg": 28,
+        "recall": 0,
+        "precision": null,
+        "fpr": 0
+      },
+      "band": {
+        "flaggedCaution": 0,
+        "falseFlags": 0,
+        "abstain": 0.03571428571428571
+      },
+      "devThreshold": 0.0288,
+      "swapThreshold": 0.0362,
+      "test": {
+        "t": 0.0288,
+        "tp": 14,
+        "fp": 1,
+        "pos": 14,
+        "neg": 14,
+        "recall": 1,
+        "precision": 0.9333333333333333,
+        "fpr": 0.07142857142857142,
+        "recallCI": [
+          0.7846829880728186,
+          1
+        ],
+        "precisionCI": [
+          0.7018292244757601,
+          0.9881334113938051
+        ]
+      },
+      "outOfFold": {
+        "tp": 24,
+        "fp": 3,
+        "pos": 28,
+        "n": 56,
+        "recall": 0.8571428571428571,
+        "precision": 0.8888888888888888,
+        "recallCI": [
+          0.6850982695512267,
+          0.9430108706929821
+        ],
+        "precisionCI": [
+          0.7194181745602705,
+          0.9614803521050127
+        ]
+      },
+      "meetsBar": false,
+      "misses": [
+        "wq33",
+        "wq37",
+        "wq43",
+        "wq55"
+      ],
+      "falseAlarms": [
+        "wq26",
+        "wq17",
+        "wq25"
+      ]
+    },
+    {
+      "model": "decider:2b",
+      "decision": "web_query_privacy",
+      "scorer": "v3.private",
+      "n": 56,
+      "auc": 0.9923469387755102,
+      "aucTest": 0.9897959183673469,
+      "at50": {
+        "t": 0.5,
+        "tp": 23,
+        "fp": 0,
+        "pos": 28,
+        "neg": 28,
+        "recall": 0.8214285714285714,
+        "precision": 1,
+        "fpr": 0
+      },
+      "at80": {
+        "t": 0.8,
+        "tp": 19,
+        "fp": 0,
+        "pos": 28,
+        "neg": 28,
+        "recall": 0.6785714285714286,
+        "precision": 1,
+        "fpr": 0
+      },
+      "band": {
+        "flaggedCaution": 0.6785714285714286,
+        "falseFlags": 0,
+        "abstain": 0.17857142857142858
+      },
+      "devThreshold": 0.17769999999999997,
+      "swapThreshold": 0.2943,
+      "test": {
+        "t": 0.17769999999999997,
+        "tp": 14,
+        "fp": 2,
+        "pos": 14,
+        "neg": 14,
+        "recall": 1,
+        "precision": 0.875,
+        "fpr": 0.14285714285714285,
+        "recallCI": [
+          0.7846829880728186,
+          1
+        ],
+        "precisionCI": [
+          0.6397666856325173,
+          0.9650232506629428
+        ]
+      },
+      "outOfFold": {
+        "tp": 27,
+        "fp": 2,
+        "pos": 28,
+        "n": 56,
+        "recall": 0.9642857142857143,
+        "precision": 0.9310344827586207,
+        "recallCI": [
+          0.8228742388150135,
+          0.9936676435024582
+        ],
+        "precisionCI": [
+          0.7803505240414808,
+          0.9808791359020055
+        ]
+      },
+      "meetsBar": true,
+      "misses": [
+        "wq31"
+      ],
+      "falseAlarms": [
+        "wq06",
+        "wq28"
+      ]
+    },
+    {
+      "model": "decision",
+      "decision": "web_query_privacy",
+      "scorer": "v8.private",
+      "n": 56,
+      "auc": 0.9323979591836735,
+      "aucTest": 0.9795918367346939,
+      "at50": {
+        "t": 0.5,
+        "tp": 13,
+        "fp": 0,
+        "pos": 28,
+        "neg": 28,
+        "recall": 0.4642857142857143,
+        "precision": 1,
+        "fpr": 0
+      },
+      "at80": {
+        "t": 0.8,
+        "tp": 1,
+        "fp": 0,
+        "pos": 28,
+        "neg": 28,
+        "recall": 0.03571428571428571,
+        "precision": 1,
+        "fpr": 0
+      },
+      "band": {
+        "flaggedCaution": 0.03571428571428571,
+        "falseFlags": 0,
+        "abstain": 0.39285714285714285
+      },
+      "devThreshold": 0.2538,
+      "swapThreshold": 0.0985,
+      "test": {
+        "t": 0.2538,
+        "tp": 10,
+        "fp": 0,
+        "pos": 14,
+        "neg": 14,
+        "recall": 0.7142857142857143,
+        "precision": 1,
+        "fpr": 0,
+        "recallCI": [
+          0.4535045882751561,
+          0.882788120898909
+        ],
+        "precisionCI": [
+          0.7224598312333834,
+          1
+        ]
+      },
+      "outOfFold": {
+        "tp": 22,
+        "fp": 4,
+        "pos": 28,
+        "n": 56,
+        "recall": 0.7857142857142857,
+        "precision": 0.8461538461538461,
+        "recallCI": [
+          0.6046105292072612,
+          0.8978767829881058
+        ],
+        "precisionCI": [
+          0.6646841558168644,
+          0.9385006600107053
+        ]
+      },
+      "meetsBar": false,
+      "misses": [
+        "wq34",
+        "wq38",
+        "wq50",
+        "wq54",
+        "wq33",
+        "wq37"
+      ],
+      "falseAlarms": [
+        "wq07",
+        "wq13",
+        "wq23",
+        "wq25"
+      ]
+    },
+    {
+      "model": "decision",
+      "decision": "web_query_privacy",
+      "scorer": "v9.private",
+      "n": 56,
+      "auc": 0.9221938775510204,
+      "aucTest": 0.9846938775510204,
+      "at50": {
+        "t": 0.5,
+        "tp": 5,
+        "fp": 1,
+        "pos": 28,
+        "neg": 28,
+        "recall": 0.17857142857142858,
+        "precision": 0.8333333333333334,
+        "fpr": 0.03571428571428571
+      },
+      "at80": {
+        "t": 0.8,
+        "tp": 0,
+        "fp": 0,
+        "pos": 28,
+        "neg": 28,
+        "recall": 0,
+        "precision": null,
+        "fpr": 0
+      },
+      "band": {
+        "flaggedCaution": 0,
+        "falseFlags": 0,
+        "abstain": 0.42857142857142855
+      },
+      "devThreshold": 0.1704,
+      "swapThreshold": 0.1344,
+      "test": {
+        "t": 0.1704,
+        "tp": 12,
+        "fp": 1,
+        "pos": 14,
+        "neg": 14,
+        "recall": 0.8571428571428571,
+        "precision": 0.9230769230769231,
+        "fpr": 0.07142857142857142,
+        "recallCI": [
+          0.600580922361363,
+          0.9599069262620787
+        ],
+        "precisionCI": [
+          0.6668546607175265,
+          0.9862899336203037
+        ]
+      },
+      "outOfFold": {
+        "tp": 25,
+        "fp": 5,
+        "pos": 28,
+        "n": 56,
+        "recall": 0.8928571428571429,
+        "precision": 0.8333333333333334,
+        "recallCI": [
+          0.7280377463234293,
+          0.9628823079452005
+        ],
+        "precisionCI": [
+          0.6643529481431982,
+          0.9266356575964831
+        ]
+      },
+      "meetsBar": false,
+      "misses": [
+        "wq34",
+        "wq44",
+        "wq29"
+      ],
+      "falseAlarms": [
+        "wq16",
+        "wq07",
+        "wq13",
+        "wq15",
+        "wq23"
+      ]
+    },
+    {
+      "model": "decision",
+      "decision": "web_query_privacy",
+      "scorer": "v3v8.private",
+      "n": 56,
+      "auc": 0.9400510204081632,
+      "aucTest": 0.9540816326530612,
+      "at50": {
+        "t": 0.5,
+        "tp": 26,
+        "fp": 5,
+        "pos": 28,
+        "neg": 28,
+        "recall": 0.9285714285714286,
+        "precision": 0.8387096774193549,
+        "fpr": 0.17857142857142858
+      },
+      "at80": {
+        "t": 0.8,
+        "tp": 18,
+        "fp": 2,
+        "pos": 28,
+        "neg": 28,
+        "recall": 0.6428571428571429,
+        "precision": 0.9,
+        "fpr": 0.07142857142857142
+      },
+      "band": {
+        "flaggedCaution": 0.6428571428571429,
+        "falseFlags": 0.07142857142857142,
+        "abstain": 0.3392857142857143
+      },
+      "devThreshold": 0.4736,
+      "swapThreshold": 0.666,
+      "test": {
+        "t": 0.4736,
+        "tp": 14,
+        "fp": 3,
+        "pos": 14,
+        "neg": 14,
+        "recall": 1,
+        "precision": 0.8235294117647058,
+        "fpr": 0.21428571428571427,
+        "recallCI": [
+          0.7846829880728186,
+          1
+        ],
+        "precisionCI": [
+          0.5897007098262422,
+          0.9380898628745101
+        ]
+      },
+      "outOfFold": {
+        "tp": 24,
+        "fp": 5,
+        "pos": 28,
+        "n": 56,
+        "recall": 0.8571428571428571,
+        "precision": 0.8275862068965517,
+        "recallCI": [
+          0.6850982695512267,
+          0.9430108706929821
+        ],
+        "precisionCI": [
+          0.6545119942718488,
+          0.9240225472852007
+        ]
+      },
+      "meetsBar": false,
+      "misses": [
+        "wq47",
+        "wq49",
+        "wq51",
+        "wq55"
+      ],
+      "falseAlarms": [
+        "wq08",
+        "wq16",
+        "wq28",
+        "wq05",
+        "wq13"
+      ]
+    },
+    {
+      "model": "decision",
+      "decision": "web_query_privacy",
+      "scorer": "v1.private",
+      "n": 56,
+      "auc": 0.9572704081632653,
+      "aucTest": 0.9693877551020408,
+      "at50": {
+        "t": 0.5,
+        "tp": 14,
+        "fp": 1,
+        "pos": 28,
+        "neg": 28,
+        "recall": 0.5,
+        "precision": 0.9333333333333333,
+        "fpr": 0.03571428571428571
+      },
+      "at80": {
+        "t": 0.8,
+        "tp": 0,
+        "fp": 0,
+        "pos": 28,
+        "neg": 28,
+        "recall": 0,
+        "precision": null,
+        "fpr": 0
+      },
+      "band": {
+        "flaggedCaution": 0,
+        "falseFlags": 0,
+        "abstain": 0.5535714285714286
+      },
+      "devThreshold": 0.2468,
+      "swapThreshold": 0.2215,
+      "test": {
+        "t": 0.2468,
+        "tp": 13,
+        "fp": 2,
+        "pos": 14,
+        "neg": 14,
+        "recall": 0.9285714285714286,
+        "precision": 0.8666666666666667,
+        "fpr": 0.14285714285714285,
+        "recallCI": [
+          0.6853073044604219,
+          0.9872781138877085
+        ],
+        "precisionCI": [
+          0.6211750079348376,
+          0.9626395301086407
+        ]
+      },
+      "outOfFold": {
+        "tp": 26,
+        "fp": 4,
+        "pos": 28,
+        "n": 56,
+        "recall": 0.9285714285714286,
+        "precision": 0.8666666666666667,
+        "recallCI": [
+          0.7735426157408214,
+          0.9801883525522292
+        ],
+        "precisionCI": [
+          0.7031831605558306,
+          0.9469043057578189
+        ]
+      },
+      "meetsBar": true,
+      "misses": [
+        "wq50",
+        "wq45"
+      ],
+      "falseAlarms": [
+        "wq26",
+        "wq28",
+        "wq13",
+        "wq23"
+      ]
+    },
+    {
+      "model": "decision",
+      "decision": "web_query_privacy",
+      "scorer": "v2.private",
+      "n": 56,
+      "auc": 0.9285714285714286,
+      "aucTest": 0.9540816326530612,
+      "at50": {
+        "t": 0.5,
+        "tp": 1,
+        "fp": 0,
+        "pos": 28,
+        "neg": 28,
+        "recall": 0.03571428571428571,
+        "precision": 1,
+        "fpr": 0
+      },
+      "at80": {
+        "t": 0.8,
+        "tp": 0,
+        "fp": 0,
+        "pos": 28,
+        "neg": 28,
+        "recall": 0,
+        "precision": null,
+        "fpr": 0
+      },
+      "band": {
+        "flaggedCaution": 0,
+        "falseFlags": 0,
+        "abstain": 0.23214285714285715
+      },
+      "devThreshold": 0.1475,
+      "swapThreshold": 0.1203,
+      "test": {
+        "t": 0.1475,
+        "tp": 11,
+        "fp": 0,
+        "pos": 14,
+        "neg": 14,
+        "recall": 0.7857142857142857,
+        "precision": 1,
+        "fpr": 0,
+        "recallCI": [
+          0.5241027622679172,
+          0.9242875166308363
+        ],
+        "precisionCI": [
+          0.7411599827511859,
+          1
+        ]
+      },
+      "outOfFold": {
+        "tp": 22,
+        "fp": 3,
+        "pos": 28,
+        "n": 56,
+        "recall": 0.7857142857142857,
+        "precision": 0.88,
+        "recallCI": [
+          0.6046105292072612,
+          0.8978767829881058
+        ],
+        "precisionCI": [
+          0.7004380781662651,
+          0.9583325864293191
+        ]
+      },
+      "meetsBar": false,
+      "misses": [
+        "wq34",
+        "wq46",
+        "wq50",
+        "wq29",
+        "wq33",
+        "wq55"
+      ],
+      "falseAlarms": [
+        "wq23",
+        "wq25",
+        "wq27"
+      ]
+    },
+    {
+      "model": "decision",
+      "decision": "web_query_privacy",
+      "scorer": "v3.private",
+      "n": 56,
+      "auc": 0.9375,
+      "aucTest": 0.9489795918367347,
+      "at50": {
+        "t": 0.5,
+        "tp": 26,
+        "fp": 5,
+        "pos": 28,
+        "neg": 28,
+        "recall": 0.9285714285714286,
+        "precision": 0.8387096774193549,
+        "fpr": 0.17857142857142858
+      },
+      "at80": {
+        "t": 0.8,
+        "tp": 17,
+        "fp": 2,
+        "pos": 28,
+        "neg": 28,
+        "recall": 0.6071428571428571,
+        "precision": 0.8947368421052632,
+        "fpr": 0.07142857142857142
+      },
+      "band": {
+        "flaggedCaution": 0.6071428571428571,
+        "falseFlags": 0.07142857142857142,
+        "abstain": 0.3392857142857143
+      },
+      "devThreshold": 0.4736,
+      "swapThreshold": 0.5787,
+      "test": {
+        "t": 0.4736,
+        "tp": 14,
+        "fp": 3,
+        "pos": 14,
+        "neg": 14,
+        "recall": 1,
+        "precision": 0.8235294117647058,
+        "fpr": 0.21428571428571427,
+        "recallCI": [
+          0.7846829880728186,
+          1
+        ],
+        "precisionCI": [
+          0.5897007098262422,
+          0.9380898628745101
+        ]
+      },
+      "outOfFold": {
+        "tp": 26,
+        "fp": 5,
+        "pos": 28,
+        "n": 56,
+        "recall": 0.9285714285714286,
+        "precision": 0.8387096774193549,
+        "recallCI": [
+          0.7735426157408214,
+          0.9801883525522292
+        ],
+        "precisionCI": [
+          0.6736529727502113,
+          0.9290748009456006
+        ]
+      },
+      "meetsBar": true,
+      "misses": [
+        "wq49",
+        "wq55"
+      ],
+      "falseAlarms": [
+        "wq08",
+        "wq16",
+        "wq28",
+        "wq05",
+        "wq13"
+      ]
+    },
+    {
+      "model": "decider:0.8b",
+      "decision": "web_query_privacy",
+      "scorer": "v8.private",
+      "n": 56,
+      "auc": 0.8845663265306123,
+      "aucTest": 0.923469387755102,
+      "at50": {
+        "t": 0.5,
+        "tp": 16,
+        "fp": 0,
+        "pos": 28,
+        "neg": 28,
+        "recall": 0.5714285714285714,
+        "precision": 1,
+        "fpr": 0
+      },
+      "at80": {
+        "t": 0.8,
+        "tp": 10,
+        "fp": 0,
+        "pos": 28,
+        "neg": 28,
+        "recall": 0.35714285714285715,
+        "precision": 1,
+        "fpr": 0
+      },
+      "band": {
+        "flaggedCaution": 0.35714285714285715,
+        "falseFlags": 0,
+        "abstain": 0.125
+      },
+      "devThreshold": 0.081,
+      "swapThreshold": 0.0286,
+      "test": {
+        "t": 0.081,
+        "tp": 8,
+        "fp": 0,
+        "pos": 14,
+        "neg": 14,
+        "recall": 0.5714285714285714,
+        "precision": 1,
+        "fpr": 0,
+        "recallCI": [
+          0.3259026690286936,
+          0.7861949006959948
+        ],
+        "precisionCI": [
+          0.6755843804891231,
+          1
+        ]
+      },
+      "outOfFold": {
+        "tp": 18,
+        "fp": 3,
+        "pos": 28,
+        "n": 56,
+        "recall": 0.6428571428571429,
+        "precision": 0.8571428571428571,
+        "recallCI": [
+          0.4582997758222723,
+          0.7929438802754113
+        ],
+        "precisionCI": [
+          0.6536350585077049,
+          0.950190782017865
+        ]
+      },
+      "meetsBar": false,
+      "misses": [
+        "wq34",
+        "wq36",
+        "wq38",
+        "wq46",
+        "wq50",
+        "wq54",
+        "wq33",
+        "wq37",
+        "wq45",
+        "wq49"
+      ],
+      "falseAlarms": [
+        "wq17",
+        "wq23",
+        "wq25"
+      ]
+    },
+    {
+      "model": "decider:0.8b",
+      "decision": "web_query_privacy",
+      "scorer": "v9.private",
+      "n": 56,
+      "auc": 0.9426020408163265,
+      "aucTest": 1,
+      "at50": {
+        "t": 0.5,
+        "tp": 0,
+        "fp": 0,
+        "pos": 28,
+        "neg": 28,
+        "recall": 0,
+        "precision": null,
+        "fpr": 0
+      },
+      "at80": {
+        "t": 0.8,
+        "tp": 0,
+        "fp": 0,
+        "pos": 28,
+        "neg": 28,
+        "recall": 0,
+        "precision": null,
+        "fpr": 0
+      },
+      "band": {
+        "flaggedCaution": 0,
+        "falseFlags": 0,
+        "abstain": 0.017857142857142856
+      },
+      "devThreshold": 0.0329,
+      "swapThreshold": 0.0188,
+      "test": {
+        "t": 0.0329,
+        "tp": 8,
+        "fp": 0,
+        "pos": 14,
+        "neg": 14,
+        "recall": 0.5714285714285714,
+        "precision": 1,
+        "fpr": 0,
+        "recallCI": [
+          0.3259026690286936,
+          0.7861949006959948
+        ],
+        "precisionCI": [
+          0.6755843804891231,
+          1
+        ]
+      },
+      "outOfFold": {
+        "tp": 21,
+        "fp": 4,
+        "pos": 28,
+        "n": 56,
+        "recall": 0.75,
+        "precision": 0.84,
+        "recallCI": [
+          0.566439747592954,
+          0.8732366505779922
+        ],
+        "precisionCI": [
+          0.6534598601976183,
+          0.9359665239142201
+        ]
+      },
+      "meetsBar": false,
+      "misses": [
+        "wq34",
+        "wq38",
+        "wq46",
+        "wq48",
+        "wq50",
+        "wq54",
+        "wq33"
+      ],
+      "falseAlarms": [
+        "wq17",
+        "wq21",
+        "wq23",
+        "wq25"
+      ]
+    },
+    {
+      "model": "decider:0.8b",
+      "decision": "web_query_privacy",
+      "scorer": "v3v8.private",
+      "n": 56,
+      "auc": 0.9936224489795918,
+      "aucTest": 0.9948979591836735,
+      "at50": {
+        "t": 0.5,
+        "tp": 28,
+        "fp": 4,
+        "pos": 28,
+        "neg": 28,
+        "recall": 1,
+        "precision": 0.875,
+        "fpr": 0.14285714285714285
+      },
+      "at80": {
+        "t": 0.8,
+        "tp": 21,
+        "fp": 0,
+        "pos": 28,
+        "neg": 28,
+        "recall": 0.75,
+        "precision": 1,
+        "fpr": 0
+      },
+      "band": {
+        "flaggedCaution": 0.75,
+        "falseFlags": 0,
+        "abstain": 0.32142857142857145
+      },
+      "devThreshold": 0.5820000000000001,
+      "swapThreshold": 0.6939,
+      "test": {
+        "t": 0.5820000000000001,
+        "tp": 14,
+        "fp": 1,
+        "pos": 14,
+        "neg": 14,
+        "recall": 1,
+        "precision": 0.9333333333333333,
+        "fpr": 0.07142857142857142,
+        "recallCI": [
+          0.7846829880728186,
+          1
+        ],
+        "precisionCI": [
+          0.7018292244757601,
+          0.9881334113938051
+        ]
+      },
+      "outOfFold": {
+        "tp": 26,
+        "fp": 1,
+        "pos": 28,
+        "n": 56,
+        "recall": 0.9285714285714286,
+        "precision": 0.9629629629629629,
+        "recallCI": [
+          0.7735426157408214,
+          0.9801883525522292
+        ],
+        "precisionCI": [
+          0.8171614606584348,
+          0.9934320234669025
+        ]
+      },
+      "meetsBar": true,
+      "misses": [
+        "wq29",
+        "wq49"
+      ],
+      "falseAlarms": [
+        "wq28"
+      ]
+    },
+    {
+      "model": "decider:0.8b",
+      "decision": "web_query_privacy",
+      "scorer": "v1.private",
+      "n": 56,
+      "auc": 0.9668367346938775,
+      "aucTest": 0.9642857142857143,
+      "at50": {
+        "t": 0.5,
+        "tp": 7,
+        "fp": 0,
+        "pos": 28,
+        "neg": 28,
+        "recall": 0.25,
+        "precision": 1,
+        "fpr": 0
+      },
+      "at80": {
+        "t": 0.8,
+        "tp": 1,
+        "fp": 0,
+        "pos": 28,
+        "neg": 28,
+        "recall": 0.03571428571428571,
+        "precision": 1,
+        "fpr": 0
+      },
+      "band": {
+        "flaggedCaution": 0.03571428571428571,
+        "falseFlags": 0,
+        "abstain": 0.32142857142857145
+      },
+      "devThreshold": 0.0415,
+      "swapThreshold": 0.0758,
+      "test": {
+        "t": 0.0415,
+        "tp": 13,
+        "fp": 2,
+        "pos": 14,
+        "neg": 14,
+        "recall": 0.9285714285714286,
+        "precision": 0.8666666666666667,
+        "fpr": 0.14285714285714285,
+        "recallCI": [
+          0.6853073044604219,
+          0.9872781138877085
+        ],
+        "precisionCI": [
+          0.6211750079348376,
+          0.9626395301086407
+        ]
+      },
+      "outOfFold": {
+        "tp": 26,
+        "fp": 4,
+        "pos": 28,
+        "n": 56,
+        "recall": 0.9285714285714286,
+        "precision": 0.8666666666666667,
+        "recallCI": [
+          0.7735426157408214,
+          0.9801883525522292
+        ],
+        "precisionCI": [
+          0.7031831605558306,
+          0.9469043057578189
+        ]
+      },
+      "meetsBar": true,
+      "misses": [
+        "wq50",
+        "wq37"
+      ],
+      "falseAlarms": [
+        "wq08",
+        "wq26",
+        "wq17",
+        "wq25"
+      ]
+    },
+    {
+      "model": "decider:0.8b",
+      "decision": "web_query_privacy",
+      "scorer": "v2.private",
+      "n": 56,
+      "auc": 0.8354591836734694,
+      "aucTest": 0.9081632653061225,
+      "at50": {
+        "t": 0.5,
+        "tp": 0,
+        "fp": 0,
+        "pos": 28,
+        "neg": 28,
+        "recall": 0,
+        "precision": null,
+        "fpr": 0
+      },
+      "at80": {
+        "t": 0.8,
+        "tp": 0,
+        "fp": 0,
+        "pos": 28,
+        "neg": 28,
+        "recall": 0,
+        "precision": null,
+        "fpr": 0
+      },
+      "band": {
+        "flaggedCaution": 0,
+        "falseFlags": 0,
+        "abstain": 0.03571428571428571
+      },
+      "devThreshold": 0.0635,
+      "swapThreshold": 0.0544,
+      "test": {
+        "t": 0.0635,
+        "tp": 10,
+        "fp": 0,
+        "pos": 14,
+        "neg": 14,
+        "recall": 0.7142857142857143,
+        "precision": 1,
+        "fpr": 0,
+        "recallCI": [
+          0.4535045882751561,
+          0.882788120898909
+        ],
+        "precisionCI": [
+          0.7224598312333834,
+          1
+        ]
+      },
+      "outOfFold": {
+        "tp": 20,
+        "fp": 2,
+        "pos": 28,
+        "n": 56,
+        "recall": 0.7142857142857143,
+        "precision": 0.9090909090909091,
+        "recallCI": [
+          0.529403642629825,
+          0.8474618415167003
+        ],
+        "precisionCI": [
+          0.7218461934161421,
+          0.9747051037171622
+        ]
+      },
+      "meetsBar": false,
+      "misses": [
+        "wq42",
+        "wq46",
+        "wq50",
+        "wq54",
+        "wq33",
+        "wq41",
+        "wq43",
+        "wq55"
+      ],
+      "falseAlarms": [
+        "wq25",
+        "wq27"
+      ]
+    },
+    {
+      "model": "decider:0.8b",
+      "decision": "web_query_privacy",
+      "scorer": "v3.private",
+      "n": 56,
+      "auc": 0.9846938775510204,
+      "aucTest": 0.9693877551020408,
+      "at50": {
+        "t": 0.5,
+        "tp": 27,
+        "fp": 4,
+        "pos": 28,
+        "neg": 28,
+        "recall": 0.9642857142857143,
+        "precision": 0.8709677419354839,
+        "fpr": 0.14285714285714285
+      },
+      "at80": {
+        "t": 0.8,
+        "tp": 17,
+        "fp": 0,
+        "pos": 28,
+        "neg": 28,
+        "recall": 0.6071428571428571,
+        "precision": 1,
+        "fpr": 0
+      },
+      "band": {
+        "flaggedCaution": 0.6071428571428571,
+        "falseFlags": 0,
+        "abstain": 0.39285714285714285
+      },
+      "devThreshold": 0.5820000000000001,
+      "swapThreshold": 0.6939,
+      "test": {
+        "t": 0.5820000000000001,
+        "tp": 13,
+        "fp": 1,
+        "pos": 14,
+        "neg": 14,
+        "recall": 0.9285714285714286,
+        "precision": 0.9285714285714286,
+        "fpr": 0.07142857142857142,
+        "recallCI": [
+          0.6853073044604219,
+          0.9872781138877085
+        ],
+        "precisionCI": [
+          0.6853073044604219,
+          0.9872781138877085
+        ]
+      },
+      "outOfFold": {
+        "tp": 24,
+        "fp": 1,
+        "pos": 28,
+        "n": 56,
+        "recall": 0.8571428571428571,
+        "precision": 0.96,
+        "recallCI": [
+          0.6850982695512267,
+          0.9430108706929821
+        ],
+        "precisionCI": [
+          0.8045552759497747,
+          0.9929039496133008
+        ]
+      },
+      "meetsBar": false,
+      "misses": [
+        "wq32",
+        "wq29",
+        "wq47",
+        "wq49"
+      ],
+      "falseAlarms": [
+        "wq28"
+      ]
+    },
+    {
+      "model": "kev",
+      "decision": "web_query_privacy",
+      "scorer": "v8.private",
+      "n": 56,
+      "auc": 0.9713010204081632,
+      "aucTest": 0.9795918367346939,
+      "at50": {
+        "t": 0.5,
+        "tp": 7,
+        "fp": 0,
+        "pos": 28,
+        "neg": 28,
+        "recall": 0.25,
+        "precision": 1,
+        "fpr": 0
+      },
+      "at80": {
+        "t": 0.8,
+        "tp": 0,
+        "fp": 0,
+        "pos": 28,
+        "neg": 28,
+        "recall": 0,
+        "precision": null,
+        "fpr": 0
+      },
+      "band": {
+        "flaggedCaution": 0,
+        "falseFlags": 0,
+        "abstain": 0.30357142857142855
+      },
+      "devThreshold": 0.0639,
+      "swapThreshold": 0.054,
+      "test": {
+        "t": 0.0639,
+        "tp": 13,
+        "fp": 1,
+        "pos": 14,
+        "neg": 14,
+        "recall": 0.9285714285714286,
+        "precision": 0.9285714285714286,
+        "fpr": 0.07142857142857142,
+        "recallCI": [
+          0.6853073044604219,
+          0.9872781138877085
+        ],
+        "precisionCI": [
+          0.6853073044604219,
+          0.9872781138877085
+        ]
+      },
+      "outOfFold": {
+        "tp": 27,
+        "fp": 8,
+        "pos": 28,
+        "n": 56,
+        "recall": 0.9642857142857143,
+        "precision": 0.7714285714285715,
+        "recallCI": [
+          0.8228742388150135,
+          0.9936676435024582
+        ],
+        "precisionCI": [
+          0.6098236221989801,
+          0.879342632538209
+        ]
+      },
+      "meetsBar": false,
+      "misses": [
+        "wq34"
+      ],
+      "falseAlarms": [
+        "wq24",
+        "wq07",
+        "wq13",
+        "wq15",
+        "wq17",
+        "wq19",
+        "wq23",
+        "wq25"
+      ]
+    },
+    {
+      "model": "kev",
+      "decision": "web_query_privacy",
+      "scorer": "v9.private",
+      "n": 56,
+      "auc": 0.9323979591836735,
+      "aucTest": 0.9744897959183674,
+      "at50": {
+        "t": 0.5,
+        "tp": 2,
+        "fp": 0,
+        "pos": 28,
+        "neg": 28,
+        "recall": 0.07142857142857142,
+        "precision": 1,
+        "fpr": 0
+      },
+      "at80": {
+        "t": 0.8,
+        "tp": 0,
+        "fp": 0,
+        "pos": 28,
+        "neg": 28,
+        "recall": 0,
+        "precision": null,
+        "fpr": 0
+      },
+      "band": {
+        "flaggedCaution": 0,
+        "falseFlags": 0,
+        "abstain": 0.44642857142857145
+      },
+      "devThreshold": 0.2001,
+      "swapThreshold": 0.1503,
+      "test": {
+        "t": 0.2001,
+        "tp": 12,
+        "fp": 0,
+        "pos": 14,
+        "neg": 14,
+        "recall": 0.8571428571428571,
+        "precision": 1,
+        "fpr": 0,
+        "recallCI": [
+          0.600580922361363,
+          0.9599069262620787
+        ],
+        "precisionCI": [
+          0.7574992425007574,
+          1
+        ]
+      },
+      "outOfFold": {
+        "tp": 25,
+        "fp": 6,
+        "pos": 28,
+        "n": 56,
+        "recall": 0.8928571428571429,
+        "precision": 0.8064516129032258,
+        "recallCI": [
+          0.7280377463234293,
+          0.9628823079452005
+        ],
+        "precisionCI": [
+          0.6371939644454013,
+          0.9081311641365236
+        ]
+      },
+      "meetsBar": false,
+      "misses": [
+        "wq34",
+        "wq44",
+        "wq51"
+      ],
+      "falseAlarms": [
+        "wq05",
+        "wq07",
+        "wq13",
+        "wq17",
+        "wq23",
+        "wq25"
+      ]
+    },
+    {
+      "model": "kev",
+      "decision": "web_query_privacy",
+      "scorer": "v3v8.private",
+      "n": 56,
+      "auc": 0.9119897959183674,
+      "aucTest": 0.9285714285714286,
+      "at50": {
+        "t": 0.5,
+        "tp": 25,
+        "fp": 7,
+        "pos": 28,
+        "neg": 28,
+        "recall": 0.8928571428571429,
+        "precision": 0.78125,
+        "fpr": 0.25
+      },
+      "at80": {
+        "t": 0.8,
+        "tp": 11,
+        "fp": 0,
+        "pos": 28,
+        "neg": 28,
+        "recall": 0.39285714285714285,
+        "precision": 1,
+        "fpr": 0
+      },
+      "band": {
+        "flaggedCaution": 0.39285714285714285,
+        "falseFlags": 0,
+        "abstain": 0.6964285714285714
+      },
+      "devThreshold": 0.497,
+      "swapThreshold": 0.6396,
+      "test": {
+        "t": 0.497,
+        "tp": 14,
+        "fp": 6,
+        "pos": 14,
+        "neg": 14,
+        "recall": 1,
+        "precision": 0.7,
+        "fpr": 0.42857142857142855,
+        "recallCI": [
+          0.7846829880728186,
+          1
+        ],
+        "precisionCI": [
+          0.4810232237710206,
+          0.854524726031006
+        ]
+      },
+      "outOfFold": {
+        "tp": 23,
+        "fp": 6,
+        "pos": 28,
+        "n": 56,
+        "recall": 0.8214285714285714,
+        "precision": 0.7931034482758621,
+        "recallCI": [
+          0.644082084514089,
+          0.9212161417056989
+        ],
+        "precisionCI": [
+          0.6160955339174228,
+          0.9015406348441479
+        ]
+      },
+      "meetsBar": false,
+      "misses": [
+        "wq37",
+        "wq47",
+        "wq49",
+        "wq51",
+        "wq55"
+      ],
+      "falseAlarms": [
+        "wq02",
+        "wq08",
+        "wq12",
+        "wq20",
+        "wq26",
+        "wq28"
+      ]
+    },
+    {
+      "model": "kev",
+      "decision": "web_query_privacy",
+      "scorer": "v1.private",
+      "n": 56,
+      "auc": 0.9247448979591837,
+      "aucTest": 0.9183673469387755,
+      "at50": {
+        "t": 0.5,
+        "tp": 8,
+        "fp": 0,
+        "pos": 28,
+        "neg": 28,
+        "recall": 0.2857142857142857,
+        "precision": 1,
+        "fpr": 0
+      },
+      "at80": {
+        "t": 0.8,
+        "tp": 0,
+        "fp": 0,
+        "pos": 28,
+        "neg": 28,
+        "recall": 0,
+        "precision": null,
+        "fpr": 0
+      },
+      "band": {
+        "flaggedCaution": 0,
+        "falseFlags": 0,
+        "abstain": 0.5
+      },
+      "devThreshold": 0.1355,
+      "swapThreshold": 0.1905,
+      "test": {
+        "t": 0.1355,
+        "tp": 14,
+        "fp": 4,
+        "pos": 14,
+        "neg": 14,
+        "recall": 1,
+        "precision": 0.7777777777777778,
+        "fpr": 0.2857142857142857,
+        "recallCI": [
+          0.7846829880728186,
+          1
+        ],
+        "precisionCI": [
+          0.5478497354769452,
+          0.90999218086618
+        ]
+      },
+      "outOfFold": {
+        "tp": 24,
+        "fp": 7,
+        "pos": 28,
+        "n": 56,
+        "recall": 0.8571428571428571,
+        "precision": 0.7741935483870968,
+        "recallCI": [
+          0.6850982695512267,
+          0.9430108706929821
+        ],
+        "precisionCI": [
+          0.6018723994130262,
+          0.8860500840550121
+        ]
+      },
+      "meetsBar": false,
+      "misses": [
+        "wq37",
+        "wq45",
+        "wq51",
+        "wq55"
+      ],
+      "falseAlarms": [
+        "wq08",
+        "wq12",
+        "wq24",
+        "wq26",
+        "wq07",
+        "wq17",
+        "wq25"
+      ]
+    },
+    {
+      "model": "kev",
+      "decision": "web_query_privacy",
+      "scorer": "v2.private",
+      "n": 56,
+      "auc": 0.9566326530612245,
+      "aucTest": 0.9795918367346939,
+      "at50": {
+        "t": 0.5,
+        "tp": 2,
+        "fp": 0,
+        "pos": 28,
+        "neg": 28,
+        "recall": 0.07142857142857142,
+        "precision": 1,
+        "fpr": 0
+      },
+      "at80": {
+        "t": 0.8,
+        "tp": 0,
+        "fp": 0,
+        "pos": 28,
+        "neg": 28,
+        "recall": 0,
+        "precision": null,
+        "fpr": 0
+      },
+      "band": {
+        "flaggedCaution": 0,
+        "falseFlags": 0,
+        "abstain": 0.6428571428571429
+      },
+      "devThreshold": 0.2388,
+      "swapThreshold": 0.2365,
+      "test": {
+        "t": 0.2388,
+        "tp": 13,
+        "fp": 2,
+        "pos": 14,
+        "neg": 14,
+        "recall": 0.9285714285714286,
+        "precision": 0.8666666666666667,
+        "fpr": 0.14285714285714285,
+        "recallCI": [
+          0.6853073044604219,
+          0.9872781138877085
+        ],
+        "precisionCI": [
+          0.6211750079348376,
+          0.9626395301086407
+        ]
+      },
+      "outOfFold": {
+        "tp": 26,
+        "fp": 5,
+        "pos": 28,
+        "n": 56,
+        "recall": 0.9285714285714286,
+        "precision": 0.8387096774193549,
+        "recallCI": [
+          0.7735426157408214,
+          0.9801883525522292
+        ],
+        "precisionCI": [
+          0.6736529727502113,
+          0.9290748009456006
+        ]
+      },
+      "meetsBar": true,
+      "misses": [
+        "wq40",
+        "wq33"
+      ],
+      "falseAlarms": [
+        "wq24",
+        "wq28",
+        "wq17",
+        "wq23",
+        "wq25"
+      ]
+    },
+    {
+      "model": "kev",
+      "decision": "web_query_privacy",
+      "scorer": "v3.private",
+      "n": 56,
+      "auc": 0.9119897959183674,
+      "aucTest": 0.9285714285714286,
+      "at50": {
+        "t": 0.5,
+        "tp": 25,
+        "fp": 7,
+        "pos": 28,
+        "neg": 28,
+        "recall": 0.8928571428571429,
+        "precision": 0.78125,
+        "fpr": 0.25
+      },
+      "at80": {
+        "t": 0.8,
+        "tp": 11,
+        "fp": 0,
+        "pos": 28,
+        "neg": 28,
+        "recall": 0.39285714285714285,
+        "precision": 1,
+        "fpr": 0
+      },
+      "band": {
+        "flaggedCaution": 0.39285714285714285,
+        "falseFlags": 0,
+        "abstain": 0.6964285714285714
+      },
+      "devThreshold": 0.497,
+      "swapThreshold": 0.6396,
+      "test": {
+        "t": 0.497,
+        "tp": 14,
+        "fp": 6,
+        "pos": 14,
+        "neg": 14,
+        "recall": 1,
+        "precision": 0.7,
+        "fpr": 0.42857142857142855,
+        "recallCI": [
+          0.7846829880728186,
+          1
+        ],
+        "precisionCI": [
+          0.4810232237710206,
+          0.854524726031006
+        ]
+      },
+      "outOfFold": {
+        "tp": 23,
+        "fp": 6,
+        "pos": 28,
+        "n": 56,
+        "recall": 0.8214285714285714,
+        "precision": 0.7931034482758621,
+        "recallCI": [
+          0.644082084514089,
+          0.9212161417056989
+        ],
+        "precisionCI": [
+          0.6160955339174228,
+          0.9015406348441479
+        ]
+      },
+      "meetsBar": false,
+      "misses": [
+        "wq37",
+        "wq47",
+        "wq49",
+        "wq51",
+        "wq55"
+      ],
+      "falseAlarms": [
+        "wq02",
+        "wq08",
+        "wq12",
+        "wq20",
+        "wq26",
+        "wq28"
+      ]
+    }
+  ],
+  "choice": [],
+  "latency": [
+    {
+      "model": "decider:2b",
+      "decision": "web_query_privacy",
+      "calls": 56,
+      "errors": 0,
+      "p50": 4280,
+      "p95": 4558,
+      "served": "decider:2b"
+    },
+    {
+      "model": "decision",
+      "decision": "web_query_privacy",
+      "calls": 56,
+      "errors": 0,
+      "p50": 2953,
+      "p95": 3083,
+      "served": "decision:latest"
+    },
+    {
+      "model": "decider:0.8b",
+      "decision": "web_query_privacy",
+      "calls": 56,
+      "errors": 0,
+      "p50": 2028,
+      "p95": 2133,
+      "served": "decider:0.8b"
+    },
+    {
+      "model": "kev",
+      "decision": "web_query_privacy",
+      "calls": 56,
+      "errors": 0,
+      "p50": 2220,
+      "p95": 2366,
+      "served": "kev:latest"
+    }
+  ]
+}

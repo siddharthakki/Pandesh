@@ -100,6 +100,8 @@ import {
   getDailyBriefRoutine,
 } from '../domain/assistantRoutine';
 import { WATCHDOG_ROUTINE, runWatchdogSoon, scheduleWatchdog, watchdogSchedule } from '../domain/watchdogRoutine';
+import { describeCommandReview, updateCommandReviewSettings } from '../runtime/commandSecondOpinion';
+import { readQueryPrivacySettings, updateQueryPrivacySettings } from '../runtime/queryPrivacySecondOpinion';
 import { setScheduledTaskEnabled } from '../domain/scheduledTasks';
 import { buildConnectorAdapters } from '../runtime/connectors/connectorDefinitions';
 import { setGmailAccessToken, clearGmailAccessToken } from '../runtime/connectors/gmailAccessTokenStore';
@@ -2046,6 +2048,22 @@ export function buildRouter(
 
   // Sets the next run to now; the scheduler (not this request) then runs it on its next tick.
   router.post('/v1/watchdog/run-soon', (ctx) => ({ status: 200, body: { schedule: runWatchdogSoon(ctx.db) } }));
+
+  // Optional local second opinions (Ollaya decision models), each off by default and advisory only: a warning on a
+  // command's approval card, and a card before a search query that may carry private information. They never approve
+  // or send anything. KARKEDIKHA_OLLAYA=0/1 overrides both.
+  router.get('/v1/integrations/ollaya', async (ctx) => ({
+    status: 200,
+    body: { commandReview: await describeCommandReview(ctx.db), queryPrivacy: readQueryPrivacySettings(ctx.db) },
+  }));
+  router.post('/v1/integrations/ollaya', (ctx) => {
+    const body = asRecord(ctx.body);
+    const updated: Record<string, unknown> = {};
+    if ('commandReview' in body) updated.commandReview = updateCommandReviewSettings(ctx.db, asRecord(body.commandReview));
+    if ('queryPrivacy' in body) updated.queryPrivacy = updateQueryPrivacySettings(ctx.db, asRecord(body.queryPrivacy));
+    if (!Object.keys(updated).length) throw new CoreError('invalid_request', "send 'commandReview' and/or 'queryPrivacy', e.g. {\"queryPrivacy\": {\"enabled\": true}}");
+    return { status: 200, body: updated };
+  });
 
   // --- Pandesh: the one proactive routine (a daily brief) ---
   router.get('/v1/assistant/routine/daily-brief', (ctx) => ({
