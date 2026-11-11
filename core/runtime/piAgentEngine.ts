@@ -1,6 +1,7 @@
 import { claimedOutputFiles, leadStatusLine, withholdUnsupportedActionClaims } from './actionClaims';
 import { answerTaskStatusQuestion, isTaskStatusQuestion, listPriorTurns, renderTaskHistorySection } from '../domain/conversationTaskHistory';
 import { listEarlierReads, renderEarlierReadsSection } from '../domain/earlierReads';
+import { homeLocationFact, readHomeLocation } from '../domain/homeLocation';
 import { checkPublicQuery, derivePublicQuery, explicitlyRequestsWebSearch, referencesLocalContent } from './publicQueryGuard';
 import { commandOpinionWarnings, readCommandReviewSettings, recordCommandReview, reviewCommand, warmCommandReview, type CommandOpinion, type CommandReviewOutcome } from './commandSecondOpinion';
 import { queryPrivacySummary, queryPrivacyWarning, readQueryPrivacySettings, recordQueryPrivacyReview, reviewQueryPrivacy, warmQueryPrivacy, type QueryPrivacyOpinion } from './queryPrivacySecondOpinion';
@@ -5053,6 +5054,9 @@ When the user asks to continue, resume, or check progress/updates, resume this w
         }
       }
     } catch { /* history continuity is best effort; the turn still runs */ }
+    // Micro-test cluster C6 (D-LOC-5): local searches went to Berlin (from the time zone) although the user stored
+    // "I live in Ulm". The main assistant gets the stored home place; specialists keep receiving no user memory.
+    if (!agentScope || agentScope.agentId === 'chief') addTurnFact(homeLocationFact(readHomeLocation(db)));
     // A spoken message may contain misheard words (Core froze how it was entered): ask about an odd word, never refuse on it.
     let spokenSection = '';
     try {
