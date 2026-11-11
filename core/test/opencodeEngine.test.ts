@@ -1,14 +1,27 @@
-import { describe, it, expect, afterAll } from 'vitest';
+import { describe, it, expect, afterAll, vi } from 'vitest';
 import * as path from 'node:path';
 import * as fs from 'node:fs';
 import * as cp from 'node:child_process';
 import { OpenCodeEngine, OpenCodeEngineAdapter, findOpenCodeExe, getFreePort } from '../runtime/opencodeEngine';
 import { EngineRegistry } from '../runtime/adapters/EngineAdapter';
+import { liveModelsAllowed } from '../../src/test/setup/realModelGuard';
+
+// The OpenCode server this file starts gets the engine's Ollama address in its workspace config, and its "hello" run
+// loaded the default 27B model on the PC's real Ollama (2026-11-11). A child process is out of the test setup's reach,
+// and the engine reads the address when its module loads, so it points at a closed port first whenever the
+// no-real-models setup (src/test/setup/noRealModels.ts, which runs before this file) marked itself active.
+const previousOllamaUrl = vi.hoisted(() => {
+  const previous = process.env.KARKEDIKHA_OLLAMA_URL;
+  if ((globalThis as Record<symbol, unknown>)[Symbol.for('pandesh.tests.noRealModels')]) process.env.KARKEDIKHA_OLLAMA_URL = 'http://127.0.0.1:9';
+  return previous;
+});
 
 describe('OpenCodeEngine & EngineRegistry', () => {
   const testWorkspace = path.resolve('.tmp/opencode-test-workspace');
 
   afterAll(() => {
+    if (previousOllamaUrl === undefined) delete process.env.KARKEDIKHA_OLLAMA_URL;
+    else process.env.KARKEDIKHA_OLLAMA_URL = previousOllamaUrl;
     OpenCodeEngine.stopServer(testWorkspace);
     try {
       fs.rmSync(testWorkspace, { recursive: true, force: true });
@@ -116,6 +129,9 @@ describe('OpenCodeEngine & EngineRegistry', () => {
     if (!(await new OpenCodeEngineAdapter().isAvailable())) return;
     fs.mkdirSync(testWorkspace, { recursive: true });
     const serverInfo = await OpenCodeEngine.ensureServer(testWorkspace);
+    // The "hello" run below must never reach the PC's real Ollama (see the top of this file).
+    const config = JSON.parse(fs.readFileSync(path.join(testWorkspace, '.opencode', 'opencode.json'), 'utf8'));
+    if (!liveModelsAllowed()) expect(config.provider.ollama.options.baseURL).toBe('http://127.0.0.1:9/v1');
     const exe = findOpenCodeExe();
     const isCmd = process.platform === 'win32' && (exe.endsWith('.cmd') || exe.endsWith('.bat') || exe === 'opencode');
 

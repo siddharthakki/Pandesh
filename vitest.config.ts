@@ -20,7 +20,8 @@ export default defineConfig({
       'src/test/suite/agentPromptLive.test.ts',
       'src/test/suite/physicalDogfoodAcceptance.test.ts',
     ],
-    setupFiles: ['src/test/setup/isolatedProfile.ts', 'src/test/setup/agentPanelHydration.ts'],
+    // noRealModels: a test never loads a model on the real Ollama of the PC it runs on (src/test/setup/realModelGuard.ts).
+    setupFiles: ['src/test/setup/isolatedProfile.ts', 'src/test/setup/noRealModels.ts', 'src/test/setup/agentPanelHydration.ts'],
     // M15 autonomous-runtime tests drive real multi-stage governed graph runs
     // (fs + git + durable-queue round-trips per stage); the previous 5s default
     // left them marginal under full-suite load even before the in-chat
