@@ -22,6 +22,8 @@ import {
   type DesktopResearchResultView,
   type DesktopArtifactView,
   type DesktopArtifactPreview,
+  type DesktopWorkshopContent,
+  type DesktopWorkshopSummary,
   type DesktopImageGenerationResult,
   type DesktopImageStudioStatus,
   type DesktopWeatherResult,
@@ -248,6 +250,22 @@ const desktopApi = {
     ipcRenderer.invoke(DESKTOP_CHANNELS.openActivityDocument, activityId),
   saveArtifactCopy: (artifactId: string): Promise<{ saved: boolean; path: string | null }> =>
     ipcRenderer.invoke(DESKTOP_CHANNELS.saveArtifactCopy, artifactId),
+  listWorkshops: (conversationId?: string | null, scope?: 'recent'): Promise<DesktopWorkshopSummary[]> =>
+    ipcRenderer.invoke(DESKTOP_CHANNELS.listWorkshops, conversationId ?? null, scope),
+  loadWorkshopVersion: (artifactId: string): Promise<DesktopWorkshopContent> =>
+    ipcRenderer.invoke(DESKTOP_CHANNELS.loadWorkshopVersion, artifactId),
+  focusWorkshop: (conversationId: string, workshopId: string | null, artifactId: string | null, open: boolean): Promise<{ recorded: boolean }> =>
+    ipcRenderer.invoke(DESKTOP_CHANNELS.focusWorkshop, conversationId, workshopId, artifactId, open),
+  confirmWorkshopCommand: (commandId: string, ok: boolean, detail?: string, state?: Record<string, unknown>): Promise<{ recorded: boolean }> =>
+    ipcRenderer.invoke(DESKTOP_CHANNELS.confirmWorkshopCommand, commandId, ok, detail, state),
+  saveWorkshopEdit: (workshopId: string, parentArtifactId: string, conversationId: string | null, edits: unknown): Promise<{ artifactId: string }> =>
+    ipcRenderer.invoke(DESKTOP_CHANNELS.saveWorkshopEdit, workshopId, parentArtifactId, conversationId, edits),
+  exportWorkshopGlb: (workshopId: string, sourceArtifactId: string, conversationId: string | null, bytes: Uint8Array, expectedNodes: string[]): Promise<{ verified: boolean; artifactId: string | null; checks: string[]; byteSize: number }> =>
+    ipcRenderer.invoke(DESKTOP_CHANNELS.exportWorkshopGlb, workshopId, sourceArtifactId, conversationId, bytes, expectedNodes),
+  saveWorkshopFile: (artifactId: string): Promise<{ saved: boolean; path: string | null }> =>
+    ipcRenderer.invoke(DESKTOP_CHANNELS.saveWorkshopFile, artifactId),
+  designPreview: (artifactId: string): Promise<{ url: string; nonce: string; expiresAt: string; warnings: string[] }> =>
+    ipcRenderer.invoke(DESKTOP_CHANNELS.designPreview, artifactId),
   openArtifactInStudio: (artifactId: string): Promise<{ opened: boolean }> =>
     ipcRenderer.invoke(DESKTOP_CHANNELS.openArtifactInStudio, artifactId),
   useArtifactAsReference: (artifactId: string): Promise<{ opened: boolean }> =>

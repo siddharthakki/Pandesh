@@ -2,6 +2,8 @@ import React, { useEffect, useRef, useState } from 'react';
 import { api, errorText, onDesktopEvent, type ApprovalCard, type BriefAction, type BriefItem, type Snapshot, type TranscriptMessage } from './bridge';
 import { Icon, Mark, elapsed, timeOf } from './ui';
 import { ActivityAside } from './Activity';
+import { useWorkshop } from './workshop/useWorkshop';
+import { WorkshopPanel } from './workshop/WorkshopPanel';
 import { Markdown } from './markdown';
 import { useVoice } from './voice';
 import type { WakeWord } from './wake';
@@ -58,6 +60,13 @@ const TOOL_WORDS: Record<string, { title: string; allow: string; why?: string }>
   gmail_send: { title: 'Send an email', allow: 'Allow sending this email' },
   web_research: { title: 'Search the web', allow: 'Allow this web search', why: 'It goes online (public web only)' },
   governed_research: { title: 'Search the web', allow: 'Allow this web search', why: 'It goes online (public web only)' },
+  create_simulation: { title: 'Run a simulation in the Workshop', allow: 'Allow the simulation', why: 'It saves a new simulation on this PC; nothing goes online' },
+  build_3d_model: { title: 'Build a 3D model in the Workshop', allow: 'Allow building it', why: 'It saves a new Workshop file on this PC; nothing goes online' },
+  create_design: { title: 'Design a page in the Workshop', allow: 'Allow designing it', why: 'It saves a new page on this PC; its preview runs offline in a sandbox' },
+  create_video: { title: 'Make a video in the Workshop', allow: 'Allow rendering it', why: 'It renders a new video on this PC from the pictures listed; nothing goes online' },
+  workshop_edit: { title: 'Change it in the Workshop', allow: 'Allow this change', why: 'It saves a new version on this PC; the earlier version is kept' },
+  workshop_restore: { title: 'Undo in the Workshop', allow: 'Allow undo', why: 'It makes an earlier version current again as a new version; nothing is deleted' },
+  workshop_export: { title: 'Export the model (GLB)', allow: 'Allow export', why: 'It writes a GLB file on this PC' },
 };
 function humanize(id: string): string { const s = id.replace(/[_-]+/g, ' ').trim(); return s.charAt(0).toUpperCase() + s.slice(1); }
 
@@ -285,6 +294,23 @@ export function Chat({ snapshot, snapshotError, refresh, narrow, openConversatio
   };
 
   const activities = (snapshot?.workspaceActivities ?? []).filter((a) => a.conversationId === convId);
+  // The Workshop: what Pandesh made in this chat, opened in a viewer that fits it (third context beside Chat and Activity).
+  const workshop = useWorkshop(convId, snapshot?.coreState === 'connected' || snapshot?.coreState === 'ready');
+  const workshopFull = Boolean(workshop.ui && workshop.ui.mode === 'full' && !narrow);
+  // A picture or clip that just finished opens in the Workshop by itself (Core's own Workshop tools ask the window to open
+  // what they made). Artifacts that existed when the chat was opened never reopen on their own.
+  const seenMedia = useRef<{ conv: string | null; ids: Set<string> } | null>(null);
+  useEffect(() => {
+    const media = activities.filter((a) => a.state === 'completed' && (a.preview?.kind === 'image' || a.preview?.kind === 'video')).flatMap((a) => a.preview?.artifactIds ?? []);
+    if (!seenMedia.current || seenMedia.current.conv !== convId) { seenMedia.current = { conv: convId, ids: new Set(media) }; return; }
+    const fresh = media.filter((id) => !seenMedia.current!.ids.has(id));
+    if (!fresh.length) return;
+    for (const id of fresh) seenMedia.current.ids.add(id);
+    void workshop.refresh().then((list) => {
+      const target = list.find((w) => w.versions.some((v) => v.artifactId === fresh[fresh.length - 1]));
+      if (target) workshop.setUi({ workshopId: target.workshopId, artifactId: fresh[fresh.length - 1], mode: workshop.ui?.mode ?? 'side' });
+    });
+  }, [activities.map((a) => `${a.id}:${a.state}`).join(','), convId]);
   // The aside opens by itself once per task, when that task first shows a viewable step; closed stays closed for that task.
   const activeTaskKey = [...activities].reverse().find((a) => a.taskId)?.taskId ?? convId ?? 'none';
   const viewable = activities.some((a) => a.preview || a.state === 'running');
@@ -409,12 +435,18 @@ export function Chat({ snapshot, snapshotError, refresh, narrow, openConversatio
           </span>
         )}
         <span className="grow" />
-        {activities.length > 0 && !asideOpen && <button type="button" className="btn small" title="Show what Pandesh did in this chat" onClick={() => { setClosedFor(null); setForcedOpen(true); }}>Workspace · {activities.length}</button>}
+        {(workshop.list.length > 0 || workshop.ui) && (
+          <button type="button" className="btn small" aria-pressed={Boolean(workshop.ui)} title="What Pandesh made in this chat, to look at, change and export"
+            onClick={() => workshop.setUi(workshop.ui ? null : { workshopId: workshop.list[0]?.workshopId ?? null, artifactId: null, mode: 'side' })}>
+            Workshop{workshop.list.length ? ` · ${workshop.list.length}` : ''}
+          </button>
+        )}
+        {activities.length > 0 && !asideOpen && <button type="button" className="btn small" title="Show what Pandesh did in this chat" onClick={() => { setClosedFor(null); setForcedOpen(true); }}>Activity · {activities.length}</button>}
         <button type="button" className="ghost-icon" title="New chat" aria-label="New chat" onClick={() => { void api.newConversation().then(() => { setMessages([]); setLoadedFor(null); refresh(); }); }}><Icon name="plus" size={18} /></button>
         <button type="button" className="search-btn" title="Search everything (Ctrl K)" onClick={onOpenPalette}><Icon name="search" size={16} /><span>Search</span>{!narrow && <kbd>Ctrl K</kbd>}</button>
       </div>
 
-      <div className={`body${idle && !narrow ? ' idle-wide' : ''}`}>
+      <div className={`body${idle && !narrow && !workshopFull ? ' idle-wide' : ''}${workshopFull ? ' ws-full' : ''}`}>
         <div className="spacer-v" />
         {coreDown && (
           <div className="notice error" role="alert" style={{ marginBottom: 12 }}>
@@ -423,7 +455,9 @@ export function Chat({ snapshot, snapshotError, refresh, narrow, openConversatio
         )}
         {snapshotError && <div className="notice error" role="alert">{snapshotError}</div>}
 
-        {idle ? (
+        {workshopFull ? (
+          <WorkshopPanel conversationId={convId} workshop={workshop} narrow={narrow} />
+        ) : idle ? (
           <div className="hero-wrap">
             <div className="hero">
               <div className="dateline"><Mark size={28} /><span>{new Date().toLocaleDateString([], { weekday: 'long', day: 'numeric', month: 'long' })}</span></div>
@@ -556,6 +590,7 @@ export function Chat({ snapshot, snapshotError, refresh, narrow, openConversatio
         <div className="spacer-v" />
       </div>
     </div>
+    {workshop.ui && !workshopFull && <WorkshopPanel conversationId={convId} workshop={workshop} narrow={narrow} />}
     {asideOpen && <ActivityAside activities={activities} conversationId={convId} narrow={narrow} onClose={() => { setClosedFor(activeTaskKey); setForcedOpen(false); }} />}
     </div>
   );

@@ -102,6 +102,11 @@ export function selectCapabilitiesForIntent(requestText?: string): readonly stri
     caps.add('revenue');
   }
 
+  // The Workshop: 3D models, simulations and pages, and their follow-ups (rotate, pull apart, change a part, export).
+  if (/\b(?:3-?d|three[- ]d|workshop|assembl(?:y|ies)|gears?|gearbox|mechanism|mechanical|exploded?|explode|pull (?:it|them|this) apart|put (?:it|them) back|reassembl\w*|turntable|glb|gltf|simulat\w*|queues?|serving counters?|arrival rate|waiting times?|landing pages?|web ?pages?|home ?pages?|page design|mock-?ups?|headings?|contact button|hero section|slide ?shows?|promo(?:tional)? (?:video|clip|reel)s?|reels?|make it (?:vertical|square|landscape|portrait))\b/i.test(text)) {
+    caps.add('workshop');
+  }
+
   // Weather intent
   if (/\b(?:weather|forecast|temperature|rain|snow|degrees|celsius|umbrella|climate)\b/i.test(text)) {
     caps.add('weather');
@@ -204,7 +209,7 @@ export interface BuildPiCapabilityBridgeOptions {
 }
 
 /** Chat capabilities the intent selection can add beyond the bounded set. */
-export const CHAT_EXPANDABLE_CAPABILITY_IDS = [...CHAT_CAPABILITY_IDS, 'system-management', 'port-management', 'computer-use', 'pc-organizer', 'revenue'] as const;
+export const CHAT_EXPANDABLE_CAPABILITY_IDS = [...CHAT_CAPABILITY_IDS, 'system-management', 'port-management', 'computer-use', 'pc-organizer', 'revenue', 'workshop'] as const;
 
 /**
  * Builds the bridge, or returns undefined when this build's registry owns none

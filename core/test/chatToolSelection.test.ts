@@ -129,3 +129,44 @@ describe('memory wording without "remember" (tool-selection run b9)', () => {
     expect(offered(prompt).has('memory_remember')).toBe(true);
   });
 });
+
+describe('the Workshop (3D models)', () => {
+  const ALL_TOOLS = ['navigate_to', 'read_file', 'build_3d_model', 'workshop_view', 'workshop_edit', 'web_research'];
+  const CAPS = new Map([
+    ['build_3d_model', { capabilityId: 'workshop', deferred: true }],
+    ['workshop_view', { capabilityId: 'workshop', deferred: true }],
+    ['workshop_edit', { capabilityId: 'workshop', deferred: true }],
+    ['web_research', { capabilityId: 'research', deferred: true }],
+  ]);
+  const offered = (requestText: string, extra: Record<string, unknown> = {}) => selectChatTools(ALL_TOOLS, { requestText, capabilities: CAPS, ...extra }).offered;
+
+  it('offers the Workshop tools for a 3D request, and drops window navigation for a plain build request', () => {
+    const build = offered('Build a simple mechanical gear assembly.');
+    expect(build.has('build_3d_model')).toBe(true);
+    expect(build.has('navigate_to')).toBe(false);
+    expect(offered('Create a 3D model of a mechanical watch').has('navigate_to')).toBe(false);
+  });
+
+  it('keeps the Workshop for short follow-ups ("Rotate it", "Pull it apart") through the recent tool', () => {
+    const rotate = offered('Rotate it.', { recentToolNames: ['build_3d_model'] });
+    expect(rotate.has('workshop_view')).toBe(true);
+    expect(rotate.has('navigate_to')).toBe(true);
+    expect(offered('Pull it apart.').has('workshop_view')).toBe(true);
+  });
+
+  it('leaves unrelated requests alone', () => {
+    const plain = offered('What is the capital of France?');
+    expect(plain.has('build_3d_model')).toBe(false);
+    expect(plain.has('navigate_to')).toBe(true);
+  });
+
+  it('routes a page design and its follow-ups to the Workshop ("make the heading larger", "show it on a phone")', () => {
+    const page = offered('Create a simple local landing page with a heading and a contact button.');
+    expect(page.has('workshop_edit')).toBe(true);
+    expect(page.has('navigate_to')).toBe(false);
+    expect(offered('Make the heading larger.').has('workshop_edit')).toBe(true);
+    expect(offered('Show it on a phone.').has('workshop_view')).toBe(true);
+    // "Open the dashboard" is still the app's own navigation, not a page design.
+    expect(offered('Open the dashboard').has('workshop_edit')).toBe(false);
+  });
+});

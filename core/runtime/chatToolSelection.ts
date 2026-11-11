@@ -114,6 +114,10 @@ export const TOOL_GROUPS: Record<string, ToolGroup> = {
     purpose: "hand work to Pandesh's specialist agents (Coding, Research, Operations, Personal) and get their result",
     pattern: /\b(?:delegate|hand (?:it|this|that) (?:off|over)|agents?|specialists?|(?:research|coding|operations|personal) (?:agent|team)|my team|ask (?:the )?(?:research|coding|operations)|have (?:the )?(?:research|coding|operations))\b/i,
   },
+  workshop: {
+    purpose: 'the Workshop: build an interactive 3D model, run a simulation, design a simple web page or make a video slideshow from pictures; change it (make it vertical), pull it apart, rotate it, play or pause it, preview it on a phone, export a GLB, show earlier versions',
+    pattern: /\b(?:3-?d|three[- ]d|workshop|scenes?|assembl(?:y|ies)|gears?|gearbox|mechanism|mechanical|exploded?|explode|pull (?:it|them|this) apart|take (?:it|them) apart|put (?:it|them) back|reassembl\w*|rotate|turntable|label (?:the )?(?:components|parts)|components?|glb|gltf|export (?:the |this |it )?model|full[- ]?screen|previous version|undo that|simulat\w*|queues?|serving counters?|(?:another|second|extra) counter|arrival rate|waiting times?|pause (?:the |it)|speed (?:it |the simulation )?up|landing pages?|web ?pages?|home ?pages?|page design|mock-?ups?|headings?|contact button|hero section|call[- ]to[- ]action|(?:on|for) (?:a )?(?:phone|mobile|tablet)|show (?:me )?the code|slide ?shows?|promo(?:tional)? (?:video|clip|reel)s?|reels?|make it (?:vertical|square|landscape|portrait|shorter|longer)|vertical|portrait|9:16)\b/i,
+  },
   weather: {
     purpose: 'weather and forecast',
     pattern: /\b(?:weather|forecast|temperature|rain\w*|snow\w*|sunny|umbrella|degrees|celsius)\b/i,
@@ -169,6 +173,7 @@ export const CAPABILITY_GROUP: Record<string, string> = {
   'computer-use': 'pc',
   'ollama-management': 'models',
   weather: 'weather',
+  workshop: 'workshop',
 };
 
 /**
@@ -195,6 +200,9 @@ export function groupsForText(text: string): Set<string> {
   for (const [group, spec] of Object.entries(TOOL_GROUPS)) if (spec.pattern.test(text)) groups.add(group);
   return groups;
 }
+
+/** A request that plainly asks Pandesh to make something in the Workshop: a 3D model, a simulation or a page. */
+export const BUILD_3D_REQUEST = /\b(?:build|make|create|model|design|construct|generate)\b[^.?!]{0,80}\b(?:3-?d|three[- ]d|assembl(?:y|ies)|gears?|gearbox|mechanism|mechanical|model of)\b|\b(?:3-?d|three[- ]d) model\b|^\s*(?:please\s+)?(?:run\s+(?:a\s+)?)?simulat\w*\b|\b(?:build|make|create|design|generate|draft)\b[^.?!]{0,60}\b(?:landing pages?|web ?pages?|home ?pages?|page with)\b|\b(?:build|make|create|render|generate|put together)\b[^.?!]{0,60}\b(?:slide ?shows?|promo(?:tional)? (?:video|clip|reel)s?|video from)\b/i;
 
 export interface ToolSelectionInput {
   requestText: string;
@@ -232,6 +240,9 @@ export function selectChatTools(allNames: readonly string[], input: ToolSelectio
     // A capability the bridge selected for this request stays, unless it is one of the near-always ones.
     if (cap && !cap.deferred && !(cap.capabilityId && GATED_CAPABILITIES.has(cap.capabilityId))) offered.add(name);
   }
+  // "Build a gear assembly": a local model offered navigate_to opened Wish to Reality instead of building (Workshop
+  // acceptance, 2026-11-11). For a request that plainly asks for a 3D model, the window navigation tool is not offered.
+  if (matched.get('workshop') === 'request' && BUILD_3D_REQUEST.test(input.requestText)) offered.delete('navigate_to');
   return { offered, groups: [...matched].map(([group, source]) => ({ group, source })) };
 }
 

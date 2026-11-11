@@ -531,6 +531,35 @@ export class CoreClient {
     return this.request('/v1/artifacts', { method: 'POST', body: input });
   }
 
+  // --- Workshop (core/api/workshopRoutes.ts): host-only ---
+  async listWorkshops(input: { conversationId?: string | null; scope?: 'recent' } = {}): Promise<{ workshops: import('../../core/shared/workshop/model').WorkshopSummary[] }> {
+    return this.requestAsHost('/v1/workshops', { query: { ...(input.conversationId ? { conversationId: input.conversationId } : {}), ...(input.scope ? { scope: input.scope } : {}) } });
+  }
+
+  async getWorkshop(workshopId: string): Promise<{ workshop: import('../../core/shared/workshop/model').WorkshopSummary }> {
+    return this.requestAsHost(`/v1/workshops/${encodeURIComponent(workshopId)}`);
+  }
+
+  /** What the window has open in a conversation, so "it" in chat means the thing on screen. */
+  async focusWorkshop(conversationId: string, input: { workshopId: string | null; artifactId: string | null; open: boolean }): Promise<{ recorded: boolean }> {
+    return this.requestAsHost(`/v1/conversations/${encodeURIComponent(conversationId)}/workshop-focus`, { method: 'POST', body: input });
+  }
+
+  /** The window's answer to a Workshop view command Core asked it to carry out. */
+  async confirmWorkshopCommand(commandId: string, input: { ok: boolean; detail?: string; state?: Record<string, unknown> }): Promise<{ recorded: boolean }> {
+    return this.requestAsHost(`/v1/workshop-commands/${encodeURIComponent(commandId)}/confirm`, { method: 'POST', body: input });
+  }
+
+  /** An edit the person made with the Workshop's own controls. */
+  async saveWorkshopVersion(workshopId: string, input: { conversationId?: string | null; parentArtifactId: string; edits?: unknown[]; set?: Record<string, unknown>; adjust?: Record<string, unknown> }): Promise<{ artifact: ArtifactRecord }> {
+    return this.requestAsHost(`/v1/workshops/${encodeURIComponent(workshopId)}/versions`, { method: 'POST', body: input });
+  }
+
+  /** A GLB the window exported, staged by this host; Core verifies it before keeping it. */
+  async exportWorkshop(workshopId: string, input: { conversationId?: string | null; sourceArtifactId: string; format: 'glb'; stagedPath: string; expectedNodes?: string[]; engine?: string }): Promise<{ verified: boolean; artifact?: ArtifactRecord; checks: string[]; meshes?: number; triangles?: number | null }> {
+    return this.requestAsHost(`/v1/workshops/${encodeURIComponent(workshopId)}/exports`, { method: 'POST', body: input });
+  }
+
   async getConversation(conversationId: string): Promise<ConversationRecord> {
     return this.request(`/v1/conversations/${encodeURIComponent(conversationId)}`);
   }

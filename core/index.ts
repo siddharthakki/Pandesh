@@ -75,6 +75,7 @@ import { createCapabilityInventoryAdapter } from './runtime/capabilityInventory'
 import { createPcOrganizerAdapter } from './runtime/pcOrganizer';
 import { createHouseholdCapabilityAdapter } from './runtime/householdCapability';
 import { createMediaProductionAdapter } from './runtime/mediaProduction';
+import { createWorkshopCapabilityAdapter } from './runtime/workshopCapability';
 import { activeCompanionDeviceCount } from './domain/companionSync';
 import { listHouseholdRoutines } from './domain/householdRoutines';
 import { companionController } from './api/companionServer';
@@ -278,7 +279,7 @@ function buildConnectorRegistry(dataDir: string, db: CoreDatabase): Map<Connecto
   return registry;
 }
 
-function buildCapabilityRegistry(dataDir: string, db: CoreDatabase, connectors: Map<ConnectorId, ConnectorAdapter>, scout: IntelligenceScout): GovernedCapabilityRegistry {
+function buildCapabilityRegistry(dataDir: string, db: CoreDatabase, connectors: Map<ConnectorId, ConnectorAdapter>, scout: IntelligenceScout, broadcaster?: EventBroadcaster): GovernedCapabilityRegistry {
   const research = createResearchCapabilityAdapter();
   const githubRepository = process.env.KARKEDIKHA_GITHUB_REPOSITORY;
   const github = githubRepository
@@ -289,6 +290,12 @@ function buildCapabilityRegistry(dataDir: string, db: CoreDatabase, connectors: 
   const memory = createMemoryCapabilityAdapter({ db });
   const imageStudioRoot = process.env.KARKEDIKHA_IMAGE_STUDIO_ROOT
     ?? (process.platform === 'win32' ? 'C:\\Projects\\ImageGeneration' : '/opt/ImageGeneration');
+  // Another local Studio port (an isolated test profile); anything that is not loopback HTTP is ignored.
+  const imageStudioUrl = (() => {
+    const value = process.env.KARKEDIKHA_IMAGE_STUDIO_URL?.trim();
+    if (!value) return undefined;
+    try { const u = new URL(value); return u.protocol === 'http:' && ['127.0.0.1', 'localhost'].includes(u.hostname) ? value : undefined; } catch { return undefined; }
+  })();
 
   const registry = new GovernedCapabilityRegistry()
     .register(createWorkspaceCapabilityAdapter())
@@ -297,6 +304,7 @@ function buildCapabilityRegistry(dataDir: string, db: CoreDatabase, connectors: 
     .register(createImageStudioCapabilityAdapter({
       db,
       studioRoot: imageStudioRoot,
+      ...(imageStudioUrl ? { baseUrl: imageStudioUrl } : {}),
       // Pandesh keeps the images it generated through ComfyUI in its OWN data
       // directory: they are Core artifacts with durable ids, and they must
       // survive a restart of either Core or the desktop app.
@@ -321,7 +329,9 @@ function buildCapabilityRegistry(dataDir: string, db: CoreDatabase, connectors: 
     .register(createDocumentToolsAdapter({ downloadsDir: path.join(dataDir, 'downloads') }))
     .register(createRevenueCapabilityAdapter({ dataDir }))
     .register(createOllamaManagementAdapter({ db }))
-    .register(createMediaProductionAdapter({}));
+    .register(createMediaProductionAdapter({}))
+    // The Workshop: versions are Core artifacts; a view command must reach the window while the tool waits for its answer.
+    .register(createWorkshopCapabilityAdapter({ db, dataDir, publish: broadcaster ? (event) => broadcaster.publishRuntime(event) : undefined }));
   // The plan capability reads the registry it is registered in (it checks a
   // declared plan against the capabilities that really exist), so it is
   // added last.
@@ -428,7 +438,7 @@ async function main(): Promise<void> {
   // reaches and the scheduler that fires a watch, so both see the same
   // durable watch list and the same last-seen versions.
   const scout = createIntelligenceScout({ dataDir });
-  const capabilityRegistry = buildCapabilityRegistry(dataDir, db, connectorRegistry, scout);
+  const capabilityRegistry = buildCapabilityRegistry(dataDir, db, connectorRegistry, scout, broadcaster);
 
   // The daily brief routine is NOT created here.
   //

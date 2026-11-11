@@ -104,6 +104,12 @@ export interface CreateVideoInput {
   width?: number;
   height?: number;
   visionModel?: string;
+  /** 'contain' (default) letterboxes each picture; 'cover' fills the frame and crops the overflow (vertical reels). */
+  fit?: 'contain' | 'cover';
+  /** Called as each stage starts, for progress shown while it runs. */
+  onStage?: (stage: string) => void;
+  /** false: the first picture is visible from the very first frame (no fade in from black), so a paused player shows it. */
+  fadeFromBlack?: boolean;
 }
 
 /** The pictures in a folder, or the given files, in name order. */
@@ -122,7 +128,11 @@ export function resolveImages(inputs: string[]): string[] {
 
 export async function createPromoVideo(input: CreateVideoInput, deps: InventoryProbeDeps = {}): Promise<VideoResult> {
   const steps: ToolStep[] = [];
-  const inv = await timed(steps, 'capability inventory', 'find working video tools and a local vision model', async () => {
+  const timedStage = <T>(list: ToolStep[], tool: string, purpose: string, fn: () => Promise<{ ok: boolean; detail: string; value: T }>): Promise<T> => {
+    input.onStage?.(purpose.charAt(0).toUpperCase() + purpose.slice(1));
+    return timed(list, tool, purpose, fn);
+  };
+  const inv = await timedStage(steps, 'capability inventory', 'find working video tools and a local vision model', async () => {
     const i = await probeCapabilityInventory(deps);
     const ffmpeg = workingExecutable(i, 'ffmpeg');
     const ffprobe = workingExecutable(i, 'ffprobe');
@@ -138,7 +148,7 @@ export async function createPromoVideo(input: CreateVideoInput, deps: InventoryP
   if (font) fs.copyFileSync(font, path.join(work, 'font.ttf'));
   const skipped: VideoResult['skipped'] = [];
 
-  const usable = await timed(steps, 'ffprobe', 'inspect each input and keep only readable pictures', async () => {
+  const usable = await timedStage(steps, 'ffprobe', 'inspect each input and keep only readable pictures', async () => {
     const keep: Array<{ image: string; w: number; h: number }> = [];
     for (const img of input.images) {
       const r = await run(inv.ffprobe!, ['-v', 'error', '-select_streams', 'v:0', '-show_entries', 'stream=width,height,codec_name', '-of', 'json', img], { timeoutMs: 20_000 });
@@ -152,7 +162,7 @@ export async function createPromoVideo(input: CreateVideoInput, deps: InventoryP
 
   const model = input.visionModel ?? inv.vision.find((m) => /qwen2\.5vl|llava|vision|gemma3/i.test(m)) ?? inv.vision[0] ?? null;
   const ollamaUrl = deps.ollamaUrl ?? process.env.KARKEDIKHA_OLLAMA_URL ?? DEFAULT_OLLAMA_URL;
-  const captions = await timed(steps, model && input.captions === 'auto' ? `ollama:${model}` : 'captions', 'write one caption per picture locally', async () => {
+  const captions = await timedStage(steps, model && input.captions === 'auto' ? `ollama:${model}` : 'captions', 'write one caption per picture locally', async () => {
     const out: VideoResult['captions'] = [];
     for (const [i, u] of usable.entries()) {
       const given = Array.isArray(input.captions) ? input.captions[i] : undefined;
@@ -171,10 +181,10 @@ export async function createPromoVideo(input: CreateVideoInput, deps: InventoryP
   });
 
   const segments: string[] = [];
-  await timed(steps, 'ffmpeg', `render a title card and ${usable.length} captioned ${seconds}s segment(s) at ${W}x${H}`, async () => {
+  await timedStage(steps, 'ffmpeg', `render a title card and ${usable.length} captioned ${seconds}s segment(s) at ${W}x${H}`, async () => {
     const text = (file: string, value: string) => { fs.writeFileSync(path.join(work, file), value, 'utf8'); return file; };
     const draw = (file: string, size: number, y: string) => font ? `,drawtext=fontfile=font.ttf:textfile=${file}:fontcolor=white:fontsize=${size}:line_spacing=10:box=1:boxcolor=black@0.5:boxborderw=22:x=(w-text_w)/2:y=${y}` : '';
-    const fade = (d: number) => `,fade=t=in:st=0:d=0.4,fade=t=out:st=${(d - 0.4).toFixed(2)}:d=0.4`;
+    const fade = (d: number, fadeIn = true) => `${fadeIn ? ',fade=t=in:st=0:d=0.4' : ''},fade=t=out:st=${(d - 0.4).toFixed(2)}:d=0.4`;
     const enc = ['-r', '30', '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '20', '-pix_fmt', 'yuv420p', '-an'];
     const errors: string[] = [];
     if (input.title) {
@@ -183,7 +193,10 @@ export async function createPromoVideo(input: CreateVideoInput, deps: InventoryP
     }
     for (const [i, u] of usable.entries()) {
       const cap = captions[i]?.caption ? draw(text(`cap${i}.txt`, wrapCaption(captions[i].caption)), Math.round(H / 15), `h-text_h-${Math.round(H / 12)}`) : '';
-      const vf = `scale=${W}:${H}:force_original_aspect_ratio=decrease,pad=${W}:${H}:(ow-iw)/2:(oh-ih)/2:color=black,setsar=1,format=yuv420p${cap}${fade(seconds)}`;
+      const frame = input.fit === 'cover'
+        ? `scale=${W}:${H}:force_original_aspect_ratio=increase,crop=${W}:${H}`
+        : `scale=${W}:${H}:force_original_aspect_ratio=decrease,pad=${W}:${H}:(ow-iw)/2:(oh-ih)/2:color=black`;
+      const vf = `${frame},setsar=1,format=yuv420p${cap}${fade(seconds, !(i === 0 && !input.title && input.fadeFromBlack === false))}`;
       const r = await run(inv.ffmpeg!, ['-y', '-v', 'error', '-loop', '1', '-t', String(seconds), '-i', u.image, '-vf', vf, '-t', String(seconds), ...enc, `seg${i}.mp4`], { cwd: work });
       if (r.code === 0) segments.push(`seg${i}.mp4`); else { errors.push(`${path.basename(u.image)}: ${r.stderr.trim().split('\n').pop()}`); skipped.push({ image: u.image, why: 'FFmpeg could not render it' }); }
     }
@@ -198,7 +211,7 @@ export async function createPromoVideo(input: CreateVideoInput, deps: InventoryP
 
   const expected = (input.title ? 2.5 : 0) + segments.filter((s) => s !== 'seg_title.mp4').length * seconds;
   const thumbnail = input.output.replace(/\.mp4$/i, '') + '.preview.png';
-  const verify = await timed(steps, 'ffprobe + ffmpeg frame grab', 'verify codec, resolution, duration and a real frame independently', async () => {
+  const verify = await timedStage(steps, 'ffprobe + ffmpeg frame grab', 'verify codec, resolution, duration and a real frame independently', async () => {
     const r = await run(inv.ffprobe!, ['-v', 'error', '-show_entries', 'format=duration:stream=codec_name,width,height,nb_frames', '-select_streams', 'v:0', '-of', 'json', input.output], { timeoutMs: 30_000 });
     const j = (() => { try { return JSON.parse(r.stdout) as { format?: { duration?: string }; streams?: Array<{ codec_name?: string; width?: number; height?: number; nb_frames?: string }> }; } catch { return {}; } })();
     const s = j.streams?.[0];
