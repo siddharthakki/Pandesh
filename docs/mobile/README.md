@@ -77,7 +77,7 @@ The PC side (Connections → Phone):
 | Tailscale link and home network address | `apps/desktop/src/host/mobileTailscale.ts` |
 | What the phone sees of the session | `apps/desktop/src/host/mobileState.ts` |
 | The app's files | `apps/desktop/src/host/mobileAssets.ts` serves `apps/desktop/renderer/mobile/` (no build step) |
-| Icons | `node apps/desktop/scripts/build-mobile-icons.mjs` (from `assets/icon-512.png`) |
+| Icons | `node apps/desktop/scripts/build-mobile-icons.mjs` (from `assets/icon.svg`, `icon-square.svg` and `icon-maskable.svg`) |
 | PC card and QR code | `apps/desktop/renderer-v2/src/Phone.tsx`, `apps/desktop/renderer-v2/src/qr.ts` |
 | Tests | `apps/desktop/test/mobile*.test.ts`, `qrEncoder.test.ts`, `uiV2PhoneCardRendererUi.test.ts` |
 

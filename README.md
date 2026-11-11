@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="apps/desktop/assets/icon-512.png" width="128" alt="Pandesh's robot panda">
+<img src="apps/desktop/assets/icon-512.png" width="128" alt="Pandesh logo: a panda with teal eyes rising into a deep-teal tile">
 
 # Pandesh
 
