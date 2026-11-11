@@ -33,6 +33,7 @@ import {
   removeBrowserProfileDir,
   sleep,
   waitForDebugEndpoint,
+  waitForPageReady,
 } from './browserInspection';
 import { resolvePublicWebUrl, siteKey } from './browserHostPolicy';
 import { EGRESS_CANARY_HOST, startEgressProxy, type EgressProxy } from './browserEgressProxy';
@@ -442,14 +443,19 @@ class BrowserSession {
     this.actionsUsed += 1;
   }
 
-  private async waitForLoad(): Promise<void> {
+  /**
+   * Waits for the page to finish loading (see waitForPageReady). Only a
+   * navigation to a known page must leave about:blank; a click or
+   * history.back() may really end there.
+   */
+  private async waitForLoad(target?: string): Promise<void> {
     const deadline = Date.now() + NAV_TIMEOUT_MS;
     await sleep(150);
-    while (Date.now() < deadline) {
-      const ready = await evaluate(this.cdp, this.sessionId, 'document.readyState').catch(() => 'loading');
-      if (ready === 'complete' || ready === 'interactive') return;
-      await sleep(150);
-    }
+    await waitForPageReady(this.cdp, this.sessionId, {
+      timeoutMs: deadline - Date.now(),
+      intervalMs: 150,
+      allowBlank: target === undefined || target === 'about:blank',
+    });
   }
 
   async currentUrl(): Promise<string> {
@@ -623,7 +629,7 @@ class BrowserSession {
     if (result.errorText && !this.blocked.length) {
       throw new BrowserSessionError(`could not open ${url}: ${String(result.errorText)}`, 'browser_navigation_failed');
     }
-    await this.waitForLoad();
+    await this.waitForLoad(url);
   }
 
   async click(target: { linkIndex?: number; locator?: PageLocator }): Promise<void> {
