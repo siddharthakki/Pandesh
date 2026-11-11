@@ -9,6 +9,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
+import { spawnSync } from 'node:child_process';
 
 const args = Object.fromEntries(process.argv.slice(2).reduce((acc, a, i, all) => (a.startsWith('--') ? [...acc, [a.slice(2), all[i + 1] && !all[i + 1].startsWith('--') ? all[i + 1] : true]] : acc), []));
 const PROFILE = path.resolve(String(args.profile ?? ''));
@@ -130,10 +131,132 @@ async function step(id, title, fn) {
   console.log(`${record.status} (${(record.latencyMs / 1000).toFixed(1)} s) ${String(record.observation).slice(0, 220)}`);
 }
 
+/** Simulation, Design and Video in plain language, each in a fresh chat, with the real local model choosing the tools. */
+async function moreScenarios(cdp) {
+  const fresh = async () => { await cdp.eval(`window.desktop.newConversation().then(() => true)`); await sleep(800); };
+  const workshopsOf = async (conversationId) => (await http('GET', `/v1/workshops?conversationId=${conversationId}`)).workshops;
+  const fileOf = async (id) => (await http('GET', `/v1/artifacts/${id}`)).absolutePath;
+  const ctx = {};
+
+  await fresh();
+  await step('WSH-110', '"Simulate a food stall with one serving counter, customers arriving every two minutes, service taking three minutes."', async ({ dir, record }) => {
+    const since = new Date().toISOString();
+    const r = await say(cdp, 'Simulate a food stall with one serving counter, customers arriving every two minutes, service taking three minutes.');
+    ctx.sim = r.conversationId;
+    const ws = (await workshopsOf(r.conversationId)).filter((w) => w.type === 'simulation');
+    record.facts = { reply: r.reply, approvals: r.approvals, ms: r.ms, tools: await toolsSince(r.conversationId, since), workshops: ws.map((w) => ({ title: w.title, versions: w.versions.length })) };
+    await sleep(1500);
+    record.screenshots.push(await cdp.screenshot(path.join(dir, 'after.png')));
+    if (!ws.length) return { status: 'FAIL', observation: `No simulation was created. Reply: ${r.reply.slice(0, 300)}` };
+    const spec = JSON.parse(fs.readFileSync(await fileOf(ws[0].latestArtifactId), 'utf8'));
+    record.facts.params = spec.params;
+    const lab = await cdp.eval(`Boolean(document.querySelector('.ws-sim canvas.ws-sim-canvas'))`);
+    const right = spec.params.counters === 1 && spec.params.arrivalEveryMinutes === 2 && spec.params.serviceMinutes === 3;
+    return right && lab
+      ? { observation: `${r.approvals.length} card(s); the model set counters 1, a customer every 2 min, 3 min service; the Lab is open. Reply: ${r.reply.slice(0, 160)}` }
+      : { status: 'FAIL', observation: `params ${JSON.stringify(spec.params)}; Lab open: ${lab}; reply: ${r.reply.slice(0, 160)}` };
+  });
+
+  await step('WSH-111', '"Add a second counter."', async ({ dir, record }) => {
+    const before = (await workshopsOf(ctx.sim)).find((w) => w.type === 'simulation');
+    const r = await say(cdp, 'Add a second counter.');
+    const after = (await workshopsOf(ctx.sim)).find((w) => w.type === 'simulation');
+    record.facts = { reply: r.reply, approvals: r.approvals, ms: r.ms, versions: [before?.versions.length, after?.versions.length] };
+    record.screenshots.push(await cdp.screenshot(path.join(dir, 'after.png')));
+    if (!after || after.versions.length !== (before?.versions.length ?? 0) + 1) return { status: 'FAIL', observation: `versions ${before?.versions.length} → ${after?.versions.length}; reply: ${r.reply.slice(0, 200)}` };
+    const spec = JSON.parse(fs.readFileSync(await fileOf(after.latestArtifactId), 'utf8'));
+    const check = after.versions[after.versions.length - 1].meta.verification?.checks?.[0] ?? '';
+    return spec.params.counters === 2
+      ? { observation: `v${after.versions.length}: counters 2, same seed; Core: "${check}"; reply: ${r.reply.slice(0, 140)}` }
+      : { status: 'FAIL', observation: `counters ${spec.params.counters}; reply: ${r.reply.slice(0, 200)}` };
+  });
+
+  await fresh();
+  await step('WSH-112', '"Create a simple local landing page with a heading and a contact button."', async ({ dir, record }) => {
+    const since = new Date().toISOString();
+    const r = await say(cdp, 'Create a simple local landing page with a heading and a contact button.', { timeoutMs: 360_000 });
+    ctx.design = r.conversationId;
+    const ws = (await workshopsOf(r.conversationId)).filter((w) => w.type === 'design');
+    record.facts = { reply: r.reply, approvals: r.approvals, ms: r.ms, tools: await toolsSince(r.conversationId, since), workshops: ws.map((w) => ({ title: w.title, versions: w.versions.length, engine: w.versions[0]?.meta.engine })) };
+    if (!ws.length) { record.screenshots.push(await cdp.screenshot(path.join(dir, 'after.png'))); return { status: 'FAIL', observation: `No page was created. Reply: ${r.reply.slice(0, 300)}` }; }
+    await sleep(2500);
+    const state = await inspect(r.conversationId);
+    record.facts.inspection = state;
+    record.screenshots.push(await cdp.screenshot(path.join(dir, 'after.png')));
+    const h1 = state?.headings?.find((h) => h.tag === 'h1') ?? state?.headings?.[0];
+    const contact = state?.buttons?.find((b) => /contact|call|email|message|reach/i.test(b.text));
+    ctx.h1 = h1?.fontSizePx;
+    return h1 && contact
+      ? { observation: `Written by ${ws[0].versions[0].meta.engine.model} on this PC; the sandboxed preview reports ${h1.tag} "${h1.text}" at ${h1.fontSizePx}px and "${contact.text}" (${contact.tag}). ${(r.ms / 1000).toFixed(0)} s.` }
+      : { status: 'FAIL', observation: `page made, but the preview reports heading ${JSON.stringify(h1)} and contact ${JSON.stringify(contact)}` };
+  });
+
+  await step('WSH-113', '"Make the heading larger."', async ({ dir, record }) => {
+    const before = (await workshopsOf(ctx.design)).find((w) => w.type === 'design');
+    const r = await say(cdp, 'Make the heading larger.', { timeoutMs: 360_000 });
+    const after = (await workshopsOf(ctx.design)).find((w) => w.type === 'design');
+    await sleep(2500);
+    const state = await inspect(ctx.design);
+    const h1 = state?.headings?.find((h) => h.tag === 'h1') ?? state?.headings?.[0];
+    record.facts = { reply: r.reply, approvals: r.approvals, ms: r.ms, versions: [before?.versions.length, after?.versions.length], op: after?.versions[after.versions.length - 1]?.meta.op, inspection: state };
+    record.screenshots.push(await cdp.screenshot(path.join(dir, 'after.png')));
+    if (!after || after.versions.length !== (before?.versions.length ?? 0) + 1) return { status: 'FAIL', observation: `versions ${before?.versions.length} → ${after?.versions.length}; reply: ${r.reply.slice(0, 200)}` };
+    return h1 && ctx.h1 && h1.fontSizePx > ctx.h1
+      ? { observation: `v${after.versions.length}: "${after.versions[after.versions.length - 1].meta.op.summary.slice(0, 120)}"; rendered heading ${ctx.h1}px → ${h1.fontSizePx}px.` }
+      : { status: 'FAIL', observation: `heading ${ctx.h1}px → ${h1?.fontSizePx}px; reply: ${r.reply.slice(0, 200)}` };
+  });
+
+  await fresh();
+  const pictures = ['stall-1.png', 'stall-2.png', 'stall-3.png'].map((f) => path.join(PROFILE, '..', 'test-images', f));
+  await step('WSH-114', '"Create a five-second promotional slideshow from these three test images: …"', async ({ dir, record }) => {
+    const since = new Date().toISOString();
+    const r = await say(cdp, `Create a five-second promotional slideshow from these three test images: ${pictures.join(', ')}`);
+    ctx.video = r.conversationId;
+    const ws = (await workshopsOf(r.conversationId)).filter((w) => w.type === 'video');
+    record.facts = { reply: r.reply, approvals: r.approvals, ms: r.ms, tools: await toolsSince(r.conversationId, since) };
+    await sleep(1500);
+    record.screenshots.push(await cdp.screenshot(path.join(dir, 'after.png')));
+    if (!ws.length) return { status: 'FAIL', observation: `No video was made. Reply: ${r.reply.slice(0, 300)}` };
+    const probe = ffprobe(await fileOf(ws[0].latestArtifactId));
+    record.facts.ffprobe = probe;
+    return Math.abs(probe.duration - 5) <= 0.15
+      ? { observation: `FFprobe on the saved file: ${probe.width}×${probe.height} ${probe.codec}, ${probe.duration} s; ${r.approvals.length} card(s). Reply: ${r.reply.slice(0, 140)}` }
+      : { status: 'FAIL', observation: `FFprobe: ${JSON.stringify(probe)}; reply: ${r.reply.slice(0, 160)}` };
+  });
+
+  await step('WSH-115', '"Make it vertical."', async ({ dir, record }) => {
+    const r = await say(cdp, 'Make it vertical.');
+    const w = (await workshopsOf(ctx.video)).find((x) => x.type === 'video');
+    record.facts = { reply: r.reply, approvals: r.approvals, ms: r.ms, versions: w?.versions.length };
+    await sleep(1500);
+    record.screenshots.push(await cdp.screenshot(path.join(dir, 'after.png')));
+    if (!w || w.versions.length < 2) return { status: 'FAIL', observation: `versions ${w?.versions.length}; reply: ${r.reply.slice(0, 200)}` };
+    const probe = ffprobe(await fileOf(w.latestArtifactId));
+    record.facts.ffprobe = probe;
+    return probe.width === 1080 && probe.height === 1920 && Math.abs(probe.duration - 5) <= 0.15
+      ? { observation: `v${w.versions.length}: FFprobe ${probe.width}×${probe.height}, ${probe.duration} s. Reply: ${r.reply.slice(0, 140)}` }
+      : { status: 'FAIL', observation: `FFprobe: ${JSON.stringify(probe)}; reply: ${r.reply.slice(0, 160)}` };
+  });
+}
+
+function ffprobe(file) {
+  const r = spawnSync('ffprobe', ['-v', 'error', '-select_streams', 'v:0', '-show_entries', 'stream=width,height,codec_name:format=duration', '-of', 'json', file], { encoding: 'utf8' });
+  const j = JSON.parse(r.stdout);
+  return { width: j.streams[0].width, height: j.streams[0].height, codec: j.streams[0].codec_name, duration: Math.round(Number(j.format.duration) * 100) / 100 };
+}
+
 async function main() {
   fs.mkdirSync(OUT, { recursive: true });
   const cdp = await Cdp.attach();
   if (args.model) await cdp.eval(`window.desktop.selectModel(${JSON.stringify(String(args.model))}).then(() => true)`);
+  if (args.scenario === 'more') {
+    await moreScenarios(cdp);
+    fs.writeFileSync(path.join(OUT, 'results.json'), JSON.stringify(results, null, 2));
+    cdp.ws.close();
+    const passed = Object.values(results).filter((r) => r.status === 'PASS').length;
+    console.log(`\n${passed}/${Object.keys(results).length} passed`);
+    return;
+  }
   await cdp.eval(`window.desktop.newConversation().then(() => true)`);
   await sleep(800);
   const ctx = {};
