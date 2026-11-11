@@ -33,6 +33,15 @@ describe('home location for local questions', () => {
     expect(line).toMatch(/never infer a place from the time zone/i);
   });
 
+  it('is added only when the message needs a place (fix-build A/B regression of CAT-002 and SAL-015)', () => {
+    for (const m of ['Find free events this weekend.', 'Find a museum open on Monday.', 'Find a nearby pharmacy open tomorrow morning.', 'Check if there are train disruptions today.', 'Find a post office with Saturday hours.', 'Find an indoor activity if it rains.', 'Find nearby wholesale grocery options.', 'How long to drive to Augsburg right now?', 'I want a wheelchair-accessible walking route.']) {
+      expect(homeLocationFact('Ulm, Germany', m), m).toContain('Ulm, Germany');
+    }
+    for (const m of ['Scale my test biryani recipe from 10 to 40 servings.', 'What is our conversion rate for the synthetic leads?', 'Explain this five-line function.', 'Show my synthetic stock watchlist.']) {
+      expect(homeLocationFact('Ulm, Germany', m), m).toBe('');
+    }
+  });
+
   it('gives nothing when no home place is stored or it was forgotten', () => {
     expect(readHomeLocation(db)).toBeNull();
     expect(homeLocationFact(null)).toBe('');

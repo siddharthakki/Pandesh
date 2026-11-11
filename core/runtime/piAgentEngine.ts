@@ -5064,7 +5064,7 @@ When the user asks to continue, resume, or check progress/updates, resume this w
     } catch { /* history continuity is best effort; the turn still runs */ }
     // Micro-test cluster C6 (D-LOC-5): local searches went to Berlin (from the time zone) although the user stored
     // "I live in Ulm". The main assistant gets the stored home place; specialists keep receiving no user memory.
-    if (!agentScope || agentScope.agentId === 'chief') addTurnFact(homeLocationFact(readHomeLocation(db)));
+    if (!agentScope || agentScope.agentId === 'chief') addTurnFact(homeLocationFact(readHomeLocation(db), String(ctx.currentMessage ?? prompt ?? '')));
     // A spoken message may contain misheard words (Core froze how it was entered): ask about an odd word, never refuse on it.
     let spokenSection = '';
     try {
