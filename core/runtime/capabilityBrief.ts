@@ -66,6 +66,7 @@ const CAPABILITY_LABELS: Record<string, string> = {
   household: 'household records and the phone companion',
   'media-production': 'making a promo video',
   'image-studio': 'image and video generation',
+  workshop: 'building interactive 3D models in the Workshop and changing, rotating, pulling apart or exporting them',
   filesystem: 'reading files outside the workspace',
   'document-tools': 'reading documents (OCR) and downloading media',
   'ollama-management': 'installing and freeing the local models',

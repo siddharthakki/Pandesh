@@ -14,6 +14,7 @@ import { Processes } from './Processes';
 import { Workspace, type SpaceId } from './Workspaces';
 import { Connections } from './Connections';
 import { useWakeWord } from './wake';
+import { startWorkshopIntake } from './workshop/useWorkshop';
 
 export type View = 'chat' | 'board' | 'team' | 'space' | 'system' | 'software' | 'tools' | 'brain' | 'processes' | 'workspace' | 'radar' | 'revenue' | 'connections';
 
@@ -108,6 +109,10 @@ export function App() {
   const [toolsTab, setToolsTab] = useState<{ tab: 'connectors'; n: number } | null>(null);
   const narrowRef = useRef(narrow);
   narrowRef.current = narrow;
+
+  // The Workshop lives beside the chat: a Workshop command that arrives while another view is showing brings the chat
+  // back, where the Workshop carries it out and confirms what it really shows (like navigate_to).
+  useEffect(() => startWorkshopIntake(() => { setPop(null); setView('chat'); }), []);
 
   // navigate_to: the assistant asked this window to open a registered place. The app's own navigation does it, and the
   // window confirms only what it then really shows, so Pandesh never says "opened" when it was not. A running task is

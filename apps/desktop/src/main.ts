@@ -1521,6 +1521,40 @@ function registerIpc(): void {
     await session.saveArtifactCopy(String(artifactId ?? ''), choice.filePath);
     return { saved: true, path: choice.filePath };
   });
+  // --- The Workshop: every write goes to Core, which owns the versions (core/api/workshopRoutes.ts) ---
+  ipcMain.handle(DESKTOP_CHANNELS.listWorkshops, async (_event, conversationId: unknown, scope: unknown) => {
+    if (!session) throw new Error('desktop session is not started');
+    return session.listWorkshops(typeof conversationId === 'string' ? conversationId : null, scope === 'recent' ? 'recent' : undefined);
+  });
+  ipcMain.handle(DESKTOP_CHANNELS.loadWorkshopVersion, async (_event, artifactId: unknown) => {
+    if (!session) throw new Error('desktop session is not started');
+    return session.loadWorkshopVersion(String(artifactId ?? ''));
+  });
+  ipcMain.handle(DESKTOP_CHANNELS.focusWorkshop, async (_event, conversationId: unknown, workshopId: unknown, artifactId: unknown, open: unknown) => {
+    if (!session) throw new Error('desktop session is not started');
+    return session.focusWorkshop(String(conversationId ?? ''), typeof workshopId === 'string' ? workshopId : null, typeof artifactId === 'string' ? artifactId : null, open === true);
+  });
+  ipcMain.handle(DESKTOP_CHANNELS.confirmWorkshopCommand, async (_event, commandId: unknown, ok: unknown, detail: unknown, state: unknown) => {
+    if (!session) throw new Error('desktop session is not started');
+    return session.confirmWorkshopCommand(String(commandId ?? ''), ok === true, typeof detail === 'string' ? detail.slice(0, 400) : undefined, state && typeof state === 'object' && !Array.isArray(state) ? state as Record<string, unknown> : undefined);
+  });
+  ipcMain.handle(DESKTOP_CHANNELS.saveWorkshopEdit, async (_event, workshopId: unknown, parentArtifactId: unknown, conversationId: unknown, edits: unknown) => {
+    if (!session) throw new Error('desktop session is not started');
+    return session.saveWorkshopEdit(String(workshopId ?? ''), String(parentArtifactId ?? ''), typeof conversationId === 'string' ? conversationId : null, Array.isArray(edits) ? edits : []);
+  });
+  ipcMain.handle(DESKTOP_CHANNELS.exportWorkshopGlb, async (_event, workshopId: unknown, sourceArtifactId: unknown, conversationId: unknown, bytes: unknown, expectedNodes: unknown) => {
+    if (!session) throw new Error('desktop session is not started');
+    if (!(bytes instanceof Uint8Array)) throw new Error('the export must be binary data');
+    return session.exportWorkshopGlb(String(workshopId ?? ''), String(sourceArtifactId ?? ''), typeof conversationId === 'string' ? conversationId : null, bytes, Array.isArray(expectedNodes) ? expectedNodes.map(String) : []);
+  });
+  ipcMain.handle(DESKTOP_CHANNELS.saveWorkshopFile, async (_event, artifactId: unknown) => {
+    if (!session || !window) throw new Error('desktop session is not started');
+    const source = await session.artifactPath(String(artifactId ?? ''));
+    const choice = await dialog.showSaveDialog(window, { title: 'Save a copy', defaultPath: path.basename(source) });
+    if (choice.canceled || !choice.filePath) return { saved: false, path: null };
+    await session.saveArtifactCopy(String(artifactId ?? ''), choice.filePath);
+    return { saved: true, path: choice.filePath };
+  });
   ipcMain.handle(DESKTOP_CHANNELS.openArtifactInStudio, async (_event, artifactId: string) => {
     if (!session) throw new Error('desktop session is not started');
     await shell.openExternal(await session.imageStudioAppUrlForPrompt(String(artifactId ?? '')));

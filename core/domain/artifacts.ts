@@ -39,7 +39,7 @@ function availabilityFor(row: Record<string, unknown>): ArtifactAvailability {
   }
 }
 
-function rowToArtifact(row: Record<string, unknown>): ArtifactRecord {
+export function rowToArtifact(row: Record<string, unknown>): ArtifactRecord {
   let metadata: Record<string, unknown> = {};
   try { metadata = JSON.parse(String(row.metadataJson ?? '{}')) as Record<string, unknown>; } catch { metadata = {}; }
   return {

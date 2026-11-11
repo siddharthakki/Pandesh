@@ -16,6 +16,7 @@ import { registerOperatorRoutes } from './operatorRoutes';
 import { registerHouseholdRoutes } from './householdRoutes';
 import { registerSoftwareRoutes } from './softwareRoutes';
 import { registerRevenueRoutes } from './revenueRoutes';
+import { registerWorkshopRoutes } from './workshopRoutes';
 import { registerAgentRoutes } from './agentRoutes';
 import { registerToolHubRoutes } from './toolHubRoutes';
 import { registerSecondBrainRoutes } from './secondBrainRoutes';
@@ -521,6 +522,8 @@ export function buildRouter(
   // --- Software & Services, read-only inventory and update discovery (core/api/softwareRoutes.ts) ---
   if (bridge) registerSoftwareRoutes(router, { dataDir: bridge.dataDir });
   if (bridge) registerRevenueRoutes(router, { dataDir: bridge.dataDir });
+  // --- Workshop: what Pandesh made, opened and refined in the window (core/api/workshopRoutes.ts) ---
+  if (bridge) registerWorkshopRoutes(router, { dataDir: bridge.dataDir, broadcaster });
   // --- Specialist agents: definitions, status, history, delegation (core/api/agentRoutes.ts) ---
   registerAgentRoutes(router, { executor });
   // --- Tools, Skills & MCP hub (core/api/toolHubRoutes.ts) ---

@@ -157,6 +157,15 @@ export const DESKTOP_CHANNELS = {
   openArtifactFile: 'desktop:openArtifactFile',
   openActivityDocument: 'desktop:openActivityDocument',
   saveArtifactCopy: 'desktop:saveArtifactCopy',
+  /** The Workshop (core/shared/workshop): list, open a version, say what is on screen, answer view commands, save
+   * an edit made with the Workshop's controls, and hand over a GLB the window exported. */
+  listWorkshops: 'desktop:listWorkshops',
+  loadWorkshopVersion: 'desktop:loadWorkshopVersion',
+  focusWorkshop: 'desktop:focusWorkshop',
+  confirmWorkshopCommand: 'desktop:confirmWorkshopCommand',
+  saveWorkshopEdit: 'desktop:saveWorkshopEdit',
+  exportWorkshopGlb: 'desktop:exportWorkshopGlb',
+  saveWorkshopFile: 'desktop:saveWorkshopFile',
   /** Bounded local deep-links into the standalone Image Generation Studio
    * app (:8989) for one already-verified Core artifact — never an
    * arbitrary/user-supplied URL. */
@@ -813,6 +822,16 @@ export interface DesktopArtifactPreview {
   fileUrl?: string;
 }
 
+/** One workshop version's content, read from Core's verified artifact and re-validated by the host. */
+export type DesktopWorkshopContent =
+  | { type: '3d'; artifactId: string; scene: import('../../../core/shared/workshop/scene3d').Scene3D }
+  | { type: 'image'; artifactId: string; dataUrl: string }
+  | { type: 'video'; artifactId: string; fileUrl: string }
+  | { type: 'design'; artifactId: string; html: string }
+  | { type: 'simulation'; artifactId: string; spec: unknown };
+
+export type DesktopWorkshopSummary = import('../../../core/shared/workshop/model').WorkshopSummary;
+
 export interface DesktopImageStudioStatus { studio: boolean; comfyui: boolean; ollama: boolean; ollamaVersion?: string | null; detail: string; checkpoints: Array<{ name: string; category: string }> }
 export type DesktopImageGenerationResult =
   | { outcome: 'approval_required'; approvalId: string; attemptId: string; presentation: Record<string, unknown> | null }
@@ -1066,7 +1085,12 @@ export type DesktopActivityKind =
   /** A pending approval was requested, resolved, superseded or expired. */
   | 'assistant_approval_changed'
   /** The assistant asked this window to open a place (navigate_to); the window confirms with confirmNavigation. */
-  | 'navigate';
+  | 'navigate'
+  /** Core asked the Workshop to carry out a view command; the window confirms with confirmWorkshopCommand. */
+  | 'workshop_command'
+  /** A workshop version was added, or real progress of long workshop work (a render stage). */
+  | 'workshop_changed'
+  | 'workshop_progress';
 
 export interface DesktopActivityEvent {
   kind: DesktopActivityKind;
@@ -1084,6 +1108,10 @@ export interface DesktopActivityEvent {
   toolArgs?: Record<string, unknown>;
   /** For `navigate`: which registered place to open and the window's own navigation target for it. */
   navigation?: { id: string; destination: string; target: string; label: string; surface: 'v2' | 'classic' };
+  /** For `workshop_command`: what Core asked the Workshop to do (display only; the window answers what it did). */
+  workshopCommand?: import('../../../core/shared/workshop/model').WorkshopCommand & { conversationId: string | null };
+  /** For `workshop_changed` / `workshop_progress`: which workshop, and the real stage reported. */
+  workshop?: { workshopId: string | null; artifactId?: string | null; stage?: string; index?: number; total?: number };
   /**
    * Core's structured `run_check` evidence, mirroring
    * `core/runtime/missionObservations.ts`. Absent on a non-check event and on

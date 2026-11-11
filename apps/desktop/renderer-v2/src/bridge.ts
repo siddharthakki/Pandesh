@@ -7,6 +7,18 @@ import { useEffect, useRef, useState } from 'react';
 import type { PermissionMode, PermissionState } from './composerModel';
 import type { GmailStatus } from './googleModel';
 import type { FolderCheck, FolderMention, RecentWorkspace, WorkspaceAccess, WorkspaceView } from './folderModel';
+import type { WorkshopCommand, WorkshopSummary } from '../../../../core/shared/workshop/model';
+import type { Scene3D } from '../../../../core/shared/workshop/scene3d';
+
+export type { WorkshopSummary, WorkshopCommand };
+/** One workshop version's content, verified and re-validated by the host before the window sees it. */
+export type WorkshopContent =
+  | { type: '3d'; artifactId: string; scene: Scene3D }
+  | { type: 'image'; artifactId: string; dataUrl: string }
+  | { type: 'video'; artifactId: string; fileUrl: string }
+  | { type: 'design'; artifactId: string; html: string }
+  | { type: 'simulation'; artifactId: string; spec: unknown };
+export type WorkshopCommandEvent = WorkshopCommand & { conversationId: string | null };
 
 export type ApprovalResolution = 'approved' | 'rejected';
 
@@ -82,6 +94,10 @@ export interface ActivityEvent {
   kind: string; at: string; conversationId?: string; messageRole?: string; attemptId?: string; eventType?: string; toolName?: string; summary: string; text?: string;
   /** For `navigate`: the place the assistant asked this window to open (navigate_to). */
   navigation?: { id: string; destination: string; target: string; label: string; surface: 'v2' | 'classic' };
+  /** For `workshop_command`: a view command Core asked the Workshop to carry out (confirm with confirmWorkshopCommand). */
+  workshopCommand?: WorkshopCommandEvent;
+  /** For `workshop_changed` / `workshop_progress`: which workshop, and the real stage reported. */
+  workshop?: { workshopId: string | null; artifactId?: string | null; stage?: string; index?: number; total?: number };
 }
 export interface TaskRow {
   attemptId: string; requestId: string; conversationId: string | null; kind: string; status: string; title: string;
@@ -176,6 +192,14 @@ export interface DesktopApi {
   clearFolder(): Promise<Snapshot | null>;
   /** A message that names a folder (not the workspace) by its full path, or null. */
   inspectFolderMention(text: string): Promise<FolderMention | null>;
+  /** The Workshop (core/shared/workshop): every write goes to Core, which keeps every version. */
+  listWorkshops(conversationId?: string | null, scope?: 'recent'): Promise<WorkshopSummary[]>;
+  loadWorkshopVersion(artifactId: string): Promise<WorkshopContent>;
+  focusWorkshop(conversationId: string, workshopId: string | null, artifactId: string | null, open: boolean): Promise<{ recorded: boolean }>;
+  confirmWorkshopCommand(commandId: string, ok: boolean, detail?: string, state?: Record<string, unknown>): Promise<{ recorded: boolean }>;
+  saveWorkshopEdit(workshopId: string, parentArtifactId: string, conversationId: string | null, edits: unknown[]): Promise<{ artifactId: string }>;
+  exportWorkshopGlb(workshopId: string, sourceArtifactId: string, conversationId: string | null, bytes: Uint8Array, expectedNodes: string[]): Promise<{ verified: boolean; artifactId: string | null; checks: string[]; byteSize: number }>;
+  saveWorkshopFile(artifactId: string): Promise<{ saved: boolean; path: string | null }>;
   onEvent(listener: (event: ActivityEvent) => void): () => void;
   setWakeWordEnabled(enabled: boolean): Promise<Snapshot | null>;
   setWakeWordMuted(muted: boolean): Promise<Snapshot | null>;

@@ -911,10 +911,13 @@
     "yaml": "^2.9.0"
   },
   "dependencies": {
+    "@babylonjs/core": "9.32.1",
+    "@babylonjs/serializers": "9.32.1",
     "@earendil-works/pi-agent-core": "^1.2.0",
     "@earendil-works/pi-ai": "^1.2.0",
     "@sinclair/typebox": "^0.34.52",
     "@vscode/sqlite3": "^5.1.14-vscode",
+    "babylonjs-gltf2interface": "9.32.1",
     "react": "^19.3.0",
     "react-dom": "^19.3.0",
     "shiki": "^4.4.3",

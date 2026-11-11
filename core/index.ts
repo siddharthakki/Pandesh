@@ -75,6 +75,7 @@ import { createCapabilityInventoryAdapter } from './runtime/capabilityInventory'
 import { createPcOrganizerAdapter } from './runtime/pcOrganizer';
 import { createHouseholdCapabilityAdapter } from './runtime/householdCapability';
 import { createMediaProductionAdapter } from './runtime/mediaProduction';
+import { createWorkshopCapabilityAdapter } from './runtime/workshopCapability';
 import { activeCompanionDeviceCount } from './domain/companionSync';
 import { listHouseholdRoutines } from './domain/householdRoutines';
 import { companionController } from './api/companionServer';
@@ -278,7 +279,7 @@ function buildConnectorRegistry(dataDir: string, db: CoreDatabase): Map<Connecto
   return registry;
 }
 
-function buildCapabilityRegistry(dataDir: string, db: CoreDatabase, connectors: Map<ConnectorId, ConnectorAdapter>, scout: IntelligenceScout): GovernedCapabilityRegistry {
+function buildCapabilityRegistry(dataDir: string, db: CoreDatabase, connectors: Map<ConnectorId, ConnectorAdapter>, scout: IntelligenceScout, broadcaster?: EventBroadcaster): GovernedCapabilityRegistry {
   const research = createResearchCapabilityAdapter();
   const githubRepository = process.env.KARKEDIKHA_GITHUB_REPOSITORY;
   const github = githubRepository
@@ -321,7 +322,9 @@ function buildCapabilityRegistry(dataDir: string, db: CoreDatabase, connectors: 
     .register(createDocumentToolsAdapter({ downloadsDir: path.join(dataDir, 'downloads') }))
     .register(createRevenueCapabilityAdapter({ dataDir }))
     .register(createOllamaManagementAdapter({ db }))
-    .register(createMediaProductionAdapter({}));
+    .register(createMediaProductionAdapter({}))
+    // The Workshop: versions are Core artifacts; a view command must reach the window while the tool waits for its answer.
+    .register(createWorkshopCapabilityAdapter({ db, dataDir, publish: broadcaster ? (event) => broadcaster.publishRuntime(event) : undefined }));
   // The plan capability reads the registry it is registered in (it checks a
   // declared plan against the capabilities that really exist), so it is
   // added last.
@@ -428,7 +431,7 @@ async function main(): Promise<void> {
   // reaches and the scheduler that fires a watch, so both see the same
   // durable watch list and the same last-seen versions.
   const scout = createIntelligenceScout({ dataDir });
-  const capabilityRegistry = buildCapabilityRegistry(dataDir, db, connectorRegistry, scout);
+  const capabilityRegistry = buildCapabilityRegistry(dataDir, db, connectorRegistry, scout, broadcaster);
 
   // The daily brief routine is NOT created here.
   //

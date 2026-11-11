@@ -13,7 +13,7 @@
  * previews are referenced by Core artifact id.
  */
 
-export type ToolActivityKind = 'browser' | 'code' | 'document' | 'image' | 'video' | 'tool';
+export type ToolActivityKind = 'browser' | 'code' | 'document' | 'image' | 'video' | 'workshop' | 'tool';
 
 export interface ToolActivity {
   kind: ToolActivityKind;
@@ -36,6 +36,8 @@ export interface ToolActivity {
   durationMs?: number;
   /** Test counts parsed from the command's own summary line; absent when the output has none. */
   tests?: TestSummary;
+  /** A Workshop version or view command (core/shared/workshop/model.ts): which workshop, and what happened to it. */
+  workshop?: { workshopId: string; type: string; action: string; version?: number };
 }
 
 export interface TestSummary { passed?: number; failed?: number; skipped?: number; total?: number; line: string }
@@ -79,7 +81,7 @@ export function parseTestSummary(output: string): TestSummary | undefined {
 /** Artifact source of a browser page screenshot: a preview of work, not a delivered result. */
 export const BROWSER_SCREENSHOT_SOURCE = 'browser_screenshot';
 
-export const TOOL_ACTIVITY_KINDS: readonly ToolActivityKind[] = ['browser', 'code', 'document', 'image', 'video', 'tool'];
+export const TOOL_ACTIVITY_KINDS: readonly ToolActivityKind[] = ['browser', 'code', 'document', 'image', 'video', 'workshop', 'tool'];
 
 const MAX_TITLE = 160;
 const MAX_URL = 600;
@@ -145,6 +147,15 @@ export function sanitizeToolActivity(raw: unknown): ToolActivity | undefined {
   if (record.exitCode === null || (typeof record.exitCode === 'number' && Number.isInteger(record.exitCode))) activity.exitCode = record.exitCode as number | null;
   if (typeof record.timedOut === 'boolean') activity.timedOut = record.timedOut;
   if (typeof record.durationMs === 'number' && Number.isFinite(record.durationMs) && record.durationMs >= 0) activity.durationMs = Math.round(record.durationMs);
+  const w = record.workshop as Record<string, unknown> | undefined;
+  if (w && typeof w === 'object' && typeof w.workshopId === 'string' && /^[\w-]{1,100}$/.test(w.workshopId) && typeof w.type === 'string' && /^[a-z0-9]{1,20}$/.test(w.type)) {
+    activity.workshop = {
+      workshopId: w.workshopId,
+      type: w.type,
+      action: text(w.action, 40) ?? 'update',
+      ...(typeof w.version === 'number' && Number.isInteger(w.version) && w.version > 0 ? { version: w.version } : {}),
+    };
+  }
   const t = record.tests as Record<string, unknown> | undefined;
   if (t && typeof t === 'object' && typeof t.line === 'string') {
     const tests: TestSummary = { line: text(t.line, 200) ?? '' };

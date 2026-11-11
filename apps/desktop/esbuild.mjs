@@ -45,6 +45,24 @@ async function bundle() {
     outfile: path.join(desktopRoot, 'renderer', 'v2', 'app.js'),
     logLevel: 'info',
   });
+  // The 3D Workshop's engine (Babylon.js, Apache-2.0) is its own script, loaded only when a 3D workshop opens, so the
+  // window's start-up never pays for it. Same CSP: a local script, no network; the CC0 studio HDRI is embedded.
+  await esbuild.build({
+    entryPoints: [path.join(desktopRoot, 'renderer-v2', 'src', 'workshop', 'engine3d', 'index.ts')],
+    bundle: true,
+    platform: 'browser',
+    format: 'iife',
+    target: 'chrome156',
+    minify: process.env.PANDESH_UI_V2_DEV !== '1',
+    sourcemap: process.env.PANDESH_UI_V2_DEV === '1' ? 'inline' : false,
+    nodePaths: [path.join(desktopRoot, '..', '..', 'node_modules')],
+    loader: { '.hdr': 'base64' },
+    define: { 'process.env.NODE_ENV': process.env.PANDESH_UI_V2_DEV === '1' ? '"development"' : '"production"' },
+    // Babylon.js is Apache-2.0: keep its licence comments in the shipped script.
+    legalComments: 'eof',
+    outfile: path.join(desktopRoot, 'renderer', 'v2', 'workshop3d.js'),
+    logLevel: 'info',
+  });
 }
 
 bundle().catch((err) => {

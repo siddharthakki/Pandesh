@@ -35,6 +35,7 @@ export function activityKindForTool(toolName: string, preview?: ToolActivity | n
   if (toolName.startsWith('browser_') || toolName === 'inspect_page' || toolName === 'web_research') return 'browser';
   if (toolName === 'image_generate') return 'image';
   if (toolName === 'video_generate') return 'video';
+  if (toolName === 'build_3d_model' || toolName.startsWith('workshop_')) return 'workshop';
   if (CODE_TOOLS.has(toolName)) return 'code';
   if (toolName === 'read_file' || toolName === 'read_file_outside_workspace' || toolName === 'gmail_read_attachment') return 'document';
   return 'tool';
@@ -83,6 +84,12 @@ export function activityTitle(toolName: string, args: Record<string, unknown> = 
     case 'run_check': return `Review: ${clip(args.check, 60) || 'check'}`;
     case 'image_generate': return `Generating an image: ${clip(args.prompt, 70)}`;
     case 'video_generate': return `Generating a video: ${clip(args.prompt, 70)}`;
+    case 'build_3d_model': return `Building a 3D model: ${clip(args.description ?? args.title, 70) || 'from parts'}`;
+    case 'workshop_edit': return `Changing the Workshop model${args.workshopTitle ? `: ${clip(args.workshopTitle, 60)}` : ''}`;
+    case 'workshop_restore': return 'Undo in the Workshop';
+    case 'workshop_export': return 'Exporting the 3D model (GLB)';
+    case 'workshop_view': return `Workshop: ${clip(String(args.action ?? 'view').replace(/_/g, ' '), 40)}`;
+    case 'workshop_status': return 'Reading the Workshop';
     default: return toolName.replace(/_/g, ' ');
   }
 }

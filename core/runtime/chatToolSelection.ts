@@ -114,6 +114,10 @@ export const TOOL_GROUPS: Record<string, ToolGroup> = {
     purpose: "hand work to Pandesh's specialist agents (Coding, Research, Operations, Personal) and get their result",
     pattern: /\b(?:delegate|hand (?:it|this|that) (?:off|over)|agents?|specialists?|(?:research|coding|operations|personal) (?:agent|team)|my team|ask (?:the )?(?:research|coding|operations)|have (?:the )?(?:research|coding|operations))\b/i,
   },
+  workshop: {
+    purpose: 'the Workshop: build an interactive 3D model, change it, pull it apart, rotate it, export a GLB, show earlier versions',
+    pattern: /\b(?:3-?d|three[- ]d|workshop|scenes?|assembl(?:y|ies)|gears?|gearbox|mechanism|mechanical|exploded?|explode|pull (?:it|them|this) apart|take (?:it|them) apart|put (?:it|them) back|reassembl\w*|rotate|turntable|label (?:the )?(?:components|parts)|components?|glb|gltf|export (?:the |this |it )?model|full[- ]?screen|previous version|undo that)\b/i,
+  },
   weather: {
     purpose: 'weather and forecast',
     pattern: /\b(?:weather|forecast|temperature|rain\w*|snow\w*|sunny|umbrella|degrees|celsius)\b/i,
@@ -169,6 +173,7 @@ export const CAPABILITY_GROUP: Record<string, string> = {
   'computer-use': 'pc',
   'ollama-management': 'models',
   weather: 'weather',
+  workshop: 'workshop',
 };
 
 /**
@@ -195,6 +200,9 @@ export function groupsForText(text: string): Set<string> {
   for (const [group, spec] of Object.entries(TOOL_GROUPS)) if (spec.pattern.test(text)) groups.add(group);
   return groups;
 }
+
+/** A request that plainly asks Pandesh to build or model something in 3D. */
+export const BUILD_3D_REQUEST = /\b(?:build|make|create|model|design|construct|generate)\b[^.?!]{0,80}\b(?:3-?d|three[- ]d|assembl(?:y|ies)|gears?|gearbox|mechanism|mechanical|model of)\b|\b(?:3-?d|three[- ]d) model\b/i;
 
 export interface ToolSelectionInput {
   requestText: string;
@@ -232,6 +240,9 @@ export function selectChatTools(allNames: readonly string[], input: ToolSelectio
     // A capability the bridge selected for this request stays, unless it is one of the near-always ones.
     if (cap && !cap.deferred && !(cap.capabilityId && GATED_CAPABILITIES.has(cap.capabilityId))) offered.add(name);
   }
+  // "Build a gear assembly": a local model offered navigate_to opened Wish to Reality instead of building (Workshop
+  // acceptance, 2026-11-11). For a request that plainly asks for a 3D model, the window navigation tool is not offered.
+  if (matched.get('workshop') === 'request' && BUILD_3D_REQUEST.test(input.requestText)) offered.delete('navigate_to');
   return { offered, groups: [...matched].map(([group, source]) => ({ group, source })) };
 }
 

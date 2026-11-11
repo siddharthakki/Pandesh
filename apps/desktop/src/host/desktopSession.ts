@@ -162,7 +162,11 @@ import type {
   DesktopCloudState,
   DesktopFolderMention,
   DesktopWorkspaceView,
+  DesktopWorkshopContent,
+  DesktopWorkshopSummary,
 } from '../ipc';
+import { isWorkshopViewAction, workshopMetaOf } from '../../../../core/shared/workshop/model';
+import { parseSceneFile } from '../../../../core/shared/workshop/scene3d';
 import {
   OpenWakeWordEngine,
   probeDesktopWakeWord,
@@ -186,6 +190,9 @@ export const CANCEL_CONFIRM_TIMEOUT_MS = 8_000;
 
 /** A navigate_to request older than this is history (replayed on connect), never a live request. Core waits 5 s. */
 export const NAVIGATION_FRESH_MS = 15_000;
+
+/** A Workshop command older than this is history. Core waits up to 6 s for a view and 45 s for an export. */
+export const WORKSHOP_COMMAND_FRESH_MS = 50_000;
 
 /** How long the search for a folder named in a message may take before the message is simply sent as it is. */
 export const FOLDER_MENTION_TIMEOUT_MS = 1_500;
@@ -370,6 +377,8 @@ export class DesktopSession {
    * is driven directly by the renderer, never by a Saath Kar attempt. */
   private pendingGmailApproval: { toolName: string; arguments: Record<string, unknown>; approval: ApprovalRecord } | null = null;
   private pendingImageApproval: { arguments: Record<string, unknown>; approval: ApprovalRecord; correlationId: string; toolName?: 'image_generate' | 'video_generate' } | null = null;
+  /** Workshop commands already passed to the window (Core replays events on reconnect). */
+  private readonly handledWorkshopCommands = new Set<string>();
   private activeImageAttemptId: string | null = null;
   private pendingWeatherApproval: { arguments: Record<string, unknown>; approval: ApprovalRecord; correlationId: string } | null = null;
   private activeWeatherAttemptId: string | null = null;
@@ -3761,6 +3770,65 @@ export class DesktopSession {
     return this.requireClient().confirmDeviceVerification(storyId, ok, note);
   }
 
+  // ------------------------------------------------------------------ Workshop (core/shared/workshop)
+
+  async listWorkshops(conversationId: string | null, scope?: 'recent'): Promise<DesktopWorkshopSummary[]> {
+    const result = await this.durableReadClient().listWorkshops(scope === 'recent' ? { scope } : { conversationId });
+    return result.workshops;
+  }
+
+  /** One version's content, from the hash-verified file Core recorded, validated again before the window sees it. */
+  async loadWorkshopVersion(artifactId: string): Promise<DesktopWorkshopContent> {
+    const { record, bytes } = await this.verifiedArtifact(artifactId);
+    const meta = workshopMetaOf(record);
+    if (!meta) throw new Error('This file is not part of a workshop');
+    if (meta.type === '3d') {
+      const parsed = parseSceneFile(bytes.toString('utf8'));
+      if (!parsed.ok) throw new Error(`The scene could not be read: ${parsed.errors.join('; ')}`);
+      return { type: '3d', artifactId: record.id, scene: parsed.value };
+    }
+    if (meta.type === 'image') {
+      if (record.byteSize > 24 * 1024 * 1024) throw new Error('Image is too large for an in-app preview');
+      return { type: 'image', artifactId: record.id, dataUrl: `data:${record.mimeType};base64,${bytes.toString('base64')}` };
+    }
+    if (meta.type === 'video') return { type: 'video', artifactId: record.id, fileUrl: pathToFileURL(record.absolutePath).toString() };
+    if (meta.type === 'design') return { type: 'design', artifactId: record.id, html: bytes.toString('utf8') };
+    return { type: 'simulation', artifactId: record.id, spec: JSON.parse(bytes.toString('utf8')) as unknown };
+  }
+
+  /** Tells Core what the Workshop shows in this conversation, so "it" in chat means the thing on screen. */
+  async focusWorkshop(conversationId: string, workshopId: string | null, artifactId: string | null, open: boolean): Promise<{ recorded: boolean }> {
+    if (!/^conv_[\w-]+$/.test(conversationId)) return { recorded: false };
+    await this.requireClient().focusWorkshop(conversationId, { workshopId, artifactId, open });
+    return { recorded: true };
+  }
+
+  async confirmWorkshopCommand(commandId: string, ok: boolean, detail?: string, state?: Record<string, unknown>): Promise<{ recorded: boolean }> {
+    if (!/^wscmd_[\w-]+$/.test(commandId)) throw new Error('unknown workshop command');
+    return this.requireClient().confirmWorkshopCommand(commandId, { ok, ...(detail ? { detail } : {}), ...(state ? { state } : {}) });
+  }
+
+  /** An edit made with the Workshop's own controls: Core applies it to the current version and keeps both. */
+  async saveWorkshopEdit(workshopId: string, parentArtifactId: string, conversationId: string | null, edits: unknown[]): Promise<{ artifactId: string }> {
+    const result = await this.requireClient().saveWorkshopVersion(workshopId, { conversationId, parentArtifactId, edits });
+    return { artifactId: result.artifact.id };
+  }
+
+  /** A GLB the window built with Babylon.js: staged here, verified and kept by Core, staging removed either way. */
+  async exportWorkshopGlb(workshopId: string, sourceArtifactId: string, conversationId: string | null, bytes: Uint8Array, expectedNodes: string[]): Promise<{ verified: boolean; artifactId: string | null; checks: string[]; byteSize: number }> {
+    if (bytes.byteLength < 20 || bytes.byteLength > 64 * 1024 * 1024) throw new Error('the export is empty or larger than 64 MB');
+    const dir = path.join(this.dataDir, 'workshop-staging');
+    fs.mkdirSync(dir, { recursive: true });
+    const file = path.join(dir, `${Date.now()}-${crypto.randomBytes(4).toString('hex')}.glb`);
+    fs.writeFileSync(file, bytes, { flag: 'wx' });
+    try {
+      const result = await this.requireClient().exportWorkshop(workshopId, { conversationId, sourceArtifactId, format: 'glb', stagedPath: file, expectedNodes: expectedNodes.slice(0, 64), engine: 'Babylon.js 9.32.1 glTF serializer' });
+      return { verified: result.verified, artifactId: result.artifact?.id ?? null, checks: result.checks ?? [], byteSize: bytes.byteLength };
+    } finally {
+      try { fs.rmSync(file, { force: true }); } catch { /* best effort */ }
+    }
+  }
+
   async listArtifacts(conversationId?: string): Promise<DesktopArtifactView[]> {
     const result = await this.durableReadClient().listArtifacts(conversationId);
     // A page screenshot is a preview of work in the workspace, not a result.
@@ -4987,6 +5055,50 @@ export class DesktopSession {
         navigation: { id: event.entityId, destination: String(m.destination ?? ''), target: String(m.target ?? ''), label: String(m.label ?? ''), surface: m.surface === 'classic' ? 'classic' : 'v2' },
       });
       return;
+    }
+    // The Workshop: a view command is passed to the window like navigate_to (fresh requests only, each once: a
+    // replayed export must never run twice); progress and new versions tell the window to refresh what it shows.
+    if (event.domain === 'workshop') {
+      const m = (event.metadata ?? {}) as Record<string, unknown>;
+      if (event.eventType === 'workshop_command_requested') {
+        if (!(Date.now() - Date.parse(event.createdAt) <= WORKSHOP_COMMAND_FRESH_MS)) return;
+        if (this.handledWorkshopCommands.has(event.entityId)) return;
+        this.handledWorkshopCommands.add(event.entityId);
+        if (this.handledWorkshopCommands.size > 500) this.handledWorkshopCommands.delete(this.handledWorkshopCommands.values().next().value as string);
+        const action = String(m.action ?? '');
+        if (!isWorkshopViewAction(action) && action !== 'export' && action !== 'inspect') return;
+        this.emit({
+          kind: 'workshop_command',
+          at: event.createdAt,
+          summary: `Workshop: ${action.replace(/_/g, ' ')}`,
+          attemptId: typeof m.attemptId === 'string' ? m.attemptId : undefined,
+          workshopCommand: {
+            id: event.entityId,
+            workshopId: String(m.workshopId ?? ''),
+            artifactId: typeof m.artifactId === 'string' ? m.artifactId : null,
+            action: action as never,
+            args: m.args && typeof m.args === 'object' && !Array.isArray(m.args) ? m.args as Record<string, unknown> : {},
+            conversationId: typeof m.conversationId === 'string' ? m.conversationId : null,
+          },
+        });
+        return;
+      }
+      if (event.eventType === 'workshop_progress') {
+        this.emit({
+          kind: 'workshop_progress',
+          at: event.createdAt,
+          summary: String(m.stage ?? ''),
+          conversationId: typeof m.conversationId === 'string' ? m.conversationId : undefined,
+          workshop: { workshopId: typeof m.workshopId === 'string' ? m.workshopId : null, stage: String(m.stage ?? ''), ...(typeof m.index === 'number' ? { index: m.index } : {}), ...(typeof m.total === 'number' ? { total: m.total } : {}) },
+        });
+      }
+      return;
+    }
+    if (event.domain === 'conversation' && event.eventType === 'artifact_registered') {
+      const m = (event.metadata ?? {}) as Record<string, unknown>;
+      if (m.source === 'workshop' || m.kind === 'image' || m.kind === 'video') {
+        this.emit({ kind: 'workshop_changed', at: event.createdAt, summary: 'workshop version added', conversationId: event.entityId.startsWith('conv_') ? event.entityId : undefined, workshop: { workshopId: null, artifactId: typeof m.artifactId === 'string' ? m.artifactId : null } });
+      }
     }
     // Core decided an action under the turn's permission mode: show who authorized it, never as the user's click.
     if (event.domain === 'attempt' && (event.eventType === 'permission_auto_authorized' || event.eventType === 'permission_mode_blocked')
