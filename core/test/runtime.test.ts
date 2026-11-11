@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
@@ -209,14 +209,24 @@ describe('attempts: lifecycle, cancellation, retry lineage', () => {
     expect(listAttempts(db, { requestId: req.id })).toHaveLength(2); // original + one retry, not two
   });
 
-  it('claim protects against a second owner stealing a live lease, but allows takeover once stale', async () => {
-    const req = envelope();
-    const attempt = createAttempt(db, { requestId: req.id, kind: 'baat_kar', actor: 'client-1' });
-    claimAttempt(db, attempt.id, { claimOwner: 'core-instance-A', leaseMs: 50, actor: 'client-1' });
-    expect(() => claimAttempt(db, attempt.id, { claimOwner: 'core-instance-B', leaseMs: 50, actor: 'client-1' })).toThrow(CoreError);
-    await new Promise((resolve) => setTimeout(resolve, 60));
-    const takeover = claimAttempt(db, attempt.id, { claimOwner: 'core-instance-B', leaseMs: 50, actor: 'client-1' });
-    expect(takeover.claimOwner).toBe('core-instance-B');
+  it('claim protects against a second owner stealing a live lease, but allows takeover once stale', () => {
+    // The lease clock is `new Date()` (claimAttempt). Real time let a 50 ms lease expire between the two claims on a
+    // slow CI runner (the test took 1.7 s there), so the "live" claim was taken over. Pin the clock instead.
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try {
+      vi.setSystemTime(new Date('2026-01-01T10:00:00.000Z'));
+      const req = envelope();
+      const attempt = createAttempt(db, { requestId: req.id, kind: 'baat_kar', actor: 'client-1' });
+      claimAttempt(db, attempt.id, { claimOwner: 'core-instance-A', leaseMs: 50, actor: 'client-1' });
+      expect(() => claimAttempt(db, attempt.id, { claimOwner: 'core-instance-B', leaseMs: 50, actor: 'client-1' })).toThrow(CoreError);
+      vi.setSystemTime(new Date('2026-01-01T10:00:00.049Z'));
+      expect(() => claimAttempt(db, attempt.id, { claimOwner: 'core-instance-B', leaseMs: 50, actor: 'client-1' })).toThrow(CoreError);
+      vi.setSystemTime(new Date('2026-01-01T10:00:00.060Z'));
+      const takeover = claimAttempt(db, attempt.id, { claimOwner: 'core-instance-B', leaseMs: 50, actor: 'client-1' });
+      expect(takeover.claimOwner).toBe('core-instance-B');
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('optimistic concurrency: stale expectedRevision is rejected', () => {

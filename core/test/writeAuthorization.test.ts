@@ -262,7 +262,9 @@ describe('A read-only workspace folder', () => {
     expect(blocked.map((e) => JSON.parse(e.metadata).toolName)).toEqual(['write_file', 'run_checks']);
     expect(blocked.every((e) => e.actor === 'core:workspace_access:read_only')).toBe(true);
     const calls = model.calls.slice(before);
-    expect(calls[0].system).toMatch(/READ-ONLY FOLDER/);
+    // The rule is per turn, so it rides in the turn's state block and the system prompt stays cacheable.
+    expect(calls[0].system).not.toMatch(/READ-ONLY FOLDER/);
+    expect(JSON.stringify(calls[0].messages)).toMatch(/READ-ONLY FOLDER/);
     const results = calls.flatMap((c) => c.messages.filter((m) => m.role === 'tool').map((m) => JSON.stringify(m.content)));
     expect(results.some((r) => /NOT DONE \(read-only folder\)/.test(r))).toBe(true);
     expect(results.some((r) => /notes\.txt/.test(r))).toBe(true); // dir ran and listed the folder

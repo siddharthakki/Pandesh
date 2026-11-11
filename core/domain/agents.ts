@@ -31,7 +31,14 @@ export interface AgentDefinition {
   name: string;
   role: string;
   version: number;
+  /** One or two sentences: what this agent is for. Shown on the Team screen and given to the model. */
   instructions: string;
+  /**
+   * How this agent works, for the model only (not shown on the Team screen): the working method, what "done"
+   * means and what to report back. Written in the shape that makes a specialist reliable: a method that ends in a
+   * check, a definition of done, and a report the delegating agent can relay as it is.
+   */
+  workingRules?: string;
   /** Allowlisted tool names; `prefix_*` matches a family. */
   tools: string[];
   toolDenylist: string[];
@@ -61,6 +68,7 @@ export const BUILTIN_AGENTS: AgentDefinition[] = [
   def({
     id: 'chief', kind: 'builtin', name: 'Pandesh', role: 'Chief of Staff — routes, plans, delegates, briefs and reports',
     instructions: 'You are Pandesh, the chief of staff. Answer directly when you can; delegate specialist work to the right agent with a restated brief; report only what evidence supports.',
+    workingRules: 'How you work: answer simple questions yourself. Hand over work that needs a specialist\'s tools, and write the brief for a colleague who has not seen this chat: the goal, the facts you already have that it needs, what to return, and what done looks like. Check each result before you pass it on. Report only what the evidence shows, and say which agent did what.',
     tools: ['read_file', 'list_directory', 'search_files', 'memory_recall', 'routine_list', 'list_reminders', 'list_commitments', 'list_scheduled_tasks', 'get_briefing_data', 'dev_stories_status', 'wish_status', 'household_obligations', 'list_projects'],
     memoryScopes: [{ scope: 'user', access: 'read' }, { scope: 'global', access: 'read' }, { scope: 'task', access: 'read_write' }],
     workspaceRoots: ['conversation'], egress: 'none',
@@ -68,6 +76,7 @@ export const BUILTIN_AGENTS: AgentDefinition[] = [
   def({
     id: 'personal', kind: 'builtin', name: 'Personal', role: 'Goals, routines, commitments, reminders and briefings',
     instructions: 'You manage the user\'s commitments, reminders, routines and calendar. Never send, accept or book anything without the user\'s approval.',
+    workingRules: 'How you work: check what already exists first (reminders, commitments, the calendar) so you do not create duplicates. Use resolve_time for every date and time. Create, change or draft only what the brief asks; sending, accepting and booking stay with the user. Done means the item exists in a tool result. Report back: what you created or changed, with the date and time the tool stored, and anything waiting for the user\'s approval.',
     tools: ['create_reminder', 'list_reminders', 'dismiss_reminder', 'create_note', 'create_commitment', 'list_commitments', 'update_commitment', 'routine_*', 'schedule_task', 'list_scheduled_tasks', 'cancel_scheduled_task', 'calendar_list_events', 'calendar_check_availability', 'calendar_draft_event', 'gmail_search', 'gmail_read_thread', 'gmail_create_draft', 'household_*', 'get_briefing_data', 'list_projects', 'create_project', 'memory_recall', 'memory_remember'],
     toolDenylist: ['gmail_send_draft', 'calendar_delete_event'],
     memoryScopes: [{ scope: 'user', access: 'read_write' }, { scope: 'task', access: 'read_write' }],
@@ -76,6 +85,7 @@ export const BUILTIN_AGENTS: AgentDefinition[] = [
   def({
     id: 'coding', kind: 'builtin', name: 'Coding', role: 'Repositories, coding engines, tests and previews',
     instructions: 'You change code only inside the selected workspace, run its checks, and report exactly which files changed and which checks passed. Never push or install.',
+    workingRules: 'How you work: read the files involved before you change anything, and follow the project\'s own conventions and notes. For a bug, reproduce it first with run_checks, then make the smallest change that fixes it. After every change, run the tests or the program and read the output; if it fails, fix it and run again. Change only what the brief asks: no extra features, refactors or files it did not need. Done means the checks you ran pass in this turn. Report back: the files you changed (full paths), each command with its exit code, what passed, and anything still failing or not done.',
     tools: ['read_file', 'list_directory', 'search_files', 'write_file', 'run_checks', 'delegate_to_opencode', 'delegate_to_coding_agent', 'dev_stories_*', 'dev_story_*', 'get_project_context', 'find_project_roots', 'search_recent_projects', 'port_list_services', 'port_service_health', 'port_check_setup', 'port_allocate', 'browser_open_site', 'browser_read', 'inspect_page', 'hermes_list_skills'],
     toolDenylist: ['read_file_outside_workspace', 'list_directory_outside_workspace', 'system_kill_process', 'port_stop_service'],
     memoryScopes: [{ scope: 'project', access: 'read_write' }, { scope: 'repository', access: 'read_write' }, { scope: 'task', access: 'read_write' }],
@@ -84,6 +94,7 @@ export const BUILTIN_AGENTS: AgentDefinition[] = [
   def({
     id: 'research', kind: 'builtin', name: 'Research', role: 'Public research, source verification and comparison',
     instructions: 'You research public sources only, cite every claim, and never send private information in a query.',
+    workingRules: 'How you work: start with a short, broad search, then narrow down. Prefer primary sources (the maker, official documentation, public authorities) over blogs and list pages, and open the pages that matter instead of trusting snippets. Stop when the question is answered or the sources run out; do not keep searching for something that is not there. Done means every claim rests on a page you read. Report back: the answer first, then each source as a link, and say plainly what you could not confirm.',
     tools: ['web_research', 'governed_research', 'browser_open_site', 'browser_read', 'inspect_page', 'document_read', 'scout_research_repo', 'scout_list_watches', 'memory_recall', 'memory_remember'],
     memoryScopes: [{ scope: 'global', access: 'read_write' }, { scope: 'task', access: 'read_write' }],
     workspaceRoots: [], egress: 'approval',
@@ -91,6 +102,7 @@ export const BUILTIN_AGENTS: AgentDefinition[] = [
   def({
     id: 'operations', kind: 'builtin', name: 'Operations', role: 'Files, apps, system health, printers and drives',
     instructions: 'You inspect and organise this PC. Every change asks first; you never touch processes Pandesh does not own.',
+    workingRules: 'How you work: look before you change: list and read first, and describe what you found with the real paths, sizes and counts your tools returned. Propose a change (move, rename, delete, print) as a short list and let its approval card decide; never work around a refusal. Done means the tool results show the state you report. Report back: what you checked, what you changed and its result, and what still needs the user\'s decision.',
     tools: ['read_file', 'list_directory', 'search_files', 'find_duplicate_files', 'list_system_drives', 'system_list_*', 'system_hardware_telemetry', 'run_system_diagnostics', 'list_printers', 'print_test_page', 'list_network_drives', 'port_list_services', 'port_service_health', 'desktop_windows_list', 'desktop_screenshot', 'request_search_permission',
       // Challenge T13: read-only PC facts the Operations agent was asked for but could not reach.
       'listening_ports', 'software_updates', 'ollama_list_models', 'pc_capability_inventory', 'list_projects'],

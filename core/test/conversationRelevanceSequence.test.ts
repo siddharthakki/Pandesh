@@ -14,6 +14,7 @@ import { acquireFence } from '../domain/fence';
 import { listPendingApprovals, resolveApproval } from '../domain/approvals';
 import { updateTaskOutcome } from '../domain/taskOutcomes';
 import type { PowerShellRunner } from '../runtime/windowsPrinting';
+import { TURN_STATE_CLOSE } from '../runtime/turnState';
 
 /**
  * Isolated reproduction of the P0 sequence: Gmail contract extraction -> weather -> device discovery -> print a test
@@ -44,7 +45,10 @@ function scriptedReply(call: ModelCall): { text?: string; tool?: { name: string;
     if (name === 'list_printers') return { tool: { name: 'print_test_page', args: '{}' } };
     return { text: `Result: ${typeof last.content === 'string' ? last.content : JSON.stringify(last.content)}` };
   }
-  const text = JSON.stringify(last.content).toLowerCase();
+  // Like a real model, act on the user's own words: Pandesh's state block (time, earlier tasks' outcomes, ...) comes
+  // first in the message and is context, not the request.
+  const raw = typeof last.content === 'string' ? last.content : JSON.stringify(last.content);
+  const text = (raw.includes(TURN_STATE_CLOSE) ? raw.slice(raw.lastIndexOf(TURN_STATE_CLOSE) + TURN_STATE_CLOSE.length) : raw).toLowerCase();
   if (text.includes('stay silent')) return { text: '' };
   if (text.includes('test page') && call.tools.includes('list_printers')) return { tool: { name: 'list_printers', args: '{}' } };
   if (text.includes('weather')) return { text: 'It is 18C and cloudy in Paris.' };
@@ -166,9 +170,10 @@ describe('P0 conversation relevance and real-action reliability (isolated sequen
     const printer = await turn(conv.id, 'Print a test page on the Brother printer');
     const unrelated = await turn(conv.id, 'What is the capital of France?');
 
-    // 1. No stale workflow is offered to any of the unrelated turns.
+    // 1. No stale workflow is offered to any of the unrelated turns (it would travel in the system prompt or, since
+    //    the prompt-cache layout, in the Pandesh state block on the user's message: check the model's whole context).
     for (const t of [weather, devices, printer, unrelated]) {
-      for (const call of t.calls) expect(call.system).not.toContain('ACTIVE WORKFLOW IN THIS CONVERSATION');
+      for (const call of t.calls) expect(call.system + JSON.stringify(call.messages)).not.toContain('ACTIVE WORKFLOW IN THIS CONVERSATION');
     }
 
     // 2. The latest request is authoritative and the old contract table is not in the unrelated turn's context.
@@ -242,8 +247,13 @@ describe('P0 conversation relevance and real-action reliability (isolated sequen
   it('still resumes the Gmail workflow when the user explicitly asks to continue it', async () => {
     const conv = seedGmailConversation();
     const t = await turn(conv.id, 'Continue where you left off');
-    expect(t.calls[0].system).toContain('ACTIVE WORKFLOW IN THIS CONVERSATION');
-    expect(t.calls[0].system).toContain('Extract the contracts from my Gmail');
+    // The open workflow changes from message to message, so it travels in the Pandesh state block on this turn's
+    // message (turnState.ts), ahead of the user's own words, not in the cached system prompt.
+    const current = t.calls[0].messages.filter((m) => m.role === 'user').pop();
+    expect(String(current?.content)).toContain('ACTIVE WORKFLOW IN THIS CONVERSATION');
+    expect(String(current?.content)).toContain('Extract the contracts from my Gmail');
+    expect(String(current?.content).trim().endsWith('Continue where you left off')).toBe(true);
+    expect(t.calls[0].system).not.toContain('ACTIVE WORKFLOW IN THIS CONVERSATION');
     expect(listMessages(db, conv.id).length).toBeGreaterThan(2);
   }, 60_000);
 });
