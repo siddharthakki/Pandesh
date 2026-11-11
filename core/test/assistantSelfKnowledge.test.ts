@@ -22,7 +22,7 @@ import {
   permissionModesPromptSection, permissionPromptState, revokeStandingAuthorization, setConversationPermissionMode,
 } from '../domain/permissionModes';
 import { KNOWN_MISHEARINGS, inputModalityOf, parseInputModality, spokenInputPromptSection } from '../domain/spokenInput';
-import { SCREENSHOT_CONTENTS_NOTE, createComputerUseCapabilityAdapter } from '../runtime/computerUseCapability';
+import { SCREENSHOT_CONTENTS_NOTE, SCREEN_READING_TOOLS, createComputerUseCapabilityAdapter } from '../runtime/computerUseCapability';
 
 let dir: string;
 let db: CoreDatabase;
@@ -182,10 +182,24 @@ describe('desktop_screenshot says what it is', () => {
 
   it('the system prompt tells the model the tool only captures and never verifies anything', () => {
     const engine = fs.readFileSync(path.join(__dirname, '../runtime/piAgentEngine.ts'), 'utf8');
-    const line = engine.slice(engine.indexOf("- 'desktop_screenshot' only CAPTURES"), engine.indexOf("Both are read-only.", engine.indexOf("- 'desktop_screenshot' only CAPTURES")));
+    const start = engine.indexOf("- 'desktop_screenshot' only CAPTURES");
+    const end = engine.indexOf('never to find out which Pandesh view is open', start);
+    expect(start).toBeGreaterThan(-1);
+    expect(end).toBeGreaterThan(start);
+    const line = engine.slice(start, end);
     expect(line).toMatch(/Capturing is not opening .+ and not inspecting .+no model can do in this build/);
     expect(line).toMatch(/never say you looked at, checked, verified or confirmed anything with one; say you saved it and where/);
     expect(line).toMatch(/never claim it leaves out, blurs or protects any app/);
     expect(line).toMatch(/Pandesh never scrapes a WhatsApp Web session/);
+    expect(line).toMatch(/the user is asked before every call/);
+  });
+
+  it('asks before every capture or window list: both read everything on the screen (micro-tests NAV-013, NAV-014)', async () => {
+    let ran = 0;
+    const adapter = createComputerUseCapabilityAdapter({ dataDir: path.join(dir, 'data'), runScript: async () => { ran += 1; return { succeeded: true, exitCode: 0, output: '[]' }; } });
+    for (const name of SCREEN_READING_TOOLS) expect(adapter.classify(name)).toBe('consequential');
+    expect(adapter.definitions().map((d) => d.name).sort()).toEqual([...SCREEN_READING_TOOLS].sort());
+    for (const d of adapter.definitions()) expect(d.description).toMatch(/asks the user first every time/);
+    expect(ran).toBe(0);
   });
 });

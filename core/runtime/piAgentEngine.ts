@@ -1207,6 +1207,43 @@ export class PiAgentEngine implements EngineAdapter {
     let refusedRepeats = 0;
     const callSignature = (name: string, args: unknown) => `${name}:${JSON.stringify(args ?? {}, (_k, v) => (v && typeof v === 'object' && !Array.isArray(v) ? Object.fromEntries(Object.entries(v).sort()) : v))}`;
 
+    /** How many times this turn wrote each file; a model stuck in a loop stops here (micro-test DRV-010: 321 writes). */
+    const writesPerFile = new Map<string, number>();
+    const MAX_WRITES_PER_FILE = 20;
+    /**
+     * What write_file must not do, whoever authorized it: empty a file that has text (write_file replaces the whole
+     * file, so an empty write erases it), turn an empty write into a "folder", write over a folder, rewrite a file with
+     * the text it already holds, or write one file again and again. Null when the write may go on to authorization.
+     */
+    function writeGuard(full: string, content: string): { reason: string; text: string } | null {
+      const name = path.basename(full);
+      let existing: Buffer | null = null;
+      try {
+        const stat = fs.statSync(full);
+        if (stat.isDirectory()) return { reason: 'the path is a folder', text: `NOT WRITTEN: "${full}" is a folder, not a file. Nothing was written.` };
+        if (stat.isFile() && stat.size <= 8 * 1024 * 1024) existing = fs.readFileSync(full);
+      } catch {
+        existing = null;
+      }
+      const empty = content.trim().length === 0;
+      if (empty && existing && existing.length > 0) {
+        return { reason: 'the write would erase the file', text: `NOT WRITTEN: this would erase all ${existing.length} bytes of ${name}, because write_file replaces the whole file. Nothing was changed. To change part of it, write the complete new text. write_file cannot rename, move or delete a file; if that is what the user asked for, tell them Pandesh cannot do it here.` };
+      }
+      if (empty && !existing && !path.extname(name) && !name.startsWith('.')) {
+        return { reason: 'an empty file named like a folder', text: `NOT WRITTEN: write_file writes a file's text; "${name}" would be an empty file with no extension, not a folder. Pandesh has no tool that creates folders here, so tell the user that instead of saying a folder was created.` };
+      }
+      if (existing && existing.equals(Buffer.from(content, 'utf8'))) {
+        return { reason: 'the file already has this text', text: `UNCHANGED: ${name} already contains exactly this text, so nothing was written. Do not write it again; tell the user it already says this.` };
+      }
+      const key = process.platform === 'win32' ? full.toLowerCase() : full;
+      const count = (writesPerFile.get(key) ?? 0) + 1;
+      if (count > MAX_WRITES_PER_FILE) {
+        return { reason: 'too many writes to one file', text: `NOT WRITTEN: ${name} was already written ${MAX_WRITES_PER_FILE} times in this reply. Stop writing it; tell the user what was done and what is left.` };
+      }
+      writesPerFile.set(key, count);
+      return null;
+    }
+
     const SKIP_DIRS = new Set([
       'node_modules',
       '.git',
@@ -1590,6 +1627,21 @@ export class PiAgentEngine implements EngineAdapter {
       | { ok: true; source: 'mission_envelope' | 'human_approval'; reason: string; approvalId?: string; mission?: { id: string; digest: string; normalizedPath?: string; contentDigest?: string; contentBytes?: number } }
       | { ok: false; reason: string; text: string };
 
+    /** What a file is right now ("absent", or its size and SHA-256): compared before and after an approval card. */
+    function fileFingerprint(full: string): string {
+      try {
+        const stat = fs.statSync(full);
+        if (!stat.isFile()) return stat.isDirectory() ? 'folder' : 'other';
+        return `${stat.size}:${crypto.createHash('sha256').update(fs.readFileSync(full)).digest('hex')}`;
+      } catch {
+        return 'absent';
+      }
+    }
+
+    function staleWriteText(full: string): string {
+      return `NOT WRITTEN: ${path.basename(full)} changed while the approval card was open (it was edited, created or removed after you were asked), so the approved write would have overwritten that change. Nothing was written. Read the file again and propose the change anew; tell the user why it was not written.`;
+    }
+
     /**
      * Whether this turn may write `full`, and on whose authority. Search or read consent for a folder never grants a
      * write, and neither does an Auto standing authorization. Inside the selected workspace, the first write asks the
@@ -1623,6 +1675,7 @@ export class PiAgentEngine implements EngineAdapter {
           } catch (err: any) {
             return notDone('the write authorization could not be created', `Not written: Pandesh could not create the approval request (${err?.message ?? err}). Nothing was changed.`);
           }
+          const shownState = fileFingerprint(full);
           const limits = mission.envelope.fileChangeLimits;
           const outcome = await requestToolApproval({
             toolName: AUTHORIZE_MISSION_TOOL,
@@ -1648,6 +1701,8 @@ export class PiAgentEngine implements EngineAdapter {
               if (getMissionAuthorization(db, attemptId)?.status !== 'authorized') markMissionAuthorized(db, attemptId, `approval:${outcome.approvalId ?? 'unknown'}`);
             });
           } catch {}
+          // Micro-test PER-019: the file the card named changed while it was open; the approved write would overwrite that.
+          if (fileFingerprint(full) !== shownState) return notDone('the file changed while the approval card was open', staleWriteText(full));
         }
         const verdict = evaluateAuthorizedDispatch(db, { attemptId, toolName: 'write_file', arguments: writeArgs });
         if (verdict.decision === 'auto_authorize' && verdict.authorization) {
@@ -1666,6 +1721,7 @@ export class PiAgentEngine implements EngineAdapter {
         const protectedReason = protectedWriteReason(full) ?? (isCredentialFilePath(full) ? 'credential files are not authorized' : null);
         if (protectedReason) return notDone(protectedReason, `Error: "${full}" cannot be written: ${protectedReason}. Nothing was written.`);
       }
+      const shownState = fileFingerprint(full);
       const outcome = await requestToolApproval({
         toolName: 'write_file',
         filePath: full,
@@ -1673,7 +1729,11 @@ export class PiAgentEngine implements EngineAdapter {
         workspaceRoot: selectedWorkspace || null,
         cardText: `Pandesh wants to write ${full} (${bytes} bytes):${reviewNote}\n${redactCredentialShapes(content.slice(0, 600))}`,
       });
-      if (outcome.outcome === 'approved') return { ok: true, source: 'human_approval', reason: `the user approved writing ${full}`, approvalId: outcome.approvalId };
+      if (outcome.outcome === 'approved') {
+        // Micro-test PER-019: approving a card for a file that changed since it appeared must not overwrite that change.
+        if (fileFingerprint(full) !== shownState) return notDone('the file changed while the approval card was open', staleWriteText(full));
+        return { ok: true, source: 'human_approval', reason: `the user approved writing ${full}`, approvalId: outcome.approvalId };
+      }
       if (outcome.outcome === 'rejected') return notDone('the user declined this write', `Not written: the user did not approve writing ${full}. Nothing was changed. Ask the user how to proceed.`);
       return notDone(`approval ${outcome.outcome}`, `Not written: ${outcome.outcome === 'timed_out' ? 'no answer to the approval request was recorded' : 'the approval request could not be created'}. Nothing was changed. The request can be made again.`);
     }
@@ -3223,6 +3283,10 @@ export class PiAgentEngine implements EngineAdapter {
           // document has been read; otherwise it is built on part of the evidence.
           const held = await evidenceGate(full, 'write_file');
           if (held) return refuse(held, 'source evidence unread');
+          // Micro-tests DRV-010 and DRV-012: a rename request became 321 identical writes that left the file empty, and
+          // an empty write named like a folder made a 0-byte file reported as a folder. Checked before anyone is asked.
+          const guard = writeGuard(full, args.content);
+          if (guard) return refuse(guard.text, guard.reason);
 
           const grant = await authorizeFileWrite(full, args.content);
           if (!grant.ok) return refuse(grant.text, grant.reason);
@@ -4747,7 +4811,7 @@ ${availableToolNames.has('system_hardware_telemetry') ? `- For disk, storage, or
 ` : '';
 
     const specialistPromptSection = ['desktop_screenshot', 'desktop_windows_list', 'inspect_page', 'scout_add_watch', 'hermes_list_skills'].some((t) => availableToolNames.has(t)) ? `COMPUTER, BROWSER, WATCHES AND SPECIALIST SKILLS (STRICT RULES):
-${availableToolNames.has('desktop_screenshot') ? `- 'desktop_screenshot' only CAPTURES: it saves a PNG of the whole visible Windows desktop on this PC and returns its path, size and SHA-256. Capturing is not opening (showing the image to the user, which this tool does not do) and not inspecting (reading what is on it, which no model can do in this build). So never describe the screen from a screenshot, and never say you looked at, checked, verified or confirmed anything with one; say you saved it and where. It has no privacy filter: every visible window is in the file as it is, private messaging apps included, so never claim it leaves out, blurs or protects any app. Pandesh's real messaging rules: sending any message always needs the user's approval, and Pandesh never scrapes a WhatsApp Web session. 'desktop_windows_list' returns the titles of the visible top-level windows; that is real data you may report to say which apps are open. Both are read-only.\n` : ''}${availableToolNames.has('inspect_page') ? `- 'inspect_page' opens a real page in the managed browser: a workspace-relative HTML path, or a live URL on this machine (http://127.0.0.1:<port>/...). It acts on a running page, so it needs the operator's approval. Quote only what the tool returned; never describe a page you did not open.\n` : ''}${availableToolNames.has('scout_add_watch') ? `- 'scout_add_watch' creates a durable watch that Core then checks on its own schedule; 'scout_list_watches', 'scout_run_watch' and 'scout_run_all' read and check them. Only add a watch when the user asked for one, and never claim a watch is running without a tool result.\n` : ''}${availableToolNames.has('hermes_list_skills') ? `- 'hermes_list_skills' lists the skills installed in the local Hermes agent; 'hermes_invoke_skill' runs one of them and returns Hermes' own result. Never invent a skill name — list the skills first, then invoke one of the names that were listed.\n` : ''}- When a tool result says NOT DONE, NOT AVAILABLE or that it was declined, say so plainly. Never present a tool's failure as a success, and never invent a file path, a number or a quote. When the user declined an approval, say "you declined" — it is the user's choice, not a system protection — and do not offer a manual way around it. Offer to do something (send, book, buy, post) only when a tool for it is in your tool list.
+${availableToolNames.has('desktop_screenshot') ? `- 'desktop_screenshot' only CAPTURES: it saves a PNG of the whole visible Windows desktop on this PC and returns its path, size and SHA-256. Capturing is not opening (showing the image to the user, which this tool does not do) and not inspecting (reading what is on it, which no model can do in this build). So never describe the screen from a screenshot, and never say you looked at, checked, verified or confirmed anything with one; say you saved it and where. It has no privacy filter: every visible window is in the file as it is, private messaging apps included, so never claim it leaves out, blurs or protects any app. Pandesh's real messaging rules: sending any message always needs the user's approval, and Pandesh never scrapes a WhatsApp Web session. 'desktop_windows_list' returns the titles of the visible top-level windows; that is real data you may report to say which apps are open. Both change nothing but read everything the user has open, so the user is asked before every call; use them only when the user asks about their screen or open apps, never to find out which Pandesh view is open (answer that from the product facts or navigate_to).\n` : ''}${availableToolNames.has('inspect_page') ? `- 'inspect_page' opens a real page in the managed browser: a workspace-relative HTML path, or a live URL on this machine (http://127.0.0.1:<port>/...). It acts on a running page, so it needs the operator's approval. Quote only what the tool returned; never describe a page you did not open.\n` : ''}${availableToolNames.has('scout_add_watch') ? `- 'scout_add_watch' creates a durable watch that Core then checks on its own schedule; 'scout_list_watches', 'scout_run_watch' and 'scout_run_all' read and check them. Only add a watch when the user asked for one, and never claim a watch is running without a tool result.\n` : ''}${availableToolNames.has('hermes_list_skills') ? `- 'hermes_list_skills' lists the skills installed in the local Hermes agent; 'hermes_invoke_skill' runs one of them and returns Hermes' own result. Never invent a skill name — list the skills first, then invoke one of the names that were listed.\n` : ''}- When a tool result says NOT DONE, NOT AVAILABLE or that it was declined, say so plainly. Never present a tool's failure as a success, and never invent a file path, a number or a quote. When the user declined an approval, say "you declined" — it is the user's choice, not a system protection — and do not offer a manual way around it. Offer to do something (send, book, buy, post) only when a tool for it is in your tool list.
 ` : '';
 
     const pcOrgPromptSection = ['pc_capability_inventory', 'pc_organize_scan', 'routine_create', 'household_scan_obligations'].some((t) => availableToolNames.has(t)) ? `PC ORGANIZATION, ROUTINES, HOUSEHOLD & JUGAAD (STRICT RULES):
