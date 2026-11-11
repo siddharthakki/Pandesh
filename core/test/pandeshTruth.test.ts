@@ -133,7 +133,35 @@ describe('status questions are answered from recorded state, without a workspace
     'Send me a notification when you are done',
     'Draft an email to my landlord',
     'hello',
+    // Micro-test D-REM-1: a change to a reminder, or a question about one, goes to the assistant and its tools.
+    'Change my stretch reminder to 6 PM.',
+    'Pause my recurring recycling reminder.',
+    'What time zone is this reminder in?',
+    'Move my dentist reminder to Friday.',
+    'Mark my ticket reminder as done.',
   ])('does not hijack %j', (text) => expect(classifyStatusRequest(text, true)).toBeNull());
+
+  it('lists reminders in local time with the zone named, and "due today" keeps only today (micro-tests REM-009, REM-021)', () => {
+    expect(classifyStatusRequest('Show reminders due today')).toEqual(['reminders']);
+    expect(classifyStatusRequest('What reminders do I have tomorrow?')).toEqual(['reminders']);
+    const now = Date.parse('2026-11-11T09:00:00.000Z');
+    const at = (iso: string, title: string) => db.run(
+      "INSERT INTO everyday_reminders (id, title, body, dueAt, timezone, status, createdAt, updatedAt) VALUES (?, ?, '', ?, 'Europe/Berlin', 'scheduled', ?, ?)",
+      [`rem_${title.replace(/\W/g, '')}`, title, iso, '2026-11-10T00:00:00.000Z', '2026-11-10T00:00:00.000Z'],
+    );
+    at('2026-11-11T14:00:00.000Z', 'Stretch');
+    at('2026-11-12T07:00:00.000Z', 'Check mail');
+    at('2026-12-01T08:00:00.000Z', 'Renew my ticket');
+    const all = composeStatusAnswer(db, ['reminders'], now, 'Show my reminders');
+    expect(all).toContain('(times in Europe/Berlin)');
+    expect(all).toContain('15:00: Stretch'); // 14:00 UTC is 15:00 in Berlin
+    expect(all).not.toMatch(/\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/);
+    expect(all).toMatch(/Stretch[\s\S]*Check mail[\s\S]*Renew my ticket/);
+    const today = composeStatusAnswer(db, ['reminders'], now, 'Show reminders due today');
+    expect(today).toContain('due today');
+    expect(today).toContain('Stretch');
+    expect(today).not.toContain('Renew my ticket');
+  });
 
   it('treats a bare "status" as a Gmail question only when Gmail work is recent', () => {
     expect(classifyStatusRequest('status', false)).toBeNull();

@@ -589,6 +589,25 @@ export function undoOverEscapedQuotes(filePath: string, content: string): string
   return content.replace(/\\"/g, '"');
 }
 
+/** A request to compare, rank or recommend models: answered from the verified inventory, never from memory. */
+export function isModelComparisonOrAnalysisRequest(text: string): boolean {
+  return /\b(?:compare|comparison|evaluate|rank|strongest|best|which is better|recommend|difference between|analyze|benchmark)\b/i.test(text)
+    && /\b(?:models?|llms?|checkpoints?)\b/i.test(text);
+}
+
+/**
+ * A request for the installed-model inventory itself ("Which models are installed?", "list my models", "ollama list").
+ * When the model answers one without a tool, Core puts the verified inventory in its place. Micro-test D-MOD-1: "Which
+ * model answered my last question?", "What's the context length configured for this model?", "Can you use a model that
+ * is not installed?" and "Which tools can this model invoke?" all got the inventory instead of an answer. A question
+ * about one model, or about a property of models, is not a request for the list.
+ */
+export function isModelListingRequest(text: string): boolean {
+  if (isModelComparisonOrAnalysisRequest(text)) return false;
+  if (/\b(?:context|length|window|tokens?|vram|size|parameters?|quanti[sz]\w*|tools?|capabilit\w*|reasoning|thinking|licen[cs]e|trained|speed|answer(?:ed|s)?)\b/i.test(text)) return false;
+  return /\b(?:list|show(?:\s+me)?|which|what)\b[^.?!]{0,30}\bmodels\b|\bmodels\b[^.?!]{0,30}\b(?:available|installed|loaded|running)\b|\bollama\s+list\b|\bmodel\s+(?:inventory|list)\b/i.test(text);
+}
+
 /** A command that only hands a file to the desktop (start, explorer, open) — it belongs to open_local_file, not run_checks. */
 export function isDesktopOpenCommand(command: string): boolean {
   return /^\s*(?:cmd(?:\.exe)?\s+\/c\s+)?(?:start|explorer(?:\.exe)?|open|xdg-open|invoke-item|ii)\b/i.test(command)
@@ -4543,7 +4562,7 @@ Report this to the user, saying the ${name} agent did the work. Do not add facts
     // recorded state, with no model and no workspace: a model's prose is exactly where invented progress came from.
     const statusTopics = classifyStatusRequest(requestText, hasRecentGmailWork(db, Date.now()));
     if (statusTopics && !projectInspection) {
-      const reply = composeStatusAnswer(db, statusTopics);
+      const reply = composeStatusAnswer(db, statusTopics, Date.now(), requestText);
       let replyRecord: any = null;
       try {
         mutateWithBroadcast(db, broadcaster, () => {
@@ -4622,19 +4641,6 @@ Report this to the user, saying the ${name} agent did the work. Do not add facts
       return /(?:run|do|perform)\s+(?:a\s+|the\s+)?diagnostic|diagnose\s+(?:my|this|the)\s+(?:pc|computer|system|setup|machine)|check\s+(?:my|this|the)\s+(?:pc|computer|system|setup|machine|health)|system\s+(?:info|health|status|diagnostics)|hardware\s+(?:info|status|telemetry)/i.test(text);
     }
 
-    function isModelComparisonOrAnalysisRequest(text: string): boolean {
-      return /\b(?:compare|comparison|evaluate|rank|strongest|best|which is better|recommend|difference between|analyze|benchmark)\b/i.test(text)
-        && /\b(?:models?|llms?|checkpoints?)\b/i.test(text);
-    }
-
-    function isModelListingRequest(text: string): boolean {
-      if (isModelComparisonOrAnalysisRequest(text)) return false;
-      return /(?:which|what|list|show|check|get)\b.*?\b(?:models?|ollama)\b|\b(?:models?)\b.*?\b(?:available|installed|running|active|loaded|list)\b|\bollama list\b|\bmodel provider\b|\blocal runtime\b/i.test(text);
-    }
-
-    function isModelRuntimeRequest(text: string): boolean {
-      return isModelComparisonOrAnalysisRequest(text) || isModelListingRequest(text);
-    }
 
     function isProductResearchRequest(text: string): boolean {
       return /\b(?:buy|buying|shop|shopping|price|prices|cheapest|offer|offers|deal|deals|discount|where to buy|retailer|retailers|kneading machine|kitchen machine|product)\b/i.test(text)
