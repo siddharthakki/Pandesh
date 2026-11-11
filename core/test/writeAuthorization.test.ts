@@ -87,11 +87,11 @@ function human(decide: (toolName: string) => 'approved' | 'rejected') {
   }, 40);
 }
 
-async function turn(text: string, options: { workspace?: string | null } = {}) {
+async function turn(text: string, options: { workspace?: string | null; access?: 'read' | 'read_write' } = {}) {
   const workspaceRoot = options.workspace === undefined ? ws : options.workspace ?? undefined;
   const { request, attempt } = submitRequest(db, {
     clientId: 'desktop', currentMessage: text, requestedMode: 'saath_kar', conversationId, ...(workspaceRoot ? { workspaceRoot } : {}),
-    requestedProvider: 'ollama', selectedModel: 'fake-model', toolPermissionPolicy: { profile: 'confirm-mutations' },
+    requestedProvider: 'ollama', selectedModel: 'fake-model', toolPermissionPolicy: { profile: 'confirm-mutations', ...(options.access ? { workspaceAccess: options.access } : {}) },
     capability: { hasWorkspace: Boolean(workspaceRoot), gitCapable: false }, correlationId: `c-${Math.random()}`,
   });
   const fence = acquireFence(db, attempt.id, { owner: 'test', actor: 'test' });
@@ -240,6 +240,40 @@ describe('Plan Only', () => {
     expect(fs.existsSync(path.join(ws, 'src'))).toBe(false);
     expect(fs.readdirSync(outside)).toEqual([]);
     expect(db.all(`SELECT id FROM runtime_events WHERE entityId = ? AND eventType = 'permission_mode_blocked'`, [attemptId]).length).toBe(2);
+  }, 60_000);
+});
+
+describe('A read-only workspace folder', () => {
+  it('writes nothing, runs no program and shows no card, even under every Auto authorization; plain read commands still run', async () => {
+    setConversationPermissionMode(db, conversationId, 'auto', 'test');
+    createStandingAuthorization(db, { conversationId, categories: Object.keys(AUTHORIZATION_CATEGORIES), workspaceRoot: ws, expiresInMinutes: 60, actor: 'test' });
+    fs.writeFileSync(path.join(ws, 'notes.txt'), 'read me\n');
+    human(() => 'approved');
+    steps = [
+      write('src/a.js'),
+      { tool: { name: 'run_checks', args: { command: 'npm test' } } },
+      { tool: { name: 'run_checks', args: { command: 'dir' } } },
+    ];
+    const before = model.calls.length;
+    const { attemptId } = await turn('Fix the module', { access: 'read' });
+    expect(asked).toEqual([]);
+    expect(fs.existsSync(path.join(ws, 'src'))).toBe(false);
+    const blocked = db.all<{ actor: string; metadata: string }>(`SELECT actor, metadata FROM runtime_events WHERE entityId = ? AND eventType = 'permission_mode_blocked' ORDER BY sequence`, [attemptId]);
+    expect(blocked.map((e) => JSON.parse(e.metadata).toolName)).toEqual(['write_file', 'run_checks']);
+    expect(blocked.every((e) => e.actor === 'core:workspace_access:read_only')).toBe(true);
+    const calls = model.calls.slice(before);
+    expect(calls[0].system).toMatch(/READ-ONLY FOLDER/);
+    const results = calls.flatMap((c) => c.messages.filter((m) => m.role === 'tool').map((m) => JSON.stringify(m.content)));
+    expect(results.some((r) => /NOT DONE \(read-only folder\)/.test(r))).toBe(true);
+    expect(results.some((r) => /notes\.txt/.test(r))).toBe(true); // dir ran and listed the folder
+  }, 60_000);
+
+  it('the same turn with read and write asks for the mission as before', async () => {
+    human(() => 'approved');
+    steps = [write('src/a.js')];
+    await turn('Build the module', { access: 'read_write' });
+    expect(asked).toEqual(['authorize_mission']);
+    expect(fs.existsSync(path.join(ws, 'src', 'a.js'))).toBe(true);
   }, 60_000);
 });
 

@@ -17,6 +17,7 @@ import {
   isToolAllowed, listScopeRefusals, type EffectiveScope,
 } from '../domain/agents';
 import { delegationOutcome, startDelegation } from '../domain/delegation';
+import { frozenWorkspaceAccess } from '../domain/permissionModes';
 import { groupsForText, groupOfTool } from '../runtime/chatToolSelection';
 
 let dir: string;
@@ -115,6 +116,20 @@ describe('Chief → specialist delegation', () => {
     expect(scope.layers.map((l) => l.source)).toContain('chief-delegation');
     expect(isToolAllowed(scope, 'write_file').allowed).toBe(false);
     expect(isToolAllowed(scope, 'web_research').allowed).toBe(true);
+  });
+
+  it('a folder the person opened read-only stays read-only for the agent it delegates to', () => {
+    const conv = createConversation(db, { mode: 'baat_kar', actor: 'test' });
+    const parent = submitRequest(db, {
+      clientId: 'test-client', currentMessage: 'Look through this folder', requestedMode: 'baat_kar', conversationId: conv.id, workspaceRoot: dir,
+      capability: { hasWorkspace: true, gitCapable: false }, correlationId: `corr-${++n}`, toolPermissionPolicy: { workspaceAccess: 'read' },
+      selectedProvider: 'ollama', selectedModel: 'zeta:1b',
+    });
+    const started = delegate(parent.attempt.id, 'coding', 'Summarise the code in this folder.');
+    expect(frozenWorkspaceAccess(db, [started.attemptId])).toBe('read');
+    expect(createApproval(db, { attemptId: started.attemptId!, kind: 'mutation', summary: { toolName: 'write_file', path: 'x.ts' }, actor: 'pi' }).status).toBe('rejected');
+    const openParent = submit('Fix the failing test');
+    expect(frozenWorkspaceAccess(db, [delegate(openParent.attempt.id, 'coding', 'Fix the failing test.').attemptId])).toBe('read_write');
   });
 
   it('returns the child\'s answer once its attempt completes', () => {

@@ -50,7 +50,42 @@ export function SecondBrain({ narrow }: { narrow: boolean }) {
     const r = await call<{ corrected: { id: string } }>('brainCorrect', { id: sel.id, value: correction });
     if (r) { setNote('Corrected. The new value is backed by your correction message; the old one was forgotten.'); setSel({ type: 'fact', id: r.corrected.id }); }
   };
-  const addFolder = async () => { if (await call('allowDocumentReading', { folder: folder.trim() })) { setFolder(''); await call('brainReindex'); void loadStatus(); setNote('Folder added. Markdown and text files in it are now searchable; nothing else is read.'); } };
+  /** A folder the person picked or typed, shown with "Allow reading" before Pandesh reads anything in it. */
+  const [pending, setPending] = useState<{ folder: string; problem: string | null; warning: string | null } | null>(null);
+  const [adding, setAdding] = useState(false);
+  /** Checks a folder (it must exist, and Pandesh's own data and Windows folders are refused) and asks about it. */
+  const offerFolder = async (picked: string) => {
+    setNote('');
+    setTab('sources');
+    try {
+      const check = await api.checkWorkspaceFolder(picked);
+      setPending({ folder: check.folder, problem: check.state === 'ok' ? null : (check.reason ?? 'Pandesh cannot read this folder'), warning: check.warning ?? null });
+    } catch (err) {
+      setError(errorText(err));
+    }
+  };
+  const chooseFolder = async () => {
+    try {
+      const picked = await api.chooseFolder({ purpose: 'second_brain' });
+      if (picked) await offerFolder(picked.folder);
+    } catch (err) {
+      setError(errorText(err));
+    }
+  };
+  const addFolder = async (target: string) => {
+    setAdding(true);
+    try {
+      if (await call('allowDocumentReading', { folder: target })) {
+        setFolder('');
+        setPending(null);
+        await call('brainReindex');
+        void loadStatus();
+        setNote(`Added ${target}. Its .md and .txt files are now searchable; nothing else in it is read.`);
+      }
+    } finally {
+      setAdding(false);
+    }
+  };
   const revoke = async (id: string) => { if (await call('revokeDocumentReading', { id })) { await call('brainReindex'); void loadStatus(); } };
 
   const grouped = useMemo(() => { const m = new Map<string, Hit[]>(); for (const h of hits ?? []) m.set(h.type, [...(m.get(h.type) ?? []), h]); return [...m.entries()]; }, [hits]);
@@ -61,6 +96,7 @@ export function SecondBrain({ narrow }: { narrow: boolean }) {
         <span className="title" style={{ color: 'var(--ink)', fontWeight: 600 }}>Second Brain</span>
         <span className="grow" />
         {status && <span style={{ fontSize: 13, color: 'var(--muted)' }}>{status.facts} memories · {status.documents} documents{status.openConflicts ? ` · ${status.openConflicts} conflicts` : ''}</span>}
+        <button type="button" className="btn small" title="Choose a folder whose notes and text files Second Brain may read" onClick={() => void chooseFolder()}>Add folder…</button>
       </div>
       <div className="board" style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
         {error && <div className="notice error" role="alert">{error}</div>}
@@ -112,16 +148,36 @@ export function SecondBrain({ narrow }: { narrow: boolean }) {
                 {graph ? <GraphView graph={graph} onPick={(n) => { const [t, id] = n.id.split(':'); if (t === 'fact' || t === 'entity') void focus(t as ItemType, id); }} /> : <div className="notice" role="status">Reading…</div>}
               </>
             )}
-            {tab === 'sources' && status && (
+            {tab === 'sources' && (
               <section style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-                <p style={{ margin: 0, fontSize: 14 }}>Index: {status.index.items} items, built {timeOf(status.index.builtAt)}. Semantic search (embeddings): {status.embeddings}.</p>
+                {status
+                  ? <p style={{ margin: 0, fontSize: 14 }}>Index: {status.index.items} items, built {timeOf(status.index.builtAt)}. Semantic search (embeddings): {status.embeddings}.</p>
+                  : <p style={{ margin: 0, fontSize: 14, color: 'var(--muted)' }}>{error ? 'The index status could not be read. You can still add a folder.' : 'Reading the index status…'}</p>}
                 <h2 style={{ margin: 0, fontSize: 15 }}>Folders you allowed</h2>
-                {status.grants.length === 0 && <div className="empty" style={{ color: 'var(--faint)' }}>None. Pandesh reads no folder unless you add it here.</div>}
-                {status.grants.map((g) => <div key={g.id} className="card" style={{ flexDirection: 'row', alignItems: 'center' }}><span style={{ flex: 1, fontFamily: 'var(--font-mono)', fontSize: 13, overflowWrap: 'anywhere' }}>{g.folder}</span><button type="button" className="btn small" onClick={() => void revoke(g.id)}>Stop reading</button></div>)}
-                <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                {status && status.grants.length === 0 && <div className="empty" style={{ color: 'var(--faint)' }}>None. Pandesh reads no folder unless you add it here.</div>}
+                {status?.grants.map((g) => <div key={g.id} className="card" style={{ flexDirection: 'row', alignItems: 'center' }}><span style={{ flex: 1, fontFamily: 'var(--font-mono)', fontSize: 13, overflowWrap: 'anywhere' }}>{g.folder}</span><button type="button" className="btn small" onClick={() => void revoke(g.id)}>Stop reading</button></div>)}
+                {pending && (
+                  <section className="approval" aria-label={pending.problem ? 'Second Brain cannot read this folder' : 'Let Second Brain read this folder?'}>
+                    <div className="approval-head"><span className={`dot ${pending.problem ? 'danger' : 'attention'}`} aria-hidden="true" /><span className="title">{pending.problem ? 'Second Brain can\'t read this folder' : 'Needs your OK · Let Second Brain read this folder?'}</span></div>
+                    <dl>
+                      <dt>Folder</dt><dd className="code">{pending.folder}</dd>
+                      {pending.problem
+                        ? <><dt>Why</dt><dd>{pending.problem}</dd></>
+                        : <><dt>Reads</dt><dd>The .md and .txt files in it and its subfolders, up to 512 KB each. Nothing else is opened, and nothing is changed.</dd></>}
+                      {!pending.problem && pending.warning && <><dt>Note</dt><dd>{pending.warning}</dd></>}
+                    </dl>
+                    <div className="actions">
+                      {!pending.problem && <button type="button" className="btn primary" autoFocus disabled={adding} onClick={() => void addFolder(pending.folder)}>Allow reading</button>}
+                      <button type="button" className="btn" disabled={adding} onClick={() => setPending(null)}>{pending.problem ? 'OK' : 'Cancel'}</button>
+                    </div>
+                  </section>
+                )}
+                <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+                  <button type="button" className="btn small primary" onClick={() => void chooseFolder()}>Choose folder…</button>
+                  <span style={{ fontSize: 13, color: 'var(--muted)' }}>or type a path:</span>
                   <label className="sr-only" htmlFor="sb-folder">Folder path</label>
-                  <input id="sb-folder" value={folder} onChange={(e) => setFolder(e.target.value)} placeholder="D:\\Notes\\Vault" style={{ flex: '1 1 260px', height: 38, padding: '0 12px', border: '1px solid var(--line)', borderRadius: 9, background: 'var(--surface)' }} />
-                  <button type="button" className="btn small" disabled={!/^[A-Za-z]:[\\/]/.test(folder.trim())} onClick={() => void addFolder()}>Allow reading this folder</button>
+                  <input id="sb-folder" value={folder} onChange={(e) => setFolder(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter' && /^[A-Za-z]:[\\/]/.test(folder.trim())) void offerFolder(folder.trim()); }} placeholder={'D:\\Notes\\Vault'} style={{ flex: '1 1 220px', height: 34, padding: '0 12px', border: '1px solid var(--line)', borderRadius: 9, background: 'var(--surface)' }} />
+                  <button type="button" className="btn small" disabled={!/^[A-Za-z]:[\\/]/.test(folder.trim())} onClick={() => void offerFolder(folder.trim())}>Add this path</button>
                 </div>
                 <p style={{ margin: 0, fontSize: 13, color: 'var(--muted)' }}>Only .md and .txt files up to 512 KB are indexed. The files stay where they are; the index is a cache that can be rebuilt.</p>
               </section>

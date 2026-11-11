@@ -8,6 +8,7 @@ import type { CoreDatabase } from '../db/connection';
 import { CoreError } from './errors';
 import { agentScopeForAttempt, assignAgentRun, chiefDelegationScope, getAgentDefinition, getHandoff, markHandoff, proposeHandoff, reconcileHandoffs, type Grant, type HandoffRecord } from './agents';
 import { submitRequest } from './submission';
+import { frozenWorkspaceAccess } from './permissionModes';
 import { createConversation, listMessages } from './conversations';
 
 export interface DelegationDefaults { selectedProvider?: string | null; selectedModel?: string | null }
@@ -46,7 +47,8 @@ export function startDelegation(db: CoreDatabase, input: {
       selectedModel: input.defaults?.selectedModel ?? null,
       workspaceRoot,
       effectiveAllowedTools: [],
-      toolPermissionPolicy: {},
+      // A folder the person opened read-only stays read-only for every agent the turn delegates to.
+      toolPermissionPolicy: frozenWorkspaceAccess(db, [input.parentAttemptId]) === 'read' ? { workspaceAccess: 'read' } : {},
       capability: { hasWorkspace: Boolean(workspaceRoot), gitCapable: false },
       correlationId: `delegation:${handoff.id}`,
       idempotencyKey: `delegation:${handoff.id}`,

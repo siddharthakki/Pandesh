@@ -31,7 +31,12 @@ export interface DesktopInteractionPlan {
   /** True when `blockReason` specifically means "select a repository", so the
    * caller can surface a Select-folder action rather than a bare error. */
   needsWorkspace?: boolean;
+  /** True when `blockReason` means "the folder is read-only for Pandesh". */
+  needsWorkspaceWrite?: boolean;
 }
+
+/** Why a worker that changes files is not started in a read-only folder, and how the person changes that. */
+export const READ_ONLY_FOLDER_BLOCK = 'This folder is read-only for Pandesh, so this worker was not started. To let Pandesh change files there, open the folder menu next to the message box and choose Allow writing.';
 
 /** A request phrased as "write/create/save/generate a file" — deliberately
  * narrow (create-shaped verbs + a file/script noun or a filename-looking
@@ -259,9 +264,20 @@ export function planDesktopInteraction(input: {
   hasFolder: boolean;
   workerId: string;
   goalText?: string;
+  /** False when the person let Pandesh read the folder but not change it (host/workspaceAccess.ts). Default true. */
+  workspaceWritable?: boolean;
 }): DesktopInteractionPlan {
   const worker = (input.workerId || 'local-core').trim();
   const wantsFileCreation = Boolean(input.goalText) && detectFileCreationIntent(input.goalText!);
+  if (input.hasFolder && input.workspaceWritable === false) {
+    // A read-only folder: a worker that exists to change files is refused before anything is sent. Anything else,
+    // a request that sounds like making a file included, goes the read-only way: Core refuses every write there and
+    // the answer says so, instead of this window guessing from words ("make a list of the files" changes nothing).
+    if (worker === 'autonomous-mission' || worker === 'opencode' || worker === 'hermes') {
+      return { mode: 'mission', requestedMode: 'saath_kar', blockReason: READ_ONLY_FOLDER_BLOCK, needsWorkspaceWrite: true };
+    }
+    return { mode: 'local_core', requestedMode: 'saath_kar' };
+  }
   if (!input.hasFolder) {
     if (worker === 'autonomous-mission' || worker === 'opencode') {
       return {

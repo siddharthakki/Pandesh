@@ -73,7 +73,11 @@ import { resolveHostBrowserBin } from '../../../../core/runtime/hostBrowserBin';
 import { reapOrphanedBrowsers } from '../../../../core/runtime/browserSession';
 import { AUTO_CHAT_MODEL, AUTO_RECOVERY_MODEL, AUTO_FALLBACK_MODEL } from '../../../../core/domain/modelRouting';
 import { getOrCreateDesktopClientId, getOrCreateDesktopToken, getOrCreateHostToken } from './desktopToken';
-import { readLastWorkspace, writeLastWorkspace } from './desktopSessionCursor';
+import {
+  checkWorkspaceFolder, clearWorkspaceRecord, folderInside, isWorkspaceAccess, readRecentWorkspaces, readWorkspaceRecord,
+  rememberWorkspace, writeWorkspaceRecord, type FolderCheck, type RecentWorkspace, type WorkspaceAccess, type WorkspaceSource,
+} from './workspaceAccess';
+import { findFolderMentionWithin } from './folderMention';
 import { emptyMissionCockpit, projectMissionCockpit } from './missionCockpit';
 import { WorkspaceActivityLog, activityTitle } from './workspaceActivity';
 import { BROWSER_SCREENSHOT_SOURCE, sanitizeToolActivity } from '../../../../core/shared/toolActivity';
@@ -156,6 +160,8 @@ import type {
   DesktopCloudProviderView,
   DesktopCloudPublicTextPreview,
   DesktopCloudState,
+  DesktopFolderMention,
+  DesktopWorkspaceView,
 } from '../ipc';
 import {
   OpenWakeWordEngine,
@@ -180,6 +186,9 @@ export const CANCEL_CONFIRM_TIMEOUT_MS = 8_000;
 
 /** A navigate_to request older than this is history (replayed on connect), never a live request. Core waits 5 s. */
 export const NAVIGATION_FRESH_MS = 15_000;
+
+/** How long the search for a folder named in a message may take before the message is simply sent as it is. */
+export const FOLDER_MENTION_TIMEOUT_MS = 1_500;
 
 export interface DesktopSessionOptions {
   productRoot: string;
@@ -263,6 +272,11 @@ export class DesktopSession {
   readonly clientId: string;
   private client: CoreClient | undefined;
   private folder: string | null = null;
+  /** How far the person let Pandesh into `folder` (workspaceAccess.ts); sent with every request, frozen by Core. */
+  private workspaceAccess: WorkspaceAccess = 'read_write';
+  private workspaceGrantedAt: string | null = null;
+  private workspaceSource: WorkspaceSource | null = null;
+  private recentWorkspaces: RecentWorkspace[] = [];
   private provider: DesktopProviderConfig | undefined;
   private modelAvailable: boolean | null = null;
   private installedModels: string[] = [];
@@ -389,6 +403,7 @@ export class DesktopSession {
     this.clientId = getOrCreateDesktopClientId(this.dataDir);
     this.attachmentStaging = new AttachmentStaging(path.join(this.dataDir, 'attachment-staging'));
     this.workspaceActivity = new WorkspaceActivityLog(path.join(this.dataDir, 'workspace-activity', 'activities.json'));
+    this.recentWorkspaces = readRecentWorkspaces(this.dataDir);
     this.operatorSelectedModel = readSelectedModel(this.dataDir);
     this.selectedConversationId = readSelectedConversation(this.dataDir);
     this.localSpeech = probeDesktopLocalSpeech(this.options.productRoot);
@@ -838,6 +853,8 @@ export class DesktopSession {
       coreState: this.coreState,
       coreDetail: this.coreDetail,
       folder: this.folder,
+      workspace: this.workspaceView(),
+      recentWorkspaces: this.recentWorkspaces.map((r) => ({ ...r })),
       model: displayModel,
       modelIsAuto,
       modelAvailable: displayProvider === 'openrouter' ? null : this.modelAvailable,
@@ -1479,10 +1496,11 @@ export class DesktopSession {
   clearFolder(): DesktopSnapshot {
     this.folder = null;
     this.taskScope = null;
-    const file = path.join(this.dataDir, 'last-workspace.txt');
-    try {
-      if (fs.existsSync(file)) fs.unlinkSync(file);
-    } catch {}
+    this.workspaceAccess = 'read_write';
+    this.workspaceGrantedAt = null;
+    this.workspaceSource = null;
+    // Both the file this build writes and the one older builds wrote: "Stop using this folder" survives a restart.
+    clearWorkspaceRecord(this.dataDir);
     this.refreshProviderSoft();
     void this.refreshModelAvailability();
     void this.refreshInstalledModels();
@@ -1490,7 +1508,11 @@ export class DesktopSession {
     return this.snapshot();
   }
 
-  setFolder(folder: string): DesktopSnapshot {
+  /**
+   * Makes `folder` the workspace. Without `grant` (the Classic folder picker, which has no access choice) the folder
+   * gets read and write access, as it always did; the v2 card passes the person's choice through `useWorkspace`.
+   */
+  setFolder(folder: string, grant: { access?: WorkspaceAccess; source?: WorkspaceSource; grantedAt?: string } = {}): DesktopSnapshot {
     if (!folder || !folder.trim()) {
       return this.clearFolder();
     }
@@ -1498,22 +1520,75 @@ export class DesktopSession {
     if (!fs.existsSync(resolved) || !fs.statSync(resolved).isDirectory()) {
       throw new Error(`folder does not exist: ${resolved}`);
     }
+    const check = checkWorkspaceFolder(resolved, { dataDir: this.dataDir });
+    if (check.state === 'refused') throw new Error(`Pandesh can't use ${resolved} as the workspace: ${check.reason}.`);
     this.folder = resolved;
+    this.workspaceAccess = grant.access ?? 'read_write';
+    this.workspaceSource = grant.source ?? 'picker';
+    this.workspaceGrantedAt = grant.grantedAt || nowIso();
     this.taskScope = describeDesktopTaskScope(resolved);
-    writeLastWorkspace(this.dataDir, resolved);
+    writeWorkspaceRecord(this.dataDir, { folder: resolved, access: this.workspaceAccess, grantedAt: this.workspaceGrantedAt, source: this.workspaceSource });
+    if (this.workspaceSource !== 'earlier_build') this.recentWorkspaces = rememberWorkspace(this.dataDir, resolved, this.workspaceAccess);
     this.refreshProviderSoft();
     void this.refreshModelAvailability();
     void this.refreshInstalledModels();
-    this.emit({ kind: 'status', at: nowIso(), summary: `Repository ${resolved}` });
+    this.emit({ kind: 'status', at: nowIso(), summary: `Repository ${resolved} (${this.workspaceAccess === 'read' ? 'read only' : 'read and write'})` });
     return this.snapshot();
+  }
+
+  /**
+   * The person's answer on the v2 folder card: this folder becomes the workspace with the access they ticked. Read is
+   * required (a folder Pandesh may not read cannot be a workspace); Write is optional. Refused while a task runs, so a
+   * running task never sees its folder change under it.
+   */
+  useWorkspace(folder: string, access: { read: boolean; write: boolean }, source: 'picker' | 'chat' | 'recent'): DesktopSnapshot {
+    if (this.isBusy()) throw new Error('Wait for the running task to finish before changing the workspace folder.');
+    if (!access?.read) throw new Error('A workspace needs read access: Pandesh cannot work with a folder it may not read.');
+    const check = checkWorkspaceFolder(String(folder ?? ''), { dataDir: this.dataDir });
+    if (check.state !== 'ok') throw new Error(`Pandesh can't use ${check.folder} as the workspace: ${check.reason}.`);
+    const where = source === 'chat' || source === 'recent' || source === 'picker' ? source : 'picker';
+    return this.setFolder(check.folder, { access: access.write ? 'read_write' : 'read', source: where });
+  }
+
+  /** Changes what Pandesh may do in the current folder ("Allow writing" / "Make read-only"). Applies from the next message. */
+  setWorkspaceAccess(access: WorkspaceAccess): DesktopSnapshot {
+    if (!this.folder) throw new Error('No workspace folder is selected.');
+    if (this.isBusy()) throw new Error('Wait for the running task to finish before changing what Pandesh may do in this folder.');
+    if (!isWorkspaceAccess(access)) throw new Error(`'${String(access)}' is not a folder access level.`);
+    return this.setFolder(this.folder, { access, source: this.workspaceSource === 'earlier_build' || !this.workspaceSource ? 'picker' : this.workspaceSource });
+  }
+
+  /** Whether `folder` can be the workspace, and what the person should know first (the v2 folder card). */
+  checkWorkspaceFolder(folder: string): FolderCheck {
+    return checkWorkspaceFolder(String(folder ?? ''), { dataDir: this.dataDir });
+  }
+
+  /**
+   * A message that names a folder by its full path, when that folder is not already the workspace (or inside it): the
+   * v2 window then asks the person whether to make it the workspace, and with which access, before the message is
+   * sent. Null when there is nothing to ask. The disk search is bounded, so a slow drive never holds a message long.
+   */
+  async inspectFolderMention(text: string): Promise<DesktopFolderMention | null> {
+    const mention = await findFolderMentionWithin(String(text ?? ''), FOLDER_MENTION_TIMEOUT_MS);
+    if (!mention) return null;
+    if (this.folder && folderInside(mention.folder, this.folder)) return null;
+    const check = checkWorkspaceFolder(mention.folder, { dataDir: this.dataDir });
+    const remembered = this.recentWorkspaces.find((r) => folderInside(r.folder, check.folder) && folderInside(check.folder, r.folder));
+    return { folder: check.folder, spelled: mention.spelled, check, rememberedAccess: remembered?.access ?? null };
+  }
+
+  /** The workspace as the window shows it: the folder, what Pandesh may do there, and since when. */
+  private workspaceView(): DesktopWorkspaceView | null {
+    if (!this.folder) return null;
+    return { folder: this.folder, access: this.workspaceAccess, grantedAt: this.workspaceGrantedAt, source: this.workspaceSource ?? 'picker' };
   }
 
   restoreLastFolder(): DesktopSnapshot | null {
     if (this.folder) return this.snapshot();
-    const previous = readLastWorkspace(this.dataDir);
+    const previous = readWorkspaceRecord(this.dataDir);
     if (!previous) return null;
     try {
-      return this.setFolder(previous);
+      return this.setFolder(previous.folder, { access: previous.access, source: previous.source, grantedAt: previous.grantedAt });
     } catch (err) {
       this.options.log?.(`last workspace unavailable: ${(err as Error).message}`);
       return null;
@@ -2146,7 +2221,7 @@ export class DesktopSession {
     }
 
     const workerOption = findWorkerOption(worker)!;
-    const plan = planDesktopInteraction({ hasFolder, workerId: worker, goalText: text });
+    const plan = planDesktopInteraction({ hasFolder, workerId: worker, goalText: text, workspaceWritable: this.workspaceAccess === 'read_write' });
     if (plan.blockReason) {
       if (plan.needsWorkspace) {
         // Truthful, non-throwing outcome the conversation pane can render
@@ -2253,6 +2328,8 @@ export class DesktopSession {
             toolPermissionPolicy: {
               profile: resolvedWorker.profile,
               worker,
+              // What the person allowed in this folder; Core freezes it with the request and enforces 'read'.
+              ...(hasFolder ? { workspaceAccess: this.workspaceAccess } : {}),
             },
           }),
       ...(visionEvidence ? { modelSelection: visionEvidence } : {}),

@@ -7,7 +7,7 @@ import { recordRuntimeEvent } from './runtimeEvents';
 import { getAttemptContext } from './attemptContext';
 import { isTerminalAttemptStatus } from './attemptTransitions';
 import { canonicalArgumentsDigest, canonicalJson, MAX_APPROVAL_ACTION_ARGUMENTS_BYTES } from './approvalArguments';
-import { PLAN_ONLY_ACTOR, planOnlyApprovalVeto } from './permissionModes';
+import { PLAN_ONLY_ACTOR, planOnlyApprovalVeto, READ_ONLY_WORKSPACE_ACTOR, readOnlyWorkspaceApprovalVeto } from './permissionModes';
 
 const MAX_SUMMARY_BYTES = 8192;
 /** The proposal-time presentation (a bounded diff) is rendering, not
@@ -203,6 +203,14 @@ export function createApproval(db: CoreDatabase, input: CreateApprovalInput): Ap
       if (veto) {
         summary = { ...summary, policyDecision: 'denied', policyReason: veto.reason };
         input = { ...input, initialResolution: 'rejected', resolvedBy: PLAN_ONLY_ACTOR };
+      }
+    }
+    // A read-only workspace: a change to files, a program run or a delivery is born rejected by Core, in any mode.
+    if (input.initialResolution !== 'rejected') {
+      const veto = readOnlyWorkspaceApprovalVeto(db, { attemptId: input.attemptId, kind: input.kind, summary });
+      if (veto) {
+        summary = { ...summary, policyDecision: 'denied', policyReason: veto.reason };
+        input = { ...input, initialResolution: 'rejected', resolvedBy: READ_ONLY_WORKSPACE_ACTOR };
       }
     }
     let actionArgumentsJson: string | null = null;
