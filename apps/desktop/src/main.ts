@@ -20,7 +20,7 @@ import {
   type DesktopBuildIdentity,
 } from './host/desktopBuildIdentity';
 import { ownsLoginItem, readHostPreferences, resolveUiVariant, writeHostPreferences } from './host/desktopHostPreferences';
-import { DESKTOP_CHANNELS, type DesktopAppMetadata, type DesktopUpdateStartResult, type DesktopUpdateStatus } from './ipc';
+import { DESKTOP_CHANNELS, type DesktopAppMetadata, type DesktopUpdateStartResult, type DesktopUpdateStatus, type MobilePairingView } from './ipc';
 import {
   acknowledgeUpdateResult, inspectPackage, launchUpdater, quiesceCore, readCoreReadiness, readUpdateResult,
   setUpdateGate, updaterAvailable, writeUiHealth,
@@ -28,7 +28,7 @@ import {
 import { JarvisTrayController } from './host/jarvisTray';
 import { createAppIcon } from './host/appIcon';
 import { normalizeSafeExternalUrl, normalizeSafeBrowserUrl } from './host/desktopSafeOpen';
-import { MobileServer, defaultMobileHost } from './host/mobileServer';
+import { MobileServer, defaultMobileHost, parseMobileAccess } from './host/mobileServer';
 
 /**
  * Dev: repo root. Portable / installed: directory that contains `app/` + `runtime/core.js`
@@ -271,7 +271,7 @@ function sendToRenderer(channel: string, payload: unknown): void {
 function syncTrayFromSession(): void {
   if (!tray || !session) return;
   const snap = session.snapshot();
-  let mobileStatus = 'Stopped';
+  let mobileStatus = parseMobileAccess(prefs.mobileAccess) === 'off' ? 'Off' : 'Stopped';
   if (mobileServer && mobileServer.isRunning()) {
     const info = mobileServer.getPairingInfo();
     mobileStatus = `Running (${info.ip}:${info.port} · ${info.connectedClients} connected)`;
@@ -286,6 +286,75 @@ function syncTrayFromSession(): void {
     uiVariant: resolveUiVariant(prefs),
     uiVariantForced: Boolean(process.env.PANDESH_UI_V2?.trim()),
   });
+}
+
+/**
+ * Starts (or restarts) Pandesh Mobile as the owner set it: off, on the home network, or for the local Tailscale proxy
+ * only. Test and scratch profiles always stay on loopback (defaultMobileHost). The server object exists even while
+ * access is off, so the PC can still list and forget paired phones.
+ */
+async function startMobileServer(): Promise<void> {
+  if (!session) return;
+  const access = parseMobileAccess(prefs.mobileAccess);
+  if (mobileServer) {
+    mobileServer.stop();
+    mobileServer = undefined;
+  }
+  mobileServer = new MobileServer({
+    dataDir,
+    session,
+    access,
+    // Overrides exist so an isolated test instance can run beside the live app (loopback, another port).
+    port: Number(process.env.KARKEDIKHA_MOBILE_PORT) || 3030,
+    // Test and scratch instances stay on loopback (no firewall prompt per build, not reachable from the LAN).
+    host: defaultMobileHost(process.env, dataDir, defaultDesktopDataDir(), access),
+    log: (message) => hostLog(message),
+    onClientsChanged: (count) => {
+      sendSnapshot();
+      sendToRenderer(DESKTOP_CHANNELS.event, {
+        kind: 'status',
+        at: new Date().toISOString(),
+        summary: `mobile_clients:${count}`,
+      });
+    },
+  });
+  if (access === 'off') {
+    hostLog('Pandesh Mobile is off (owner setting)');
+    syncTrayFromSession();
+    return;
+  }
+  try {
+    await mobileServer.start();
+    const info = mobileServer.getPairingInfo();
+    hostLog(MobileServer.logLine(info));
+  } catch (err) {
+    hostLog(`mobile server start failed: ${(err as Error).message}`);
+  }
+  syncTrayFromSession();
+}
+
+/** What Connections → Phone (v2) and Integrations (Classic) show. Never a session token. */
+async function mobilePairingView(): Promise<MobilePairingView> {
+  const access = parseMobileAccess(prefs.mobileAccess);
+  const port = Number(process.env.KARKEDIKHA_MOBILE_PORT) || 3030;
+  if (mobileServer && access !== 'off') return { ...(await mobileServer.getPairingView()), access };
+  const devices = mobileServer ? mobileServer.pairedDevices() : [];
+  return {
+    code: '',
+    codeExpiresAt: null,
+    port,
+    ip: '127.0.0.1',
+    url: '',
+    secureUrl: null,
+    secure: { state: 'unchecked', url: null, detail: access === 'off' ? 'Phone access is off.' : 'Pandesh Mobile has not started.' },
+    localUrl: '',
+    access,
+    pairedCount: devices.length,
+    connectedClients: 0,
+    listening: false,
+    devices,
+    pairingPausedUntil: null,
+  };
 }
 
 function applyOpenAtLogin(enabled: boolean): void {
@@ -713,9 +782,10 @@ async function createWindow(): Promise<void> {
     setOpenAtLogin: (enabled) => applyOpenAtLogin(enabled),
     quitJarvis: () => { void shutdownAndQuit(); },
     openMobileUrl: () => {
-      if (mobileServer) {
+      // The phone page on this PC, without a pairing code: a code works once, and this click must not use it up.
+      if (mobileServer && mobileServer.isRunning()) {
         const info = mobileServer.getPairingInfo();
-        void shell.openExternal(info.url);
+        void shell.openExternal(`http://127.0.0.1:${info.port}/`);
       }
     },
     setUiVariant: (variant) => {
@@ -778,30 +848,7 @@ async function createWindow(): Promise<void> {
   await ensureMainWindow();
   await session.start();
 
-  try {
-    mobileServer = new MobileServer({
-      dataDir,
-      session,
-      // Overrides exist so an isolated test instance can run beside the live app (loopback, another port).
-      port: Number(process.env.KARKEDIKHA_MOBILE_PORT) || 3030,
-      // Test and scratch instances stay on loopback (no firewall prompt per build, not reachable from the LAN).
-      host: defaultMobileHost(process.env, dataDir, defaultDesktopDataDir()),
-      log: (message) => hostLog(message),
-      onClientsChanged: (count) => {
-        sendSnapshot();
-        sendToRenderer(DESKTOP_CHANNELS.event, {
-          kind: 'status',
-          at: new Date().toISOString(),
-          summary: `mobile_clients:${count}`,
-        });
-      },
-    });
-    await mobileServer.start();
-    const info = mobileServer.getPairingInfo();
-    hostLog(MobileServer.logLine(info));
-  } catch (err) {
-    hostLog(`mobile server start failed: ${(err as Error).message}`);
-  }
+  await startMobileServer();
 
   // Restore wake preference from last session (tray background continuity).
   if (prefs.wakeEnabled) {
@@ -1533,18 +1580,30 @@ function registerIpc(): void {
     sendSnapshot();
     return snapshot;
   });
-  ipcMain.handle(DESKTOP_CHANNELS.getMobilePairing, () => {
-    const info = mobileServer?.getPairingInfo();
-    return info ?? {
-      code: '----',
-      token: '',
-      port: 3030,
-      ip: '127.0.0.1',
-      url: 'http://127.0.0.1:3030/',
-      pairedCount: 0,
-      connectedClients: 0,
-      listening: false,
-    };
+  ipcMain.handle(DESKTOP_CHANNELS.getMobilePairing, () => mobilePairingView());
+  ipcMain.handle(DESKTOP_CHANNELS.rotateMobilePairingCode, async () => {
+    mobileServer?.rotateCode();
+    return mobilePairingView();
+  });
+  ipcMain.handle(DESKTOP_CHANNELS.forgetMobileDevice, async (_event, id: string) => {
+    const target = String(id ?? '').trim();
+    if (!target) throw new Error('which phone to forget is required');
+    mobileServer?.forgetDevice(target);
+    sendSnapshot();
+    return mobilePairingView();
+  });
+  ipcMain.handle(DESKTOP_CHANNELS.setMobileAccess, async (_event, mode: string) => {
+    const access = parseMobileAccess(mode);
+    if (String(mode) !== access) throw new Error(`unknown phone access '${String(mode)}'`);
+    prefs = writeHostPreferences(dataDir, { mobileAccess: access });
+    hostLog(`Pandesh Mobile access set to ${access}`);
+    await startMobileServer();
+    sendSnapshot();
+    return mobilePairingView();
+  });
+  ipcMain.handle(DESKTOP_CHANNELS.resumeMobilePairing, async () => {
+    mobileServer?.resumePairing();
+    return mobilePairingView();
   });
   ipcMain.handle(DESKTOP_CHANNELS.minimizeWindow, () => {
     if (window && !window.isDestroyed()) window.minimize();

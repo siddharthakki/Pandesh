@@ -1,0 +1,224 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
+  <meta name="color-scheme" content="dark light">
+  <meta name="theme-color" content="#0E1013" media="(prefers-color-scheme: dark)">
+  <meta name="theme-color" content="#F7F7F5" media="(prefers-color-scheme: light)">
+  <meta name="referrer" content="no-referrer">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-title" content="Pandesh">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="description" content="Pandesh, your assistant on your PC, from your phone.">
+  <title>Pandesh</title>
+  <link rel="manifest" href="/manifest.webmanifest">
+  <link rel="icon" href="/icons/icon-192.png" type="image/png">
+  <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png">
+  <link rel="stylesheet" href="/app.css">
+  <script src="/lib.js" defer></script>
+  <script src="/app.js" defer></script>
+</head>
+<body>
+  <div id="app" class="app" data-phase="boot">
+    <header class="topbar">
+      <img class="brand-mark" src="/icons/icon-192.png" alt="" width="34" height="34">
+      <div class="brand-text">
+        <h1 class="brand-name">Pandesh</h1>
+        <p class="brand-sub" id="brand-sub">Your assistant on your PC</p>
+      </div>
+      <span class="conn-pill" id="conn-pill" data-tone="busy" role="status" aria-live="polite">Connecting…</span>
+      <button type="button" class="icon-btn" id="menu-btn" aria-label="Connection and settings" aria-haspopup="dialog" aria-controls="sheet">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="5" cy="12" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="19" cy="12" r="1.6"/></svg>
+      </button>
+    </header>
+
+    <div class="banner" id="banner" role="status" aria-live="polite" hidden>
+      <span class="banner-text" id="banner-text"></span>
+      <button type="button" class="btn small" id="banner-action" hidden></button>
+    </div>
+
+    <main class="views">
+      <section id="view-boot" class="view view-boot" aria-label="Starting">
+        <img class="boot-mark" src="/icons/icon-192.png" alt="" width="64" height="64">
+      </section>
+
+      <section id="view-pair" class="view view-pair" aria-labelledby="pair-title" hidden>
+        <div class="pair-card">
+          <img class="pair-mark" src="/icons/icon-192.png" alt="" width="76" height="76">
+          <h2 id="pair-title" class="pair-title">Pair this phone</h2>
+          <p class="pair-lead">On your PC, open Pandesh, then <strong>System → Connections → Phone</strong>. Scan the QR code there with this phone's camera, or type the code.</p>
+          <form id="pair-form" class="pair-form" autocomplete="off" novalidate>
+            <label class="field-label" for="pair-code">Pairing code</label>
+            <input id="pair-code" class="pair-input" type="text" inputmode="text" autocapitalize="characters" autocomplete="one-time-code" spellcheck="false" maxlength="9" placeholder="XXXX-XXXX" aria-describedby="pair-msg">
+            <button type="submit" class="btn primary block" id="pair-submit">Pair</button>
+            <p id="pair-msg" class="form-msg" role="alert"></p>
+          </form>
+          <details class="help">
+            <summary>Can't connect?</summary>
+            <ul>
+              <li>Check that the PC is on and Pandesh is running.</li>
+              <li><strong>Secure link</strong> (https, through Tailscale): turn Tailscale on in its app on this phone.</li>
+              <li><strong>Wi-Fi link</strong> (http): this phone must be on the same Wi-Fi as the PC, not a guest network, with no VPN on.</li>
+              <li>A code works once and for 10 minutes. Show a new one on the PC if it expired.</li>
+            </ul>
+          </details>
+        </div>
+      </section>
+
+      <section id="view-offline" class="view view-offline" aria-labelledby="offline-title" hidden>
+        <div class="offline-card">
+          <svg class="offline-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M2 8.8a15 15 0 0 1 4.2-2.6"/><path d="M10 5.1A15 15 0 0 1 22 8.8"/><path d="M5 12.6a10 10 0 0 1 5.2-2.5"/><path d="M15.9 10.8A10 10 0 0 1 19 12.6"/><path d="M8.5 16.1a5 5 0 0 1 7 0"/><path d="M12 20h.01"/><path d="M3 3l18 18"/></svg>
+          <h2 id="offline-title">Can't reach your PC</h2>
+          <p id="offline-detail">Pandesh runs on your PC, and this phone could not reach it.</p>
+          <button type="button" class="btn primary" id="offline-retry">Try again</button>
+          <p class="muted small" id="offline-next"></p>
+          <ul class="tips">
+            <li>Is the PC on, with Pandesh running?</li>
+            <li>Secure link: is Tailscale turned on in its app on this phone?</li>
+            <li>Wi-Fi link: is this phone on the same Wi-Fi as the PC (not a guest network, no VPN)?</li>
+          </ul>
+        </div>
+      </section>
+
+      <section id="view-chat" class="view view-chat" aria-label="Conversation" hidden>
+        <div class="transcript" id="transcript">
+          <div class="transcript-inner">
+            <div class="hero" id="hero">
+              <p class="hero-date" id="hero-date"></p>
+              <h2 class="hero-title" id="hero-title">Hello.</h2>
+              <p class="hero-sub">Ask Pandesh anything. It works on your PC, not in the cloud.</p>
+            </div>
+            <div id="messages" class="messages"></div>
+            <div id="outbox" class="messages"></div>
+            <div id="live" class="messages"></div>
+            <section id="decision" class="decision" aria-label="Needs your OK" hidden></section>
+          </div>
+        </div>
+        <button type="button" class="jump" id="jump" hidden>
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14"/><path d="M19 12l-7 7-7-7"/></svg>
+          <span>Latest</span>
+        </button>
+        <div class="footer">
+          <div class="status-line" id="status-line" hidden>
+            <span class="pulse-dot" aria-hidden="true"></span>
+            <span class="status-text" id="status-text">Working…</span>
+            <span class="status-time" id="status-time"></span>
+            <button type="button" class="btn small" id="stop-btn">Stop</button>
+          </div>
+          <div class="voice-line" id="voice-line" hidden>
+            <span class="meter" aria-hidden="true"><span class="meter-fill" id="meter-fill"></span></span>
+            <span class="voice-text" id="voice-text">Listening…</span>
+            <button type="button" class="btn small" id="voice-cancel">Cancel</button>
+          </div>
+          <p class="composer-note" id="composer-note" role="status" hidden></p>
+          <form class="composer" id="composer" autocomplete="off">
+            <textarea id="input" rows="1" placeholder="Message Pandesh" aria-label="Message Pandesh" maxlength="20000"></textarea>
+            <button type="button" class="icon-btn mic" id="mic-btn" aria-label="Speak to Pandesh">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3a3 3 0 0 0-3 3v6a3 3 0 0 0 6 0V6a3 3 0 0 0-3-3z"/><path d="M19 11a7 7 0 0 1-14 0"/><path d="M12 18v3"/></svg>
+            </button>
+            <button type="submit" class="icon-btn send" id="send-btn" aria-label="Send" disabled>
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 19V5"/><path d="M5 12l7-7 7 7"/></svg>
+            </button>
+          </form>
+        </div>
+      </section>
+
+      <section id="view-tasks" class="view view-page" aria-labelledby="tasks-title" hidden>
+        <div class="page">
+          <div class="page-head">
+            <h2 id="tasks-title">Development tasks</h2>
+            <button type="button" class="btn small danger" id="tasks-stop-all">Stop all</button>
+          </div>
+          <p class="muted" id="tasks-counts">Loading…</p>
+          <ul class="task-list" id="tasks-list"></ul>
+          <p class="empty" id="tasks-empty" hidden>No development tasks yet.</p>
+          <section class="task-detail" id="task-detail" hidden></section>
+        </div>
+      </section>
+
+      <section id="view-pc" class="view view-page" aria-labelledby="pc-title" hidden>
+        <div class="page">
+          <h2 id="pc-title">Your PC</h2>
+          <dl class="kv card">
+            <dt>Pandesh</dt><dd id="pc-core">—</dd>
+            <dt>Model</dt><dd id="pc-model">—</dd>
+            <dt>Workspace</dt><dd id="pc-workspace">—</dd>
+            <dt>Link</dt><dd id="pc-link">—</dd>
+          </dl>
+          <h3>Health</h3>
+          <dl class="kv card">
+            <dt>CPU</dt><dd id="h-cpu">—</dd>
+            <dt>Memory</dt><dd id="h-ram">—</dd>
+            <dt>GPU</dt><dd id="h-gpu">—</dd>
+            <dt>GPU load</dt><dd id="h-gpu-load">—</dd>
+            <dt>GPU memory</dt><dd id="h-vram">—</dd>
+            <dt>Disk</dt><dd id="h-disk">—</dd>
+            <dt>Ollama</dt><dd id="h-ollama">—</dd>
+          </dl>
+          <p class="muted small" id="h-status">Loading…</p>
+        </div>
+      </section>
+    </main>
+
+    <nav class="tabbar" id="tabbar" aria-label="Sections" hidden>
+      <button type="button" class="tab" data-tab="chat" aria-current="page">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M21 12a8 8 0 0 1-11.6 7.1L4 20l1-4.6A8 8 0 1 1 21 12z"/></svg>
+        <span>Chat</span><span class="tab-badge" id="badge-chat" hidden></span>
+      </button>
+      <button type="button" class="tab" data-tab="tasks" aria-current="false">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 6h11"/><path d="M9 12h11"/><path d="M9 18h11"/><path d="M4 6l1 1 2-2"/><path d="M4 12l1 1 2-2"/><path d="M4 18l1 1 2-2"/></svg>
+        <span>Tasks</span><span class="tab-badge" id="badge-tasks" hidden></span>
+      </button>
+      <button type="button" class="tab" data-tab="pc" aria-current="false">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="12" rx="2"/><path d="M8 20h8"/><path d="M12 16v4"/></svg>
+        <span>PC</span>
+      </button>
+    </nav>
+
+    <div class="sheet-backdrop" id="sheet-backdrop" hidden></div>
+    <section class="sheet" id="sheet" role="dialog" aria-modal="true" aria-labelledby="sheet-title" hidden>
+      <div class="sheet-grip" aria-hidden="true"></div>
+      <div class="sheet-head">
+        <h2 id="sheet-title">Pandesh on this phone</h2>
+        <button type="button" class="icon-btn" id="sheet-close" aria-label="Close">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12"/><path d="M18 6L6 18"/></svg>
+        </button>
+      </div>
+      <div class="sheet-body">
+        <section class="sheet-section">
+          <h3>Connection</h3>
+          <dl class="kv">
+            <dt>Status</dt><dd id="c-status">—</dd>
+            <dt>Link</dt><dd id="c-link">—</dd>
+            <dt>This phone</dt><dd id="c-device">—</dd>
+            <dt>Last update</dt><dd id="c-last">—</dd>
+          </dl>
+          <button type="button" class="btn block" id="reconnect-btn">Reconnect now</button>
+        </section>
+        <section class="sheet-section">
+          <h3 id="read-aloud-label">Read replies aloud</h3>
+          <div class="segmented" role="radiogroup" aria-labelledby="read-aloud-label" id="read-aloud">
+            <button type="button" role="radio" data-value="off">Off</button>
+            <button type="button" role="radio" data-value="voice">When I speak</button>
+            <button type="button" role="radio" data-value="always">Always</button>
+          </div>
+        </section>
+        <section class="sheet-section" id="install-section" hidden>
+          <h3>Install the app</h3>
+          <p class="muted" id="install-text"></p>
+          <button type="button" class="btn primary block" id="install-btn" hidden>Install Pandesh</button>
+        </section>
+        <section class="sheet-section">
+          <button type="button" class="btn danger block" id="unpair-btn">Unpair this phone</button>
+          <p class="muted small">You can also remove phones on your PC, in Connections → Phone.</p>
+        </section>
+      </div>
+    </section>
+
+    <div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
+  </div>
+  <noscript>Pandesh needs JavaScript to run.</noscript>
+</body>
+</html>

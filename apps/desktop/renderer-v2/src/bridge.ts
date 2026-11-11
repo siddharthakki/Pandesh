@@ -1,8 +1,7 @@
 /**
  * The only way the v2 renderer reaches Pandesh: the existing preload bridge
- * (`window.desktop`, apps/desktop/src/preload.ts). No network access, no new
- * IPC surface beyond `getUiVariant` / `setUiVariant`. Types are the subset of
- * apps/desktop/src/ipc.ts the v2 surfaces read.
+ * (`window.desktop`, apps/desktop/src/preload.ts). No network access. Types are
+ * the subset of apps/desktop/src/ipc.ts the v2 surfaces read.
  */
 import { useEffect, useRef, useState } from 'react';
 import type { PermissionMode, PermissionState } from './composerModel';
@@ -90,8 +89,35 @@ export interface BriefAction { kind: string; label: string; approvalId?: string;
 export interface BriefItem { id: string; kind: string; stance: string; title: string; detail: string; state: string; at: string; source: { kind: string; label: string; checkedAt: string }; actions: BriefAction[] }
 export interface Brief { generatedAt: string; home: BriefItem[] }
 
+/** Who can reach Pandesh Mobile (ipc.ts MobileAccessMode). */
+export type MobileAccess = 'off' | 'lan' | 'tailscale';
+export interface MobileDevice { id: string; name: string; pairedAt: string; lastSeenAt: string | null; connected: boolean }
+/** Phone pairing as the host reports it (ipc.ts MobilePairingView). Never a session token. */
+export interface MobilePairing {
+  code: string;
+  codeExpiresAt: string | null;
+  port: number;
+  ip: string;
+  url: string;
+  secureUrl: string | null;
+  secure: { state: 'ready' | 'not-installed' | 'not-running' | 'not-serving' | 'funnel' | 'error' | 'unchecked'; url: string | null; detail: string };
+  localUrl: string;
+  access: MobileAccess;
+  pairedCount: number;
+  connectedClients: number;
+  listening: boolean;
+  devices: MobileDevice[];
+  pairingPausedUntil: string | null;
+}
+
 export interface DesktopApi {
   getSnapshot(): Promise<Snapshot | null>;
+  /** Phone pairing: the code and links, a new code, forget a phone, who may connect, resume paused pairing. */
+  getMobilePairing(): Promise<MobilePairing>;
+  rotateMobilePairingCode(): Promise<MobilePairing>;
+  forgetMobileDevice(id: string): Promise<MobilePairing>;
+  setMobileAccess(mode: MobileAccess): Promise<MobilePairing>;
+  resumeMobilePairing(): Promise<MobilePairing>;
   /** `voiceTurnId` marks a message that was spoken (the transcript of a voice turn). */
   submitTask(goal: string, worker?: string, voiceTurnId?: string): Promise<{ attemptId: string; requestId: string; model: string; routed?: string }>;
   /** A local model name, `__auto__`, or `<provider>::<model>` for a free cloud model. */
