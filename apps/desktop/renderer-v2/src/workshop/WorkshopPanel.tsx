@@ -9,9 +9,11 @@ import { api, errorText, type WorkshopContent, type WorkshopSummary } from '../b
 import { timeOf } from '../ui';
 import { WORKSHOP_TYPE_LABEL, type WorkshopVersion } from '../../../../../core/shared/workshop/model';
 import { diffScenes, type Scene3D } from '../../../../../core/shared/workshop/scene3d';
+import { lineDiff } from '../../../../../core/shared/workshop/design';
 import { Viewer3D } from './Viewer3D';
 import { ImageViewer } from './ImageViewer';
 import { SimulationLab } from './SimulationLab';
+import { DesignPreview } from './DesignPreview';
 import type { CommandOutcome, ViewerHandle } from './viewerTypes';
 import type { WorkshopState } from './useWorkshop';
 
@@ -124,6 +126,11 @@ export function WorkshopPanel({ conversationId, workshop, narrow }: Props) {
     if (!compareContent || !content || compareContent.type !== '3d' || content.type !== '3d') return null;
     return diffScenes((compareContent as { scene: Scene3D }).scene, (content as { scene: Scene3D }).scene);
   }, [compareContent, content]);
+  const designChanges = useMemo(() => {
+    if (compareContent?.type !== 'design' || content?.type !== 'design') return null;
+    const lines = lineDiff(compareContent.html, content.html, 0);
+    return { added: lines.filter((l) => l.kind === '+').length, removed: lines.filter((l) => l.kind === '-').length };
+  }, [compareContent, content]);
 
   if (!ui) return null;
   const mode = ui.mode;
@@ -159,6 +166,7 @@ export function WorkshopPanel({ conversationId, workshop, narrow }: Props) {
         <div className="ws-compare" role="region" aria-label="Compare versions">
           <strong>Comparing v{compareVersion.number} → v{version.number}</strong>
           {changes && (changes.length ? <ul>{changes.slice(0, 12).map((c, i) => <li key={i}><span className="meta">{c.name}</span> {c.field}: {c.from && <><del>{c.from}</del> → </>}{c.to}</li>)}</ul> : <p className="meta">No differences.</p>)}
+          {designChanges && <p className="meta">{designChanges.added} line{designChanges.added === 1 ? '' : 's'} added, {designChanges.removed} removed in the page source. Open <strong>Changes</strong> in the preview's toolbar to read them.</p>}
           {content?.type === 'image' && compareContent?.type === 'image' && (
             <div className="ws-side-by-side">
               <figure><img src={compareContent.dataUrl} alt={`Version ${compareVersion.number}`} /><figcaption>v{compareVersion.number} · {compareVersion.meta.op.summary.slice(0, 80)}</figcaption></figure>
@@ -188,7 +196,8 @@ export function WorkshopPanel({ conversationId, workshop, narrow }: Props) {
             onSave={(set, what) => onEdit({ set }, `Simulation: ${what}`)} />
         )}
         {summary && version && loaded && content?.type === 'design' && (
-          <div className="notice" style={{ margin: 16 }}>This {WORKSHOP_TYPE_LABEL[summary.type]} version is saved, but this build has no viewer for it yet.</div>
+          <DesignPreview ref={viewer} artifactId={content.artifactId} html={content.html} title={summary.title}
+            compareHtml={compareContent?.type === 'design' ? compareContent.html : null} compareLabel={compareVersion ? `v${compareVersion.number}` : null} />
         )}
         {drawer && summary && version && (
           <aside className="ws-drawer" aria-label={drawer === 'history' ? 'Version history' : 'Details'}>
@@ -246,7 +255,7 @@ function Gallery({ list, recent, onOpen }: { list: WorkshopSummary[]; recent: Wo
   return (
     <div className="ws-gallery">
       <h3>In this conversation</h3>
-      {list.length ? <div className="ws-cards">{list.map(card)}</div> : <p className="meta">Nothing yet. Ask Pandesh to build a 3D model, and it opens here.</p>}
+      {list.length ? <div className="ws-cards">{list.map(card)}</div> : <p className="meta">Nothing yet. Ask Pandesh to build a 3D model, run a simulation or design a page, and it opens here.</p>}
       {others.length > 0 && <><h3>Recent, from other conversations</h3><div className="ws-cards">{others.map(card)}</div></>}
     </div>
   );

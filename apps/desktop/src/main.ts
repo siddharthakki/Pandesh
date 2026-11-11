@@ -10,10 +10,13 @@ import {
   ipcMain,
   Notification,
   powerMonitor,
+  protocol,
   screen,
   shell,
 } from 'electron';
 import { DesktopSession } from './host/desktopSession';
+import { DESIGN_PREVIEW_SCHEME, DesignPreviewStore, isDesignPreviewUrl } from './host/designPreview';
+import { checkDesignHtml } from '../../../core/shared/workshop/design';
 import {
   formatDiagnosticsReport,
   resolveBuildIdentity,
@@ -188,6 +191,11 @@ if (process.env.KARKEDIKHA_DESKTOP_DISABLE_GPU === '1' || packageSmokeMode) {
 const desktopUserData = path.join(dataDir, 'electron-profile');
 fs.mkdirSync(desktopUserData, { recursive: true });
 app.setPath('userData', desktopUserData);
+
+// The Design workshop's preview scheme (host/designPreview.ts): registered before the app is ready, as Electron
+// requires. Not bypassCSP, no fetch, no service workers: a preview page gets nothing a web page would not.
+protocol.registerSchemesAsPrivileged([{ scheme: DESIGN_PREVIEW_SCHEME, privileges: { standard: true, secure: true } }]);
+const designPreviews = new DesignPreviewStore();
 
 function resolveBundledCoreVersion(root: string): string {
   try {
@@ -717,6 +725,15 @@ async function ensureMainWindow(): Promise<BrowserWindow> {
       // Refused: the app window never navigates away.
     }
   });
+  // The only frames inside the window are Workshop previews; a frame may load a preview and nothing else. The
+  // window's own policy (frame-src pandesh-preview:) already blocks any other address before a request is made;
+  // this is the second layer, should that policy ever be loosened.
+  window.webContents.on('will-frame-navigate', (details) => {
+    if (details.isMainFrame) return;
+    if (isDesignPreviewUrl(details.url) || details.url === 'about:blank') return;
+    details.preventDefault();
+    hostLog('stopped a navigation inside a Workshop preview frame');
+  });
 
   window.on('close', (event) => {
     if (isQuitting || isShuttingDown) return;
@@ -741,10 +758,13 @@ async function ensureMainWindow(): Promise<BrowserWindow> {
   window.on('blur', () => writeWindowState({ visible: window?.isVisible() ?? true, minimized: window?.isMinimized() ?? false, focused: false }));
 
   // Explicit push-to-talk / wake: allow media when the renderer requests it.
-  window.webContents.session.setPermissionRequestHandler((_wc, permission, callback) => {
-    callback(permission === 'media');
+  // Only the window itself, never a frame inside it (a Workshop preview), may use the microphone.
+  window.webContents.session.setPermissionRequestHandler((_wc, permission, callback, details) => {
+    callback(permission === 'media' && details.isMainFrame !== false && !isDesignPreviewUrl(details.requestingUrl ?? ''));
   });
-  window.webContents.session.setPermissionCheckHandler((_wc, permission) => permission === 'media');
+  window.webContents.session.setPermissionCheckHandler((_wc, permission, requestingOrigin, details) => (
+    permission === 'media' && details.isMainFrame !== false && !isDesignPreviewUrl(requestingOrigin ?? '') && !isDesignPreviewUrl(details.requestingUrl ?? '')
+  ));
   await window.loadFile(rendererEntry());
   return window;
 }
@@ -1548,6 +1568,15 @@ function registerIpc(): void {
     if (!(bytes instanceof Uint8Array)) throw new Error('the export must be binary data');
     return session.exportWorkshopGlb(String(workshopId ?? ''), String(sourceArtifactId ?? ''), typeof conversationId === 'string' ? conversationId : null, bytes, Array.isArray(expectedNodes) ? expectedNodes.map(String) : []);
   });
+  ipcMain.handle(DESKTOP_CHANNELS.designPreview, async (_event, artifactId: unknown) => {
+    if (!session) throw new Error('desktop session is not started');
+    // The hash-verified page from Core, checked again, then served only from memory by a short-lived token.
+    const content = await session.loadWorkshopVersion(String(artifactId ?? ''));
+    if (content.type !== 'design') throw new Error('This file is not a Design workshop page');
+    const check = checkDesignHtml(content.html);
+    if (!check.ok) throw new Error(`The page cannot be shown: ${check.errors.join('; ')}`);
+    return { ...designPreviews.mint({ artifactId: content.artifactId, html: content.html }), warnings: check.warnings };
+  });
   ipcMain.handle(DESKTOP_CHANNELS.saveWorkshopFile, async (_event, artifactId: unknown) => {
     if (!session || !window) throw new Error('desktop session is not started');
     const source = await session.artifactPath(String(artifactId ?? ''));
@@ -1872,6 +1901,11 @@ if (gotSingleInstanceLock) {
 
   app.whenReady().then(async () => {
     hostLog('Electron ready');
+    // Workshop previews come from memory by token, never from a path (host/designPreview.ts).
+    protocol.handle(DESIGN_PREVIEW_SCHEME, (request) => {
+      const answer = designPreviews.respond(request.url, request.method);
+      return new Response(answer.body, { status: answer.status, headers: answer.headers });
+    });
     registerIpc();
     // The build identity is written into every host log line's context: a
     // crash report can be tied to the exact build without asking the user.

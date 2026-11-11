@@ -201,6 +201,8 @@ export interface DesktopApi {
   saveWorkshopEdit(workshopId: string, parentArtifactId: string, conversationId: string | null, change: unknown[] | { set?: Record<string, unknown>; adjust?: Record<string, unknown> }): Promise<{ artifactId: string }>;
   exportWorkshopGlb(workshopId: string, sourceArtifactId: string, conversationId: string | null, bytes: Uint8Array, expectedNodes: string[]): Promise<{ verified: boolean; artifactId: string | null; checks: string[]; byteSize: number }>;
   saveWorkshopFile(artifactId: string): Promise<{ saved: boolean; path: string | null }>;
+  /** A short-lived pandesh-preview: URL for a Design page (served from memory, sandboxed, no network). */
+  designPreview(artifactId: string): Promise<{ url: string; nonce: string; expiresAt: string; warnings: string[] }>;
   onEvent(listener: (event: ActivityEvent) => void): () => void;
   setWakeWordEnabled(enabled: boolean): Promise<Snapshot | null>;
   setWakeWordMuted(muted: boolean): Promise<Snapshot | null>;

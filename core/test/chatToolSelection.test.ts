@@ -159,4 +159,14 @@ describe('the Workshop (3D models)', () => {
     expect(plain.has('build_3d_model')).toBe(false);
     expect(plain.has('navigate_to')).toBe(true);
   });
+
+  it('routes a page design and its follow-ups to the Workshop ("make the heading larger", "show it on a phone")', () => {
+    const page = offered('Create a simple local landing page with a heading and a contact button.');
+    expect(page.has('workshop_edit')).toBe(true);
+    expect(page.has('navigate_to')).toBe(false);
+    expect(offered('Make the heading larger.').has('workshop_edit')).toBe(true);
+    expect(offered('Show it on a phone.').has('workshop_view')).toBe(true);
+    // "Open the dashboard" is still the app's own navigation, not a page design.
+    expect(offered('Open the dashboard').has('workshop_edit')).toBe(false);
+  });
 });

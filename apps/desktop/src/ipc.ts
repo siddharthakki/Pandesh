@@ -166,6 +166,8 @@ export const DESKTOP_CHANNELS = {
   saveWorkshopEdit: 'desktop:saveWorkshopEdit',
   exportWorkshopGlb: 'desktop:exportWorkshopGlb',
   saveWorkshopFile: 'desktop:saveWorkshopFile',
+  /** A short-lived pandesh-preview: URL for one Design page (host/designPreview.ts). */
+  designPreview: 'desktop:designPreview',
   /** Bounded local deep-links into the standalone Image Generation Studio
    * app (:8989) for one already-verified Core artifact — never an
    * arbitrary/user-supplied URL. */

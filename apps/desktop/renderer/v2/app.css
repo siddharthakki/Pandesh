@@ -323,3 +323,22 @@ kbd { font-family: var(--font-mono); font-size: 12px; color: var(--muted); borde
 .ws-compare-table { width: 100%; margin-top: 8px; border-collapse: collapse; font-size: 13px; }
 .ws-compare-table th, .ws-compare-table td { padding: 3px 6px; border-bottom: 1px solid var(--line); text-align: right; }
 .ws-compare-table th:first-child, .ws-compare-table td:first-child { text-align: left; color: var(--muted); }
+/* Design page (sandboxed preview) */
+.ws-design { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
+.ws-design-main { flex: 1 1 auto; min-height: 0; display: flex; }
+.ws-design-stage { flex: 1 1 auto; min-width: 0; overflow: hidden; display: flex; align-items: flex-start; justify-content: center; padding: 12px; background: var(--canvas); }
+.ws-device { flex: 0 0 auto; overflow: hidden; border: 1px solid var(--line); border-radius: 10px; background: #fff; box-shadow: 0 8px 28px rgba(0,0,0,0.28); }
+.ws-device[data-device="phone"] { border-radius: 22px; }
+.ws-device iframe { display: block; border: 0; background: #fff; }
+.ws-code { flex: 1 1 auto; min-width: 0; margin: 0; overflow: auto; padding: 10px 0; background: var(--canvas); font-family: var(--font-mono); font-size: 12.5px; line-height: 1.5; white-space: pre; color: var(--ink); }
+.ws-code > div { padding: 0 12px 0 0; }
+.ws-code .ln { display: inline-block; width: 44px; margin-right: 10px; padding-right: 6px; text-align: right; color: var(--faint); user-select: none; border-right: 1px solid var(--line); }
+.ws-code .mark { display: inline-block; width: 14px; color: var(--muted); }
+.ws-diff .add { background: rgba(80, 200, 120, 0.14); }
+.ws-diff .del { background: rgba(230, 90, 90, 0.14); }
+.ws-design-side { flex: 0 0 270px; overflow-y: auto; padding: 10px 12px; border-left: 1px solid var(--line); font-size: 14px; }
+.ws-design-side h4 { margin: 10px 0 6px; font-size: 12.5px; color: var(--muted); letter-spacing: 0.04em; text-transform: uppercase; }
+.ws-outline { margin: 0 0 6px; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 4px; }
+.ws-outline li { overflow-wrap: anywhere; }
+.ws-outline .tag { display: inline-block; min-width: 26px; padding: 0 5px; border: 1px solid var(--line); border-radius: 5px; font-family: var(--font-mono); font-size: 11.5px; color: var(--muted); text-align: center; }
+@media (max-width: 1180px) { .ws-design-side { flex-basis: 220px; } }

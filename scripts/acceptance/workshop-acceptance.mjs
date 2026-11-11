@@ -14,6 +14,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
+import { createServer } from 'node:http';
 
 const args = Object.fromEntries(process.argv.slice(2).reduce((acc, a, i, all) => (a.startsWith('--') ? [...acc, [a.slice(2), all[i + 1] && !all[i + 1].startsWith('--') ? all[i + 1] : true]] : acc), []));
 const PROFILE = path.resolve(String(args.profile ?? ''));
@@ -61,18 +62,24 @@ class Cdp {
     }
     throw new Error('no v2 window on the CDP port');
   }
-  constructor(url) { this.url = url; this.id = 0; this.pending = new Map(); }
+  constructor(url) { this.url = url; this.id = 0; this.pending = new Map(); this.listeners = new Map(); }
   async open() {
     this.ws = new WebSocket(this.url);
     await new Promise((resolve, reject) => { this.ws.addEventListener('open', resolve, { once: true }); this.ws.addEventListener('error', reject, { once: true }); });
-    this.ws.addEventListener('message', (m) => { const d = JSON.parse(m.data); if (d.id && this.pending.has(d.id)) { const p = this.pending.get(d.id); this.pending.delete(d.id); if (d.error) p.reject(new Error(JSON.stringify(d.error))); else p.resolve(d.result); } });
+    this.ws.addEventListener('message', (m) => {
+      const d = JSON.parse(m.data);
+      if (d.id && this.pending.has(d.id)) { const p = this.pending.get(d.id); this.pending.delete(d.id); if (d.error) p.reject(new Error(JSON.stringify(d.error))); else p.resolve(d.result); return; }
+      if (d.method) for (const fn of this.listeners.get(d.method) ?? []) fn(d.params, d.sessionId);
+    });
   }
-  send(method, params = {}, timeoutMs = 60_000) {
+  /** CDP events (for frames attached as their own flattened sessions). */
+  on(method, fn) { if (!this.listeners.has(method)) this.listeners.set(method, []); this.listeners.get(method).push(fn); }
+  send(method, params = {}, timeoutMs = 60_000, sessionId = undefined) {
     const id = ++this.id;
     return new Promise((resolve, reject) => {
       const t = setTimeout(() => { this.pending.delete(id); reject(new Error(`CDP timeout ${method}`)); }, timeoutMs);
       this.pending.set(id, { resolve: (v) => { clearTimeout(t); resolve(v); }, reject: (e) => { clearTimeout(t); reject(e); } });
-      this.ws.send(JSON.stringify({ id, method, params }));
+      this.ws.send(JSON.stringify({ id, method, params, ...(sessionId ? { sessionId } : {}) }));
     });
   }
   async eval(expression, timeoutMs = 60_000) {
@@ -273,9 +280,250 @@ async function simulationScenario(cdp) {
   });
 }
 
+// ------------------------------------------------------------------------------------------ scenario: Design page
+const LANDING = [
+  '<!doctype html>',
+  '<html lang="en">',
+  '<head>',
+  '<meta charset="utf-8">',
+  '<meta name="viewport" content="width=device-width, initial-scale=1">',
+  '<title>Kha ke dikha</title>',
+  '<style>',
+  'body { margin: 0; font-family: system-ui, "Segoe UI", sans-serif; background: #fff8f0; color: #2b2118; }',
+  '.wrap { max-width: 880px; margin: 0 auto; padding: 48px 20px; }',
+  'h1 { font-size: 40px; line-height: 1.15; margin: 0 0 12px; }',
+  'p { font-size: 18px; color: #5b4a3a; }',
+  '.cta { margin-top: 18px; padding: 14px 22px; border: 0; border-radius: 10px; background: #c0392b; color: #fff; font-size: 17px; font-weight: 600; cursor: pointer; }',
+  '</style>',
+  '</head>',
+  '<body>',
+  '<main class="wrap">',
+  '<h1>Kha ke dikha biryani</h1>',
+  '<p>Slow-cooked dum biryani, packed fresh for pickup every evening.</p>',
+  '<button type="button" class="cta">Contact us</button>',
+  '</main>',
+  '</body>',
+  '</html>',
+].join('\n');
+
+/** A page that tries every way out of the preview, all aimed at a listener this script owns on 127.0.0.1. */
+const hostilePage = (port) => `<!doctype html><html><head><title>Offline check</title>
+<link rel="stylesheet" href="http://127.0.0.1:${port}/style.css">
+<link rel="prefetch" href="http://127.0.0.1:${port}/prefetch">
+<style>@import url(http://127.0.0.1:${port}/import.css); body { background: url(http://127.0.0.1:${port}/bg.png); }</style>
+<script src="http://127.0.0.1:${port}/script.js"></script>
+</head><body>
+<h1>Offline check</h1>
+<img src="http://127.0.0.1:${port}/pixel.png" alt="remote image">
+<iframe src="http://127.0.0.1:${port}/frame" title="remote frame"></iframe>
+<form action="http://127.0.0.1:${port}/submit" method="post"><input name="q" value="page text"><button id="send">Send</button></form>
+<script>
+var port = ${port};
+fetch('http://127.0.0.1:' + port + '/fetch?d=' + encodeURIComponent(document.title)).catch(function () {});
+try { new WebSocket('ws://127.0.0.1:' + port + '/ws'); } catch (e) {}
+try { navigator.sendBeacon('http://127.0.0.1:' + port + '/beacon', 'x'); } catch (e) {}
+try { new EventSource('http://127.0.0.1:' + port + '/events'); } catch (e) {}
+try { var x = new XMLHttpRequest(); x.open('GET', 'http://127.0.0.1:' + port + '/xhr'); x.send(); } catch (e) {}
+setTimeout(function () { document.getElementById('send').click(); }, 300);
+setTimeout(function () { try { window.open('http://127.0.0.1:' + port + '/popup'); } catch (e) {} }, 500);
+setTimeout(function () { location.href = 'http://127.0.0.1:' + port + '/navigate'; }, 900);
+</script></body></html>`;
+
+/** Counts every TCP connection and request that reaches it: the proof that nothing left the preview. */
+function listener() {
+  const hits = [];
+  const server = createServer((req, res) => { hits.push(`${req.method} ${req.url}`); res.writeHead(204); res.end(); });
+  server.on('connection', () => hits.push('TCP connection'));
+  server.on('upgrade', (req, socket) => { hits.push(`UPGRADE ${req.url}`); socket.destroy(); });
+  return new Promise((resolve) => server.listen(0, '127.0.0.1', () => resolve({ port: server.address().port, hits, close: () => new Promise((r) => server.close(r)) })));
+}
+
+/** The preview frame's own JavaScript context: an out-of-process frame is reached as its own flattened session. */
+async function previewFrame(cdp, src) {
+  const attached = [];
+  cdp.on('Target.attachedToTarget', (p) => attached.push(p));
+  await cdp.send('Target.setAutoAttach', { autoAttach: true, waitForDebuggerOnStart: false, flatten: true });
+  const evalWith = (extra) => async (expression) => {
+    const r = await cdp.send('Runtime.evaluate', { expression: `(async () => { return (${expression}); })()`, awaitPromise: true, returnByValue: true, ...extra.params }, 30_000, extra.sessionId);
+    if (r.exceptionDetails) throw new Error(`frame eval failed: ${JSON.stringify(r.exceptionDetails).slice(0, 300)}`);
+    return r.result?.value;
+  };
+  const target = await waitFor(async () => attached.filter((a) => a.targetInfo?.type === 'iframe' && a.targetInfo.url === src).pop(), 6_000, 'the preview frame target').catch(() => null);
+  if (target) return { kind: 'out-of-process frame (own renderer process)', eval: evalWith({ sessionId: target.sessionId, params: {} }) };
+  const contexts = [];
+  cdp.on('Runtime.executionContextCreated', (p, sessionId) => { if (!sessionId) contexts.push(p.context); });
+  await cdp.send('Runtime.enable');
+  const tree = await cdp.send('Page.getFrameTree');
+  const child = (tree.frameTree.childFrames ?? []).find((f) => f.frame.url === src);
+  if (!child) throw new Error('no preview frame in the page');
+  const context = await waitFor(() => contexts.find((c) => c.auxData?.frameId === child.frame.id && c.auxData?.isDefault), 6_000, 'the frame context');
+  return { kind: 'in-process frame', eval: evalWith({ params: { contextId: context.id } }) };
+}
+
+
+async function designScenario(cdp) {
+  const ctx = { log: [] };
+  // The window's own console: Chromium reports what its policies blocked here.
+  cdp.on('Log.entryAdded', (p, sessionId) => { if (!sessionId) ctx.log.push(String(p.entry?.text ?? '')); });
+  await cdp.send('Log.enable');
+  const frameSrc = () => cdp.eval(`document.querySelector('.ws-design iframe')?.src ?? ''`);
+  const versionLabel = () => cdp.eval(`document.querySelector('#ws-version')?.selectedOptions?.[0]?.textContent ?? ''`);
+
+  await test('WSH-030', '"Create a simple local landing page with a heading and a contact button": the page opens in a sandboxed, offline preview', async ({ dir, record }) => {
+    const conv = await http('POST', '/v1/conversations', { mode: 'baat_kar', title: 'Design acceptance' });
+    ctx.conversationId = conv.id;
+    await cdp.eval(`window.desktop.openConversation(${JSON.stringify(conv.id)}, true).then(() => true)`);
+    await sleep(800);
+    const r = await governed(conv.id, 'create_design', { title: 'Kha ke dikha landing page', html: LANDING }, record);
+    record.facts.output = outputOf(r);
+    if (r.toolInvocation?.status !== 'succeeded') throw new Error(outputOf(r));
+    const frame = await waitFor(() => cdp.eval(`(() => { const f = document.querySelector('.ws-design iframe'); return f && f.src.startsWith('pandesh-preview://') ? { src: f.src, sandbox: f.getAttribute('sandbox'), referrerPolicy: f.getAttribute('referrerpolicy') } : null; })()`), 20_000, 'the design preview frame');
+    await waitFor(() => cdp.eval(`document.querySelectorAll('.ws-design-side .ws-outline li').length > 0`), 15_000, 'the page outline');
+    const { state } = await inspect(conv.id);
+    record.facts.frame = frame; record.facts.inspected = state;
+    record.screenshots.push(await cdp.screenshot(path.join(dir, 'landing-desktop.png')));
+    const h1 = state?.headings?.find((h) => h.tag === 'h1');
+    const button = state?.buttons?.find((b) => /contact/i.test(b.text));
+    if (frame.sandbox !== 'allow-scripts') throw new Error(`frame sandbox is "${frame.sandbox}"`);
+    if (!h1 || h1.fontSizePx !== 40 || !button?.visible) throw new Error(`inspection: ${JSON.stringify(state).slice(0, 300)}`);
+    ctx.h1Before = h1.fontSizePx;
+    return { observation: `v1 saved (text/html) and shown in a sandbox="allow-scripts" frame from pandesh-preview://…; the rendered page reports h1 "${h1.text}" at ${h1.fontSizePx}px and a visible "${button.text}" button (${button.widthPx}×${button.heightPx}px).` };
+  });
+
+  await test('WSH-031', 'The preview cannot reach Pandesh: no bridge, no Node, opaque origin, no storage, no Core API, no popups, no navigation away', async ({ record }) => {
+    const src = await frameSrc();
+    const frame = await previewFrame(cdp, src);
+    const corePort = new URL(core().base).port;
+    const probe = await frame.eval(`(async () => {
+      const out = { origin: self.origin, href: location.href.slice(0, 30), desktopBridge: typeof window.desktop, require: typeof require, process: typeof process, electron: typeof window.electron };
+      try { out.parentDocument = String(Boolean(parent.document)); } catch (e) { out.parentDocument = 'blocked: ' + e.name; }
+      try { out.localStorage = 'available (' + localStorage.length + ')'; } catch (e) { out.localStorage = 'blocked: ' + e.name; }
+      try { out.cookie = 'readable: ' + JSON.stringify(document.cookie); } catch (e) { out.cookie = 'blocked: ' + e.name; }
+      try { const r = await fetch('http://127.0.0.1:${corePort}/v1/health'); out.coreApi = 'reached ' + r.status; } catch (e) { out.coreApi = 'blocked: ' + e.name; }
+      try { const w = window.open('about:blank'); out.popup = w ? 'opened' : 'blocked (null)'; } catch (e) { out.popup = 'blocked: ' + e.name; }
+      try { const s = await navigator.mediaDevices.getUserMedia({ audio: true }); s.getTracks().forEach((t) => t.stop()); out.microphone = 'GRANTED'; } catch (e) { out.microphone = 'blocked: ' + (e && e.name); }
+      return out;
+    })()`);
+    // Navigation away, aimed at a listener this script owns: nothing may reach it.
+    const sink = await listener();
+    let navigation;
+    try {
+      const logBefore = ctx.log.length;
+      await frame.eval(`(location.href = 'http://127.0.0.1:${sink.port}/away', true)`).catch(() => undefined);
+      await sleep(2_000);
+      const stopped = ctx.log.slice(logBefore).filter((t) => t.includes(`'http://127.0.0.1:${sink.port}/'`) && /frame-src/.test(t));
+      const notice = await waitFor(() => cdp.eval(`[...document.querySelectorAll('.ws-design .notice')].map((n) => n.textContent).find((t) => /tried to open another address/.test(t)) ?? null`), 6_000, 'the "tried to open another address" notice').catch(() => null);
+      navigation = { listenerHits: [...sink.hits], windowPolicyLog: stopped.map((t) => t.trim().slice(0, 200)), notice: notice?.slice(0, 160) ?? null };
+    } finally { await sink.close(); }
+    // Reload brings the page back in a fresh preview (a new token), with its reporter.
+    const reload = await dispatch(ctx.conversationId, 'workshop_view', { action: 'reset' });
+    await waitFor(async () => (await frameSrc()) !== src && (await frameSrc()).startsWith('pandesh-preview://'), 10_000, 'a fresh preview');
+    await waitFor(() => cdp.eval(`document.querySelectorAll('.ws-design-side .ws-outline li').length > 0 && !document.querySelector('.ws-design .notice')`), 10_000, 'the reloaded page outline');
+    record.facts = { frameKind: frame.kind, probe, navigation, reload: outputOf(reload) };
+    const failures = [];
+    if (probe.origin !== 'null') failures.push(`origin ${probe.origin}`);
+    if (probe.desktopBridge !== 'undefined' || probe.require !== 'undefined' || probe.process !== 'undefined') failures.push('a privileged global is visible');
+    for (const k of ['parentDocument', 'localStorage', 'cookie', 'coreApi', 'microphone']) if (!String(probe[k]).startsWith('blocked')) failures.push(`${k}: ${probe[k]}`);
+    if (!String(probe.popup).startsWith('blocked')) failures.push(`popup ${probe.popup}`);
+    if (navigation.listenerHits.length) failures.push(`navigation reached the listener: ${navigation.listenerHits.join(', ')}`);
+    if (!navigation.windowPolicyLog.length) failures.push('no frame-src block recorded for the navigation');
+    if (!navigation.notice) failures.push('the panel did not say the page tried to leave');
+    if (!/^DONE/.test(outputOf(reload))) failures.push(`reload: ${outputOf(reload).slice(0, 120)}`);
+    if (failures.length) throw new Error(failures.join('; '));
+    return { observation: `In the ${frame.kind}: origin "null"; window.desktop/require/process undefined; parent.document ${probe.parentDocument}; localStorage ${probe.localStorage}; cookie ${probe.cookie}; Core API ${probe.coreApi}; popup ${probe.popup}; microphone ${probe.microphone}. Navigation to 127.0.0.1:<listener>: 0 connections; the window's policy logged "${navigation.windowPolicyLog[0]?.slice(0, 90)}"; the panel said so; "reset" reloaded the page in a fresh preview.` };
+  });
+
+  await test('WSH-032', '"Show it on a phone": phone, tablet and desktop sizes, measured in the page', async ({ dir, record }) => {
+    const seen = {};
+    for (const value of ['mobile', 'tablet', 'desktop']) {
+      const r = await dispatch(ctx.conversationId, 'workshop_view', { action: 'device', value });
+      if (!/^DONE/.test(outputOf(r))) throw new Error(outputOf(r));
+      const vw = /\((\d+)×(\d+) CSS px\)/.exec(outputOf(r));
+      seen[value] = vw ? `${vw[1]}×${vw[2]}` : outputOf(r).slice(0, 80);
+      if (value === 'mobile') record.screenshots.push(await cdp.screenshot(path.join(dir, 'landing-phone.png')));
+    }
+    record.facts = seen;
+    if (seen.mobile !== '390×844' || seen.tablet !== '820×1180' || seen.desktop !== '1280×800') throw new Error(JSON.stringify(seen));
+    return { observation: `The page itself reported its viewport: phone ${seen.mobile}, tablet ${seen.tablet}, desktop ${seen.desktop} (CSS px).` };
+  });
+
+  await test('WSH-033', '"Make the heading larger": a new version, and the preview shows the larger heading', async ({ dir, record }) => {
+    const r = await governed(ctx.conversationId, 'workshop_edit', { replacements: [{ find: 'h1 { font-size: 40px;', replace: 'h1 { font-size: 64px;' }], summary: 'Make the heading larger' }, record);
+    record.facts.output = outputOf(r);
+    if (r.toolInvocation?.status !== 'succeeded') throw new Error(outputOf(r));
+    await waitFor(async () => /v2 of 2/.test(await versionLabel()), 15_000, 'version 2 on screen');
+    await waitFor(() => cdp.eval(`[...document.querySelectorAll('.ws-design-side .ws-outline li')].some((l) => /h1/.test(l.textContent) && /64px/.test(l.textContent))`), 15_000, 'the 64px heading in the outline');
+    const { state } = await inspect(ctx.conversationId);
+    const h1 = state?.headings?.find((h) => h.tag === 'h1');
+    record.facts.inspected = state;
+    record.screenshots.push(await cdp.screenshot(path.join(dir, 'heading-larger.png')));
+    if (!h1 || !(h1.fontSizePx > ctx.h1Before)) throw new Error(`h1 is ${h1?.fontSizePx}px (was ${ctx.h1Before}px)`);
+    return { observation: `${outputOf(r).split('\n')[0].slice(0, 160)}; the rendered h1 is now ${h1.fontSizePx}px (was ${ctx.h1Before}px), ${h1.heightPx}px tall.` };
+  });
+
+  await test('WSH-034', 'Compare v1 with v2: the changed line, read from the two saved files', async ({ dir, record }) => {
+    const r = await dispatch(ctx.conversationId, 'workshop_view', { action: 'compare', version: '1', compareWith: '2' });
+    await sleep(800);
+    const summaryText = await cdp.eval(`document.querySelector('.ws-compare')?.innerText ?? ''`);
+    await cdp.eval(`([...document.querySelectorAll('.ws-design .ws-toolbar button')].find((b) => b.textContent === 'Changes')?.click(), true)`);
+    await sleep(400);
+    const diff = await cdp.eval(`({ added: [...document.querySelectorAll('.ws-diff .add')].map((d) => d.textContent), removed: [...document.querySelectorAll('.ws-diff .del')].map((d) => d.textContent) })`);
+    record.facts = { output: outputOf(r), summaryText, diff };
+    record.screenshots.push(await cdp.screenshot(path.join(dir, 'changes.png')));
+    if (!/^DONE/.test(outputOf(r)) || !diff.added.some((t) => /64px/.test(t)) || !diff.removed.some((t) => /40px/.test(t)) || diff.added.length !== 1 || diff.removed.length !== 1) throw new Error(JSON.stringify(diff));
+    await cdp.eval(`([...document.querySelectorAll('.ws-compare button')].find((b) => /Done comparing/.test(b.textContent))?.click(), true)`);
+    return { observation: `${summaryText.replace(/\s+/g, ' ').slice(0, 120)}; diff: − ${diff.removed[0].trim().slice(0, 50)} / + ${diff.added[0].trim().slice(0, 50)}.` };
+  });
+
+  await test('WSH-035', '"Show me the code": the page source, read-only', async ({ record }) => {
+    const r = await dispatch(ctx.conversationId, 'workshop_view', { action: 'show_code' });
+    const code = await cdp.eval(`document.querySelector('.ws-design .ws-code')?.innerText ?? ''`);
+    record.facts = { output: outputOf(r), lines: code.split('\n').length };
+    if (!/^DONE/.test(outputOf(r)) || !/font-size: 64px/.test(code) || !/Contact us/.test(code)) throw new Error(`${outputOf(r)} / ${code.slice(0, 80)}`);
+    await dispatch(ctx.conversationId, 'workshop_view', { action: 'device', value: 'desktop' });
+    return { observation: `${outputOf(r).slice(0, 120)}; the code view shows the saved v2 source (64px heading, Contact us button).` };
+  });
+
+  await test('WSH-036', 'A page that tries every way out (fetch, XHR, WebSocket, beacon, EventSource, images, CSS, scripts, frames, forms, popups, navigation) reaches nothing', async ({ dir, record }) => {
+    const sink = await listener();
+    try {
+      const r = await governed(ctx.conversationId, 'create_design', { title: 'Offline check', html: hostilePage(sink.port) }, record);
+      record.facts.output = outputOf(r);
+      if (r.toolInvocation?.status !== 'succeeded') throw new Error(outputOf(r));
+      await waitFor(async () => (await frameSrc()).startsWith('pandesh-preview://') && /Offline check/.test(await cdp.eval(`document.querySelector('.ws-title')?.textContent ?? ''`)), 20_000, 'the offline-check page');
+      await sleep(3_500);
+      const blocked = await cdp.eval(`[...document.querySelectorAll('.ws-design-side h4')].filter((h) => /Blocked/.test(h.textContent)).map((h) => h.nextElementSibling?.innerText ?? '').join('\\n')`);
+      const notes = await cdp.eval(`[...document.querySelectorAll('.ws-design-side h4')].filter((h) => /Notes/.test(h.textContent)).map((h) => h.nextElementSibling?.innerText ?? '').join('\\n')`);
+      const leftNotice = await cdp.eval(`[...document.querySelectorAll('.ws-design .notice')].map((n) => n.textContent).find((t) => /tried to open another address/.test(t)) ?? ''`);
+      record.facts.listenerHits = [...sink.hits];
+      record.facts.blockedShown = blocked.split('\n').filter(Boolean);
+      record.facts.windowPolicyLog = ctx.log.filter((t) => t.includes(`127.0.0.1:${sink.port}`)).map((t) => t.trim().slice(0, 200));
+      record.facts.notes = notes;
+      record.facts.leftNotice = leftNotice.slice(0, 160);
+      record.screenshots.push(await cdp.screenshot(path.join(dir, 'offline-check.png')));
+      if (sink.hits.length) throw new Error(`the listener was reached: ${sink.hits.join(', ')}`);
+      if (!/127\.0\.0\.1/.test(blocked)) throw new Error(`no blocked requests reported: ${blocked}`);
+      if (!leftNotice) throw new Error('the panel did not say the page tried to leave');
+      return { observation: `0 connections reached the listener on 127.0.0.1:${sink.port} (fetch, XHR, WebSocket, beacon, EventSource, img, CSS, @import, script, iframe, form, popup, navigation all tried); the panel lists ${record.facts.blockedShown.length} blocked request(s) and says the page tried to leave; Core noted up front: ${notes.split('\n')[0]?.slice(0, 90)}.` };
+    } finally {
+      await sink.close();
+    }
+  });
+}
+
 async function main() {
   fs.mkdirSync(OUT, { recursive: true });
   if (args.reopen) return reopen(String(args.reopen));
+  if (args.scenario === 'design') {
+    const cdp = await Cdp.attach();
+    await cdp.send('Page.bringToFront').catch(() => undefined);
+    await designScenario(cdp);
+    fs.writeFileSync(path.join(OUT, 'results.json'), JSON.stringify(results, null, 2));
+    cdp.ws.close();
+    const failed = Object.values(results).filter((r) => r.status !== 'PASS');
+    console.log(`\n${Object.keys(results).length - failed.length}/${Object.keys(results).length} passed`);
+    process.exit(failed.length ? 1 : 0);
+  }
   if (args.scenario === 'simulation') {
     const cdp = await Cdp.attach();
     await simulationScenario(cdp);

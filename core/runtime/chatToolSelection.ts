@@ -115,8 +115,8 @@ export const TOOL_GROUPS: Record<string, ToolGroup> = {
     pattern: /\b(?:delegate|hand (?:it|this|that) (?:off|over)|agents?|specialists?|(?:research|coding|operations|personal) (?:agent|team)|my team|ask (?:the )?(?:research|coding|operations)|have (?:the )?(?:research|coding|operations))\b/i,
   },
   workshop: {
-    purpose: 'the Workshop: build an interactive 3D model or run a simulation, change it, pull it apart, rotate it, play or pause it, export a GLB, show earlier versions',
-    pattern: /\b(?:3-?d|three[- ]d|workshop|scenes?|assembl(?:y|ies)|gears?|gearbox|mechanism|mechanical|exploded?|explode|pull (?:it|them|this) apart|take (?:it|them) apart|put (?:it|them) back|reassembl\w*|rotate|turntable|label (?:the )?(?:components|parts)|components?|glb|gltf|export (?:the |this |it )?model|full[- ]?screen|previous version|undo that|simulat\w*|queues?|serving counters?|(?:another|second|extra) counter|arrival rate|waiting times?|pause (?:the |it)|speed (?:it |the simulation )?up)\b/i,
+    purpose: 'the Workshop: build an interactive 3D model, run a simulation or design a simple web page, change it, pull it apart, rotate it, play or pause it, preview it on a phone, export a GLB, show earlier versions',
+    pattern: /\b(?:3-?d|three[- ]d|workshop|scenes?|assembl(?:y|ies)|gears?|gearbox|mechanism|mechanical|exploded?|explode|pull (?:it|them|this) apart|take (?:it|them) apart|put (?:it|them) back|reassembl\w*|rotate|turntable|label (?:the )?(?:components|parts)|components?|glb|gltf|export (?:the |this |it )?model|full[- ]?screen|previous version|undo that|simulat\w*|queues?|serving counters?|(?:another|second|extra) counter|arrival rate|waiting times?|pause (?:the |it)|speed (?:it |the simulation )?up|landing pages?|web ?pages?|home ?pages?|page design|mock-?ups?|headings?|contact button|hero section|call[- ]to[- ]action|(?:on|for) (?:a )?(?:phone|mobile|tablet)|show (?:me )?the code)\b/i,
   },
   weather: {
     purpose: 'weather and forecast',
@@ -201,8 +201,8 @@ export function groupsForText(text: string): Set<string> {
   return groups;
 }
 
-/** A request that plainly asks Pandesh to build or model something in 3D. */
-export const BUILD_3D_REQUEST = /\b(?:build|make|create|model|design|construct|generate)\b[^.?!]{0,80}\b(?:3-?d|three[- ]d|assembl(?:y|ies)|gears?|gearbox|mechanism|mechanical|model of)\b|\b(?:3-?d|three[- ]d) model\b|^\s*(?:please\s+)?(?:run\s+(?:a\s+)?)?simulat\w*\b/i;
+/** A request that plainly asks Pandesh to make something in the Workshop: a 3D model, a simulation or a page. */
+export const BUILD_3D_REQUEST = /\b(?:build|make|create|model|design|construct|generate)\b[^.?!]{0,80}\b(?:3-?d|three[- ]d|assembl(?:y|ies)|gears?|gearbox|mechanism|mechanical|model of)\b|\b(?:3-?d|three[- ]d) model\b|^\s*(?:please\s+)?(?:run\s+(?:a\s+)?)?simulat\w*\b|\b(?:build|make|create|design|generate|draft)\b[^.?!]{0,60}\b(?:landing pages?|web ?pages?|home ?pages?|page with)\b/i;
 
 export interface ToolSelectionInput {
   requestText: string;
