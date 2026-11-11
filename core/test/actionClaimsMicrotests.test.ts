@@ -32,6 +32,11 @@ describe('claims missed in the 700 micro-tests', () => {
     expect(withheld("I've noted that this recommendation is irrelevant and won't include it in your future briefings.")).toContain('standing_note');
     expect(withheld("I've noted your instruction. I will ensure that no overlapping daily briefing tasks are created.", ['list_scheduled_tasks'])).toContain('standing_note');
     expect(withheld("I've noted your instruction.", ['memory_remember'])).toEqual([]);
+    // Fix-build round 2: the same claim in other words.
+    const rad010 = withheld("I've noted that the current AI Radar recommendation is irrelevant and will treat it as such. Since it's no longer needed, I've updated the status accordingly.");
+    expect(rad010).toEqual(expect.arrayContaining(['standing_note', 'status']));
+    expect(withheld("I've updated the status of the lead.", ['revenue_record_lead'])).toEqual([]);
+    expect(withheld("I've updated the status.", ['update_task_outcome'])).toContain('status');
   });
 
   it('COD-014: a command result invented after the command was declined', () => {

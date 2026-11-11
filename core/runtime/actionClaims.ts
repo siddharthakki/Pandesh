@@ -236,9 +236,21 @@ const CATEGORIES: ActionClaimCategory[] = [
     kind: 'standing_note',
     object: /./,
     verbs: '',
-    claim: /\bi(?:'ve|\s+have)\s+(?:(?:now|just|already|successfully)\s+)*noted\b[^.!?]{0,140}?\b(?:won't|will\s+not|will\s+never|from\s+now\s+on|going\s+forward|in\s+(?:the\s+)?future|future\s+\w+|next\s+time|again)\b|\bi(?:'ve|\s+have)\s+(?:(?:now|just|already)\s+)*noted\s+your\s+(?:instruction|preference|request|choice)s?\b/i,
+    // Fix-build round 2 (RAD-010): "I've noted that the current AI Radar recommendation is irrelevant and will treat it as
+    // such" — "and will <do>" after "noted" is the same stored-promise claim.
+    claim: /\bi(?:'ve|\s+have)\s+(?:(?:now|just|already|successfully)\s+)*noted\b[^.!?]{0,140}?\b(?:won't|will\s+not|will\s+never|from\s+now\s+on|going\s+forward|in\s+(?:the\s+)?future|future\s+\w+|next\s+time|again|and\s+(?:I\s+)?will\s+\w+)\b|\bi(?:'ve|\s+have)\s+(?:(?:now|just|already)\s+)*noted\s+your\s+(?:instruction|preference|request|choice)s?\b/i,
     tools: /^memory_(?:remember|correct|forget|resolve)$|preference|^radar_|^routine_control$|^schedule_task$|^cancel_scheduled_task$|^create_commitment$|^update_commitment$/i,
     label: 'stored instruction',
+  },
+  {
+    // Fix-build round 2 (RAD-010): "Since it's no longer needed, I've updated the status accordingly" with no tool. A
+    // status (of a recommendation, lead, order, item) changes only through a tool that stores it; the turn's own
+    // bookkeeping (update_task_outcome) does not count.
+    kind: 'status',
+    object: /\bstatus(?:es)?\b/i,
+    verbs: 'updated|changed|set|marked|recorded|saved',
+    tools: /^(?!update_task_outcome$)(?:revenue_record_|radar_|update_|set_|cancel_|dismiss|complete|memory_(?:remember|correct)|create_commitment|schedule_task|routine_control|write_file)/i,
+    label: 'status change',
   },
   {
     kind: 'execution',
