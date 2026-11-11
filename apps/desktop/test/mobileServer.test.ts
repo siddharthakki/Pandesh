@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import * as vm from 'node:vm';
-import { mockSession, pair, startServer } from './mobileTestKit';
+import { mockSession, pair, startServer, tempDir } from './mobileTestKit';
 
 const mobileFile = (name: string) => path.join(__dirname, '..', 'renderer', 'mobile', name);
 
@@ -220,6 +220,28 @@ describe('Pandesh Mobile Server (Unified Session Protocol)', () => {
       expect(text).not.toContain('host.token');
     }
     expect(JSON.stringify(await ok.json())).not.toMatch(/token/i);
+  });
+
+  it('after an upgrade, phones paired with an older build must pair again; the log gives only the count', async () => {
+    const dataDir = tempDir(dirs);
+    const hostToken = 'old-host-token-value-0002';
+    const phones = ['old-phone-session-dddd', 'old-phone-session-eeee'];
+    fs.writeFileSync(path.join(dataDir, 'mobile-pair.json'), JSON.stringify({ code: 'H7KM', token: hostToken, sessions: [phones[0], hostToken], pairedTokens: [phones[1]] }));
+    const { server: mobile, logs, base } = await server({ dataDir });
+
+    expect(logs).toContain('[MOBILE] dropped 2 phone logins from an older build');
+    expect(mobile.pairedDevices()).toEqual([]);
+    for (const old of [...phones, hostToken]) {
+      expect((await fetch(`${base}/api/session`, { headers: { Cookie: `kkd_session=${old}` } })).status).toBe(401);
+      expect((await fetch(`${base}/api/events`, { headers: { Cookie: `kkd_session=${old}` } })).status).toBe(401);
+    }
+    expect((await pair(base, 'H7KM')).status).toBe(401);
+
+    const { code } = mobile.getPairingInfo();
+    expect(code).toMatch(/^[23456789A-HJ-NP-Z]{4}-[23456789A-HJ-NP-Z]{4}$/);
+    expect((await pair(base, code)).status).toBe(200);
+    const logText = logs.join('\n');
+    for (const secret of [...phones, hostToken, 'H7KM', code, code.replace('-', '')]) expect(logText).not.toContain(secret);
   });
 });
 

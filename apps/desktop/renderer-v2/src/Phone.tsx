@@ -56,7 +56,8 @@ function QrCode({ text }: { text: string }) {
 }
 
 function deviceLine(d: MobileDevice, now: number): string {
-  const seen = d.connected ? 'connected now' : d.lastSeenAt ? `last seen ${since(d.lastSeenAt, now)}` : 'not seen since this update';
+  const lastSeen = since(d.lastSeenAt ?? d.pairedAt, now);
+  const seen = d.connected ? 'connected now' : lastSeen ? `last seen ${lastSeen}` : '';
   const paired = Number.isFinite(Date.parse(d.pairedAt)) ? `paired ${new Date(d.pairedAt).toLocaleDateString(undefined, { day: 'numeric', month: 'short' })}` : '';
   return [seen, paired].filter(Boolean).join(' · ');
 }

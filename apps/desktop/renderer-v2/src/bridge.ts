@@ -91,7 +91,7 @@ export interface Brief { generatedAt: string; home: BriefItem[] }
 
 /** Who can reach Pandesh Mobile (ipc.ts MobileAccessMode). */
 export type MobileAccess = 'off' | 'lan' | 'tailscale';
-export interface MobileDevice { id: string; name: string; pairedAt: string; lastSeenAt: string | null; connected: boolean; legacy?: boolean }
+export interface MobileDevice { id: string; name: string; pairedAt: string; lastSeenAt: string | null; connected: boolean }
 /** Phone pairing as the host reports it (ipc.ts MobilePairingView). Never a session token. */
 export interface MobilePairing {
   code: string;

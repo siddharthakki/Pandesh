@@ -95,6 +95,7 @@ describe('PairingStore', () => {
     if (!paired.ok) throw new Error('pairing failed');
     const code = a.currentCode().code;
     const b = new PairingStore(file, c.now);
+    expect(b.droppedOldLogins).toBe(0);
     expect(b.currentCode().code).toBe(code);
     expect(b.verify(paired.token)?.id).toBe(paired.device.id);
   });
@@ -139,26 +140,42 @@ describe('PairingStore', () => {
     expect(store.list()).toHaveLength(MAX_PAIRED_DEVICES);
   });
 
-  it('migrates the old file: phones kept with hashed tokens, the old code and the host token dropped', () => {
+  it('drops every login from an older build: none works again, a fresh code is issued, nothing old stays on disk', () => {
     const file = pairFile();
-    const hostToken = 'legacy-host-token-value-0001';
+    const hostToken = 'old-host-token-value-0001';
+    const phones = ['old-phone-session-aaaa', 'old-phone-session-bbbb', 'old-phone-session-cccc'];
     fs.writeFileSync(file, JSON.stringify({
       code: 'H7KM',
       token: hostToken,
-      sessions: ['phone-session-aaaa', hostToken, 'phone-session-bbbb'],
+      sessions: [phones[0], hostToken, phones[1]],
+      pairedTokens: [phones[1], phones[2]],
       updatedAt: '2026-11-01T10:00:00.000Z',
     }));
-    const store = new PairingStore(file, clock().now);
-    expect(store.currentCode().code).toMatch(/^[23456789A-HJ-NP-Z]{8}$/);
-    expect(store.list()).toHaveLength(2);
-    expect(store.list().every((d) => d.legacy && d.name === 'Paired before this update')).toBe(true);
-    expect(store.verify('phone-session-aaaa')).not.toBeNull();
-    expect(store.verify(hostToken)).toBeNull();
+    const c = clock();
+    const store = new PairingStore(file, c.now);
+
+    // 1. The old logins are dropped: three phones (the host token and the repeated token are not counted again).
+    expect(store.droppedOldLogins).toBe(3);
+    expect(store.list()).toEqual([]);
+    // 2. No old session token logs in any more, and neither does the old host token.
+    for (const old of [...phones, hostToken]) expect(store.verify(old)).toBeNull();
+    // 3. A fresh one-time code replaces the old 4-character one.
+    const { code, expiresAt } = store.currentCode();
+    expect(code).toMatch(/^[23456789A-HJ-NP-Z]{8}$/);
+    expect(expiresAt - c.now()).toBe(PAIR_CODE_TTL_MS);
+    expect(store.tryPair('H7KM', ANDROID_CHROME)).toEqual({ ok: false, reason: 'invalid' });
+
+    // Nothing old stays on disk: not in the new file (not even hashed), and no backup or temp file beside it.
+    expect(fs.readdirSync(path.dirname(file))).toEqual(['mobile-pair.json']);
     const saved = fs.readFileSync(file, 'utf8');
-    expect(saved).not.toContain('phone-session-aaaa');
-    expect(saved).not.toContain(hostToken);
-    expect(saved).not.toContain('H7KM');
-    expect(JSON.parse(saved).version).toBe(2);
+    for (const old of [...phones, hostToken, 'H7KM', ...[...phones, hostToken].map(hashSessionToken)]) expect(saved).not.toContain(old);
+    expect(JSON.parse(saved)).toMatchObject({ version: 2, devices: [] });
+
+    // A phone pairs as usual with the new code, and the next start has nothing old left to drop.
+    expect(store.tryPair(code, ANDROID_CHROME).ok).toBe(true);
+    const restarted = new PairingStore(file, c.now);
+    expect(restarted.droppedOldLogins).toBe(0);
+    expect(restarted.list()).toHaveLength(1);
   });
 
   it('a broken or foreign file starts clean instead of failing', () => {
@@ -166,6 +183,7 @@ describe('PairingStore', () => {
     fs.writeFileSync(file, '{ not json');
     const store = new PairingStore(file, clock().now);
     expect(store.list()).toEqual([]);
+    expect(store.droppedOldLogins).toBe(0);
     expect(store.currentCode().code).toHaveLength(8);
   });
 });

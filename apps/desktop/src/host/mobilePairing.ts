@@ -8,7 +8,8 @@
  * - A phone not seen for 90 days is forgotten.
  *
  * Earlier builds kept a 4-character code that never changed and the raw session tokens. Loading such a file keeps
- * its phones (marked "paired before this update", so the owner can forget them) and drops the old code.
+ * none of it: phones paired with an older build pair again with a new one-time code, and the new file replaces the
+ * old one, so no copy of its values stays on disk.
  */
 import * as crypto from 'node:crypto';
 import * as fs from 'node:fs';
@@ -28,8 +29,6 @@ export interface PairedDevice {
   name: string;
   pairedAt: string;
   lastSeenAt: string | null;
-  /** Paired by a build before this pairing format (its token was stored in the clear and has now been hashed). */
-  legacy?: boolean;
 }
 
 interface StoredDevice extends PairedDevice {
@@ -108,6 +107,7 @@ export class PairingStore {
   private codeIssuedAt = 0;
   private devices: StoredDevice[] = [];
   private readonly persistedSeen = new Map<string, number>();
+  private oldLoginsDropped = 0;
 
   constructor(
     private readonly file: string,
@@ -119,6 +119,11 @@ export class PairingStore {
 
   static fileIn(dataDir: string): string {
     return path.join(dataDir, 'mobile-pair.json');
+  }
+
+  /** How many phone logins from an older build's file were dropped when this store loaded it (a count, nothing else). */
+  get droppedOldLogins(): number {
+    return this.oldLoginsDropped;
   }
 
   /** The current code, replaced first when it has expired. */
@@ -232,7 +237,6 @@ export class PairingStore {
           pairedAt: typeof d.pairedAt === 'string' ? d.pairedAt : new Date(this.now()).toISOString(),
           lastSeenAt: typeof d.lastSeenAt === 'string' ? d.lastSeenAt : null,
           tokenHash: d.tokenHash,
-          ...(d.legacy ? { legacy: true } : {}),
         }));
       const issued = Date.parse(file.codeIssuedAt);
       if (normalizePairingCode(file.code) === file.code && Number.isFinite(issued)) {
@@ -244,30 +248,20 @@ export class PairingStore {
       return;
     }
 
-    // Before this format: { code, token, sessions[], pairedTokens[] } with raw tokens. Keep the phones, hash their
-    // tokens, drop the never-expiring code. The old `token` was a host-side secret that was also accepted as a login;
-    // no phone ever received it, so it is not carried over.
+    // Before this format: { code, token, sessions[], pairedTokens[] }, with raw session tokens and a code that never
+    // changed. None of it is carried over (the owner's decision): phones paired with an older build pair again. The
+    // old `token` was a host-side secret that was also accepted as a login; it is dropped too, but not counted as a
+    // phone, since no phone ever held it.
     if (raw && typeof raw === 'object') {
-      const legacyHostToken = typeof raw.token === 'string' ? raw.token : null;
-      const tokens = new Set<string>();
+      const hostToken = typeof raw.token === 'string' ? raw.token : null;
+      const logins = new Set<string>();
       for (const list of [raw.sessions, raw.pairedTokens]) {
-        if (Array.isArray(list)) for (const t of list) if (typeof t === 'string' && t && t !== legacyHostToken) tokens.add(t);
+        if (Array.isArray(list)) for (const t of list) if (typeof t === 'string' && t && t !== hostToken) logins.add(t);
       }
-      const at = typeof raw.updatedAt === 'string' && Number.isFinite(Date.parse(raw.updatedAt))
-        ? raw.updatedAt
-        : new Date(this.now()).toISOString();
-      for (const t of tokens) {
-        this.devices.push({
-          id: crypto.randomBytes(6).toString('hex'),
-          name: 'Paired before this update',
-          pairedAt: at,
-          lastSeenAt: null,
-          tokenHash: hashSessionToken(t),
-          legacy: true,
-        });
-      }
-      this.trimDevices();
+      this.oldLoginsDropped = logins.size;
     }
+    // Starts with no phones and a fresh one-time code. The save replaces the old file in place (temp file, then
+    // rename), so none of the old values stay on disk.
     this.rotateCode();
   }
 

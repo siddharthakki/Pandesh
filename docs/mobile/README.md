@@ -46,6 +46,7 @@ Without Tailscale, a phone on the same Wi-Fi opens `http://<PC address>:3030`. T
 
 - **Pairing.** The code has 8 characters, works once, and expires after 10 minutes. After 5 wrong codes from one device in 5 minutes, that device has to wait. After 20 wrong codes in total, pairing pauses for 15 minutes. You can allow it again on the PC.
 - **Each phone has its own login.** It is an HttpOnly, SameSite=Strict cookie, marked Secure over HTTPS. The PC stores only a hash of it. A phone that has not been seen for 90 days is forgotten. The Phone card lists the paired phones, with **Forget** and **Forget all**.
+- **Phones paired with an older build must pair again.** On its first start this build drops the old pairing code and every phone login stored by an older build, and keeps no copy of them. The host log records only how many were dropped.
 - **Only this PC's own addresses.** A request must name the PC: an IP address, a local name, or the Tailscale name through `tailscale serve`. So a web page cannot reach Pandesh by DNS rebinding. Requests from other sites are refused (there is no CORS), and the app runs under a strict Content Security Policy.
 - **No public internet.** Requests that arrive through Tailscale Funnel are refused, and the Phone card warns while Funnel is on.
 - **Nothing about your conversations is stored on the phone.** The service worker caches only the app's own files. Conversations, approvals, audio and pairing always go to the PC.

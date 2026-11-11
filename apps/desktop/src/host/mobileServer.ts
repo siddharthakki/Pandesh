@@ -134,6 +134,9 @@ export class MobileServer {
     this.pairing = new PairingStore(PairingStore.fileIn(options.dataDir), this.now);
     this.limiter = new PairAttemptLimiter(options.pairLimits ?? DEFAULT_PAIR_LIMITS, this.now);
     this.assets = new MobileAssets(options.assetsDir ?? defaultMobileAssetsDir());
+    // Only the count, so the drop can be confirmed after an upgrade; never a token or a code.
+    const dropped = this.pairing.droppedOldLogins;
+    if (dropped > 0) this.log(`[MOBILE] dropped ${dropped} phone login${dropped === 1 ? '' : 's'} from an older build`);
   }
 
   private log(message: string): void {

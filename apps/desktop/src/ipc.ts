@@ -1115,7 +1115,6 @@ export interface MobilePairedDeviceView {
   pairedAt: string;
   lastSeenAt: string | null;
   connected: boolean;
-  legacy?: boolean;
 }
 
 /** The phone pairing state for the PC (Connections → Phone; Classic Integrations). Never contains a session token. */
