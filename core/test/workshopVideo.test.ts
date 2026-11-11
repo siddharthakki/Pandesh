@@ -11,9 +11,10 @@ import * as path from 'node:path';
 import { openCoreDatabase } from '../db/openCore';
 import type { CoreDatabase } from '../db/connection';
 import { createConversation } from '../domain/conversations';
-import { listArtifacts } from '../domain/artifacts';
+import { listArtifacts, registerArtifact } from '../domain/artifacts';
 import { listWorkshops, readWorkshopVersion, recordWorkshopFocus } from '../domain/workshops';
 import { createWorkshopCapabilityAdapter } from '../runtime/workshopCapability';
+import { resolvePictures } from '../runtime/workshopVideo';
 import { sanitizeWorkshopMeta } from '../shared/workshop/model';
 import { VIDEO_ASPECTS, aspectFromText, applyVideoChanges, parseVideoRecipe, recipeDuration, secondsForTotal, type VideoRecipe } from '../shared/workshop/video';
 
@@ -69,6 +70,33 @@ describe('a video recipe', () => {
     expect(sanitizeWorkshopMeta({ ...base, recipe: recipe() })?.recipe).toMatchObject({ aspect: 'landscape' });
     expect(sanitizeWorkshopMeta({ ...base, recipe: { big: 'x'.repeat(17_000) } })?.recipe).toBeUndefined();
     expect(sanitizeWorkshopMeta({ ...base, recipe: ['not', 'an', 'object'] })?.recipe).toBeUndefined();
+  });
+});
+
+// The recipes above use short fake ids; a real Core id comes from newId('artifact'), so it reads artifact_<uuid>.
+// Before 2026-11-11 only art_ ids were looked up, so create_video could not take any real picture by its id.
+describe('pictures named by Core artifact id', () => {
+  const ONE_PIXEL_PNG = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==';
+  let dir: string; let db: CoreDatabase;
+  beforeEach(() => { dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pandesh-video-ids-')); db = openCoreDatabase(path.join(dir, 'core.db')).db; });
+  afterEach(() => { db.close(); fs.rmSync(dir, { recursive: true, force: true }); });
+
+  it('takes a picture by its real Core artifact id', () => {
+    const file = path.join(dir, 'dish.png');
+    fs.writeFileSync(file, Buffer.from(ONE_PIXEL_PNG, 'base64'));
+    const artifact = registerArtifact(db, { kind: 'image', title: 'dish.png', mimeType: 'image/png', absolutePath: file, source: 'test', actor: 'test' });
+    expect(artifact.id).toMatch(/^artifact_[\w-]+$/);
+    expect(resolvePictures(db, [artifact.id])).toEqual({ pictures: [{ path: artifact.absolutePath, name: 'dish.png', sha256: artifact.sha256, bytes: artifact.byteSize }], problems: [] });
+  });
+
+  it('says which id is unknown and which is not a picture', () => {
+    const notes = path.join(dir, 'notes.txt');
+    fs.writeFileSync(notes, 'not a picture');
+    const document = registerArtifact(db, { kind: 'document', title: 'notes.txt', mimeType: 'text/plain', absolutePath: notes, source: 'test', actor: 'test' });
+    expect(resolvePictures(db, ['artifact_00000000-0000-4000-8000-000000000000', document.id]).problems).toEqual([
+      'artifact_00000000-0000-4000-8000-000000000000: no such artifact',
+      `${document.id}: not an available picture`,
+    ]);
   });
 });
 

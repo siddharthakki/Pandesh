@@ -32,7 +32,8 @@ export function resolvePictures(db: CoreDatabase, inputs: string[]): { pictures:
   for (const raw of inputs.slice(0, 60)) {
     const value = String(raw ?? '').trim();
     if (!value) continue;
-    if (/^art_[\w-]+$/.test(value)) {
+    // Core's ids are artifact_<uuid> (newId('artifact')); art_ is the short form some callers and tests use.
+    if (/^(?:artifact|art)_[\w-]+$/.test(value)) {
       try {
         const a = getArtifact(db, value);
         if (a.kind !== 'image' || a.availability !== 'ready') { problems.push(`${value}: not an available picture`); continue; }
