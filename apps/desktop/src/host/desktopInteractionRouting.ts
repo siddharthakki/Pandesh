@@ -188,6 +188,22 @@ const ASKS_ABOUT_WEATHER = /\b(?:what(?:'s| is| will)|how(?:'s| is)|will it|is i
 const WEATHER_LOCATION_PHRASE =
   /\b(?:weather|temperature|forecast|rain(?:ing|y)?|snow(?:ing|y)?)\b(?:\s+\w+)*?\s+(?:in|for|at)\s+([a-z\u00C0-\u024F][a-z\u00C0-\u024F\s.',-]*?)(?=\s+(?:right now|today|tonight|tomorrow|currently|now|this (?:week|morning|afternoon|evening|weekend)|for (?:today|tonight|tomorrow|now|this)|please)\b|[?.!]|$)/i;
 
+/** A temperature that is not the weather: a room sensor, a device, food, a body (micro-test DEV-018). */
+const NOT_WEATHER_TEMPERATURE = /\b(?:room|indoor|inside|sensor|thermostat|cpu|gpu|processor|graphics card|drive|disk|ssd|battery|laptop|pc|computer|device|oven|fridge|freezer|water|body|fever|engine|coffee|tea|milk|oil)\b[^.?!]{0,30}\btemperature\b|\btemperature\b[^.?!]{0,30}\b(?:sensor|reading|room|cpu|gpu|pc|computer|device|oven|fridge|freezer|body|water|engine|coffee|tea|milk|oil|bake|baking|cook|cooking)\b/i;
+/**
+ * Another request in the same message (micro-test RES-025: "Check my free disk space and also look up today's weather
+ * in Ulm" — the shortcut answered only the weather and the disk part was lost). Such a message goes to Core, whose
+ * model has the weather tool too and can do both.
+ */
+// Lookups only: an instruction to create or organise something next to a weather question keeps the earlier design
+// (weatherRoutingChallenge: "Create a packing list and tell me the weather in Rome tomorrow" stays a weather question).
+const OTHER_REQUEST = /^\s*(?:(?:please|can you|could you)\s+)?(?:check|show|list|find|open|read|calculate|count|search|look for|summari[sz]e)\b/i;
+function hasOtherRequest(text: string): boolean {
+  const clauses = text.split(/\s*(?:[,;]|\band also\b|\band then\b|\balso\b|\bthen\b|\band\b|\bplus\b)\s*/i).filter((c) => c.trim());
+  if (clauses.length < 2) return false;
+  return clauses.some((c) => !WEATHER_NOUN.test(c) && OTHER_REQUEST.test(c));
+}
+
 export function detectWeatherIntent(text: string, lastLocation?: string | null): boolean {
   const trimmed = text.trim();
   if (!trimmed) return false;
@@ -196,6 +212,8 @@ export function detectWeatherIntent(text: string, lastLocation?: string | null):
   // frame" was answered "Which location?" and never reached Core. A weather word inside an instruction to create or
   // organise something is part of that work, unless the message also asks about the weather itself.
   if (MAKES_SOMETHING.test(trimmed) && !ASKS_ABOUT_WEATHER.test(trimmed)) return false;
+  if (NOT_WEATHER_TEMPERATURE.test(trimmed)) return false;
+  if (hasOtherRequest(trimmed)) return false;
   if (WEATHER_NOUN.test(trimmed)) return true;
   // If a weather location is already established in context, relative time follow-ups are weather queries
   if (lastLocation && /\b(?:tomorrow|evening|morning|tonight|this afternoon|weekend)\b/i.test(trimmed)) {
@@ -364,7 +382,10 @@ export function deriveTerminalJarvisState(input: {
  * to cancellation immediately instead of waiting behind the work it is meant to end. Anything that
  * carries more content ("stop using tabs and use spaces") is an instruction, not a Stop.
  */
-const STOP_INTENT = /^\s*(?:(?:please|pls)\s+)?(?:stop|cancel|halt|abort|kill)(?:\s+(?:it|that|this|the task|that task|this task|the job|everything|all|now|working|coding|please))*\s*[.!]*\s*$/i;
+// Micro-tests RES-003 ("Cancel the active test task now.") and REC-006 ("No, cancel that."): the earlier pattern
+// missed both, so the cancel waited in the queue behind the very work it was meant to stop.
+const STOP_OBJECT = String.raw`(?:it|that|this|everything|all|now|working|coding|please|immediately|right\s+now|(?:the|this|that|my|your)\s+(?:(?:active|current|running|test|background|whole|last)\s+){0,3}(?:task|job|work|request|run|search|download|command|process|one|thing))`;
+const STOP_INTENT = new RegExp(String.raw`^\s*(?:(?:no|nope|wait|ok|okay|hey)[,.!]?\s+)*(?:(?:please|pls)\s+)?(?:stop|cancel|halt|abort|kill)(?:\s+${STOP_OBJECT})*\s*[.!]*\s*$`, 'i');
 
 export function isStopIntent(text: string): boolean {
   return STOP_INTENT.test(text);

@@ -123,7 +123,9 @@ const CATEGORIES: ActionClaimCategory[] = [
     // Only concrete artefacts: a reply that "created a summary below" is prose, not a file claim.
     // "I have prepared a test document" (printer re-run P1, no tool ran) is a concrete artefact claim too.
     object: /[\w.-]+\.(?:pdf|docx?|xlsx?|pptx?|md|txt|csv|html?|json|png|jpe?g|zip)\b|\b(?:files?|folders?|pdfs?)\b|\btest\s+(?:documents?|pages?)\b/i,
-    verbs: 'saved|created|written|wrote|exported|generated|converted|moved|renamed|copied|deleted|removed|downloaded|printed|organi[sz]ed|prepared',
+    // Micro-test SAL-008: "I have updated the offer ... in offer_stadtbibliothek_ulm.md to clearly separate the pricing"
+    // with no tool at all; the file was unchanged. Edits are file changes too.
+    verbs: 'saved|created|written|wrote|exported|generated|converted|moved|renamed|copied|deleted|removed|downloaded|printed|organi[sz]ed|prepared|updated|modified|edited|rewritten|rewrote',
     // Tools that produce or change files; read-only tools (read_file, document_read, list_directory, list_printers)
     // never support it.
     tools: /write|propose_|edit|create_note|export|build_|image_generate|comfyui_generate|media_|download|print_|organize_apply|pdf|file_change|delegate_to_opencode|delegate_to_coding_agent/i,
@@ -199,11 +201,73 @@ const CATEGORIES: ActionClaimCategory[] = [
     label: 'project creation',
   },
   {
+    // Micro-test COD-024: "I have stopped the process for 'Show the smallest failing test.'" with no tool; nothing ran.
+    kind: 'process',
+    object: /\b(?:process(?:es)?|programs?|jobs?|services?|tasks?|scripts?|runs?)\b/i,
+    verbs: 'stopped|terminated|killed|ended|cancell?ed|aborted|halted|shut down',
+    tools: /cancel|stop|kill|terminate|process|service|routine_control|^run_checks$/i,
+    label: 'process stop',
+  },
+  {
+    // Micro-test RES-024: "I'm back online ... I've re-established the connection to your local environment" — nothing
+    // had been lost and no tool ran.
+    kind: 'connection',
+    object: /\b(?:connections?|online|network|link|session)\b/i,
+    verbs: '',
+    claim: /\bi(?:'ve|\s+have)?\s+(?:(?:now|just|already|successfully)\s+)*(?:re-?established|restored|reconnected|re-?connected|recovered)\b|\b(?:connection|session)\b[^.!?]{0,40}?\b(?:has|have)\s+been\s+(?:re-?established|restored|recovered)\b|\bi'?m\s+back\s+online\b/i,
+    tools: /connect|network|reconnect|ollama_|port_check|system_/i,
+    label: 'reconnection',
+  },
+  {
+    // Micro-test SEC-018: the hand-off was declined, yet the reply said "I've passed your health note ... to the Sales
+    // agent for their records". Only a hand-off that succeeded supports it.
+    kind: 'attribution',
+    object: /\b(?:agents?|specialists?)\b/i,
+    verbs: '',
+    claim: /\bi(?:'ve|\s+have)?\s+(?:(?:now|just|already|successfully)\s+)*(?:passed|sent|shared|handed|forwarded|given|delegated|assigned)\b[^.!?]{0,120}?\bto\s+(?:the|your|my|our)\s+(?:\w+\s+)?(?:agents?|specialists?)\b/i,
+    exclude: /\b(?:not|never|cannot|unable|could(?:n't| not))\b|n't\b/i,
+    tools: /^delegate_to_agent$/,
+    label: 'specialist hand-off',
+  },
+  {
+    // Micro-tests SAL/RAD/RES/REC: "I've noted that this recommendation is irrelevant and won't include it in your future
+    // briefings" (RAD-010), "I've noted your instruction. I will ensure that ..." (RES-023, REC-024). A promise about
+    // future behaviour is only real when something stored it.
+    kind: 'standing_note',
+    object: /./,
+    verbs: '',
+    // Fix-build round 2 (RAD-010): "I've noted that the current AI Radar recommendation is irrelevant and will treat it as
+    // such" — "and will <do>" after "noted" is the same stored-promise claim.
+    claim: /\bi(?:'ve|\s+have)\s+(?:(?:now|just|already|successfully)\s+)*noted\b[^.!?]{0,140}?\b(?:won't|will\s+not|will\s+never|from\s+now\s+on|going\s+forward|in\s+(?:the\s+)?future|future\s+\w+|next\s+time|again|and\s+(?:I\s+)?will\s+\w+)\b|\bi(?:'ve|\s+have)\s+(?:(?:now|just|already)\s+)*noted\s+your\s+(?:instruction|preference|request|choice)s?\b/i,
+    tools: /^memory_(?:remember|correct|forget|resolve)$|preference|^radar_|^routine_control$|^schedule_task$|^cancel_scheduled_task$|^create_commitment$|^update_commitment$/i,
+    label: 'stored instruction',
+  },
+  {
+    // Fix-build round 2 (RAD-010): "Since it's no longer needed, I've updated the status accordingly" with no tool. A
+    // status (of a recommendation, lead, order, item) changes only through a tool that stores it; the turn's own
+    // bookkeeping (update_task_outcome) does not count.
+    kind: 'status',
+    object: /\bstatus(?:es)?\b/i,
+    verbs: 'updated|changed|set|marked|recorded|saved',
+    tools: /^(?!update_task_outcome$)(?:revenue_record_|radar_|update_|set_|cancel_|dismiss|complete|memory_(?:remember|correct)|create_commitment|schedule_task|routine_control|write_file)/i,
+    label: 'status change',
+  },
+  {
     kind: 'execution',
     object: /\b(?:commands?|actions?|steps?|tasks?|requests?|instructions?|changes?)\b/i,
     verbs: 'executed|carried out|completed|performed|applied|run|ran|done|finished',
     tools: /./,
     label: 'action',
+  },
+  {
+    // Micro-test COD-014 (twice): the git command was declined, yet "The last commit message is 'Initial commit' (Note: I
+    // retrieved this by executing a git command in the project directory.)" — invented, and the real message differs.
+    kind: 'execution',
+    object: /\b(?:commands?|git|tool|script|query|log)\b/i,
+    verbs: '',
+    claim: /\b(?:retrieved|got|obtained|found|read|checked|confirmed)\s+(?:this|it|that|them|the\s+\w+)\s+(?:by|via|using)\s+(?:executing|running|calling|using)\b|\bi\s+(?:have\s+)?(?:executed|ran|run)\s+(?:a|the)\s+(?:git\s+)?(?:command|script|query)\b/i,
+    tools: /^run_checks$|^run_command$|^workspace_git|git/i,
+    label: 'command run',
   },
 ];
 

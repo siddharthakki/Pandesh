@@ -1,5 +1,7 @@
 import { claimedOutputFiles, leadStatusLine, withholdUnsupportedActionClaims } from './actionClaims';
 import { answerTaskStatusQuestion, isTaskStatusQuestion, listPriorTurns, renderTaskHistorySection } from '../domain/conversationTaskHistory';
+import { listEarlierReads, renderEarlierReadsSection } from '../domain/earlierReads';
+import { homeLocationFact, readHomeLocation } from '../domain/homeLocation';
 import { checkPublicQuery, derivePublicQuery, explicitlyRequestsWebSearch, referencesLocalContent } from './publicQueryGuard';
 import { commandOpinionWarnings, readCommandReviewSettings, recordCommandReview, reviewCommand, warmCommandReview, type CommandOpinion, type CommandReviewOutcome } from './commandSecondOpinion';
 import { queryPrivacySummary, queryPrivacyWarning, readQueryPrivacySettings, recordQueryPrivacyReview, reviewQueryPrivacy, warmQueryPrivacy, type QueryPrivacyOpinion } from './queryPrivacySecondOpinion';
@@ -3286,6 +3288,14 @@ export class PiAgentEngine implements EngineAdapter {
           // Micro-tests DRV-010 and DRV-012: a rename request became 321 identical writes that left the file empty, and
           // an empty write named like a folder made a 0-byte file reported as a folder. Checked before anyone is asked.
           const guard = writeGuard(full, args.content);
+          // Fix-build verification (REC-014): a file that already holds exactly the requested text is the requested
+          // end state. Reporting it as an error made Core say "NOT DONE ... could not do it" and the next turn told the
+          // user the file was never created. Nothing is written and no approval is needed, but it is not a failure.
+          if (guard?.reason === 'the file already has this text') {
+            // Same audit record as before (the write was not performed); only the result is no longer an error.
+            safeRecordRuntimeEvent(db, broadcaster, attemptId, 'file_write_refused', { path: full, reason: guard.reason }, actor);
+            return { content: [{ type: 'text', text: `${guard.text} The file is already as requested: ${full}` }] };
+          }
           if (guard) return refuse(guard.text, guard.reason);
 
           const grant = await authorizeFileWrite(full, args.content);
@@ -5039,6 +5049,22 @@ When the user asks to continue, resume, or check progress/updates, resume this w
     // Earlier tasks' real outcomes (cancelled / failed / interrupted), so the model never presents them as pending (D4).
     const taskHistorySection = renderTaskHistorySection(priorTurns);
     addTurnFact(taskHistorySection);
+    // Micro-test cluster C4 (D-JOB-1): tool results are not part of the history, so a file read two turns ago was
+    // "reviewed" from memory and its deadline, salary and link reported missing. Carry the latest content of each file
+    // read earlier in this conversation, bounded.
+    try {
+      if (conversationId) {
+        const earlier = listEarlierReads(db, conversationId, { excludeRequestId: requestId, workspaceRoot: selectedWorkspace || undefined });
+        const section = renderEarlierReadsSection(earlier);
+        if (section) {
+          addTurnFact(section);
+          safeRecordRuntimeEvent(db, broadcaster, attemptId, 'earlier_reads_carried', { files: earlier.length, chars: section.length }, actor);
+        }
+      }
+    } catch { /* history continuity is best effort; the turn still runs */ }
+    // Micro-test cluster C6 (D-LOC-5): local searches went to Berlin (from the time zone) although the user stored
+    // "I live in Ulm". The main assistant gets the stored home place; specialists keep receiving no user memory.
+    if (!agentScope || agentScope.agentId === 'chief') addTurnFact(homeLocationFact(readHomeLocation(db), String(ctx.currentMessage ?? prompt ?? '')));
     // A spoken message may contain misheard words (Core froze how it was entered): ask about an odd word, never refuse on it.
     let spokenSection = '';
     try {

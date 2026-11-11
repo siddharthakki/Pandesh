@@ -33,6 +33,12 @@ export interface OllamaCallMetrics {
   toolCalls: number;
   /** Tool calls the model wrote as JSON text that were recovered into real calls (Build 161 audit). */
   inlineToolCallsRecovered?: number;
+  /** Identical calls (same tool, same arguments) repeated within this one response and dropped. */
+  duplicateToolCallsDropped?: number;
+  /** Set when the response hit the per-response tool-call limit: generation was stopped there. */
+  toolCallLimitHit?: number;
+  /** Raw chat-template control tokens (e.g. <|tool_response>) removed from the reply text. */
+  controlTokensRemoved?: number;
   messages: number;
   toolDefinitions: number;
   /** Characters sent by section: what the prompt budget is spent on. */
@@ -56,6 +62,20 @@ export interface PiOllamaFetchOptions {
   firstOutputTimeoutMs?: number;
   /** A reply that stops streaming for this long is stopped. Default 120 s, or PANDESH_MODEL_IDLE_TIMEOUT_MS. */
   idleTimeoutMs?: number;
+  /**
+   * Most distinct tool calls one model response may carry; generation stops at the limit. Default 12, or
+   * PANDESH_MAX_TOOL_CALLS_PER_RESPONSE. Micro-test RAD-020: gemma4:12b looped one call 875 times in a single
+   * 12,288-token response and Core ran all of them (199 s); FIN-007 did the same with 372 calls.
+   */
+  maxToolCallsPerResponse?: number;
+}
+
+/** Chat-template control tokens that must never reach the user (FIN-007 showed '<|tool_response>' as the reply). */
+const CONTROL_TOKEN = /<\|(?:tool_response|tool_call|tool_calls|im_start|im_end|start_of_turn|end_of_turn|eot_id|end|channel|message|return|call)\|?>/g;
+export function stripControlTokens(text: string): { text: string; removed: number } {
+  let removed = 0;
+  const out = text.replace(CONTROL_TOKEN, () => { removed += 1; return ''; });
+  return { text: out, removed };
 }
 
 /**
@@ -275,10 +295,25 @@ export function createPiOllamaFetch(options: PiOllamaFetchOptions): typeof fetch
       async start(controller) {
         const push = (text: string) => controller.enqueue(encoder.encode(text));
         const firstToken = () => { if (metrics.firstTokenMs == null) metrics.firstTokenMs = Date.now() - started; };
-        const emitToolCall = (name: string, args: unknown) => {
+        const maxCalls = options.maxToolCallsPerResponse ?? positiveEnv('PANDESH_MAX_TOOL_CALLS_PER_RESPONSE', 12);
+        const seenCalls = new Set<string>();
+        let capped = false;
+        /** Returns false once the response has reached its tool-call limit (the caller then stops reading). */
+        const emitToolCall = (name: string, args: unknown): boolean => {
+          const argText = typeof args === 'string' ? args : JSON.stringify(args ?? {});
+          const key = `${name}\u0000${argText}`;
+          if (seenCalls.has(key)) { metrics.duplicateToolCallsDropped = (metrics.duplicateToolCallsDropped ?? 0) + 1; return true; }
+          if (metrics.toolCalls >= maxCalls) { capped = true; metrics.toolCallLimitHit = maxCalls; return false; }
+          seenCalls.add(key);
           const index = metrics.toolCalls;
           metrics.toolCalls += 1;
-          push(chunk({ tool_calls: [{ index, id: `call_${started.toString(36)}_${index}`, type: 'function', function: { name, arguments: typeof args === 'string' ? args : JSON.stringify(args ?? {}) } }] }));
+          push(chunk({ tool_calls: [{ index, id: `call_${started.toString(36)}_${index}`, type: 'function', function: { name, arguments: argText } }] }));
+          return true;
+        };
+        const cleanText = (text: string) => {
+          const { text: out, removed } = stripControlTokens(text);
+          if (removed) metrics.controlTokensRemoved = (metrics.controlTokensRemoved ?? 0) + removed;
+          return out;
         };
         const inline: { mode: 'undecided' | 'holding' | 'streaming'; held: string } = { mode: 'undecided', held: '' };
         let sawDone = false;
@@ -296,7 +331,7 @@ export function createPiOllamaFetch(options: PiOllamaFetchOptions): typeof fetch
         };
         watch();
         try {
-          for await (const raw of upstream.lines) {
+          read: for await (const raw of upstream.lines) {
             sawFrame = true;
             watch();
             const frame = raw as {
@@ -311,23 +346,24 @@ export function createPiOllamaFetch(options: PiOllamaFetchOptions): typeof fetch
               metrics.thinkingChars += msg.thinking.length;
               push(chunk({ reasoning: msg.thinking }));
             }
-            if (msg?.content) {
-              firstToken();
+            const content = msg?.content ? cleanText(msg.content) : '';
+            if (msg?.content) firstToken();
+            if (content) {
               // A reply that starts like a JSON object or a code fence may be a tool call written as text: hold it.
               if (inline.mode === 'undecided' && offeredToolDefs.length > 0) {
-                inline.held += msg.content;
+                inline.held += content;
                 const lead = inline.held.trimStart();
                 if (lead) inline.mode = lead.startsWith('{') || lead.startsWith('```') ? 'holding' : 'streaming';
                 if (inline.mode === 'streaming') { push(chunk({ content: inline.held })); inline.held = ''; }
               } else if (inline.mode === 'holding') {
-                inline.held += msg.content;
+                inline.held += content;
               } else {
-                push(chunk({ content: msg.content }));
+                push(chunk({ content }));
               }
             }
             for (const call of msg?.tool_calls ?? []) {
               firstToken();
-              emitToolCall(call.function?.name ?? '', call.function?.arguments ?? {});
+              if (!emitToolCall(call.function?.name ?? '', call.function?.arguments ?? {})) break read;
             }
             if (frame.done) {
               if (inline.held) {
@@ -365,6 +401,12 @@ export function createPiOllamaFetch(options: PiOllamaFetchOptions): typeof fetch
           // D8: a stream that ends without Ollama's final frame was cut (server stopped, connection lost),
           // not a finished reply; the turn must say the connection was lost, not "no reply".
           if (silence) clearTimeout(silence);
+          if (capped && !sawDone) {
+            // Stop the model right here: the rest of a looping response is only more of the same calls.
+            upstream.destroy();
+            sawDone = true;
+            push(chunk({}, 'tool_calls'));
+          }
           if (stall) throw stall;
           if (!sawDone && !init.signal?.aborted) throw new Error('the connection to Ollama closed before the reply finished');
           push('data: [DONE]\n\n');
