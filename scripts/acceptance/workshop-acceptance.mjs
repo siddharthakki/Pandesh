@@ -621,9 +621,125 @@ async function videoScenario(cdp) {
   });
 }
 
+// ------------------------------------------------------------------------------------------ scenario: Image versions
+/**
+ * A STAND-IN for the Image Studio on its own loopback port (the isolated instance is started with --studio-url): it
+ * answers the Studio's two calls with real PNG files made by FFmpeg — a flat "promo" card, and for a change, the
+ * referenced file made darker. It is not a generative model; it exercises Pandesh's own path (approval, the
+ * reference on screen, versions, lineage, comparison) without the GPU, which the 700 micro-test run is using.
+ */
+function standInStudio(root, port) {
+  const out = path.join(root, 'output');
+  fs.mkdirSync(out, { recursive: true });
+  let n = 0;
+  const calls = [];
+  const server = createServer((req, res) => {
+    let body = '';
+    req.on('data', (c) => { body += c; });
+    req.on('end', () => {
+      const reply = (status, json) => { res.writeHead(status, { 'Content-Type': 'application/json' }); res.end(JSON.stringify(json)); };
+      if (req.url === '/api/status') return reply(200, { comfyui: true, ollama: true, standIn: 'ffmpeg' });
+      if (req.url !== '/api/generate' || req.method !== 'POST') return reply(404, { status: 'failed', message: 'not available in the stand-in' });
+      const b = JSON.parse(body || '{}');
+      calls.push({ image_ref: b.image_ref ?? null, denoise: b.denoise ?? null, width: b.width, height: b.height, prompt: String(b.prompt ?? '').slice(0, 120) });
+      n += 1;
+      const name = `standin-${Date.now()}-${n}.png`;
+      const target = path.join(out, name);
+      const w = Number(b.width) || 1024; const h = Number(b.height) || 1024;
+      const r = b.image_ref
+        ? spawnSync('ffmpeg', ['-v', 'error', '-i', path.join(out, path.basename(String(b.image_ref))), '-vf', 'eq=brightness=-0.22', '-frames:v', '1', target])
+        : spawnSync('ffmpeg', ['-v', 'error', '-f', 'lavfi', '-i', `color=c=0xF5B041:s=${w}x${h}`, '-vf', `drawbox=x=${Math.round(w * 0.2)}:y=${Math.round(h * 0.3)}:w=${Math.round(w * 0.6)}:h=${Math.round(h * 0.45)}:color=0xC0392B:t=fill,drawbox=x=${Math.round(w * 0.3)}:y=${Math.round(h * 0.38)}:w=${Math.round(w * 0.4)}:h=${Math.round(h * 0.28)}:color=0xFFF3D6:t=fill`, '-frames:v', '1', target]);
+      if (r.status !== 0) return reply(200, { status: 'failed', message: `stand-in could not draw: ${String(r.stderr).slice(0, 200)}` });
+      return reply(200, { status: 'completed', images: [{ path: `/images/${name}`, seed: 1234 }], used_checkpoint: 'stand-in: FFmpeg (not a generative model)' });
+    });
+  });
+  return new Promise((resolve, reject) => { server.once('error', reject); server.listen(port, '127.0.0.1', () => resolve({ calls, close: () => new Promise((r) => server.close(r)) })); });
+}
+function pngSize(file) { const b = fs.readFileSync(file); return b.readUInt32BE(0) === 0x89504e47 ? { width: b.readUInt32BE(16), height: b.readUInt32BE(20) } : null; }
+function meanLuma(file) {
+  const r = spawnSync('ffmpeg', ['-v', 'info', '-i', file, '-vf', 'signalstats,metadata=print:key=lavfi.signalstats.YAVG', '-f', 'null', '-'], { encoding: 'utf8' });
+  const m = /lavfi\.signalstats\.YAVG=([\d.]+)/.exec(`${r.stdout}\n${r.stderr}`);
+  return m ? Math.round(Number(m[1]) * 10) / 10 : null;
+}
+
+async function imageScenario(cdp) {
+  const ctx = {};
+  const studioUrl = new URL(String(args['studio-url'] ?? 'http://127.0.0.1:18989'));
+  const studio = await standInStudio(path.resolve(String(args['studio-root'] ?? path.join(PROFILE, '..', 'studio-stand-in'))), Number(studioUrl.port));
+  const imageWorkshop = async () => (await http('GET', `/v1/workshops?conversationId=${ctx.conversationId}`)).workshops.find((w) => w.type === 'image');
+  const fileOf = async (id) => (await http('GET', `/v1/artifacts/${id}`)).absolutePath;
+  try {
+    await test('WSH-050', '"Create a square Kha ke dikha biryani promotional image": a real 1024×1024 picture opens in the Workshop (stand-in Studio)', async ({ dir, record }) => {
+      const conv = await http('POST', '/v1/conversations', { mode: 'baat_kar', title: 'Image acceptance' });
+      ctx.conversationId = conv.id;
+      await cdp.eval(`window.desktop.openConversation(${JSON.stringify(conv.id)}, true).then(() => true)`);
+      await sleep(800);
+      const r = await governed(conv.id, 'image_generate', { prompt: 'Square promotional image for Kha ke dikha biryani: a plate of biryani on a warm background', checkpoint: 'stand-in', width: 1024, height: 1024 }, record);
+      record.facts.output = outputOf(r);
+      if (r.toolInvocation?.status !== 'succeeded') throw new Error(outputOf(r));
+      const w = await imageWorkshop();
+      ctx.workshopId = w.workshopId; ctx.v1 = w.latestArtifactId;
+      const open = await dispatch(conv.id, 'workshop_view', { action: 'open', workshop: w.workshopId });
+      await waitFor(() => cdp.eval(`(() => { const i = document.querySelector('.ws-image img'); return i && i.complete && i.naturalWidth > 0 ? true : null; })()`), 15_000, 'the picture in the Workshop');
+      const shown = await cdp.eval(`(() => { const i = document.querySelector('.ws-image img'); return { w: i.naturalWidth, h: i.naturalHeight }; })()`);
+      const size = pngSize(await fileOf(ctx.v1));
+      record.facts.open = outputOf(open); record.facts.shown = shown; record.facts.fileHeader = size; record.facts.meta = w.versions[0].meta; record.facts.studioCalls = [...studio.calls];
+      record.screenshots.push(await cdp.screenshot(path.join(dir, 'v1.png')));
+      if (!/^DONE/.test(outputOf(open)) || size?.width !== 1024 || size?.height !== 1024 || shown.w !== 1024) throw new Error(JSON.stringify({ open: outputOf(open).slice(0, 120), size, shown }));
+      if (studio.calls[0]?.image_ref) throw new Error('a new picture was sent a reference');
+      return { status: 'PASS', observation: `v1: a ${size.width}×${size.height} PNG (file header), shown at ${shown.w}×${shown.h}; op "${w.versions[0].meta.op.kind}", "${w.versions[0].meta.verification?.checks[0]}". Drawn by the FFmpeg stand-in, not a generative model.` };
+    });
+
+    await test('WSH-051', '"Make the background darker": the approval names the picture on screen; v2 is the next version of the same workshop', async ({ dir, record }) => {
+      const r = await governed(ctx.conversationId, 'image_generate', { prompt: 'Square promotional image for Kha ke dikha biryani, with a darker background', checkpoint: 'stand-in', width: 1024, height: 1024, denoise: 0.45 }, record);
+      record.facts.output = outputOf(r);
+      if (r.toolInvocation?.status !== 'succeeded') throw new Error(outputOf(r));
+      const w = await imageWorkshop();
+      const v2 = w.versions[w.versions.length - 1];
+      await dispatch(ctx.conversationId, 'workshop_view', { action: 'open', workshop: w.workshopId });
+      await waitFor(async () => /v2 of 2/.test(await cdp.eval(`document.querySelector('#ws-version')?.selectedOptions?.[0]?.textContent ?? ''`)), 15_000, 'version 2 on screen');
+      const [f1, f2] = [await fileOf(ctx.v1), await fileOf(v2.artifactId)];
+      const luma = { v1: meanLuma(f1), v2: meanLuma(f2) };
+      const card = record.facts.image_generateApproval ?? {};
+      record.facts.card = card; record.facts.luma = luma; record.facts.v2meta = v2.meta; record.facts.studioCall = studio.calls[studio.calls.length - 1];
+      record.screenshots.push(await cdp.screenshot(path.join(dir, 'v2.png')));
+      const problems = [];
+      if (w.workshopId !== ctx.workshopId || w.versions.length !== 2) problems.push(`workshop ${w.workshopId} has ${w.versions.length} version(s)`);
+      if (v2.meta.parentArtifactId !== ctx.v1 || v2.meta.op.kind !== 'refine') problems.push(`v2 parent ${v2.meta.parentArtifactId}, op ${v2.meta.op.kind}`);
+      if (card.referenceArtifactId !== ctx.v1 || !/the picture open in the Workshop/.test(String(card.changes ?? ''))) problems.push(`approval card: ${JSON.stringify(card).slice(0, 200)}`);
+      if (!studio.calls[studio.calls.length - 1]?.image_ref) problems.push('the Studio was not given the reference');
+      if (!(luma.v2 < luma.v1)) problems.push(`mean luminance ${luma.v1} → ${luma.v2}`);
+      if (problems.length) throw new Error(problems.join('; '));
+      return { observation: `Approval card: changes "${card.changes}"; v2 parent = v1, op refine, note "${v2.meta.notes?.[0]?.slice(0, 90)}…"; mean luminance ${luma.v1} → ${luma.v2} (measured with FFmpeg signalstats).` };
+    });
+
+    await test('WSH-052', '"Show me the original beside the new one": two real pictures side by side', async ({ dir, record }) => {
+      const r = await dispatch(ctx.conversationId, 'workshop_view', { action: 'compare', version: '1', compareWith: '2' });
+      await waitFor(() => cdp.eval(`[...document.querySelectorAll('.ws-compare .ws-side-by-side img')].filter((i) => i.complete && i.naturalWidth > 0).length === 2`), 10_000, 'two pictures side by side');
+      const figures = await cdp.eval(`[...document.querySelectorAll('.ws-compare figure')].map((f) => ({ caption: f.querySelector('figcaption')?.textContent ?? '', w: f.querySelector('img')?.naturalWidth, src: (f.querySelector('img')?.src ?? '').length }))`);
+      record.facts = { output: outputOf(r), figures };
+      record.screenshots.push(await cdp.screenshot(path.join(dir, 'side-by-side.png')));
+      if (!/^DONE/.test(outputOf(r)) || figures.length !== 2 || figures.some((f) => f.w !== 1024)) throw new Error(JSON.stringify(record.facts));
+      return { observation: `${outputOf(r).slice(0, 100)}; ${figures.map((f) => f.caption.slice(0, 60)).join(' | ')}.` };
+    });
+  } finally {
+    await studio.close();
+  }
+}
+
 async function main() {
   fs.mkdirSync(OUT, { recursive: true });
   if (args.reopen) return reopen(String(args.reopen));
+  if (args.scenario === 'image') {
+    const cdp = await Cdp.attach();
+    await cdp.send('Page.bringToFront').catch(() => undefined);
+    await imageScenario(cdp);
+    fs.writeFileSync(path.join(OUT, 'results.json'), JSON.stringify(results, null, 2));
+    cdp.ws.close();
+    const failed = Object.values(results).filter((r) => r.status !== 'PASS');
+    console.log(`\n${Object.keys(results).length - failed.length}/${Object.keys(results).length} passed`);
+    process.exit(failed.length ? 1 : 0);
+  }
   if (args.scenario === 'video') {
     const cdp = await Cdp.attach();
     await cdp.send('Page.bringToFront').catch(() => undefined);

@@ -290,6 +290,12 @@ function buildCapabilityRegistry(dataDir: string, db: CoreDatabase, connectors: 
   const memory = createMemoryCapabilityAdapter({ db });
   const imageStudioRoot = process.env.KARKEDIKHA_IMAGE_STUDIO_ROOT
     ?? (process.platform === 'win32' ? 'C:\\Projects\\ImageGeneration' : '/opt/ImageGeneration');
+  // Another local Studio port (an isolated test profile); anything that is not loopback HTTP is ignored.
+  const imageStudioUrl = (() => {
+    const value = process.env.KARKEDIKHA_IMAGE_STUDIO_URL?.trim();
+    if (!value) return undefined;
+    try { const u = new URL(value); return u.protocol === 'http:' && ['127.0.0.1', 'localhost'].includes(u.hostname) ? value : undefined; } catch { return undefined; }
+  })();
 
   const registry = new GovernedCapabilityRegistry()
     .register(createWorkspaceCapabilityAdapter())
@@ -298,6 +304,7 @@ function buildCapabilityRegistry(dataDir: string, db: CoreDatabase, connectors: 
     .register(createImageStudioCapabilityAdapter({
       db,
       studioRoot: imageStudioRoot,
+      ...(imageStudioUrl ? { baseUrl: imageStudioUrl } : {}),
       // Pandesh keeps the images it generated through ComfyUI in its OWN data
       // directory: they are Core artifacts with durable ids, and they must
       // survive a restart of either Core or the desktop app.
