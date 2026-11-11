@@ -94,9 +94,15 @@ export function PhoneCard() {
       setBusy(null);
     }
   };
-  const copy = (text: string, what: string) => {
-    if (!navigator.clipboard) { setNote({ text: 'Select the text and copy it.', error: true }); return; }
-    navigator.clipboard.writeText(text).then(() => setNote({ text: `${what} copied.` }), () => setNote({ text: 'Could not copy. Select the text and copy it.', error: true }));
+  const copy = async (text: string, what: string) => {
+    try {
+      // Through the host: the app window allows pages only the microphone, so navigator.clipboard is refused there.
+      if (typeof api?.copyToClipboard === 'function') await api.copyToClipboard(text);
+      else await navigator.clipboard.writeText(text);
+      setNote({ text: `${what} copied.` });
+    } catch {
+      setNote({ text: 'Could not copy. Select the text and copy it.', error: true });
+    }
   };
 
   if (!supported) return null;
@@ -164,7 +170,7 @@ export function PhoneCard() {
             )}
             <div className="actions" style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
               <button type="button" className="btn small" disabled={Boolean(busy)} onClick={() => void run('code', () => api.rotateMobilePairingCode(), 'New code ready.')}>New code</button>
-              {link && <button type="button" className="btn small" onClick={() => copy(link, 'Link')}>Copy link</button>}
+              {link && <button type="button" className="btn small" onClick={() => { void copy(link, 'Link'); }}>Copy link</button>}
             </div>
           </div>
         </div>
@@ -204,7 +210,7 @@ export function PhoneCard() {
             <li>Install Tailscale on this PC and on your phone, and sign in with the same account on both. <button type="button" className="btn link" onClick={() => void api.openExternalUrl('https://tailscale.com/download').catch((err) => setNote({ text: errorText(err), error: true }))}>Get Tailscale</button></li>
             <li>In the Tailscale admin console, on the DNS page, turn on MagicDNS and HTTPS Certificates. <button type="button" className="btn link" onClick={() => void api.openExternalUrl('https://login.tailscale.com/admin/dns').catch((err) => setNote({ text: errorText(err), error: true }))}>Open the DNS page</button></li>
             <li>Give this PC a neutral name there (Machines → ⋯ → Edit machine name), for example desktop-1. The secure address appears in public certificate logs, so it should not contain your name.</li>
-            <li>On this PC, run this in a terminal: <code style={{ fontFamily: 'var(--font-mono)', fontSize: 13 }}>{serveCommand}</code> <button type="button" className="btn link" onClick={() => copy(serveCommand, 'Command')}>Copy</button>. Never use <code style={{ fontFamily: 'var(--font-mono)', fontSize: 13 }}>tailscale funnel</code>: that would put Pandesh on the public internet.</li>
+            <li>On this PC, run this in a terminal: <code style={{ fontFamily: 'var(--font-mono)', fontSize: 13 }}>{serveCommand}</code> <button type="button" className="btn link" onClick={() => { void copy(serveCommand, 'Command'); }}>Copy</button>. Never use <code style={{ fontFamily: 'var(--font-mono)', fontSize: 13 }}>tailscale funnel</code>: that would put Pandesh on the public internet.</li>
             <li>On the phone, turn Tailscale on (on Android it takes the VPN slot, so another VPN cannot be on at the same time), then scan the QR code above.</li>
           </ol>
           <div className="actions" style={{ display: 'flex', gap: 6, marginTop: 8 }}>
