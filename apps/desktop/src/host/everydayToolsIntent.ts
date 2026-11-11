@@ -126,7 +126,9 @@ export function wantsAssistantMemory(body: string): boolean {
   const text = body.trim();
   if (/^to\s+/i.test(text)) return false;
   return /\b(?:memor(?:y|ies|i[sz]e)|provenance|facts?|save\s+(?:it|this|that)|store\s+(?:it|this|that)|confirm|verify|recall)\b/i.test(text)
-    || /[.!?;]\s+\S/.test(text);
+    || /[.!?;]\s+\S/.test(text)
+    // Micro-test EDU-018: "Remember my new vocabulary only in this study session" asks for scoped memory, not a note.
+    || /\b(?:only|just)\s+(?:in|for|during)\s+(?:this|the|our)\s+(?:session|conversation|chat|exercise|lesson|study session)\b/i.test(text);
 }
 
 /** "my home is Ulm", "about me: ...", "I live in ...", "I prefer ...", "not Karlsruhe": statements about the person themself. */
@@ -136,7 +138,10 @@ export function isPersonalFact(body: string): boolean {
   // "our flour supplier is \u2026" / "we deliver on Tuesdays" are facts about the user's own household or business (live demo
   // 2026-11-09: they were saved as a plain note, so memory recall and the Second Brain never found them).
   return /\b(?:about (?:me|us)|(?:my|our)\s+\w+(?:\s+\w+){0,3}\s+(?:is|are|was|were)|i\s+(?:am|live|work|prefer|like|use|speak|moved)|we\s+(?:are|live|work|prefer|like|use|sell|deliver|open|close|run|own|charge|offer)|i['\u2019]m|we['\u2019]re|(?:is|are)\s+(?:in|at)\s+\w+,?\s+not|correction)\b/i.test(text)
-    || /\bmy\s+(?:home|address|city|name|birthday|timezone|time zone|language|job|company|email|phone)\b/i.test(text);
+    || /\bmy\s+(?:home|address|city|name|birthday|timezone|time zone|language|job|company|email|phone)\b/i.test(text)
+    // Micro-test FIN-021: "Remember my synthetic test stock watchlist: NVDA and SAP" became a note the next question never
+    // found. "my/our <thing>: <value>" is a fact about the user's own things.
+    || /^(?:my|our)\s+[\w\s'-]{1,60}?:\s*\S/i.test(text);
 }
 
 /**
