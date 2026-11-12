@@ -1,6 +1,7 @@
 import { claimedOutputFiles, leadStatusLine, withholdUnsupportedActionClaims } from './actionClaims';
 import { answerTaskStatusQuestion, isTaskStatusQuestion, listPriorTurns, renderTaskHistorySection } from '../domain/conversationTaskHistory';
 import { listEarlierReads, renderEarlierReadsSection } from '../domain/earlierReads';
+import { listOpenGmailPlans, renderOpenGmailPlansSection } from '../domain/openGmailPlans';
 import { homeLocationFact, readHomeLocation } from '../domain/homeLocation';
 import { checkPublicQuery, derivePublicQuery, explicitlyRequestsWebSearch, referencesLocalContent } from './publicQueryGuard';
 import { commandOpinionWarnings, readCommandReviewSettings, recordCommandReview, reviewCommand, warmCommandReview, type CommandOpinion, type CommandReviewOutcome } from './commandSecondOpinion';
@@ -5062,6 +5063,18 @@ When the user asks to continue, resume, or check progress/updates, resume this w
         }
       }
     } catch { /* history continuity is best effort; the turn still runs */ }
+    // Production, 2026-11-12: a Gmail preview made in one turn could not be applied in the next. The reply had named it
+    // "gplan_1a2b3c4d...", so the model made up the rest of the id. Carry the open previews with their exact ids.
+    try {
+      if (conversationId && availableToolNames.has('gmail_apply_plan')) {
+        const openPlans = listOpenGmailPlans(db, conversationId, { excludeRequestId: requestId });
+        const section = renderOpenGmailPlansSection(openPlans);
+        if (section) {
+          addTurnFact(section);
+          safeRecordRuntimeEvent(db, broadcaster, attemptId, 'gmail_previews_carried', { previews: openPlans.length, chars: section.length }, actor);
+        }
+      }
+    } catch { /* best effort, like the earlier reads; the turn still runs */ }
     // Micro-test cluster C6 (D-LOC-5): local searches went to Berlin (from the time zone) although the user stored
     // "I live in Ulm". The main assistant gets the stored home place; specialists keep receiving no user memory.
     if (!agentScope || agentScope.agentId === 'chief') addTurnFact(homeLocationFact(readHomeLocation(db), String(ctx.currentMessage ?? prompt ?? '')));

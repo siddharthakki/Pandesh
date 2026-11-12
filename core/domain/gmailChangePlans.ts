@@ -36,6 +36,16 @@ export function createGmailOrganizeStore(db: CoreDatabase, nowMs: () => number =
       this.save(next);
       return next;
     },
+    listOpen(accountEmail: string, nowIso: string, limit: number): GmailChangePlan[] {
+      return db
+        .all<PlanRow>(
+          `SELECT planJson FROM gmail_change_plans
+            WHERE lower(accountEmail) = lower(?) AND status = 'planned' AND expiresAt > ?
+            ORDER BY createdAt DESC LIMIT ?`,
+          [accountEmail, nowIso, Math.max(1, Math.floor(limit))],
+        )
+        .map((row) => JSON.parse(row.planJson) as GmailChangePlan);
+    },
   };
 }
 

@@ -106,6 +106,8 @@ export interface GmailOrganizeStore {
   save(plan: GmailChangePlan): void;
   get(planId: string): GmailChangePlan | undefined;
   update(planId: string, patch: Partial<GmailChangePlan>): GmailChangePlan | undefined;
+  /** Previews of this account still waiting to be applied (status planned, not expired), newest first. */
+  listOpen?(accountEmail: string, nowIso: string, limit: number): GmailChangePlan[];
 }
 
 export interface OrganizeEnv {
@@ -373,7 +375,23 @@ function resolveLabel(raw: string, catalog: LabelCatalog, allowCreate: boolean, 
   if (existing) return { ok: true, id: existing, create: null };
   if (action === 'remove') return { ok: false, reason: `there is no label named "${name}" to remove` };
   if (!allowCreate) return { ok: false, reason: `there is no label named "${name}"` };
+  const problem = newLabelNameProblem(name);
+  if (problem) return { ok: false, reason: problem };
   return { ok: true, id: null, create: name };
+}
+
+/**
+ * A NEW label name that is really a leftover of the model's own text, not a name the user chose. Production,
+ * 2026-11-12: a preview would have created a label called "Receipts**" (markdown bold left in), and another call asked
+ * for a label "12345678901234567890". Existing labels are matched by name first, so a real label like that still works.
+ */
+function newLabelNameProblem(name: string): string | null {
+  if (/[*`]/.test(name) || /^#+\s/.test(name)) {
+    const plain = name.replace(/[*`]/g, '').replace(/^#+\s*/, '').trim();
+    return `"${name}" still has formatting characters in it (*, \` or #), so it is not used as a new label name${plain ? `; the plain name would be "${plain}"` : ''}`;
+  }
+  if (/^\d{10,}$/.test(name)) return `"${name}" is a long number, not a label name; use the label's name as it appears in Gmail`;
+  return null;
 }
 
 function describeOperation(op: { addLabelIds: string[]; removeLabelIds: string[]; createLabels: string[]; category?: string; archive: boolean; addNames: string[]; removeNames: string[] }): string {
@@ -419,13 +437,16 @@ export async function planChanges(rawArgs: Record<string, unknown>, env: Organiz
   const args = unwrapArgs(rawArgs);
   const now = env.nowMs ?? Date.now;
   const started = now();
-  const query = trimmedNonEmptyString(args.query);
-  const explicitIds = stringArray(args.messageIds);
+  const opArg = (args.operation && typeof args.operation === 'object' ? args.operation : {}) as Record<string, unknown>;
+  // Production, 2026-11-12 (gemma4:12b): "query" was put inside "operation" five times in a row and every call was
+  // refused with "provide a Gmail query". Which messages to look at is not ambiguous there, so it is accepted too.
+  const query = trimmedNonEmptyString(args.query) ?? trimmedNonEmptyString(opArg.query);
+  const topLevelIds = stringArray(args.messageIds);
+  const explicitIds = topLevelIds.length ? topLevelIds : stringArray(opArg.messageIds);
   if (!query && explicitIds.length === 0) return invalidArgs('gmail_plan_changes: provide a Gmail "query" (for example "category:promotions newer_than:30d") or "messageIds"');
   const cap = clampInt(args.maxMessages, PLAN_DEFAULT_MESSAGES, 1, PLAN_MAX_MESSAGES);
   const deadline = started + clampInt(args.timeBudgetMs, DEFAULT_TIME_BUDGET_MS, 5_000, 180_000);
 
-  const opArg = (args.operation && typeof args.operation === 'object' ? args.operation : {}) as Record<string, unknown>;
   const categoryRaw = trimmedNonEmptyString(opArg.moveToCategory)?.toLowerCase();
   if (categoryRaw && !CATEGORY_LABELS[categoryRaw]) return invalidArgs(`gmail_plan_changes: moveToCategory must be one of ${Object.keys(CATEGORY_LABELS).join(', ')}`);
   const archive = opArg.archive === true;
@@ -536,9 +557,31 @@ export type PrepareOutcome = { ok: true; arguments: Record<string, unknown>; pre
 
 const MODIFY_SCOPE_HELP = 'Inbox organization needs one extra Google permission (gmail.modify). Open Connections → Google → "Allow inbox organization", approve it in the browser, then try again. Nothing was changed.';
 
+/** How many open previews a "no such plan" answer to gmail_apply_plan lists. */
+const OPEN_PREVIEWS_LISTED = 3;
+
+/**
+ * Production, 2026-11-12: the reply had named a preview "gplan_1a2b3c4d...", the next turn made up the rest of the id,
+ * and apply found nothing. The answer now lists the account's open previews with their exact ids, so the model can
+ * retry with the right one (the user still approves the exact change on the card).
+ */
+function missingPlanReason(env: OrganizeEnv, planId: string, forApply: boolean): string {
+  const base = `no change plan "${planId}" exists`;
+  let open: GmailChangePlan[] = [];
+  if (forApply) {
+    try {
+      const nowIso = new Date((env.nowMs ?? Date.now)()).toISOString();
+      open = (env.store.listOpen?.(env.accountEmail, nowIso, OPEN_PREVIEWS_LISTED + 3) ?? []).filter((p) => !p.taskId).slice(0, OPEN_PREVIEWS_LISTED);
+    } catch { open = []; }
+  }
+  if (open.length === 0) return `${base}; make a new preview with gmail_plan_changes`;
+  const listed = open.map((p) => `${p.planId} (${p.operation.summary}; ${p.messages.length} message${p.messages.length === 1 ? '' : 's'})`).join('; ');
+  return `${base}. Open previews for this account, newest first: ${listed}. If the user meant one of them, call gmail_apply_plan again with its exact planId; otherwise make a new preview with gmail_plan_changes`;
+}
+
 function loadLivePlan(env: OrganizeEnv, planId: string, allowed: PlanStatus[]): { ok: true; plan: GmailChangePlan } | { ok: false; reason: string } {
   const plan = env.store.get(planId);
-  if (!plan) return { ok: false, reason: `no change plan "${planId}" exists; make a new preview with gmail_plan_changes` };
+  if (!plan) return { ok: false, reason: missingPlanReason(env, planId, allowed.includes('planned')) };
   if (plan.accountEmail.toLowerCase() !== env.accountEmail.toLowerCase()) return { ok: false, reason: 'that plan was made for a different Google account' };
   if (!allowed.includes(plan.status)) return { ok: false, reason: `that plan is already "${plan.status}" and cannot be used this way` };
   if (plan.status === 'planned' && Date.parse(plan.expiresAt) < (env.nowMs ?? Date.now)()) return { ok: false, reason: 'that preview expired; make a new one with gmail_plan_changes' };
