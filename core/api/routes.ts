@@ -3,6 +3,7 @@ import type { ApiContext, ApiResult } from './context';
 import { CoreError } from '../domain/errors';
 import { sharedCloudCredentials } from '../runtime/cloudCredentials';
 import { listCloudModels, testCloudConnection, SELF_HOSTED_PUBLIC_REFUSAL } from '../runtime/cloudProviderProbe';
+import { registerFreeModelRoutes } from './freeModelRoutes';
 import { ProviderCatalog, isPrivateEndpoint } from '../platform/providerCatalog';
 import { withIdempotency, lookupIdempotencyResult } from '../domain/idempotency';
 import { latestSequence, listEventsAfter } from '../domain/events';
@@ -256,6 +257,8 @@ export function buildRouter(
   // Free cloud pool: the catalog, real model discovery and one fixed public connection test. A key is only ever
   // read from the in-memory credential store; a test runs only against a model already verified free.
   const cloudCatalog = new ProviderCatalog();
+  // The free-model registry keeps its last known-good copy in the data dir; without one it stays off.
+  const freeModelRegistry = bridge ? registerFreeModelRoutes(router, { dataDir: bridge.dataDir, catalog: cloudCatalog }) : undefined;
   router.get('/v1/cloud/catalog', () => ({
     status: 200,
     body: {
@@ -281,7 +284,10 @@ export function buildRouter(
     if (!provider) throw new CoreError('not_found', `Unknown cloud provider ${match.params.provider}`);
     const credential = sharedCloudCredentials.get(provider.id);
     if (!credential) return { status: 409, body: { error: 'not_configured', message: 'Add an API key for this provider first.' } };
-    return { status: 200, body: await listCloudModels(provider, credential) };
+    const listing = await listCloudModels(provider, credential);
+    // Discovery is also verification evidence: only this makes a registry model `verified_free`.
+    freeModelRegistry?.recordListing(provider.id, listing);
+    return { status: 200, body: listing };
   });
   router.post('/v1/cloud/providers/:provider/test', async (ctx, match) => {
     const provider = cloudCatalog.get(match.params.provider);

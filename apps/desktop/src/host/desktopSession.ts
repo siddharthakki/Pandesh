@@ -31,14 +31,11 @@ import { buildConnectorCredentialEnv, storeConnectorCredential, clearConnectorCr
 import { createPortProcessManager } from '../../../../core/runtime/portManager';
 import { CLOUD_PUBLIC_TEXT_SYSTEM_PROMPT, decideCloudPublicText } from '../../../../core/runtime/cloudPublicText';
 import {
-  clearCloudProviderKey,
-  cloudProviderKeyHint,
   isCloudOff,
-  loadCloudProviderKey,
   loadCloudSettings,
   saveCloudSettings,
-  storeCloudProviderKey,
 } from './cloudProviderSettings';
+import { CredentialVault, defaultCredentialBackend, listBackupProviders, type CredentialStatus } from './credentialVault';
 import { GmailTokenManager, type GmailConnectionStatus } from './gmailTokenManager';
 import {
   clearStoredGoogleOAuthClient,
@@ -159,6 +156,7 @@ import type {
   DesktopCloudModelListing,
   DesktopCloudProviderView,
   DesktopCloudPublicTextPreview,
+  DesktopFreeModelsState,
   DesktopCloudState,
   DesktopFolderMention,
   DesktopWorkspaceView,
@@ -313,6 +311,10 @@ export class DesktopSession {
   private cloudCatalogCache: DesktopCloudCatalog | null = null;
   private cloudListings = new Map<string, DesktopCloudModelListing>();
   private cloudTests = new Map<string, DesktopCloudConnectionTest>();
+  /** Provider API keys: Windows Credential Manager (legacy safeStorage files are still read). Never sent to the renderer. */
+  private readonly vault: CredentialVault;
+  /** Masked status per provider, refreshed after every key change; values never live here. */
+  private credentialStatus: Record<string, CredentialStatus> = {};
   /** Set when the operator explicitly approved the exact text of the next cloud send. */
   private cloudApprovedText: string | null = null;
   private activeWorker: string | null = null;
@@ -410,6 +412,7 @@ export class DesktopSession {
 
   constructor(private readonly options: DesktopSessionOptions) {
     this.dataDir = options.dataDir ?? defaultDesktopDataDir();
+    this.vault = new CredentialVault(this.dataDir, defaultCredentialBackend(), () => tryElectronSecretBox());
     this.token = getOrCreateDesktopToken(this.dataDir);
     this.clientId = getOrCreateDesktopClientId(this.dataDir);
     this.attachmentStaging = new AttachmentStaging(path.join(this.dataDir, 'attachment-staging'));
@@ -1770,7 +1773,7 @@ export class DesktopSession {
     const settings = loadCloudSettings(this.dataDir);
     const catalog = this.cloudCatalogCache;
     for (const providerId of settings.enabledProviders) {
-      const apiKey = loadCloudProviderKey(this.dataDir, providerId, this.cloudBox());
+      const apiKey = await this.vault.get(providerId).catch(() => null);
       if (!apiKey) continue;
       const baseUrl = settings.baseUrls[providerId] ?? catalog?.providers.find((p) => p.id === providerId)?.baseUrl;
       if (!baseUrl) continue;
@@ -1814,6 +1817,7 @@ export class DesktopSession {
     try {
       const catalog = await this.requireClient().request<DesktopCloudCatalog>('/v1/cloud/catalog');
       this.cloudCatalogCache = catalog;
+      await this.refreshCredentialStatus();
       await this.pushCloudCredentials();
     } catch (error) {
       this.options.log?.(`cloud catalog unavailable: ${(error as Error).message}`);
@@ -1823,13 +1827,13 @@ export class DesktopSession {
 
   getCloudState(): DesktopCloudState {
     const settings = loadCloudSettings(this.dataDir);
-    const box = this.cloudBox();
     const catalog = this.cloudCatalogCache;
     const providers: DesktopCloudProviderView[] = (catalog?.providers ?? []).map((provider) => ({
       id: provider.id,
       displayName: provider.displayName,
-      configured: Boolean(cloudProviderKeyHint(this.dataDir, provider.id, box)),
-      keyHint: cloudProviderKeyHint(this.dataDir, provider.id, box),
+      configured: Boolean(this.credentialStatus[provider.id]?.configured),
+      keyHint: this.credentialStatus[provider.id]?.hint ?? null,
+      keySource: this.credentialStatus[provider.id]?.source ?? null,
       enabled: settings.enabledProviders.includes(provider.id),
       requiresBaseUrlInput: provider.requiresBaseUrlInput,
       baseUrl: settings.baseUrls[provider.id] ?? null,
@@ -1860,7 +1864,8 @@ export class DesktopSession {
     if (!provider) throw new Error(`${providerId} is not a known provider in the catalog`);
     const trimmedUrl = (baseUrl ?? '').trim().replace(/\/$/, '');
     if (provider.requiresBaseUrlInput && !trimmedUrl) throw new Error(`${provider.displayName} needs its endpoint with your account id filled in`);
-    storeCloudProviderKey(this.dataDir, providerId, apiKey, this.cloudBox() ?? (() => { throw new Error('host encrypted storage is not available'); })());
+    await this.vault.set(providerId, apiKey);
+    await this.refreshCredentialStatus();
     const settings = loadCloudSettings(this.dataDir);
     saveCloudSettings(this.dataDir, {
       enabledProviders: [...new Set([...settings.enabledProviders, providerId])],
@@ -1875,7 +1880,8 @@ export class DesktopSession {
   }
 
   async clearCloudProviderKey(providerId: string): Promise<DesktopCloudState> {
-    clearCloudProviderKey(this.dataDir, providerId);
+    await this.vault.delete(providerId);
+    await this.refreshCredentialStatus();
     const settings = loadCloudSettings(this.dataDir);
     const selected = settings.selectedModel?.startsWith(`${providerId}::`) ? null : settings.selectedModel;
     if (selected === null && this.selectedInferenceProvider === 'cloud') this.selectedInferenceProvider = 'ollama';
@@ -1897,13 +1903,15 @@ export class DesktopSession {
         : settings.enabledProviders.filter((id) => id !== providerId),
     });
     if (enabled) await this.pushCloudCredentials();
+    // A switched-off provider must not stay usable in Core (routing or fallback) until the next restart.
+    else { try { await this.requireClient().clearProviderCredential(providerId); } catch { /* Core may be down */ } }
     return this.getCloudState();
   }
 
   /** Real model discovery. Only free, generative models are returned by Core. */
   async discoverCloudModels(providerId: string): Promise<DesktopCloudState> {
     const client = this.requireClient();
-    const key = loadCloudProviderKey(this.dataDir, providerId, this.cloudBox());
+    const key = await this.vault.get(providerId);
     if (!key) throw new Error('Add an API key for this provider first.');
     const settings = loadCloudSettings(this.dataDir);
     const baseUrl = settings.baseUrls[providerId] ?? this.cloudCatalogCache?.providers.find((p) => p.id === providerId)?.baseUrl;
@@ -1951,6 +1959,14 @@ export class DesktopSession {
     const modelId = encoded.slice(index + 2);
     if (!modelId.trim()) throw new Error('model name is required');
     const settings = loadCloudSettings(this.dataDir);
+    if (encoded === AUTO_FREE_CLOUD) {
+      // Auto: Core's router picks among providers you approved for automatic routing, per send.
+      if (settings.enabledProviders.length === 0) throw new Error('enable a provider first');
+      saveCloudSettings(this.dataDir, { selectedModel: encoded });
+      this.selectedInferenceProvider = 'cloud';
+      this.emit({ kind: 'status', at: nowIso(), summary: 'Cloud model: Auto (best approved free model) — chats you start now run on it' });
+      return this.snapshot();
+    }
     if (!settings.enabledProviders.includes(providerId)) throw new Error('enable that provider first');
     // After a restart the discovered pool is gone; Core re-checks freeness on the real call.
     if (!this.cloudListings.get(providerId) && this.cloudBox()) {
@@ -1968,14 +1984,42 @@ export class DesktopSession {
     return this.snapshot();
   }
 
-  /** The exact two messages a cloud send would carry, for the approval card. */
-  previewCloudPublicText(text: string): DesktopCloudPublicTextPreview {
+  /**
+   * Resolves what a cloud send would use: the selected model (or, under Auto, the router's pick) plus the approved
+   * free alternatives it may switch to if that one is rate-limited. Core's existing pool router decides; the host
+   * only shows it. Private content never reaches this path (the public-text gate below refuses it first).
+   */
+  private async resolveCloudPlan(): Promise<{ providerId: string; modelId: string; fallbacks: Array<{ provider: string; model: string }>; routed: boolean; blocked?: string; selectionReason: string }> {
     const selection = this.selectedCloudSelection();
     if (!selection) throw new Error('no cloud model is selected');
+    const auto = `${selection.providerId}::${selection.modelId}` === AUTO_FREE_CLOUD;
+    const exclude = auto ? [] : [`${selection.providerId}::${selection.modelId}`];
+    let route: { decision: { kind: 'selected'; candidate: { descriptor: { provider: string; modelId: string } }; alternatives: Array<{ descriptor: { provider: string; modelId: string } }> } | { kind: 'blocked'; reason: string }; preferences: { fallbackOnRateLimit: boolean } } | null = null;
+    try {
+      route = await this.requireClient().request('/v1/cloud/route', { method: 'POST', body: { task: 'chat', privacy: 'public', exclude } });
+    } catch (error) {
+      this.options.log?.(`cloud route unavailable: ${(error as Error).message}`);
+    }
+    const picks = route?.decision.kind === 'selected' ? [route.decision.candidate, ...route.decision.alternatives].map((c) => ({ provider: c.descriptor.provider, model: c.descriptor.modelId })) : [];
+    if (auto) {
+      if (!picks.length) {
+        return { providerId: 'auto', modelId: 'free', fallbacks: [], routed: true, blocked: route?.decision.kind === 'blocked' ? route.decision.reason : 'The model router is unavailable.', selectionReason: 'Auto' };
+      }
+      const [first, ...rest] = picks;
+      return { providerId: first.provider, modelId: first.model, fallbacks: route?.preferences.fallbackOnRateLimit ? rest.slice(0, 3) : [], routed: true, selectionReason: 'Auto picked the best approved, verified-free, qualified model' };
+    }
+    return { providerId: selection.providerId, modelId: selection.modelId, fallbacks: route?.preferences.fallbackOnRateLimit ? picks.slice(0, 3) : [], routed: false, selectionReason: 'You selected this model' };
+  }
+
+  /** The exact two messages a cloud send would carry, for the approval card. */
+  async previewCloudPublicText(text: string): Promise<DesktopCloudPublicTextPreview> {
+    const plan = await this.resolveCloudPlan();
+    const selection = { providerId: plan.providerId, modelId: plan.modelId };
     const provider = this.cloudCatalogCache?.providers.find((entry) => entry.id === selection.providerId);
     const trimmed = text.trim();
     const pool = this.cloudListings.get(selection.providerId)?.pool ?? [];
-    const eligibleModel = pool.some((entry) => entry.id === selection.modelId);
+    // A routed pick was verified free by Core's registry; an explicit pick must be in the discovered free pool.
+    const eligibleModel = !plan.blocked && (plan.routed || pool.some((entry) => entry.id === selection.modelId));
     // The same fail-closed gate Core applies, so a refusal is shown before anything is approved or sent.
     const gate = decideCloudPublicText({
       approved: true,
@@ -1988,11 +2032,13 @@ export class DesktopSession {
       historyTurns: 0,
       text: trimmed,
     });
-    const reason = gate.allowed
-      ? undefined
-      : gate.code === 'not_verified_free'
-        ? 'This model is not in the verified free pool.'
-        : gate.reason.replace(/\s*Nothing was sent to the cloud\.$/, '');
+    const reason = plan.blocked
+      ?? (gate.allowed
+        ? undefined
+        : gate.code === 'not_verified_free'
+          ? 'This model is not in the verified free pool.'
+          : gate.reason.replace(/\s*Nothing was sent to the cloud\.$/, ''));
+    const nameOf = (id: string) => this.cloudCatalogCache?.providers.find((entry) => entry.id === id)?.displayName ?? id;
     return {
       providerId: selection.providerId,
       model: selection.modelId,
@@ -2001,12 +2047,96 @@ export class DesktopSession {
       text: trimmed,
       eligible: !reason,
       reason,
+      selectionReason: plan.selectionReason,
+      fallbacks: plan.fallbacks.map((f) => ({ providerId: f.provider, model: f.model, providerName: nameOf(f.provider) })),
     };
   }
 
   /** Records the operator's approval of this exact text. The next cloud send must match it. */
   approveCloudPublicText(text: string): void {
     this.cloudApprovedText = text.trim();
+  }
+
+  // ── Free model registry and provider credentials ──────────────────────────────────────────
+
+  private async refreshCredentialStatus(): Promise<void> {
+    const ids = (this.cloudCatalogCache?.providers ?? []).map((p) => p.id);
+    try {
+      this.credentialStatus = await this.vault.status(ids);
+    } catch (error) {
+      this.options.log?.(`credential status unavailable: ${(error as Error).message}`);
+    }
+  }
+
+  /** Registry, routing preferences, credential status. Never a key. */
+  async getFreeModels(): Promise<DesktopFreeModelsState> {
+    if (!this.cloudCatalogCache) await this.refreshCloudCatalog();
+    const registry = await this.requireClient().request<Record<string, unknown>>('/v1/cloud/registry');
+    const legacyOnly = await this.vault.legacyOnly((this.cloudCatalogCache?.providers ?? []).map((p) => p.id)).catch(() => []);
+    return { registry, credentials: { backend: this.vault.backendKind, status: this.credentialStatus, legacyOnly }, cloud: this.getCloudState() } as DesktopFreeModelsState;
+  }
+
+  async refreshFreeModels(): Promise<DesktopFreeModelsState> {
+    await this.pushCloudCredentials();
+    const result = await this.requireClient().request<{ outcome: { report: { summary: string }; errors: string[] } }>('/v1/cloud/registry/refresh', { method: 'POST', body: {} });
+    this.emit({ kind: 'status', at: nowIso(), summary: `Free model registry: ${result.outcome.report.summary}${result.outcome.errors.length ? ` (${result.outcome.errors.length} source problem(s); last good data kept)` : ''}` });
+    return this.getFreeModels();
+  }
+
+  async setFreeModelPreferences(prefs: { autoProviders?: string[]; disabledProviders?: string[]; preferredOrder?: string[]; fallbackOnRateLimit?: boolean }): Promise<DesktopFreeModelsState> {
+    await this.requireClient().request('/v1/cloud/registry/preferences', { method: 'POST', body: prefs });
+    return this.getFreeModels();
+  }
+
+  async setFreeModelSchedule(enabled: boolean): Promise<DesktopFreeModelsState> {
+    await this.requireClient().request('/v1/cloud/registry/schedule', { method: 'POST', body: { enabled } });
+    return this.getFreeModels();
+  }
+
+  /** One GET /models with the stored key: tests the key and refreshes free/paid evidence. */
+  async testProviderKey(providerId: string): Promise<DesktopFreeModelsState> {
+    await this.pushCloudCredentials();
+    const key = await this.vault.get(providerId);
+    if (!key) throw new Error('Pending setup: add an API key for this provider first.');
+    const settings = loadCloudSettings(this.dataDir);
+    const baseUrl = settings.baseUrls[providerId] ?? this.cloudCatalogCache?.providers.find((p) => p.id === providerId)?.baseUrl;
+    if (!baseUrl) throw new Error('No endpoint is known for this provider.');
+    await this.requireClient().setProviderCredential(providerId, baseUrl, key);
+    await this.discoverCloudModels(providerId);
+    return this.getFreeModels();
+  }
+
+  /** Runs the small qualification suite for one verified-free model. Explicit user action only. */
+  async qualifyFreeModel(providerId: string, model: string): Promise<DesktopFreeModelsState> {
+    const result = await this.requireClient().request<{ record?: { capabilities: Record<string, boolean> }; message?: string }>(
+      `/v1/cloud/registry/providers/${encodeURIComponent(providerId)}/qualify`, { method: 'POST', body: { model } },
+    );
+    if (!result.record) throw new Error(result.message ?? 'qualification was refused');
+    const caps = Object.entries(result.record.capabilities).filter(([, v]) => v).map(([k]) => k);
+    this.emit({ kind: 'status', at: nowIso(), summary: `Qualified ${providerId} ${model}: ${caps.length ? caps.join(', ') : 'nothing passed'}` });
+    return this.getFreeModels();
+  }
+
+  /** Copies legacy encrypted-file keys into Windows Credential Manager (read back and verified). */
+  async migrateLegacyKeys(providerIds: string[]): Promise<{ results: Array<{ provider: string; migrated: boolean; reason?: string }>; state: DesktopFreeModelsState }> {
+    const results = await this.vault.migrateLegacy(providerIds);
+    await this.refreshCredentialStatus();
+    return { results, state: await this.getFreeModels() };
+  }
+
+  async exportCredentialBackup(file: string, passphrase: string, providerIds: string[]): Promise<{ file: string; providers: string[] }> {
+    return this.vault.exportBackup(file, passphrase, providerIds);
+  }
+
+  async inspectCredentialBackup(file: string, passphrase: string): Promise<{ providers: string[] }> {
+    return { providers: await listBackupProviders(file, passphrase) };
+  }
+
+  async restoreCredentialBackup(file: string, passphrase: string, providerIds: string[]): Promise<{ restored: string[]; skipped: string[]; state: DesktopFreeModelsState }> {
+    const result = await this.vault.restoreBackup(file, passphrase, providerIds);
+    await this.refreshCredentialStatus();
+    await this.pushCloudCredentials();
+    return { ...result, state: await this.getFreeModels() };
   }
 
   // ── Composer attachments (staged here, uploaded to Core only when a message is sent) ──
@@ -2125,7 +2255,16 @@ export class DesktopSession {
     // on that model (owner, 2026-11-12: "I need cloud model to work if that is selected before starting a chat").
     // Only Pandesh's own assistant runs there; Core still refuses it unless the key is delivered and the model is free.
     const useCloud = this.selectedInferenceProvider === 'cloud';
-    const cloudSelection = useCloud ? this.selectedCloudSelection() : null;
+    let cloudSelection = useCloud ? this.selectedCloudSelection() : null;
+    // Auto: the registry router's current pick (approved, keyed, verified free, qualified) becomes this chat's model.
+    let cloudRoutedPick = false;
+    if (useCloud && cloudSelection && `${cloudSelection.providerId}::${cloudSelection.modelId}` === AUTO_FREE_CLOUD) {
+      await this.pushCloudCredentials();
+      const plan = await this.resolveCloudPlan();
+      if (plan.blocked) throw new Error(`Auto found no free cloud model to use: ${plan.blocked} Nothing was sent.`);
+      cloudSelection = { providerId: plan.providerId, modelId: plan.modelId };
+      cloudRoutedPick = true;
+    }
     if (useCloud) {
       if (!cloudSelection) throw new Error('Choose a free cloud model first (Settings → Cloud), or pick a local model.');
       if (worker === 'hermes' || worker === 'opencode') {
@@ -2136,7 +2275,8 @@ export class DesktopSession {
       }
       await this.pushCloudCredentials();
       const pool = this.cloudListings.get(cloudSelection.providerId)?.pool ?? [];
-      if (!pool.some((entry) => entry.id === cloudSelection.modelId)) {
+      const picked = cloudSelection;
+      if (!cloudRoutedPick && !pool.some((entry) => entry.id === picked.modelId)) {
         throw new Error(`${cloudSelection.modelId} is not in the verified free pool of ${cloudSelection.providerId}, so nothing was sent. Pick another free cloud model, or a local model.`);
       }
     }
@@ -5014,6 +5154,13 @@ export class DesktopSession {
   }
 
   private async handleRuntimeEvent(event: RuntimeEventRecord): Promise<void> {
+    // Free-cloud rate-limit fallback: say in the live activity view which provider took over, and why.
+    if (event.eventType === 'cloud_provider_switched') {
+      const m = (event.metadata ?? {}) as Record<string, unknown>;
+      this.emit({ kind: 'status', at: event.createdAt, attemptId: typeof m.attemptId === 'string' ? m.attemptId : undefined, summary: `Switched cloud model: ${String(m.from ?? '?')} → ${String(m.to ?? '?')} (${String(m.reason ?? 'rate-limited')})` });
+      if (typeof m.to === 'string' && m.to.includes('::')) this.activeModel = m.to.slice(m.to.indexOf('::') + 2);
+      return;
+    }
     // navigate_to: Core asks this window to open a registered place. It changes only what the window shows, so it is
     // passed on whatever task is running; the window confirms back through confirmNavigation.
     if (event.domain === 'ui_navigation' && event.eventType === 'ui_navigation_requested') {
@@ -5646,6 +5793,9 @@ function mapDailyBriefRoutine(routine: {
     conversationId: routine.conversationId,
   };
 }
+
+/** Cloud selection value meaning "Core's router picks the best approved free model per send". */
+export const AUTO_FREE_CLOUD = 'auto::free';
 
 function defaultDesktopDataDir(): string {  if (process.platform === 'win32') {
     const localAppData = process.env.LOCALAPPDATA || path.join(os.homedir(), 'AppData', 'Local');

@@ -3498,6 +3498,11 @@ function renderModels(snapshot) {
     if (cloudModels.length > 0) {
       const group = document.createElement('optgroup');
       group.label = 'Free cloud — the whole chat runs there';
+      // Auto: Core's router picks the best provider you approved for automatic routing, per send.
+      const auto = document.createElement('option');
+      auto.value = 'auto::free';
+      auto.textContent = 'Auto — best approved free model';
+      group.appendChild(auto);
       for (const entry of cloudModels) {
         const option = document.createElement('option');
         option.value = entry.value;
@@ -4765,7 +4770,9 @@ modelSelect?.addEventListener('change', async () => {
     if (modelSelect.value.includes('::') && modelSelect.value !== lastSnapshot?.cloud?.selectedModel) {
       const at = modelSelect.value.indexOf('::');
       const providerId = modelSelect.value.slice(0, at);
-      const ok = await confirmCloudChoice({ model: modelSelect.value.slice(at + 2), providerName: cloudProviderLabel(lastSnapshot?.cloud, providerId) });
+      const ok = providerId === 'auto'
+        ? await confirmCloudChoice({ model: 'Auto (best approved free model)', providerName: 'the free cloud provider Auto picks' })
+        : await confirmCloudChoice({ model: modelSelect.value.slice(at + 2), providerName: cloudProviderLabel(lastSnapshot?.cloud, providerId) });
       if (!ok) {
         await refresh();
         return;

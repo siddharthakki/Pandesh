@@ -568,6 +568,12 @@ export interface ModelSelectionEvidence {
   cloudChatApproved?: boolean;
   /** How `cloudChatApproved` was given. */
   cloudChatSource?: 'picked_before_chat' | 'approved_offer';
+  /**
+   * Other free cloud models the operator's approval also covered, in order, used ONLY when the selected one answers
+   * with a rate-limit/quota failure before producing any text. Each is re-checked (approved, keyed, verified free,
+   * qualified, not cooled down) at the moment it would be used. Same public text, same privacy class, never paid.
+   */
+  cloudFallback?: Array<{ provider: string; model: string }>;
   /** Frozen routing label for authorization envelopes. */
   routingPolicy?: 'local-only' | 'local-first-cloud-fallback' | 'explicit-openrouter' | 'explicit-orcarouter' | 'explicit-cloud';
   /**

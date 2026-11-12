@@ -3,3 +3,6 @@
 
 # This source intentionally contains literal NUL fingerprint delimiters.
 src/coding/ChangeScopeReconciliation.ts diff
+
+# Git hooks must keep LF line endings to run under Git for Windows.
+.githooks/* text eol=lf

@@ -76,6 +76,10 @@ export interface PoolInput {
   preferredModels?: Readonly<Record<string, string>>;
   /** Provider ids the user disabled for the pool. */
   disabledProviders?: ReadonlySet<string>;
+  /** Extra fail-closed admission check (registry status, user approval, qualification). See freeModelEligibility.ts. */
+  eligibility?: (d: ModelDescriptor) => { ok: true } | { ok: false; reason: string };
+  /** Rank offset (lower = earlier), e.g. the user's preferred provider order. */
+  rankAdjust?: (d: ModelDescriptor) => number;
 }
 
 export interface PoolCandidate { descriptor: ModelDescriptor; key: string; rank: number }
@@ -99,10 +103,12 @@ export function rankPool(input: PoolInput): { candidates: PoolCandidate[]; rejec
     if (!verdict.allowed) { rejected.push({ key, reason: verdict.reason }); continue; }
     const fit = satisfiesRequirements(d, input.requirements ?? {});
     if (!fit.ok) { rejected.push({ key, reason: fit.reasons.join('; ') }); continue; }
+    const admitted = input.eligibility?.(d);
+    if (admitted && !admitted.ok) { rejected.push({ key, reason: admitted.reason }); continue; }
     const priority = input.catalog.get(d.provider)?.fallbackPriority ?? 100;
     const preferred = input.preferredModels?.[d.provider] === d.modelId ? -50 : 0;
     const quality = (d.tools === true ? -5 : 0) + (d.coding === true ? -3 : 0) + (d.contextWindow ? -Math.min(3, d.contextWindow / 100_000) : 0);
-    candidates.push({ descriptor: d, key, rank: priority + preferred + quality });
+    candidates.push({ descriptor: d, key, rank: priority + preferred + quality + (input.rankAdjust?.(d) ?? 0) });
   }
   candidates.sort((a, b) => a.rank - b.rank || a.key.localeCompare(b.key));
   return { candidates, rejected, exhaustedProviders: [...exhaustedProviders] };

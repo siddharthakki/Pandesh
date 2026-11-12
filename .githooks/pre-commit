@@ -1,0 +1,3 @@
+#!/bin/sh
+# Pandesh pre-commit: block commits that add secrets. Install once with: npm run hooks:install
+exec node scripts/secret-scan.mjs --staged

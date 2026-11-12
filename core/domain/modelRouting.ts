@@ -8,11 +8,15 @@ import { resolveContextWindowChain } from '../shared/contextBudget';
 import type { InstalledModelsCatalog } from '../runtime/ollamaCatalog';
 import { CoreError } from './errors';
 
+// Every tag below is an installed Ollama model, so each role resolves without
+// falling through to installedFallback. Question work is read-only tool use, so
+// it gets the fast MoE (vision + tools); recovery is a different model family,
+// so a retry is a genuine second opinion rather than the same model again.
 export const AUTO_CHAT_MODEL = 'gemma4:12b';
-export const AUTO_QUESTION_MODEL = 'jarvis-qwen3.8:27b-gsq';
+export const AUTO_QUESTION_MODEL = 'gemma4:26b-a4b-it-qat';
 export const AUTO_MUTATION_MODEL = 'qwen3.8:27b-mtp-q4_K_M';
-export const AUTO_RECOVERY_MODEL = 'laguna-xs-2.1:latest';
-export const AUTO_FALLBACK_MODEL = 'qwen2.5-coder:1.5b';
+export const AUTO_RECOVERY_MODEL = 'gpt-oss:20b';
+export const AUTO_FALLBACK_MODEL = 'qwen2.5-coder:3b';
 
 function routingKind(mode: ResolvedMode, profile?: string): 'chat' | 'question' | 'mutation' {
   if (mode === 'baat_kar') return 'chat';
