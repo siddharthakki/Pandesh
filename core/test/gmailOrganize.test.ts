@@ -446,6 +446,70 @@ describe('Gmail organization through Core governed dispatch (permission -> exact
   });
 });
 
+describe('production 2026-11-12: the mistakes a small model made in a real inbox cleanup', () => {
+  it('accepts the search or message ids when they are put inside "operation"', async () => {
+    const fake = fakeGmail([msg(1, 'promo'), msg(2, 'promo'), msg(3, 'personal')]);
+    const exec = createGwsGmailExecutor(config(fake, memoryStore()));
+    const byQuery = await exec('gmail_plan_changes', { operation: { addLabels: ['Newsletters'], query: 'from:shop' } }, ctx);
+    expect(byQuery.status).toBe('succeeded');
+    expect(parse(byQuery).willChange).toBe(2);
+    const byIds = await exec('gmail_plan_changes', { operation: { archive: true, messageIds: ['m3'] } }, ctx);
+    expect(byIds.status).toBe('succeeded');
+    expect(parse(byIds).willChange).toBe(1);
+    // Without a search anywhere it is still refused, and nothing was changed by any of it.
+    const none = await exec('gmail_plan_changes', { operation: { addLabels: ['Newsletters'] } }, ctx);
+    expect(none.status).toBe('failed');
+    expect(none.output).toMatch(/provide a Gmail "query"/);
+    expect(fake.calls.some((c) => c.method === 'messages.batchModify')).toBe(false);
+  });
+
+  it('does not make a new label out of formatting leftovers or a long number, but keeps a real label with such a name', async () => {
+    const fake = fakeGmail([msg(1, 'promo')]);
+    const exec = createGwsGmailExecutor(config(fake, memoryStore()));
+    const starred = await exec('gmail_plan_changes', { query: 'from:shop', operation: { addLabels: ['Receipts**'] } }, ctx);
+    expect(starred.status).toBe('failed');
+    expect(starred.output).toMatch(/still has formatting characters in it/);
+    expect(starred.output).toContain('the plain name would be "Receipts"');
+    const number = await exec('gmail_plan_changes', { query: 'from:shop', operation: { addLabels: ['12345678901234567890'] } }, ctx);
+    expect(number.status).toBe('failed');
+    expect(number.output).toMatch(/is a long number, not a label name/);
+    fake.userLabels.set('Label_77', 'Fav*');
+    const existing = await exec('gmail_plan_changes', { query: 'from:shop', operation: { addLabels: ['Fav*'] } }, ctx);
+    expect(existing.status).toBe('succeeded');
+    expect(parse(existing).change).toBe('add label "Fav*"');
+    expect([...fake.userLabels.values()]).toEqual(['Fav*']); // planning creates no label
+  });
+
+  it('answers a made-up planId with the open previews, so the exact one can then be applied', async () => {
+    const db = openCoreDatabase(path.join(dir, 'open-previews.db')).db;
+    try {
+      const fake = fakeGmail([msg(1, 'promo'), msg(2, 'promo')]);
+      const store = createGmailOrganizeStore(db);
+      const exec = createGwsGmailExecutor(config(fake, store));
+      const preview = parse(await exec('gmail_plan_changes', { query: 'from:shop', operation: { addLabels: ['Newsletters'] } }, ctx));
+      // What the model sent in production: the first 8 hex digits right, the rest made up.
+      const madeUp = `gplan_${String(preview.planId).slice(6, 14)}0123456789abcdef01234567`;
+      const missed = await exec('gmail_apply_plan', { planId: madeUp }, ctx);
+      expect(missed.status).toBe('failed');
+      expect(missed.output).toContain(`no change plan "${madeUp}" exists. Open previews for this account, newest first: ${preview.planId} (add label "Newsletters"`);
+      expect(missed.output).toContain('2 messages)');
+      expect(missed.output).toMatch(/call gmail_apply_plan again with its exact planId/);
+      expect(fake.calls.some((c) => c.method === 'messages.batchModify')).toBe(false);
+
+      expect((await exec('gmail_apply_plan', { planId: preview.planId }, ctx)).status).toBe('succeeded');
+      // An applied preview is no longer offered.
+      const again = await exec('gmail_apply_plan', { planId: madeUp }, ctx);
+      expect(again.output).not.toContain(String(preview.planId));
+      expect(again.output).toMatch(/no change plan ".*" exists; make a new preview with gmail_plan_changes/);
+      // Undo of an unknown id does not list previews: they cannot be undone.
+      const undo = await exec('gmail_undo_plan', { planId: madeUp }, ctx);
+      expect(undo.output).toMatch(/exists; make a new preview with gmail_plan_changes/);
+    } finally {
+      db.close();
+    }
+  });
+});
+
 describe('the plan journal is durable', () => {
   it('survives reopening the database and keeps the prior labels', () => {
     const file = path.join(dir, 'plans.db');
