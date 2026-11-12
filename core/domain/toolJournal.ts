@@ -82,6 +82,7 @@ const KIND_BY_PREFIX: Record<string, string> = {
   commitment: 'commitment',
   wish: 'wish',
   proj: 'project',
+  ptask: 'task',
   mem: 'memory',
   bgtask: 'task',
   story: 'story',
@@ -95,15 +96,15 @@ const ID_PATTERN = /\b([a-z][a-z0-9]{0,15})_([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}
 const PATH_ARG_KEYS = /^(?:path|filePath|file|filename|outputPath|targetPath|destination|output|absolutePath|savedTo|pdfPath|documentPath)$/;
 
 /** Private tools: results that must never be rendered to a non-local model. Content stays in the local DB. */
-const PRIVATE_TOOLS = /^(?:gmail_|calendar_|memory_|household_|document_read|document_ocr|read_file|read_file_outside_workspace|revenue_|record_wish_money|get_briefing_data|github_read_issue)/;
+const PRIVATE_TOOLS = /^(?:personal_overview|search_second_brain|list_tasks|add_task|update_task|gmail_|calendar_|memory_|household_|document_read|document_ocr|read_file|read_file_outside_workspace|revenue_|record_wish_money|get_briefing_data|github_read_issue)/;
 
 /** What a call did, from its name. Deterministic and tool-agnostic; unknown tools are 'other'. */
 export function classifyEffect(toolName: string): JournalEffect {
   const t = toolName.toLowerCase();
   if (/undo|revert|restore/.test(t)) return 'undone';
   if (/^(?:update_|edit_|apply_|dismiss_|cancel_|delete_|memory_correct|memory_forget|routine_control|system_(?:stop|start|kill|set)_|port_stop|port_cleanup|scout_(?:pause|remove)|dev_story_(?:approve|reassign|retry)|household_obligation_update|advance_wish|update_wish)|_apply(?:_plan)?$|_update(?:_event)?$|_delete(?:_event)?$/.test(t)) return 'modified';
-  if (/^(?:create_|write_file|schedule_task|routine_create|propose_|export_|image_generate|video_generate|comfyui_generate|media_create|media_download|build_wish|scout_add|delegate_to|dev_stories_plan|dev_stories_dispatch|declare_execution_plan|memory_remember|send_to_phone|revenue_record|wish_create|wish_order|wish_record|record_wish|wish_prepare|port_allocate|gmail_create_|gmail_plan_changes|calendar_(?:create|draft)_|pc_organize_scan|household_scan|print_test_page|jugaad_send|ollama_pull|connect_network_drive)/.test(t)) return 'created';
-  if (/^(?:read|list|get|search|find|recall|inspect|document_|browser_read|governed_research|web_research|software_updates|listening_ports|system_(?:list|hardware)|pc_capability|pc_organize_plan|execution_plan_status|wish_status|routine_list|dev_stories_status|scout_list|resolve_time|calculate|memory_(?:recall|export|impact)|household_obligations|github_read|calendar_list|calendar_check|gmail_(?:search|read|analyze|task_status))/.test(t)) return 'read';
+  if (/^(?:create_|add_task|write_file|schedule_task|routine_create|propose_|export_|image_generate|video_generate|comfyui_generate|media_create|media_download|build_wish|scout_add|delegate_to|dev_stories_plan|dev_stories_dispatch|declare_execution_plan|memory_remember|send_to_phone|revenue_record|wish_create|wish_order|wish_record|record_wish|wish_prepare|port_allocate|gmail_create_|gmail_plan_changes|calendar_(?:create|draft)_|pc_organize_scan|household_scan|print_test_page|jugaad_send|ollama_pull|connect_network_drive)/.test(t)) return 'created';
+  if (/^(?:read|list|get|search|find|recall|inspect|personal_overview|document_|browser_read|governed_research|web_research|software_updates|listening_ports|system_(?:list|hardware)|pc_capability|pc_organize_plan|execution_plan_status|wish_status|routine_list|dev_stories_status|scout_list|resolve_time|calculate|memory_(?:recall|export|impact)|household_obligations|github_read|calendar_list|calendar_check|gmail_(?:search|read|analyze|task_status))/.test(t)) return 'read';
   return 'other';
 }
 
@@ -172,8 +173,15 @@ export function extractRefs(input: { toolName: string; args: Record<string, unkn
         : input.effect === 'modified' ? 'modified'
           : input.effect === 'undone' ? 'undone'
             : input.effect === 'read' ? 'listed' : 'listed';
-  // A create call names one new thing; any further ids in its result are what it mentions.
+  // A create call names one new thing; any further ids in its result are what it mentions. A tool that knows which id
+  // it created says so (details.primaryId): add_task's result names the project before the task, and the journal
+  // recorded the project as "created" with the task's title, so "mark that task done" found no task (scenario I).
   let primaryAssigned = false;
+  const declared = (input.details as { primaryId?: unknown } | undefined)?.primaryId;
+  if (typeof declared === 'string' && resultIds.has(declared) && !argIds.has(declared)) {
+    push({ kind: kindOfId(declared), id: declared, role: roleForResult, ...(roleForResult === 'created' && label ? { label } : {}) });
+    if (roleForResult === 'created') primaryAssigned = true;
+  }
   for (const id of resultIds) {
     if (argIds.has(id)) continue;
     const role: RefRole = roleForResult === 'created' && primaryAssigned ? 'listed' : roleForResult;

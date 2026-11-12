@@ -411,8 +411,10 @@ describe('P0 tool-result continuity across turns (black-box, runs against Build 
     const convB = newConversation('B');
     const t = await turn(convB.id, `Dismiss reminder ${foreignId}`);
     expect(getReminder(db, foreignId).status).not.toBe('completed');
-    // Conversation A's results never appear in B's context.
-    for (const c of t.calls) expect(contextText(c)).not.toContain('pick up the medical results');
+    // Conversation A's tool results never appear in B's execution journal. (Since the Personal Context work, the user's
+    // own dated reminders from any chat may appear in the main assistant's personal section — "what is due this week"
+    // must work in a new chat — but acting on another conversation's id is still refused, as asserted above.)
+    for (const c of t.calls) expect(contextText(c).match(/EXECUTION JOURNAL[\s\S]*?(?=\n[A-Z][A-Z ]{6,}[:(]|$)/)?.[0] ?? '').not.toContain('pick up the medical results');
   }, 90_000);
 
   // 9 ──────────────────────────────────────────────────────────────────────────────────────────────────────────

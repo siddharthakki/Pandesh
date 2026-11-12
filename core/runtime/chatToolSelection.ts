@@ -36,7 +36,8 @@ export const TOOL_GROUPS: Record<string, ToolGroup> = {
   projects: {
     purpose: "Pandesh's Projects workspace: create a project with tasks, list saved projects",
     // F13e: "current project tasks" did not offer list_projects, and the model went through the folder running tests.
-    pattern: /\b(?:create|new|add|start|set up|make)\b[^.]{0,40}\bprojects?\b|\bprojects?\s+(?:workspace|named|called|with|tasks?|status|list)\b|\b(?:my|saved|list|show|current|open|active|all)\s+projects\b|\bprojects workspace\b|\b(?:current|open|pending)\s+(?:project\s+)?tasks\b/i,
+    // Personal Context mission: task wording (TSK-001..025) — create/add/mark/move/rename/reopen a task, deadlines, overdue.
+    pattern: /\b(?:tasks?|to-?dos?|checklist|overdue|deadlines?|due (?:today|tomorrow|this week|next week|on|by))\b|\b(?:create|new|add|start|set up|make)\b[^.]{0,40}\bprojects?\b|\bprojects?\s+(?:workspace|named|called|with|tasks?|status|list)\b|\b(?:my|saved|list|show|current|open|active|all)\s+projects\b|\bprojects workspace\b|\b(?:current|open|pending)\s+(?:project\s+)?tasks\b/i,
   },
   models: {
     purpose: 'local AI models in Ollama: list, pull, unload, delete',
@@ -122,6 +123,12 @@ export const TOOL_GROUPS: Record<string, ToolGroup> = {
     purpose: 'weather and forecast',
     pattern: /\b(?:weather|forecast|temperature|rain\w*|snow\w*|sunny|umbrella|degrees|celsius)\b/i,
   },
+  // Personal Context mission. Recall over precision: any message about the user, their plans, or what Pandesh did or
+  // stored. Pure arithmetic or a general question does not pay for these two definitions (~400 tokens).
+  personal: {
+    purpose: "the user's own life and work as Core records it (priorities, deadlines, goals, what Pandesh finished or failed, remembered facts and their source) and their Second Brain (saved notes, documents, promises)",
+    pattern: /\b(?:i|i'm|i've|i'd|my|me|mine|we|our|us|you did|you (?:made|created|finished|did|said|promised|told)|priorit\w*|focus|deadlines?|due|overdue|neglect\w*|goals?|plans?|planned|promis\w*|commitments?|unfinished|finish\w*|complete\w*|decid\w*|decisions?|recommend\w*|saved|notes?|wrote|written|posting|documents?|second brain|remember\w*|earlier|yesterday|last (?:week|time|month)|this week|today|tomorrow)\b/i,
+  },
 };
 
 /** Offered on every request. */
@@ -154,6 +161,8 @@ export const NATIVE_GROUP: Record<string, string> = {
   delegate_to_agent: 'agents',
   software_updates: 'pc', listening_ports: 'pc', find_installed_app: 'pc',
   create_project: 'projects', list_projects: 'projects',
+  add_task: 'projects', update_task: 'projects', list_tasks: 'projects',
+  personal_overview: 'personal', search_second_brain: 'personal',
 };
 
 /** Governed capability id → group. */

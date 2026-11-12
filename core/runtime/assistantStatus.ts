@@ -34,7 +34,10 @@ export function classifyStatusRequest(text: string, hasRecentGmailWork = false):
   const asksQuestion = /\?|\b(?:how|why|what|which|show|list|tell|explain|configur\w*|status|enabled|working|didn.?t|did not|never)\b/i.test(t);
   if (/\bnotif\w*\b/i.test(t) && asksQuestion && !/\b(?:send|create|write|draft)\b/i.test(t)) topics.push('notifications');
   if (/\b(?:reminders?)\b/i.test(t) && /\b(?:show|list|what|which|any|my|open|upcoming|pending)\b/i.test(t) && !/\bremind me\b/i.test(t) && !REMINDER_CHANGE.test(t) && !REMINDER_DETAIL.test(t)) topics.push('reminders');
-  if (/\b(?:what|which)\b[^.?!]{0,40}\b(?:tasks?|jobs?|work)\b[^.?!]{0,30}\b(?:running|active|pending|doing|have)\b|\b(?:running|active|background|pending) (?:tasks?|jobs?)\b|\bwhat are you (?:doing|working on|running)\b/i.test(t)) topics.push('tasks');
+  // "What tasks do I have / my pending tasks / due this week" are the user's own to-dos (Projects, list_tasks), not
+  // Pandesh's background work; only questions about what Pandesh is running go to the recorded background state.
+  const usersOwnTasks = /\b(?:my|i have|do i have|i've got|due|overdue|deadline|project)\b/i.test(t) && !/\b(?:you|pandesh)\b[^.?!]{0,30}\b(?:running|doing|working)\b/i.test(t);
+  if (!usersOwnTasks && /\b(?:what|which)\b[^.?!]{0,40}\b(?:tasks?|jobs?|work)\b[^.?!]{0,30}\b(?:running|active|pending|doing|have)\b|\b(?:running|active|background|pending) (?:tasks?|jobs?)\b|\bwhat are you (?:doing|working on|running)\b/i.test(t)) topics.push('tasks');
   if (GMAIL_WORDS.test(t) && PROGRESS_WORDS.test(t) && asksQuestion && !IMPERATIVE.test(t)) topics.push('gmail');
   if (topics.length === 0 && hasRecentGmailWork && BARE_FOLLOW_UP.test(t)) topics.push('gmail');
   return topics.length ? topics : null;

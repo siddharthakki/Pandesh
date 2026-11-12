@@ -16,6 +16,7 @@
  * mutation approval as their explicit user-consent step; read-only ones
  * (`memory_recall`, `memory_impact`, `memory_export`) run without one.
  */
+import { SOURCE_LABEL, factSourceClass } from '../domain/personalContext';
 import type { CoreDatabase } from '../db/connection';
 import type { ModelToolDefinition, ModelToolCall } from './modelBackend';
 import type { ToolExecutionContext, ToolExecutionResult } from './toolRunner';
@@ -341,6 +342,9 @@ export function createMemoryCapabilityAdapter(options: MemoryCapabilityOptions):
           // An agent run's readable scopes (set by Core's agent-scope gate, never widened here): a specialist sees only
           // facts in those scope types, whatever the recall itself would have included.
           const readable = Array.isArray(args[MEMORY_SCOPE_FILTER_ARG]) ? (args[MEMORY_SCOPE_FILTER_ARG] as unknown[]).map(String) : null;
+          // Where each fact came from (you told me / you confirmed / from a document / inference), decided from its
+          // evidence rows, so an imported or inferred fact is never presented as something the user confirmed.
+          result.entries = result.entries.map((e) => ({ ...e, source: SOURCE_LABEL[factSourceClass(db, e.memory as never)] })) as typeof result.entries;
           if (readable) {
             const entries = result.entries.filter((e) => readable.includes(e.memory.scopeType));
             return ok({ ...result, entries, includedScopes: readable }, 'memory_recall_succeeded', safeArgs);
