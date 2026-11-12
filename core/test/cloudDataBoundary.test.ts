@@ -35,17 +35,19 @@ describe('cloud data boundary rules', () => {
     }
   });
 
-  it('shows a cloud model only what was written after the last local turn', () => {
+  it('shows a cloud model only messages that came from cloud model calls, and the user messages they answered', () => {
+    const cloudIds = new Set(['mi_cloud1', 'mi_cloud2']);
+    const isCloud = (id: string) => cloudIds.has(id);
     const msgs = [
-      { role: 'user', createdAt: '2026-11-13T10:00:00.000Z' },
-      { role: 'assistant', createdAt: '2026-11-13T10:00:05.000Z' },
-      { role: 'user', createdAt: '2026-11-13T10:01:00.000Z' }, // a local turn that never got a reply
-      { role: 'user', createdAt: '2026-11-13T10:05:00.000Z' },
-      { role: 'assistant', createdAt: '2026-11-13T10:05:04.000Z' },
+      { role: 'user' }, { role: 'assistant', modelInvocationId: 'mi_local' }, // a local exchange
+      { role: 'user' }, // a local turn that never got a reply
+      { role: 'user' }, { role: 'assistant', modelInvocationId: 'mi_cloud1' }, // a cloud exchange
+      { role: 'assistant', modelInvocationId: null }, // a routine / background / Core-composed post
+      { role: 'user' }, { role: 'assistant' }, // a Core-composed answer during a cloud attempt
+      { role: 'user' }, { role: 'assistant', modelInvocationId: 'mi_cloud2' },
     ];
-    expect(cloudVisibleHistory(msgs, '2026-11-13T10:01:02.000Z')).toEqual({ kept: msgs.slice(3), withheld: 3 });
-    expect(cloudVisibleHistory(msgs, null)).toEqual({ kept: msgs, withheld: 0 });
-    expect(cloudVisibleHistory(msgs, '9999').withheld).toBe(5); // fail closed
+    expect(cloudVisibleHistory(msgs, isCloud)).toEqual({ kept: [msgs[3], msgs[4], msgs[8], msgs[9]], withheld: 6 });
+    expect(cloudVisibleHistory(msgs, () => false).withheld).toBe(10); // no cloud origin known: nothing goes
     expect(isCloudProvider('hermes')).toBe(false);
     expect(isCloudProvider('orcarouter')).toBe(true);
   });
@@ -159,6 +161,8 @@ describe('a cloud turn in a chat that holds private data', () => {
     appendMessage(db, conversationId, { role: 'assistant', content: 'It says SECRET-LOCAL-REPLY bank 12345.', actor: 'core', modelInvocationId: mi.id } as any);
     // A local turn that never got a reply (it waited for an approval).
     newAttempt(conversationId, 'Remember that my locker code is MEMORY-MARKER-M3.');
+    // A background job / routine posting into the chat after the local turns (no model call behind it).
+    appendMessage(db, conversationId, { role: 'assistant', content: 'Gmail contract inventory: BG-MARKER-G1 Acme lease 1,200 EUR', actor: 'kkd:background' });
   }
 
   async function cloudTurn(conversationId: string, text: string) {
@@ -171,12 +175,15 @@ describe('a cloud turn in a chat that holds private data', () => {
     return att.id;
   }
 
-  const MARKERS = ['SECRET-LOCAL-REPLY', 'SECRET-FILE-CONTENT', 'SECRET-PROJECT-NOTES', 'SECRET-START-SCRIPT', 'MARKER-FILENAME-Z9', 'LOCALQ-MARKER-U6', 'MEMORY-MARKER-M3', 'PATH-MARKER-X1', 'inventory-marker-n8'];
+  const MARKERS = ['SECRET-LOCAL-REPLY', 'SECRET-FILE-CONTENT', 'SECRET-PROJECT-NOTES', 'SECRET-START-SCRIPT', 'MARKER-FILENAME-Z9', 'LOCALQ-MARKER-U6', 'MEMORY-MARKER-M3', 'PATH-MARKER-X1', 'inventory-marker-n8', 'BG-MARKER-G1'];
 
   it('sends no earlier local result, request, path or notes, and runs no private tool even when the cloud model asks', async () => {
     const conv = createConversation(db, { mode: 'saath_kar', actor: 'user', title: 'Private chat' });
     localTurn(conv.id);
     const first = await cloudTurn(conv.id, 'TRY-PRIVATE-TOOLS Read private.txt again and tell me the account number.');
+    // Core answers this one itself from package.json during a cloud attempt (verification round 2, L7) ...
+    await cloudTurn(conv.id, 'How do I run this project?');
+    // ... and that locally composed answer must not travel with the next cloud turn.
     const second = await cloudTurn(conv.id, 'Which models are installed on this PC?');
 
     expect(cloudCalls.length).toBeGreaterThan(1);

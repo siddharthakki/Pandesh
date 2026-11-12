@@ -54,22 +54,23 @@ export function isCloudProvider(provider: string | null | undefined): boolean {
 }
 
 /**
- * The part of the history a cloud turn may see: only what was written after the last turn of this conversation that
- * did NOT run on a cloud model. `localCutoffIso` is when that local turn last changed (null when every earlier turn ran
- * on a cloud model). Everything at or before it is withheld, user messages included, also those of a local turn that
- * never got a reply (verification of #78: a cut at assistant replies only let such a message through).
+ * The part of the history a cloud turn may see, decided by each message's origin (verification of #78, rounds 1-2:
+ * cutting by time or at local replies let local text through):
+ *  - an assistant message is kept only when it is linked to a model call that ran on a cloud model
+ *    (`isCloudInvocation(modelInvocationId)`). Replies Core composed itself (project answers, status answers, folder
+ *    listings), routine and background posts, and appended messages carry no such link and are withheld;
+ *  - a user message is kept only when the next message is a kept cloud reply, so a local request, an unanswered
+ *    message and anything typed for the local model stay on this PC.
+ * Everything else is withheld: fail closed.
  */
-export function cloudVisibleHistory<T extends { createdAt: string }>(messages: readonly T[], localCutoffIso: string | null): { kept: T[]; withheld: number } {
-  if (!localCutoffIso) return { kept: [...messages], withheld: 0 };
-  const kept = messages.filter((m) => m.createdAt > localCutoffIso);
+export function cloudVisibleHistory<T extends { role: string; modelInvocationId?: string | null }>(
+  messages: readonly T[],
+  isCloudInvocation: (modelInvocationId: string) => boolean,
+): { kept: T[]; withheld: number } {
+  const cloudReply = messages.map((m) => m.role === 'assistant' && Boolean(m.modelInvocationId) && isCloudInvocation(String(m.modelInvocationId)));
+  const kept = messages.filter((m, i) => cloudReply[i] || (m.role === 'user' && cloudReply[i + 1] === true));
   return { kept, withheld: messages.length - kept.length };
 }
-
-/** SQL for the cutoff: the latest change of any earlier attempt in the conversation that did not start a cloud turn. */
-export const LOCAL_CUTOFF_SQL = `SELECT MAX(MAX(a.createdAt, a.updatedAt, COALESCE(a.completedAt, ''))) AS t
-  FROM attempts a JOIN requests r ON r.id = a.requestId
- WHERE r.conversationId = ? AND a.id != ?
-   AND NOT EXISTS (SELECT 1 FROM runtime_events e WHERE e.entityId = a.id AND e.eventType = 'cloud_turn_started')`;
 
 /**
  * Replaces local paths in text bound for a cloud model: the selected folder becomes "the selected folder" and the home
