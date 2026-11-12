@@ -137,6 +137,36 @@ afterEach(async () => {
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
+/** Desktop's default worker ("Pandesh", local-core) on a free cloud model, as Build 167 submitted it. */
+async function submitLocalCoreCloudChat(chosen: boolean) {
+  const conversation = await json(await authed('/v1/conversations', { method: 'POST', idempotencyKey: idem(), body: JSON.stringify({ mode: 'saath_kar' }) }));
+  const submission = await json(await authed('/v1/submit', {
+    method: 'POST', idempotencyKey: idem(),
+    body: JSON.stringify({
+      currentMessage: 'why did the last run fail?', requestedMode: 'saath_kar', conversationId: conversation.id,
+      requestedProvider: 'groq', requestedModel: 'openai/gpt-oss-20b',
+      toolPermissionPolicy: { profile: 'local-core-question', worker: 'local-core' },
+      modelSelection: { ...selection(false), ...(chosen ? { cloudChatApproved: true, cloudChatSource: 'picked_before_chat' } : {}) },
+    }),
+  }));
+  await authed(`/v1/attempts/${submission.attempt.id}/execute`, { method: 'POST', idempotencyKey: idem() });
+  return submission.attempt.id as string;
+}
+
+describe('a free cloud model the user picked runs the default Pandesh worker (owner test of Build 167)', () => {
+  it('is not refused as a "local read-only Core question"', async () => {
+    const attempt = await pollAttempt(await submitLocalCoreCloudChat(true), a => a.status !== 'queued' && a.status !== 'running');
+    expect(String(attempt.failureReason ?? '')).not.toMatch(/not permitted for local read-only Core questions/);
+  });
+  it('a cloud provider the user did not choose for the chat still is', async () => {
+    const attempt = await pollAttempt(await submitLocalCoreCloudChat(false), a => a.status === 'completed' || a.status === 'failed');
+    expect(attempt.status).toBe('failed');
+    expect(attempt.failureReason).toMatch(/not permitted for local read-only Core questions/);
+    expect(cloudCalls).toHaveLength(0);
+    expect(localBackend.calls).toBe(0);
+  });
+});
+
 describe('Core enforces the free-cloud public-text boundary', () => {
   it('refuses an unapproved cloud request in Core before any network call and never falls back to local', async () => {
     const attempt = await pollAttempt(await submit(false), a => a.status === 'completed' || a.status === 'failed');

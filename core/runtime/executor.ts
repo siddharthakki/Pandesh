@@ -47,7 +47,7 @@ import { LocalAutonomySecurityKernel } from '../security/kernel';
 import type { ExecutionGrant } from '../security/types';
 import { ModelBackendError, OllamaModelBackend, describeInlineToolCallFailure, isAbortError, recoverInlineToolCalls } from './modelBackend';
 import { inlineToolCallCorrection, validateNativeToolCalls, type StructuralRepairRecord } from './inlineToolCalls';
-import { cloudProviderLabel, isCloudAttemptProvider, isFreeCloudPublicTextAttempt, isPoolProvider, isSupportedAttemptProvider, resolveAttemptModelBackend, usesOpenRouterPool } from './attemptModelBackend';
+import { cloudProviderLabel, isChosenCloudChat, isCloudAttemptProvider, isFreeCloudPublicTextAttempt, isPoolProvider, isSupportedAttemptProvider, resolveAttemptModelBackend, usesOpenRouterPool } from './attemptModelBackend';
 import { decideCloudPublicText } from './cloudPublicText';
 import { activeFreeModelRegistry } from './freeModelRegistryService';
 import { isQuotaFailure } from '../platform/cloudRouting';
@@ -705,7 +705,9 @@ export class RuntimeExecutor {
         }));
         return;
       }
-      if (isCloudAttemptProvider(frozenContext.selectedProvider) && isLocalCoreQuestion(frozenContext.approvalPolicy?.profile)) {
+      // A free cloud chat the user chose runs Pandesh's own assistant there (owner, 2026-11-12); Build 167 found this
+      // guard still refused it for the default worker. Anything else on a cloud provider stays refused here.
+      if (isCloudAttemptProvider(frozenContext.selectedProvider) && isLocalCoreQuestion(frozenContext.approvalPolicy?.profile) && !isChosenCloudChat(frozenContext)) {
         this.mutate(() => failAttempt(this.db, attemptId, {
           failureReason: `${frozenContext.selectedProvider === 'openrouter' ? 'OpenRouter' : cloudProviderLabel(frozenContext.selectedProvider)} is not permitted for local read-only Core questions`,
           fenceToken: fence.token,
@@ -5334,7 +5336,7 @@ export class RuntimeExecutor {
 
     // A free cloud chat the user chose (picked before the chat, or "yes" to Pandesh's offer) runs the whole Pi turn on
     // that provider; piCloudTarget.ts still refuses it before sending anything without the key or a free spend policy.
-    if (context.selectedProvider && context.selectedProvider !== 'ollama' && context.modelSelection?.cloudChatApproved === true && isPoolProvider(context.selectedProvider)) {
+    if (isChosenCloudChat(context)) {
       return 'pi';
     }
     // Otherwise Pi runs its model on local Ollama only. A cloud provider chosen for this task is not sent to Ollama under
