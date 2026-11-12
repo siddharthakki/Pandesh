@@ -150,12 +150,12 @@ describe('Jarvis model selection ownership: Gmail summarization model resolution
   it('Auto resolves summarization to an installed local model from the chat preference chain', async () => {
     const dataDir = freshDataDir();
     const productRoot = freshProductRoot();
-    stubOllamaCatalog(['jarvis-qwen3.8:27b-gsq', 'qwen2.5-coder:1.5b']); // fallback chain tail, not the head
+    stubOllamaCatalog(['jarvis-qwen3.8:27b-gsq', 'qwen2.5-coder:3b']); // fallback chain tail, not the head
     const host = new DesktopSession({ productRoot, dataDir });
     await host.selectModel(AUTO_MODEL);
     const adapter = host as unknown as { resolveSummarizationModel(): Promise<string> };
     const model = await adapter.resolveSummarizationModel();
-    expect(model).toBe('qwen2.5-coder:1.5b');
+    expect(model).toBe('qwen2.5-coder:3b');
     expect(model).not.toBe('qwen2.5:14b');
   });
 
