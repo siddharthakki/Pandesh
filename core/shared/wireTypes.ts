@@ -560,6 +560,12 @@ export interface ModelSelectionEvidence {
    * free. Only then may Core send the public text: no tools, history, files, memory or task context.
    */
   cloudPublicTextApproved?: boolean;
+  /**
+   * Other free cloud models the operator's approval also covered, in order, used ONLY when the selected one answers
+   * with a rate-limit/quota failure before producing any text. Each is re-checked (approved, keyed, verified free,
+   * qualified, not cooled down) at the moment it would be used. Same public text, same privacy class, never paid.
+   */
+  cloudFallback?: Array<{ provider: string; model: string }>;
   /** Frozen routing label for authorization envelopes. */
   routingPolicy?: 'local-only' | 'local-first-cloud-fallback' | 'explicit-openrouter' | 'explicit-orcarouter' | 'explicit-cloud';
   /**

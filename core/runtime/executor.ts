@@ -45,8 +45,10 @@ import { LocalAutonomySecurityKernel } from '../security/kernel';
 import type { ExecutionGrant } from '../security/types';
 import { ModelBackendError, OllamaModelBackend, describeInlineToolCallFailure, isAbortError, recoverInlineToolCalls } from './modelBackend';
 import { inlineToolCallCorrection, validateNativeToolCalls, type StructuralRepairRecord } from './inlineToolCalls';
-import { cloudProviderLabel, isCloudAttemptProvider, isFreeCloudPublicTextAttempt, isSupportedAttemptProvider, resolveAttemptModelBackend } from './attemptModelBackend';
+import { cloudProviderLabel, isCloudAttemptProvider, isFreeCloudPublicTextAttempt, isSupportedAttemptProvider, resolveAttemptModelBackend, usesOpenRouterPool } from './attemptModelBackend';
 import { decideCloudPublicText } from './cloudPublicText';
+import { activeFreeModelRegistry } from './freeModelRegistryService';
+import { isQuotaFailure } from '../platform/cloudRouting';
 import { createResearchEvidenceRunner } from './researchCapability';
 import { redactSecrets } from '../platform/credentialStore';
 import {
@@ -58,7 +60,7 @@ import {
   synthesizePublicResearchReport,
 } from './cloudPublicResearch';
 import type { ToolExecutionResult } from './toolRunner';
-import type { CloudCredentialStore } from './cloudCredentials';
+import { sharedCloudCredentials, type CloudCredentialStore } from './cloudCredentials';
 import { finalizeOpenRouterCall, prepareOpenRouterCall } from './openRouterExecution';
 import type { ToolRunner } from './toolRunner';
 import { CoreToolRunner } from './toolRunner';
@@ -511,7 +513,8 @@ export class RuntimeExecutor {
     onToken: (delta: string) => void,
   ): Promise<ModelChatResult> {
     let budget: { reserveUsd: number } | null = null;
-    if (context.selectedProvider === 'openrouter') {
+    // Only the legacy spend-capped OpenRouter mode reserves a budget; the free pool (key delivered, no cap) cannot spend.
+    if (context.selectedProvider === 'openrouter' && !usesOpenRouterPool(context, this.cloudCredentials ?? sharedCloudCredentials)) {
       budget = this.mutate(() => prepareOpenRouterCall(this.db, context, request.messages));
     }
     const backend = this.modelBackendFor(context);
@@ -890,29 +893,89 @@ export class RuntimeExecutor {
         actor: CORE_ACTOR,
       }),
     );
-    try {
-      const result = await this.streamModelChat(
-        context,
-        attemptId,
-        invocation.id,
-        { model: context.selectedModel, messages: messages as never, tools: [], signal },
-        (delta) => this.broadcaster.publishRuntimeToken({ attemptId, invocationId: invocation.id, delta }),
-      );
-      this.throwIfCancellationRequested(attemptId, signal);
-      if (!result.content || !result.content.trim()) {
-        throw new ModelBackendError('cloud model produced an empty response', 'model_empty_response');
+    let current = context;
+    let currentInvocationId = invocation.id;
+    const fallbacks = [...(context.modelSelection?.cloudFallback ?? [])];
+    // Bounded: the approved alternatives, at most three switches, only before any text was produced.
+    for (let switches = 0; ; switches++) {
+      let produced = false;
+      try {
+        const invocationId = currentInvocationId;
+        const result = await this.streamModelChat(
+          current,
+          attemptId,
+          invocationId,
+          { model: current.selectedModel, messages: messages as never, tools: [], signal },
+          (delta) => { produced = true; this.broadcaster.publishRuntimeToken({ attemptId, invocationId, delta }); },
+        );
+        this.throwIfCancellationRequested(attemptId, signal);
+        if (!result.content || !result.content.trim()) {
+          throw new ModelBackendError('cloud model produced an empty response', 'model_empty_response');
+        }
+        this.completeInvocationSucceeded(invocationId, result);
+        this.appendAssistant(request.conversationId, result.content.trim(), invocationId, attemptId);
+        this.recordQuality(attemptId, 'final_verification_recorded', {
+          kind: 'cloud_public_text_response',
+          model: result.model,
+          provider: current.selectedProvider,
+          ...(switches > 0 ? { switchedFrom: context.selectedProvider } : {}),
+        }, 'final-conversation');
+        this.mutate(() => transitionAttempt(this.db, attemptId, { toStatus: 'completed', fenceToken, actor: CORE_ACTOR }));
+        return;
+      } catch (err) {
+        const next = produced || switches >= 3 || isAbortError(err) || getAttempt(this.db, attemptId).cancelRequestedAt
+          ? undefined
+          : this.nextCloudFallback(current, fallbacks, err);
+        if (!next) {
+          this.recordChatFailure(attemptId, currentInvocationId, fenceToken, err);
+          return;
+        }
+        this.mutate(() => completeModelInvocation(this.db, currentInvocationId, { status: 'failed', actor: CORE_ACTOR }));
+        // Shown in the live activity view: which provider was rate-limited and which approved one took over.
+        const switched = this.mutate(() => recordRuntimeEvent(this.db, {
+          domain: 'attempt', entityId: attemptId, eventType: 'cloud_provider_switched', actor: CORE_ACTOR,
+          metadata: { attemptId, from: `${current.selectedProvider}::${current.selectedModel}`, to: `${next.provider}::${next.model}`, reason: next.reason },
+          resultingRevision: null,
+        }));
+        this.broadcaster.publishRuntime(switched);
+        current = { ...current, selectedProvider: next.provider, selectedModel: next.model };
+        currentInvocationId = this.mutate(() => startModelInvocation(this.db, {
+          attemptId,
+          requestedProvider: next.provider,
+          requestedModel: next.model,
+          policyProvider: next.provider,
+          policyModel: next.model,
+          actor: CORE_ACTOR,
+        })).id;
       }
-      this.completeInvocationSucceeded(invocation.id, result);
-      this.appendAssistant(request.conversationId, result.content.trim(), invocation.id, attemptId);
-      this.recordQuality(attemptId, 'final_verification_recorded', {
-        kind: 'cloud_public_text_response',
-        model: result.model,
-        provider: context.selectedProvider,
-      }, 'final-conversation');
-      this.mutate(() => transitionAttempt(this.db, attemptId, { toStatus: 'completed', fenceToken, actor: CORE_ACTOR }));
-    } catch (err) {
-      this.recordChatFailure(attemptId, invocation.id, fenceToken, err);
     }
+  }
+
+  /**
+   * The next approved free model after a rate-limit/quota failure, or undefined (then the failure stands). Only models
+   * frozen into this attempt's approval are considered, each re-checked now; the original privacy class (public text)
+   * and FREE_ONLY never change. Any other failure is not a reason to switch.
+   */
+  private nextCloudFallback(
+    current: AttemptContextRecord,
+    fallbacks: Array<{ provider: string; model: string }>,
+    err: unknown,
+  ): { provider: string; model: string; reason: string } | undefined {
+    const message = err instanceof Error ? err.message : String(err);
+    const status = typeof (err as { status?: unknown })?.status === 'number' ? (err as { status: number }).status : undefined;
+    if (!isQuotaFailure(status, message)) return undefined;
+    const registry = activeFreeModelRegistry();
+    registry?.noteFailure(current.selectedProvider, status ?? 429, message);
+    if (!registry || !registry.getPreferences().fallbackOnRateLimit) return undefined;
+    while (fallbacks.length > 0) {
+      const candidate = fallbacks.shift()!;
+      if (candidate.provider === current.selectedProvider && candidate.model === current.selectedModel) continue;
+      const verdict = registry.stillEligible(candidate.provider, candidate.model, 'chat');
+      if (!verdict.ok) continue;
+      if (!(this.cloudCredentials ?? sharedCloudCredentials).get(candidate.provider)) continue;
+      return { ...candidate, reason: `${current.selectedProvider} ${current.selectedModel} was rate-limited (${redactSecrets(message).slice(0, 120)}); switched to an approved free model` };
+    }
+    return undefined;
   }
 
   /**

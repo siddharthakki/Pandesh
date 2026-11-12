@@ -3498,6 +3498,11 @@ function renderModels(snapshot) {
     if (cloudModels.length > 0) {
       const group = document.createElement('optgroup');
       group.label = 'Free cloud — approved public text only';
+      // Auto: Core's router picks the best provider you approved for automatic routing, per send.
+      const auto = document.createElement('option');
+      auto.value = 'auto::free';
+      auto.textContent = 'Auto — best approved free model';
+      group.appendChild(auto);
       for (const entry of cloudModels) {
         const option = document.createElement('option');
         option.value = entry.value;
@@ -3550,7 +3555,20 @@ function confirmCloudPublicText(preview) {
     send.className = 'dispatch';
     send.textContent = 'Send to the cloud';
     actions.append(cancel, send);
-    dialog.append(title, lead, block('Fixed instruction', preview.systemPrompt), block('Your text', preview.text), actions);
+    const extras = [];
+    if (preview.selectionReason) {
+      const why = document.createElement('p');
+      why.className = 'cloud-approval-lead';
+      why.textContent = `Why this model: ${preview.selectionReason}.`;
+      extras.push(why);
+    }
+    if (Array.isArray(preview.fallbacks) && preview.fallbacks.length > 0) {
+      const fb = document.createElement('p');
+      fb.className = 'cloud-approval-lead';
+      fb.textContent = `If it is rate-limited before answering, the same two messages may go to: ${preview.fallbacks.map((f) => `${f.providerName} (${f.model})`).join(', ')}. All are free providers you approved; nothing paid is ever used.`;
+      extras.push(fb);
+    }
+    dialog.append(title, lead, ...extras, block('Fixed instruction', preview.systemPrompt), block('Your text', preview.text), actions);
     const finish = (approved) => { dialog.close(); dialog.remove(); resolve(approved); };
     cancel.addEventListener('click', () => finish(false));
     send.addEventListener('click', () => finish(true));

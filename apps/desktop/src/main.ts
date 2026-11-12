@@ -1074,6 +1074,49 @@ function registerIpc(): void {
     sendSnapshot();
     return snapshot;
   });
+  // ── Free models + credentials. Keys and passphrases travel renderer → host only; nothing secret is returned. ──
+  const requireSession = () => { if (!session) throw new Error('desktop session is not started'); return session; };
+  const idList = (value: unknown): string[] => (Array.isArray(value) ? value.filter((v): v is string => typeof v === 'string' && /^[a-z0-9][a-z0-9-]{1,48}$/.test(v)) : []);
+  ipcMain.handle(DESKTOP_CHANNELS.getFreeModels, () => requireSession().getFreeModels());
+  ipcMain.handle(DESKTOP_CHANNELS.refreshFreeModels, async () => { const state = await requireSession().refreshFreeModels(); sendSnapshot(); return state; });
+  ipcMain.handle(DESKTOP_CHANNELS.setFreeModelPreferences, (_event, prefs: Record<string, unknown>) => requireSession().setFreeModelPreferences({
+    ...(prefs && 'autoProviders' in prefs ? { autoProviders: idList(prefs.autoProviders) } : {}),
+    ...(prefs && 'disabledProviders' in prefs ? { disabledProviders: idList(prefs.disabledProviders) } : {}),
+    ...(prefs && 'preferredOrder' in prefs ? { preferredOrder: idList(prefs.preferredOrder) } : {}),
+    ...(prefs && typeof prefs.fallbackOnRateLimit === 'boolean' ? { fallbackOnRateLimit: prefs.fallbackOnRateLimit } : {}),
+  }));
+  ipcMain.handle(DESKTOP_CHANNELS.setFreeModelSchedule, (_event, enabled: boolean) => requireSession().setFreeModelSchedule(enabled !== false));
+  ipcMain.handle(DESKTOP_CHANNELS.testProviderKey, async (_event, providerId: string) => { const state = await requireSession().testProviderKey(String(providerId ?? '')); sendSnapshot(); return state; });
+  ipcMain.handle(DESKTOP_CHANNELS.qualifyFreeModel, (_event, providerId: string, model: string) => requireSession().qualifyFreeModel(String(providerId ?? ''), String(model ?? '')));
+  ipcMain.handle(DESKTOP_CHANNELS.migrateLegacyKeys, async (_event, providerIds: unknown) => { const result = await requireSession().migrateLegacyKeys(idList(providerIds)); sendSnapshot(); return result; });
+  ipcMain.handle(DESKTOP_CHANNELS.exportCredentialBackup, async (_event, passphrase: string, providerIds: unknown) => {
+    const s = requireSession();
+    const suggestedDir = fs.existsSync('D:\\PandeshBackups') ? 'D:\\PandeshBackups' : app.getPath('documents');
+    const options = {
+      title: 'Save encrypted key backup',
+      defaultPath: path.join(suggestedDir, `pandesh-keys-${new Date().toISOString().slice(0, 10)}.pandesh-keys`),
+      filters: [{ name: 'Pandesh key backup', extensions: ['pandesh-keys'] }],
+    };
+    const picked = window ? await dialog.showSaveDialog(window, options) : await dialog.showSaveDialog(options);
+    if (picked.canceled || !picked.filePath) return null;
+    return s.exportCredentialBackup(picked.filePath, String(passphrase ?? ''), idList(providerIds));
+  });
+  ipcMain.handle(DESKTOP_CHANNELS.inspectCredentialBackup, async (_event, file: string | null, passphrase: string) => {
+    const s = requireSession();
+    let target = typeof file === 'string' && file ? file : '';
+    if (!target) {
+      const options = { title: 'Open encrypted key backup', properties: ['openFile' as const], filters: [{ name: 'Pandesh key backup', extensions: ['pandesh-keys'] }] };
+      const picked = window ? await dialog.showOpenDialog(window, options) : await dialog.showOpenDialog(options);
+      if (picked.canceled || picked.filePaths.length === 0) return null;
+      target = picked.filePaths[0];
+    }
+    return { file: target, ...(await s.inspectCredentialBackup(target, String(passphrase ?? ''))) };
+  });
+  ipcMain.handle(DESKTOP_CHANNELS.restoreCredentialBackup, async (_event, file: string, passphrase: string, providerIds: unknown) => {
+    const result = await requireSession().restoreCredentialBackup(String(file ?? ''), String(passphrase ?? ''), idList(providerIds));
+    sendSnapshot();
+    return result;
+  });
   ipcMain.handle(DESKTOP_CHANNELS.previewCloudPublicText, (_event, text: string) => {
     if (!session) throw new Error('desktop session is not started');
     return session.previewCloudPublicText(String(text ?? ''));
