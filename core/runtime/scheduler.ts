@@ -12,6 +12,7 @@ import { SCOUT_ROUTINE } from '../domain/scoutRoutine';
 import { WATCHDOG_ROUTINE } from '../domain/watchdogRoutine';
 import { runReliabilityWatchdogRoutine } from './watchdogRoutine';
 import { AI_RADAR_ROUTINE, runAiRadarRoutine } from './aiRadarRoutine';
+import { FREE_MODEL_ROUTINE, runFreeModelRoutine } from './freeModelRegistryRoutine';
 import type { IntelligenceScout } from './intelligenceScout';
 import type { ConnectorAdapter } from './connectors/connectorCapability';
 import type { ConnectorId } from '../shared/wireTypes';
@@ -101,6 +102,12 @@ export function startScheduledTaskLoop(
           void runAiRadarRoutine(db, broadcaster, { task, dataDir: options.cwd })
             .then((r) => console.log(`[karkedikha-core ${new Date().toISOString()}] ai radar ${task.id}: ${r.newFindings.length} new, ${r.urgent.length} urgent, ${r.errors.length} errors`))
             .catch((err) => console.error(`[karkedikha-core ${new Date().toISOString()}] ai radar ${task.id} failed:`, err instanceof Error ? err.message : err));
+          continue;
+        }
+        if (task.routine === FREE_MODEL_ROUTINE) {
+          void runFreeModelRoutine(db, broadcaster, { task })
+            .then((summary) => console.log(`[karkedikha-core ${new Date().toISOString()}] free model registry ${task.id}: ${summary}`))
+            .catch((err) => console.error(`[karkedikha-core ${new Date().toISOString()}] free model registry ${task.id} failed:`, err instanceof Error ? err.message : err));
           continue;
         }
         if (task.routine === SCOUT_ROUTINE) {

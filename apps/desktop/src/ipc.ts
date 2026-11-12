@@ -40,6 +40,17 @@ export const DESKTOP_CHANNELS = {
   selectCloudModel: 'desktop:selectCloudModel',
   setCloudLocalFallback: 'desktop:setCloudLocalFallback',
   previewCloudPublicText: 'desktop:previewCloudPublicText',
+  /** Free model registry, routing preferences and credential management. Keys go in only; never come back out. */
+  getFreeModels: 'desktop:getFreeModels',
+  refreshFreeModels: 'desktop:refreshFreeModels',
+  setFreeModelPreferences: 'desktop:setFreeModelPreferences',
+  setFreeModelSchedule: 'desktop:setFreeModelSchedule',
+  testProviderKey: 'desktop:testProviderKey',
+  qualifyFreeModel: 'desktop:qualifyFreeModel',
+  migrateLegacyKeys: 'desktop:migrateLegacyKeys',
+  exportCredentialBackup: 'desktop:exportCredentialBackup',
+  inspectCredentialBackup: 'desktop:inspectCredentialBackup',
+  restoreCredentialBackup: 'desktop:restoreCredentialBackup',
   /** WAV bytes (base64) from explicit push-to-talk capture in the renderer. */
   transcribeUtterance: 'desktop:transcribeUtterance',
   /** Real host telemetry for the control-center HUD (no fabricated values). */
@@ -475,6 +486,20 @@ export interface DesktopCloudProviderView {
   privacyWarning: string | null;
   /** Masked hint only, e.g. `gsk_…A1b2`. */
   keyHint: string | null;
+  /** Where the key is kept: Windows Credential Manager, or the earlier encrypted file. */
+  keySource?: 'credential-manager' | 'legacy-encrypted-file' | null;
+}
+
+/** Free model registry + credential status for the Free models panel. Never contains a key. */
+export interface DesktopFreeModelsState {
+  registry: Record<string, unknown>;
+  credentials: {
+    backend: string;
+    status: Record<string, { configured: boolean; source: 'credential-manager' | 'legacy-encrypted-file' | null; hint: string | null }>;
+    /** Providers whose key exists only in the earlier encrypted file. */
+    legacyOnly: string[];
+  };
+  cloud: DesktopCloudState;
 }
 
 export interface DesktopCloudModel {
@@ -549,6 +574,10 @@ export interface DesktopCloudPublicTextPreview {
   text: string;
   eligible: boolean;
   reason?: string;
+  /** Why this model: chosen by you, or by Auto routing. */
+  selectionReason?: string;
+  /** Approved free alternatives used only if the chosen one is rate-limited before answering. */
+  fallbacks?: Array<{ providerId: string; model: string; providerName: string }>;
 }
 
 /** Chat permission mode for a conversation. Core stores and enforces it; the renderer only shows and chooses. */
