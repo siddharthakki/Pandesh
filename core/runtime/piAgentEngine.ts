@@ -48,6 +48,7 @@ import type { PiMemoryBridge } from './piMemoryBridge';
 import type { PiCapabilityBridge } from './piCapabilityBridge';
 import type { EventBroadcaster } from '../ws/broadcaster';
 import { startToolInvocation, completeToolInvocation } from '../domain/toolInvocations';
+import { buildJournalContext, clarificationQuestion, foreignIdsInMessage, recallJournal, type JournalContext } from '../domain/toolJournal';
 import { startModelInvocation, completeModelInvocation } from '../domain/modelInvocations';
 import { recordRuntimeEvent, latestRuntimeSequence, listRuntimeEventsAfter } from '../domain/runtimeEvents';
 import { appendMessage, listMessages } from '../domain/conversations';
@@ -1168,7 +1169,7 @@ export class PiAgentEngine implements EngineAdapter {
       const text = String(result?.content?.[0]?.text ?? '');
       const ok = !result?.isError;
       if (invId) {
-        try { mutateWithBroadcast(db, broadcaster, () => completeToolInvocation(db, invId!, { actor, status: ok ? 'succeeded' : 'failed', exitCode: ok ? 0 : 1, evidence: { output: text.slice(0, 500), initiatedBy, ...(sanitizeToolActivity(result?.details?.activity) ? { activity: sanitizeToolActivity(result?.details?.activity) } : {}) } })); } catch {}
+        try { mutateWithBroadcast(db, broadcaster, () => completeToolInvocation(db, invId!, { actor, status: ok ? 'succeeded' : 'failed', exitCode: ok ? 0 : 1, result: { text: extractToolResultText(result), details: result?.details }, evidence: { output: text.slice(0, 500), initiatedBy, ...(sanitizeToolActivity(result?.details?.activity) ? { activity: sanitizeToolActivity(result?.details?.activity) } : {}) } })); } catch {}
       }
       toolCallsRecorded.push({ tool: toolName, args, result, status: ok ? 'completed' : 'failed' });
       return { ok, text };
@@ -4394,7 +4395,7 @@ ${String(args.objective ?? '').slice(0, 600)}`,
             const secs = Math.round((Date.now() - t0) / 1000);
             if (out.status !== 'completed' || !out.answer) {
               return { content: [{ type: 'text', text: `NOT DONE: the ${name} agent's task ended as "${out.status}" after ${secs}s${out.answer ? `. Its last message: ${out.answer.slice(0, 1500)}` : ''}. Tell the user exactly that; do not do the task yourself.` }], isError: true,
-                details: { activity: { kind: 'document', title: `${name} agent: ${out.status}`, excerpt: (out.answer ?? '').slice(0, 1200) } } };
+                details: { handoffId: started.handoff.id, childAttemptId, agentId: toAgentId, activity: { kind: 'document', title: `${name} agent: ${out.status}`, excerpt: (out.answer ?? '').slice(0, 1200) } } };
             }
             if (expectedOutputs.length && selectedWorkspace) {
               const nowNames = new Set([...snapshotFiles(selectedWorkspace).keys()].map((k) => path.basename(k).toLowerCase()));
@@ -4402,7 +4403,7 @@ ${String(args.objective ?? '').slice(0, 600)}`,
               if (missing.length) {
                 safeRecordRuntimeEvent(db, broadcaster, attemptId, 'handoff_output_missing', { agent: toAgentId, missing }, actor);
                 return { content: [{ type: 'text', text: `NOT DONE: the ${name} agent finished after ${secs}s, but ${missing.join(', ')} does not exist — it was not created, whatever its reply says. Its reply (unverified):\n${out.answer.slice(0, 1500)}\n\nEither create ${missing.join(', ')} yourself now with write_file from the real data you have, or tell the user plainly it was not created.` }], isError: true,
-                  details: { activity: { kind: 'document', title: `${name} agent: ${missing.join(', ')} not created`, excerpt: out.answer.slice(0, 1200) } } };
+                  details: { handoffId: started.handoff.id, childAttemptId, agentId: toAgentId, activity: { kind: 'document', title: `${name} agent: ${missing.join(', ')} not created`, excerpt: out.answer.slice(0, 1200) } } };
               }
             }
             return {
@@ -4411,7 +4412,7 @@ ${String(args.objective ?? '').slice(0, 600)}`,
 ${out.answer.slice(0, 6000)}
 
 Report this to the user, saying the ${name} agent did the work. Do not add facts it does not contain.` }],
-              details: { activity: { kind: 'document', title: `${name} agent returned (${secs}s)`, excerpt: out.answer.slice(0, 1200) } },
+              details: { handoffId: started.handoff.id, childAttemptId, agentId: toAgentId, activity: { kind: 'document', title: `${name} agent returned (${secs}s)`, excerpt: out.answer.slice(0, 1200) } },
             };
           } finally {
             signal?.removeEventListener('abort', onAbort);
@@ -4635,6 +4636,53 @@ Report this to the user, saying the ${name} agent did the work. Do not add facts
       safeRecordRuntimeEvent(db, broadcaster, attemptId, 'step_finish', { step: 1, engine: 'pi', durationMs: Date.now() - startTime, outcome: 'completed' }, actor);
       return { success: true, reply: taskStatusAnswer };
     }
+    // P0 tool execution journal. What earlier tool calls in this conversation really did (ids, paths, artifacts, status)
+    // comes from Core's journal, never from the assistant's earlier prose, which may have left the ids out. References in
+    // this message ("that plan", "undo that") are resolved against it; an ambiguous one that would change something is
+    // answered with a question, before any model or tool runs.
+    const journalScope = conversationId ? { conversationId, agentId: agentScope?.agentId ?? null } : null;
+    const journalLocalModel = !/(?:[:-]cloud)$/i.test(String(selectedModel ?? ''));
+    let journalCtx: JournalContext | null = null;
+    if (journalScope) {
+      try { journalCtx = buildJournalContext(db, journalScope, { message: requestText, excludeAttemptId: attemptId, localModel: journalLocalModel }); } catch (err: any) { console.warn('[piAgentEngine] journal context unavailable:', err?.message); }
+      if (journalCtx && journalCtx.resolution.status !== 'none') {
+        const r = journalCtx.resolution;
+        safeRecordRuntimeEvent(db, broadcaster, attemptId, 'journal_reference_resolved', {
+          status: r.status,
+          ...(r.status === 'resolved' ? { kind: r.item.kind, id: r.item.id, record: r.item.invocationId } : {}),
+          ...(r.status === 'ambiguous' ? { candidates: r.candidates.map((c) => c.id) } : {}),
+          ...(r.status === 'inaccessible' ? { ids: r.ids } : {}),
+        }, actor);
+      }
+    }
+    if (journalCtx?.resolution.status === 'ambiguous' && journalCtx.resolution.action) {
+      const question = clarificationQuestion(journalCtx.resolution);
+      let replyRecord: any = null;
+      try { mutateWithBroadcast(db, broadcaster, () => { replyRecord = appendMessage(db, conversationId, { role: 'assistant', content: question, actor }); }); } catch {}
+      try {
+        mutateWithBroadcast(db, broadcaster, () => {
+          ensureTaskOutcome(db, { attemptId, conversationId: conversationId || null, requestId, objective: objectiveFromRequest(requestText) });
+          finalizeTaskOutcome(db, attemptId, { verdict: 'conversational', reason: 'The reference matched more than one recorded item; Core asked which one before acting', performed: [], refused: [], failed: [] }, { answerMessageId: replyRecord?.id ?? null });
+        });
+      } catch {}
+      try { mutateWithBroadcast(db, broadcaster, () => { transitionAttempt(db, attemptId, { toStatus: 'completed', fenceToken, actor }); }); } catch {}
+      safeRecordRuntimeEvent(db, broadcaster, attemptId, 'step_finish', { step: 1, engine: 'pi', durationMs: Date.now() - startTime, outcome: 'completed', reason: 'ambiguous_reference' }, actor);
+      return { success: true, reply: question };
+    }
+    if (journalScope && journalCtx && journalCtx.entries > 0) {
+      tools.push({
+        name: 'recall_execution',
+        label: 'recall_execution',
+        description: 'Return the complete recorded result of an earlier tool call in THIS conversation (the text of a document, a full list, the details of a created item, the whole answer of a specialist agent). Give the record id (tinv_…) or the item id or file path listed in the EXECUTION JOURNAL. Read-only.',
+        parameters: { type: 'object', properties: { ref: { type: 'string', description: 'Record id (tinv_…), item id, or file path from the EXECUTION JOURNAL.' } }, required: ['ref'] },
+        execute: async (_id: string, args: any) => {
+          const out = recallJournal(db, journalScope, String(args?.ref ?? ''), { localModel: journalLocalModel });
+          return { content: [{ type: 'text', text: out.text }], ...(out.ok ? {} : { isError: true }) };
+        },
+      });
+      activeToolNames.add('recall_execution');
+    }
+
     // Questions about Pandesh itself (notifications, Gmail progress, running tasks, reminders) are answered from the
     // recorded state, with no model and no workspace: a model's prose is exactly where invented progress came from.
     const statusTopics = classifyStatusRequest(requestText, hasRecentGmailWork(db, Date.now()));
@@ -4983,6 +5031,9 @@ When the user asks to continue, resume, or check progress/updates, resume this w
       else turnStateParts.push(part);
     };
 
+    // P0: the journal travels with this message (it changes every turn, so it stays out of the cached system prompt).
+    if (journalCtx?.section) addTurnFact(journalCtx.section);
+
     // Load prior conversation turns for multi-turn continuity
     const priorMessages: any[] = [];
     let priorTurnsTotal = 0;
@@ -5253,6 +5304,19 @@ When the user asks to continue, resume, or check progress/updates, resume this w
           };
         }
 
+        // P0 isolation: an id that Core recorded for another conversation or agent, and that nothing in this
+        // conversation or this turn produced, is refused here, whoever typed it (the user, a document, the model).
+        if (journalScope && toolName !== 'recall_execution') {
+          try {
+            const thisTurn = toolCallsRecorded.map((t) => extractToolResultText(t.result)).join(' ');
+            const foreign = foreignIdsInMessage(db, JSON.stringify(args ?? {}), journalScope).filter((id) => !thisTurn.includes(id));
+            if (foreign.length) {
+              safeRecordRuntimeEvent(db, broadcaster, attemptId, 'journal_foreign_reference_refused', { toolName, ids: foreign }, actor);
+              return { block: true, reason: `NOT DONE (refused by Pandesh Core): ${foreign.join(', ')} belongs to another conversation or agent and is not accessible here. Nothing was changed. Tell the user exactly that.` };
+            }
+          } catch { /* the check is best effort; the tool's own authorization still applies */ }
+        }
+
         let invRec: any;
         try {
           mutateWithBroadcast(db, broadcaster, () => {
@@ -5293,6 +5357,8 @@ When the user asks to continue, resume, or check progress/updates, resume this w
                 // A call cut short by Stop was cancelled, not a failure of the tool.
                 status: signal?.aborted ? 'cancelled' : afterCtx.result?.isError ? 'failed' : 'succeeded',
                 exitCode: afterCtx.result?.isError ? 1 : 0,
+                // The complete result feeds the tool execution journal that later turns read (P0).
+                result: { text: extractToolResultText(output), details: output?.details },
                 evidence: {
                   output: output?.content?.[0]?.text?.slice(0, 500),
                   // Every page the tool really returned, beyond the 500-char excerpt: what a citation can be checked against.
@@ -6241,6 +6307,13 @@ When the user asks to continue, resume, or check progress/updates, resume this w
     // second fabricated "I have now executed the commands" is withheld too.
     {
       const succeeded = toolCallsRecorded.filter((t) => t.status === 'completed').map((t) => t.tool);
+      // A question about a hand-off that finished in an EARLIER turn ("what did the agent find?") is answered from that
+      // turn's recorded delegate_to_agent result. It supports the attribution only when Core itself resolved this message
+      // to that recorded hand-off; a claim of a new hand-off in this turn still needs one that ran now.
+      if (journalCtx?.resolution.status === 'resolved') {
+        const item = journalCtx.resolution.item;
+        if (item.kind === 'delegation' || /^delegate_to/.test(item.createdIn?.toolName ?? '') || /^delegate_to/.test(item.byTool)) succeeded.push('delegate_to_agent');
+      }
       // A named output file must exist on disk (re-run of M4: ".md written, .pdf claimed, no .pdf").
       const fileExists = (reference: string): boolean => {
         const clean = reference.replace(/[\\/]+$/, '');

@@ -1853,6 +1853,35 @@ CREATE TABLE IF NOT EXISTS brain_index_state (
 
 /** Phase 2f — Social Studio drafts (core/domain/socialDrafts.ts). Drafting and
  * the user's decisions only: nothing here publishes, schedules or sends. */
+/**
+ * P0 tool execution journal: one structured row per completed tool invocation (sanitized arguments, status, effect,
+ * extracted ids/paths, artifact ids, a bounded copy of the result), scoped to its conversation and agent. The next
+ * model turn reads it back (see core/domain/toolJournal.ts); before this, tool results never reached a later turn.
+ */
+const MIGRATION_51_TOOL_EXECUTION_JOURNAL = `
+CREATE TABLE IF NOT EXISTS tool_execution_journal (
+  seq INTEGER PRIMARY KEY AUTOINCREMENT,
+  invocationId TEXT NOT NULL UNIQUE REFERENCES tool_invocations(id),
+  conversationId TEXT,
+  requestId TEXT,
+  attemptId TEXT NOT NULL,
+  agentId TEXT,
+  toolName TEXT NOT NULL,
+  argsJson TEXT NOT NULL DEFAULT '{}',
+  status TEXT NOT NULL,
+  effect TEXT NOT NULL,
+  summary TEXT NOT NULL DEFAULT '',
+  resultText TEXT NOT NULL DEFAULT '',
+  refsJson TEXT NOT NULL DEFAULT '[]',
+  artifactIdsJson TEXT NOT NULL DEFAULT '[]',
+  sensitivity TEXT NOT NULL DEFAULT 'normal',
+  startedAt TEXT NOT NULL,
+  endedAt TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_tool_execution_journal_conversation ON tool_execution_journal(conversationId, agentId, seq);
+CREATE INDEX IF NOT EXISTS idx_tool_execution_journal_attempt ON tool_execution_journal(attemptId, seq);
+`;
+
 const MIGRATION_50_SOCIAL_DRAFTS = `
 CREATE TABLE IF NOT EXISTS social_drafts (
   id TEXT PRIMARY KEY,
@@ -1919,6 +1948,7 @@ export const MIGRATIONS: Migration[] = [
   { version: 48, description: 'Specialist agents: custom definitions and overrides, agent runs with their frozen scope, delegations, scope refusals', sql: MIGRATION_48_AGENTS },
   { version: 49, description: 'Second Brain: knowledge sources, rebuildable chunks, structural links and a full-text index', sql: MIGRATION_49_SECOND_BRAIN },
   { version: 50, description: 'Social Studio drafts and the user decisions on them (no publishing)', sql: MIGRATION_50_SOCIAL_DRAFTS },
+  { version: 51, description: 'Tool execution journal: structured, conversation- and agent-scoped record of every completed tool call (ids, paths, artifacts, status, bounded result)', sql: MIGRATION_51_TOOL_EXECUTION_JOURNAL },
 ];
 
 

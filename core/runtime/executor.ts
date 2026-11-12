@@ -1,6 +1,6 @@
 import { piAgentEngine, type PiConnectorBridge, type PiMemoryBridge } from './piAgentEngine';
 import { OpenCodeEngine, openCodeCandidates } from './opencodeEngine';
-import { HermesEngine } from './hermesEngine';
+import { HermesEngine, hermesAutoRouteAllowed } from './hermesEngine';
 import { EngineRegistry } from './adapters/EngineAdapter';
 /**
  * Core-owned runtime executor (M32 Priority 1). This is what makes the Core
@@ -32,6 +32,7 @@ import { MUTATION_DENIED_NOTICE, checkToolCallAgainstMutationPolicy, deriveMutat
 import { applyToolSurface, deriveToolSurface } from '../domain/taskToolSurface';
 import { CoreError } from '../domain/errors';
 import { appendMessage, listMessages } from '../domain/conversations';
+import { buildJournalContext, journalAgentForAttempt } from '../domain/toolJournal';
 import { formatContinuityBrief, readConversationWorkingState } from '../domain/conversationWorkingState';
 import { startModelInvocation, completeModelInvocation } from '../domain/modelInvocations';
 import { startToolInvocation, completeToolInvocation } from '../domain/toolInvocations';
@@ -3971,6 +3972,17 @@ export class RuntimeExecutor {
       if (workingState) {
         messages.push({ role: 'system', content: formatContinuityBrief(workingState) });
       }
+      // P0 tool execution journal: what earlier tool calls in this conversation actually did (ids, paths, artifacts,
+      // status) — the replayed history below holds only prose, which may have left the ids out. Private results are
+      // referenced by id only when the attempt's model is not local Ollama.
+      try {
+        const journal = buildJournalContext(this.db, { conversationId, agentId: attemptId ? journalAgentForAttempt(this.db, attemptId) : null }, {
+          message: currentMessage,
+          excludeAttemptId: attemptId,
+          localModel: !context.selectedProvider || context.selectedProvider === 'ollama',
+        });
+        if (journal.section) messages.push({ role: 'system', content: journal.section });
+      } catch { /* the journal is derived evidence; its absence never blocks a turn */ }
       let history = listMessages(this.db, conversationId);
       const regeneration = attemptId ? this.db.get<{ userMessageId: string }>('SELECT userMessageId FROM regeneration_requests WHERE attemptId = ?', [attemptId]) : undefined;
       // Regeneration uses the same durable prior context and frozen attachment
@@ -5245,10 +5257,12 @@ export class RuntimeExecutor {
       if (opencodeAdapter && await opencodeAdapter.isAvailable()) {
         return 'opencode';
       }
-      // If OpenCode unavailable, check Hermes
-      const hermesCheck = await HermesEngine.checkCapabilities();
-      if (hermesCheck.available) {
-        return 'hermes';
+      // If OpenCode is unavailable, Hermes takes it only when this task class is enabled for it (PANDESH_HERMES_ROUTES).
+      if (hermesAutoRouteAllowed('workspace_coding')) {
+        const hermesCheck = await HermesEngine.checkCapabilities();
+        if (hermesCheck.available) {
+          return 'hermes';
+        }
       }
       // Fallback to Pi
       return 'pi';
@@ -5257,7 +5271,7 @@ export class RuntimeExecutor {
     // Autonomous skills / specialist multi-turn tasks
     const requiresSpecialist = (context.modelSelection?.requiredCapabilities as any)?.specialist === true ||
       (context.modelSelection?.requiredCapabilities as any)?.autonomousSkills === true;
-    if (requiresSpecialist || (isAutonomous && !hasWorkspace)) {
+    if ((requiresSpecialist && hermesAutoRouteAllowed('specialist')) || (isAutonomous && !hasWorkspace && hermesAutoRouteAllowed('autonomous_no_workspace'))) {
       const hermesCheck = await HermesEngine.checkCapabilities();
       if (hermesCheck.available) {
         return 'hermes';
