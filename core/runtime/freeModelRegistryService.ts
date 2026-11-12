@@ -13,6 +13,7 @@ import {
   REGISTRY_SOURCES,
   UNIMPORTED_SOURCES,
   applyLocalEvidence,
+  deriveCatalogEntries,
   diffRegistries,
   parsePrimaryRegistry,
   parseSecondaryRegistry,
@@ -41,7 +42,7 @@ import {
 } from '../platform/freeModelEligibility';
 import { QuotaTracker, isQuotaFailure, type PoolDecision } from '../platform/cloudRouting';
 import { humanizeModelName, type ModelDescriptor } from '../platform/modelCatalog';
-import { ProviderCatalog } from '../platform/providerCatalog';
+import { ProviderCatalog, setDerivedProviders } from '../platform/providerCatalog';
 import { listCloudModels, type CloudModelListing } from './cloudProviderProbe';
 import { qualifyModel, type QualificationRecord, type QualificationOptions } from './modelQualification';
 import { sharedCloudCredentials, type CloudCredentialStore } from './cloudCredentials';
@@ -131,6 +132,19 @@ export class FreeModelRegistryService {
     this.qualifications = readJson<Record<string, QualificationRecord>>(this.file('qualifications.json')) ?? {};
     this.preferences = normalizeRoutingPreferences(readJson(this.file('preferences.json')) ?? DEFAULT_ROUTING_PREFERENCES);
     this.lastReport = readJson(this.file('last-report.json'));
+    // Discovered providers get their generic adapters as soon as Core starts, from the stored registry.
+    if (this.snapshot) this.snapshot = { ...this.snapshot, providers: applyLocalEvidence(this.reconcile(this.snapshot.sourceData), this.evidence) };
+  }
+
+  /**
+   * Reconciles both sources and gives every discovered OpenAI-compatible https provider the generic adapter
+   * (owner, 2026-11-13: "i want all enabled"). The first pass runs without derived entries, so the set is rebuilt from
+   * the registry each time; the second pass runs with them, so those providers show as having an adapter.
+   */
+  private reconcile(sourceData: Record<RegistrySourceId, readonly SourceProvider[]>): RegistryProvider[] {
+    setDerivedProviders([]);
+    setDerivedProviders(deriveCatalogEntries(reconcileRegistry(sourceData, this.catalog)));
+    return reconcileRegistry(sourceData, this.catalog);
   }
 
   private file(name: string): string { return path.join(this.dir, name); }
@@ -176,7 +190,7 @@ export class FreeModelRegistryService {
       anyNew = true;
       records.push({ id: source.id, url, fetchedAt, upstreamGenerated: parsed.generated, sha256: sha256(text), entryCount: parsed.entryCount, accepted: parsed.providers.length, rejected: parsed.rejected.length, carriedOver: false });
     }
-    const providers = applyLocalEvidence(reconcileRegistry(sourceData, this.catalog), this.evidence);
+    const providers = applyLocalEvidence(this.reconcile(sourceData), this.evidence);
     const report = diffRegistries(previous?.providers, providers);
     const keptLastKnownGood = records.some(r => r.carriedOver);
     if (anyNew) {
@@ -194,7 +208,7 @@ export class FreeModelRegistryService {
   /** Re-applies evidence to the stored registry (after a health check or key change) without fetching upstream. */
   private reapplyEvidence(): void {
     if (!this.snapshot) return;
-    this.snapshot = { ...this.snapshot, providers: applyLocalEvidence(reconcileRegistry(this.snapshot.sourceData, this.catalog), this.evidence) };
+    this.snapshot = { ...this.snapshot, providers: applyLocalEvidence(this.reconcile(this.snapshot.sourceData), this.evidence) };
     atomicWriteJson(this.file('registry.json'), this.snapshot);
   }
 

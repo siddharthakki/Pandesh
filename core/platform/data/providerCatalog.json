@@ -358,16 +358,16 @@
         "streaming"
       ],
       "freeTier": {
-        "kind": "unknown",
-        "note": "NVIDIA-hosted endpoints are offered for development/evaluation to NVIDIA Developer Program members; current credit and rate terms could not be confirmed from official docs on the verification date."
+        "kind": "recurring",
+        "note": "Enabled by the owner on 2026-11-13. NVIDIA-hosted endpoints are offered free for development and evaluation to NVIDIA Developer Program members, with rate limits; Pandesh has not confirmed the current credit and rate terms, and NVIDIA can end free access."
       },
-      "paymentMethodRequired": "unknown",
+      "paymentMethodRequired": "doesNotRequirePaymentMethod",
       "providerResidency": "NVIDIA-hosted.",
-      "lastVerifiedAt": "2026-10-06",
+      "lastVerifiedAt": "2026-11-13",
       "sourceUrl": "https://build.nvidia.com",
       "modelRules": {
         "freeness": {
-          "kind": "never"
+          "kind": "provider-tier"
         }
       },
       "fallbackPriority": 95

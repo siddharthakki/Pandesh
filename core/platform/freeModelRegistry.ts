@@ -12,7 +12,7 @@
  * Missing information stays unknown. Nothing here invents a limit, a capability or a privacy guarantee.
  */
 import { createHash } from 'node:crypto';
-import type { ProviderCatalog, ProviderDescriptor } from './providerCatalog';
+import { isPrivateEndpoint, type FreeTierKind, type PaymentRequirement, type ProviderCatalog, type ProviderDescriptor } from './providerCatalog';
 
 export type RegistrySourceId = 'primary' | 'secondary';
 export type Tri = boolean | 'unknown';
@@ -553,6 +553,61 @@ export interface LocalProviderEvidence {
   freeModelIds: string[];
   /** Models the provider lists as paid. */
   paidModelIds: string[];
+}
+
+// ── generic adapters for discovered providers (owner, 2026-11-13: "i want all enabled") ──────────
+
+const escapeRegExp = (text: string): string => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+/** Why a discovered provider cannot get the generic OpenAI-compatible adapter, or null when it can. */
+export function genericAdapterBlocker(provider: RegistryProvider): string | null {
+  if (provider.catalogProviderId) return 'already in the shipped catalog';
+  if (provider.openaiCompatible !== true) return 'its API is not OpenAI-compatible, so it needs its own adapter';
+  if (!provider.baseUrl || !provider.baseUrl.startsWith('https://')) return 'no https API address is listed';
+  if (/[{}]/.test(provider.baseUrl)) return 'its API address needs account-specific parts';
+  if (isPrivateEndpoint(provider.baseUrl)) return 'its API address is a private or local address';
+  return null;
+}
+
+/**
+ * A catalog entry for a discovered provider, using the generic OpenAI-compatible adapter. Only the models the registry
+ * lists count as free, and only when the registry's free tier is recurring. Trial or credit tiers stay "trial", so
+ * Pandesh's free-only spend policy still keeps them out of free routing. The provider still needs the owner's key, and
+ * Pandesh's own health check, before anything is sent to it.
+ */
+export function deriveCatalogEntry(provider: RegistryProvider): ProviderDescriptor | null {
+  if (genericAdapterBlocker(provider)) return null;
+  const baseUrl = provider.baseUrl!.replace(/\/+$/, '');
+  const freeTierKind: FreeTierKind = provider.freeKind === 'recurring' ? 'recurring' : provider.freeKind === 'trial' || provider.freeKind === 'credit' ? 'trial' : provider.freeKind === 'paid' ? 'paid' : 'unknown';
+  const payment: PaymentRequirement = provider.cardRequired === true ? 'requiresPaymentMethod' : provider.cardRequired === false ? 'doesNotRequirePaymentMethod' : 'unknown';
+  const patterns = provider.models.map(m => `^${escapeRegExp(m.modelId)}$`);
+  const privacyWarning = provider.training === 'yes'
+    ? 'The registry says this provider may use prompts to train models.'
+    : provider.training === 'unknown' ? 'The registry does not say whether this provider uses prompts for training.' : undefined;
+  return {
+    id: provider.id,
+    displayName: provider.displayName,
+    protocol: 'openai-compatible',
+    baseUrl,
+    signupUrl: provider.keyUrl ?? provider.docsUrl ?? baseUrl,
+    apiKeysUrl: provider.keyUrl ?? provider.docsUrl ?? baseUrl,
+    docsUrl: provider.docsUrl ?? provider.keyUrl ?? baseUrl,
+    modelsUrl: `${baseUrl}/models`,
+    authType: provider.requiresKey ? 'api-key' : 'none',
+    capabilities: ['streaming'],
+    freeTier: { kind: freeTierKind, note: 'Added from the free-model registry with the generic OpenAI-compatible adapter; terms come from the registry and are not yet verified by Pandesh.' },
+    paymentMethodRequired: payment,
+    providerResidency: 'Unknown; listed by the free-model registry.',
+    lastVerifiedAt: provider.lastVerified ?? '1970-01-01',
+    sourceUrl: provider.docsUrl ?? provider.keyUrl ?? baseUrl,
+    fallbackPriority: 500,
+    ...(privacyWarning ? { privacyWarning } : {}),
+    modelRules: { freeness: patterns.length > 0 ? { kind: 'provider-tier', idPatterns: patterns } : { kind: 'never' } },
+  };
+}
+
+export function deriveCatalogEntries(providers: readonly RegistryProvider[]): ProviderDescriptor[] {
+  return providers.map(deriveCatalogEntry).filter((entry): entry is ProviderDescriptor => entry !== null);
 }
 
 /**
