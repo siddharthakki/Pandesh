@@ -4,6 +4,7 @@ import { CoreError } from './errors';
 import { projectEventArguments } from './eventArguments';
 import { newId, nowIso } from './ids';
 import { recordRuntimeEvent } from './runtimeEvents';
+import { recordJournalEntry } from './toolJournal';
 
 /**
  * Durable evidence bound. Raised for M39: a governed memory recall/export
@@ -109,6 +110,11 @@ export interface CompleteToolInvocationInput {
   evidence?: Record<string, unknown>;
   actor: string;
   clientId?: string | null;
+  /**
+   * The complete result the tool returned (text and structured details). It feeds the tool execution journal, which
+   * is what later turns read; when omitted, the journal falls back to `evidence.output`.
+   */
+  result?: { text?: string; details?: unknown };
 }
 
 /** Records truthful evidence (command, cwd, exit code, bounded stdout/stderr) for a
@@ -128,6 +134,19 @@ export function completeToolInvocation(db: CoreDatabase, id: string, input: Comp
       now,
       id,
     ]);
+    let args: Record<string, unknown> = {};
+    try { args = JSON.parse(String(existing.argsSummary ?? '{}')); } catch { /* recorded arguments unreadable */ }
+    recordJournalEntry(db, {
+      invocationId: id,
+      attemptId: String(existing.attemptId),
+      toolName: String(existing.toolName),
+      args,
+      status: input.status,
+      resultText: input.result?.text ?? String((input.evidence as { output?: unknown } | undefined)?.output ?? ''),
+      details: input.result?.details,
+      startedAt: String(existing.startedAt),
+      endedAt: now,
+    });
     recordRuntimeEvent(db, {
       domain: 'tool_invocation',
       entityId: id,

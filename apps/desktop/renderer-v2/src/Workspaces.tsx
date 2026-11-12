@@ -80,7 +80,9 @@ function ProjectsView({ projects }: { projects: Rec[] }) {
   const tasksOf = (p: Rec): Rec[] => { const ctx = p.productContext as Rec | null | undefined; return Array.isArray(ctx?.tasks) ? (ctx!.tasks as Rec[]) : []; };
   return <div style={{ display: 'grid', gap: 10, gridTemplateColumns: 'repeat(auto-fill, minmax(300px, 1fr))' }}>{projects.map((p) => {
     const tasks = tasksOf(p);
-    return <RecordCard key={str(p.id)} r={p} extra={tasks.length ? <ul style={{ margin: 0, paddingLeft: 18, fontSize: 14 }}>{tasks.map((t) => <li key={str(t.id ?? t.title)}><span className="meta">{str(t.status)}</span> {str(t.title)}</li>)}</ul> : null} />;
+    // Due date, the priority the user set and a blocker (personalTasks.ts) are shown when a task has them.
+    const due = (t: Rec) => { const d = str(t.dueAt); if (!d) return null; const late = new Date(d).getTime() < Date.now() && !['done', 'cancelled'].includes(str(t.status)); return <span className="meta"> · due {d.slice(0, 10)}{late ? ' (overdue)' : ''}</span>; };
+    return <RecordCard key={str(p.id)} r={p} extra={tasks.length ? <ul style={{ margin: 0, paddingLeft: 18, fontSize: 14 }}>{tasks.map((t) => <li key={str(t.id ?? t.title)}><span className="meta">{str(t.status)}</span> {str(t.title)}{due(t)}{str(t.priority) === 'high' ? <span className="meta"> · high priority</span> : null}{str(t.blockedBy) ? <span className="meta"> · blocked by {str(t.blockedBy)}</span> : null}</li>)}</ul> : null} />;
   })}</div>;
 }
 

@@ -32,6 +32,9 @@ import { checkWrittenOutput, ungroundedValues, type OutputCheck } from './output
 import { expectedOutputFiles, inventedDates, suggestedCommandProblems, thirdPartyImportProblems, unfinishedRequestedSteps } from './taskCompletion';
 import { discoverCodingAgents, housekeepingRoot, spawnPlan } from './codingAgents';
 import { createProject, listProjects } from '../domain/projects';
+import { addTask, updateTask, listTasks, formatTask, type TaskStatus, type TaskPriority } from '../domain/personalTasks';
+import { buildPersonalContextSection, personalOverview, type OverviewFocus } from '../domain/personalContext';
+import { searchBrainForChat } from '../domain/secondBrain';
 import { readUpdateState } from './software/updates';
 import { collectListeningPorts } from './software/inventory';
 import { findInstalledApp, formatInstalledAppLookup, validAppQuery } from './installedAppLookup';
@@ -48,6 +51,7 @@ import type { PiMemoryBridge } from './piMemoryBridge';
 import type { PiCapabilityBridge } from './piCapabilityBridge';
 import type { EventBroadcaster } from '../ws/broadcaster';
 import { startToolInvocation, completeToolInvocation } from '../domain/toolInvocations';
+import { buildJournalContext, clarificationQuestion, foreignIdsInMessage, recallJournal, type JournalContext } from '../domain/toolJournal';
 import { startModelInvocation, completeModelInvocation } from '../domain/modelInvocations';
 import { recordRuntimeEvent, latestRuntimeSequence, listRuntimeEventsAfter } from '../domain/runtimeEvents';
 import { appendMessage, listMessages } from '../domain/conversations';
@@ -443,6 +447,14 @@ export function isPublicResearchTask(text: string | null | undefined): boolean {
   // This PC's own devices are local work, never a web search: "Find my connected printers … verify the print-job
   // status" matched the job-search rule below ("find" + "job") and lost every local tool.
   if (/\b(?:printers?|print(?:ing|ed)?\s*[-\s]?jobs?|print\s+queue|scanners?|webcams?|my\s+(?:pc|computer|laptop)|this\s+(?:pc|computer|laptop)|connected\s+(?:devices?|printers?|drives?))\b/i.test(t)) {
+    return false;
+  }
+
+  // Personal Context mission (scenario B): "What were the salary, the deadline and the link of that job posting?" asks
+  // about a document already read in this conversation. It was routed to public web research: the turn lost every
+  // local tool and the earlier read, and the user's question went to a search engine. A reference to a specific
+  // earlier/saved posting is local recall, not a vacancy search.
+  if (/\b(?:that|this|the same|the earlier|the previous|the saved|my saved|the one|which)\s+(?:job\s+)?(?:postings?|ads?|adverts?|vacanc(?:y|ies)|listings?|offers?)\b|\b(?:posting|vacancy|job ad|listing)\s+(?:you|i|we)\s+(?:read|opened|saved|summari[sz]ed|looked at)\b|\b(?:you|i|we)\s+(?:read|opened|saved)\s+(?:earlier|before|yesterday)\b/i.test(t)) {
     return false;
   }
 
@@ -1192,7 +1204,7 @@ export class PiAgentEngine implements EngineAdapter {
       const text = String(result?.content?.[0]?.text ?? '');
       const ok = !result?.isError;
       if (invId) {
-        try { mutateWithBroadcast(db, broadcaster, () => completeToolInvocation(db, invId!, { actor, status: ok ? 'succeeded' : 'failed', exitCode: ok ? 0 : 1, evidence: { output: text.slice(0, 500), initiatedBy, ...(sanitizeToolActivity(result?.details?.activity) ? { activity: sanitizeToolActivity(result?.details?.activity) } : {}) } })); } catch {}
+        try { mutateWithBroadcast(db, broadcaster, () => completeToolInvocation(db, invId!, { actor, status: ok ? 'succeeded' : 'failed', exitCode: ok ? 0 : 1, result: { text: extractToolResultText(result), details: result?.details }, evidence: { output: text.slice(0, 500), initiatedBy, ...(sanitizeToolActivity(result?.details?.activity) ? { activity: sanitizeToolActivity(result?.details?.activity) } : {}) } })); } catch {}
       }
       toolCallsRecorded.push({ tool: toolName, args, result, status: ok ? 'completed' : 'failed' });
       return { ok, text };
@@ -3499,6 +3511,103 @@ export class PiAgentEngine implements EngineAdapter {
           return { content: [{ type: 'text', text: projects.length ? `${projects.length} project(s):\n${lines.join('\n')}` : 'No projects are saved in Core.' }] };
         },
       },
+      // Personal Context mission (micro-tests TSK-001..025): tasks with due dates, priorities, blockers, notes and a
+      // history, kept in the Projects workspace. A user ticking off their own task needs no file evidence.
+      {
+        name: 'add_task',
+        label: 'add_task',
+        description: "Add a to-do task to a project in Pandesh's Projects workspace (use 'Inbox' when the user names none). Store a deadline only as an ISO date resolved with resolve_time, and a priority or goal only when the user stated it. Report the ref it returns.",
+        parameters: { type: 'object', properties: {
+          title: { type: 'string' }, project: { type: 'string', description: 'Project name or id; default Inbox.' },
+          dueAt: { type: 'string', description: 'ISO date/time from resolve_time.' }, priority: { type: 'string', enum: ['high', 'normal', 'low'] },
+          goal: { type: 'string', description: "The goal this task serves, in the user's words." }, blockedBy: { type: 'string' }, note: { type: 'string' },
+          createProject: { type: 'boolean', description: 'true only when the user asked for a new project of that name.' },
+        }, required: ['title'] },
+        execute: async (_id: string, args: any) => {
+          try {
+            const projectArg = String(args?.project ?? '').trim();
+            const task = mutateWithBroadcast(db, broadcaster, () => addTask(db, {
+              title: String(args?.title ?? ''), project: projectArg || 'Inbox', dueAt: args?.dueAt ?? null, priority: args?.priority ?? null,
+              goal: args?.goal ?? null, blockedBy: args?.blockedBy ?? null, note: args?.note ?? null,
+              createProjectIfMissing: args?.createProject === true || !projectArg || /^inbox$/i.test(projectArg),
+              source: `conversation:${conversationId || 'none'}`,
+            }));
+            const text = `Added task ${formatTask(task)}. It is shown under Spaces → Projects.`;
+            return { content: [{ type: 'text', text }], details: { primaryId: task.id, taskRef: task.ref, activity: { kind: 'tool', title: `Added task ${task.title}`, excerpt: text } } };
+          } catch (err: any) {
+            return { content: [{ type: 'text', text: `NOT DONE: ${err?.message ?? String(err)}. Nothing was added.` }], isError: true };
+          }
+        },
+      },
+      {
+        name: 'update_task',
+        label: 'update_task',
+        description: "Change ONE existing task: mark it done, reopen it, set or move its deadline, set the priority the user stated, rename it, mark it blocked by something, add a note, link it to a goal, or move it to another project. Identify it by its ref (project/task) or the words of its title; if several tasks match, Core returns them and you ask the user which.",
+        parameters: { type: 'object', properties: {
+          task: { type: 'string', description: 'Task ref (proj_…/ptask_…) or words of its title.' },
+          status: { type: 'string', enum: ['pending', 'in_progress', 'blocked', 'done', 'cancelled', 'reopen'] },
+          dueAt: { type: 'string', description: 'ISO date/time from resolve_time; empty string clears it.' }, priority: { type: 'string', enum: ['high', 'normal', 'low'] },
+          title: { type: 'string', description: 'New title (rename).' }, blockedBy: { type: 'string', description: 'What blocks it; empty string clears.' },
+          goal: { type: 'string' }, note: { type: 'string' }, moveToProject: { type: 'string' },
+        }, required: ['task'] },
+        execute: async (_id: string, args: any) => {
+          try {
+            const { task, changes } = mutateWithBroadcast(db, broadcaster, () => updateTask(db, {
+              ref: String(args?.task ?? ''), source: `conversation:${conversationId || 'none'}`,
+              ...(args?.status ? { status: String(args.status) as TaskStatus | 'reopen' } : {}),
+              ...(args?.dueAt !== undefined ? { dueAt: args.dueAt === '' ? null : String(args.dueAt) } : {}),
+              ...(args?.priority ? { priority: String(args.priority) as TaskPriority } : {}),
+              ...(args?.title ? { title: String(args.title) } : {}),
+              ...(args?.blockedBy !== undefined ? { blockedBy: args.blockedBy === '' ? null : String(args.blockedBy) } : {}),
+              ...(args?.goal ? { goal: String(args.goal) } : {}),
+              ...(args?.note ? { note: String(args.note) } : {}),
+              ...(args?.moveToProject ? { moveToProject: String(args.moveToProject) } : {}),
+            }));
+            const text = changes.length ? `Updated ${formatTask(task)}: ${changes.join('; ')}.` : `No change: ${formatTask(task)} already had those values.`;
+            return { content: [{ type: 'text', text }], details: { taskRef: task.ref, activity: { kind: 'tool', title: `Updated task ${task.title}`, excerpt: text } } };
+          } catch (err: any) {
+            return { content: [{ type: 'text', text: `NOT DONE: ${err?.message ?? String(err)}. Nothing was changed.` }], isError: true };
+          }
+        },
+      },
+      {
+        name: 'list_tasks',
+        label: 'list_tasks',
+        description: "List the user's tasks across all projects with due dates, priorities, blockers, notes, history and completion times. Filters: open, overdue, due within N days, done since a date, one project, or words of a task (\"the task where we discussed the monitor\"). Read-only.",
+        parameters: { type: 'object', properties: {
+          status: { type: 'string', enum: ['open', 'pending', 'in_progress', 'blocked', 'done', 'cancelled'] }, overdue: { type: 'boolean' },
+          dueWithinDays: { type: 'number' }, completedSince: { type: 'string', description: 'ISO date' }, project: { type: 'string' }, text: { type: 'string' },
+        } },
+        execute: async (_id: string, args: any) => {
+          const now = new Date();
+          const dateFilter = args?.overdue === true || typeof args?.dueWithinDays === 'number';
+          const tasks = listTasks(db, { status: args?.status, overdue: args?.overdue === true, dueWithinDays: typeof args?.dueWithinDays === 'number' ? args.dueWithinDays : undefined, completedSince: args?.completedSince, project: args?.project, text: args?.text, now });
+          const undated = dateFilter ? listTasks(db, { status: 'open' }).filter((t) => !t.dueAt).length : 0;
+          const note = dateFilter && undated ? ` (${undated} open task(s) have no due date, so they are never due or overdue)` : '';
+          const lines = tasks.map((t) => `- ${formatTask(t, now)}${t.notes?.length ? `\n  notes: ${t.notes.map((n) => n.text).join(' | ').slice(0, 400)}` : ''}${t.history?.length ? `\n  history: ${t.history.slice(-5).map((h) => `${h.at.slice(0, 16)} ${h.change}`).join('; ')}` : ''}`);
+          return { content: [{ type: 'text', text: `${tasks.length ? `${tasks.length} task(s)` : 'No task matches'}${note}${lines.length ? `:\n${lines.join('\n')}` : '.'}` }] };
+        },
+      },
+      {
+        name: 'personal_overview',
+        label: 'personal_overview',
+        description: "The user's life and work as Core records it, with a record id on every line: what matters now (ranked by deadlines, the priorities and goals the user stated, promises), what is due or overdue, conflicting deadlines, what is blocked, stalled or neglected, what Pandesh actually completed or failed (verified tool records, across conversations), approvals waiting, remembered facts about the user with their source, and decisions that changed. Use for 'what are my priorities', 'what am I neglecting', 'what did you actually finish', 'what changed this week', 'which decisions did we reverse', 'what do you know about me'. Read-only.",
+        parameters: { type: 'object', properties: {
+          focus: { type: 'string', enum: ['all', 'priorities', 'due', 'completed', 'unfinished', 'changes', 'decisions', 'about_me'] },
+          days: { type: 'number', description: 'Look-back window in days for completed/changed items (default 7).' },
+        } },
+        execute: async (_id: string, args: any) => ({ content: [{ type: 'text', text: personalOverview(db, { focus: (args?.focus ?? 'all') as OverviewFocus, days: typeof args?.days === 'number' ? Math.min(Math.max(args.days, 1), 90) : undefined }) }] }),
+      },
+      {
+        name: 'search_second_brain',
+        label: 'search_second_brain',
+        description: "Search the user's Second Brain: remembered facts, notes, promises, files Pandesh created and the .md/.txt documents in folders the user granted. Returns ranked passages, each with its source file/section or record id and date. Use for anything the user saved or wrote down earlier ('the job posting I saved', 'my notes on the supplier').",
+        parameters: { type: 'object', properties: { query: { type: 'string' }, limit: { type: 'number' } }, required: ['query'] },
+        execute: async (_id: string, args: any) => {
+          const out = searchBrainForChat(db, { q: String(args?.query ?? ''), limit: typeof args?.limit === 'number' ? args.limit : undefined, localModel: !cloudTarget && !/(?:[:-]cloud)$/i.test(String(selectedModel ?? '')) });
+          return { content: [{ type: 'text', text: out.text }], details: { hits: out.hits, mode: out.mode } };
+        },
+      },
       {
         name: 'open_local_file',
         label: 'open_local_file',
@@ -4418,7 +4527,7 @@ ${String(args.objective ?? '').slice(0, 600)}`,
             const secs = Math.round((Date.now() - t0) / 1000);
             if (out.status !== 'completed' || !out.answer) {
               return { content: [{ type: 'text', text: `NOT DONE: the ${name} agent's task ended as "${out.status}" after ${secs}s${out.answer ? `. Its last message: ${out.answer.slice(0, 1500)}` : ''}. Tell the user exactly that; do not do the task yourself.` }], isError: true,
-                details: { activity: { kind: 'document', title: `${name} agent: ${out.status}`, excerpt: (out.answer ?? '').slice(0, 1200) } } };
+                details: { handoffId: started.handoff.id, childAttemptId, agentId: toAgentId, activity: { kind: 'document', title: `${name} agent: ${out.status}`, excerpt: (out.answer ?? '').slice(0, 1200) } } };
             }
             if (expectedOutputs.length && selectedWorkspace) {
               const nowNames = new Set([...snapshotFiles(selectedWorkspace).keys()].map((k) => path.basename(k).toLowerCase()));
@@ -4426,7 +4535,7 @@ ${String(args.objective ?? '').slice(0, 600)}`,
               if (missing.length) {
                 safeRecordRuntimeEvent(db, broadcaster, attemptId, 'handoff_output_missing', { agent: toAgentId, missing }, actor);
                 return { content: [{ type: 'text', text: `NOT DONE: the ${name} agent finished after ${secs}s, but ${missing.join(', ')} does not exist — it was not created, whatever its reply says. Its reply (unverified):\n${out.answer.slice(0, 1500)}\n\nEither create ${missing.join(', ')} yourself now with write_file from the real data you have, or tell the user plainly it was not created.` }], isError: true,
-                  details: { activity: { kind: 'document', title: `${name} agent: ${missing.join(', ')} not created`, excerpt: out.answer.slice(0, 1200) } } };
+                  details: { handoffId: started.handoff.id, childAttemptId, agentId: toAgentId, activity: { kind: 'document', title: `${name} agent: ${missing.join(', ')} not created`, excerpt: out.answer.slice(0, 1200) } } };
               }
             }
             return {
@@ -4435,7 +4544,7 @@ ${String(args.objective ?? '').slice(0, 600)}`,
 ${out.answer.slice(0, 6000)}
 
 Report this to the user, saying the ${name} agent did the work. Do not add facts it does not contain.` }],
-              details: { activity: { kind: 'document', title: `${name} agent returned (${secs}s)`, excerpt: out.answer.slice(0, 1200) } },
+              details: { handoffId: started.handoff.id, childAttemptId, agentId: toAgentId, activity: { kind: 'document', title: `${name} agent returned (${secs}s)`, excerpt: out.answer.slice(0, 1200) } },
             };
           } finally {
             signal?.removeEventListener('abort', onAbort);
@@ -4677,6 +4786,53 @@ Report this to the user, saying the ${name} agent did the work. Do not add facts
       safeRecordRuntimeEvent(db, broadcaster, attemptId, 'step_finish', { step: 1, engine: 'pi', durationMs: Date.now() - startTime, outcome: 'completed' }, actor);
       return { success: true, reply };
     }
+    // P0 tool execution journal. What earlier tool calls in this conversation really did (ids, paths, artifacts, status)
+    // comes from Core's journal, never from the assistant's earlier prose, which may have left the ids out. References in
+    // this message ("that plan", "undo that") are resolved against it; an ambiguous one that would change something is
+    // answered with a question, before any model or tool runs.
+    const journalScope = conversationId ? { conversationId, agentId: agentScope?.agentId ?? null } : null;
+    const journalLocalModel = !cloudTarget && !/(?:[:-]cloud)$/i.test(String(selectedModel ?? ''));
+    let journalCtx: JournalContext | null = null;
+    if (journalScope) {
+      try { journalCtx = buildJournalContext(db, journalScope, { message: requestText, excludeAttemptId: attemptId, localModel: journalLocalModel }); } catch (err: any) { console.warn('[piAgentEngine] journal context unavailable:', err?.message); }
+      if (journalCtx && journalCtx.resolution.status !== 'none') {
+        const r = journalCtx.resolution;
+        safeRecordRuntimeEvent(db, broadcaster, attemptId, 'journal_reference_resolved', {
+          status: r.status,
+          ...(r.status === 'resolved' ? { kind: r.item.kind, id: r.item.id, record: r.item.invocationId } : {}),
+          ...(r.status === 'ambiguous' ? { candidates: r.candidates.map((c) => c.id) } : {}),
+          ...(r.status === 'inaccessible' ? { ids: r.ids } : {}),
+        }, actor);
+      }
+    }
+    if (journalCtx?.resolution.status === 'ambiguous' && journalCtx.resolution.action) {
+      const question = clarificationQuestion(journalCtx.resolution);
+      let replyRecord: any = null;
+      try { mutateWithBroadcast(db, broadcaster, () => { replyRecord = appendMessage(db, conversationId, { role: 'assistant', content: question, actor }); }); } catch {}
+      try {
+        mutateWithBroadcast(db, broadcaster, () => {
+          ensureTaskOutcome(db, { attemptId, conversationId: conversationId || null, requestId, objective: objectiveFromRequest(requestText) });
+          finalizeTaskOutcome(db, attemptId, { verdict: 'conversational', reason: 'The reference matched more than one recorded item; Core asked which one before acting', performed: [], refused: [], failed: [] }, { answerMessageId: replyRecord?.id ?? null });
+        });
+      } catch {}
+      try { mutateWithBroadcast(db, broadcaster, () => { transitionAttempt(db, attemptId, { toStatus: 'completed', fenceToken, actor }); }); } catch {}
+      safeRecordRuntimeEvent(db, broadcaster, attemptId, 'step_finish', { step: 1, engine: 'pi', durationMs: Date.now() - startTime, outcome: 'completed', reason: 'ambiguous_reference' }, actor);
+      return { success: true, reply: question };
+    }
+    if (journalScope && journalCtx && journalCtx.entries > 0) {
+      tools.push({
+        name: 'recall_execution',
+        label: 'recall_execution',
+        description: 'Return the complete recorded result of an earlier tool call in THIS conversation (the text of a document, a full list, the details of a created item, the whole answer of a specialist agent). Give the record id (tinv_…) or the item id or file path listed in the EXECUTION JOURNAL. Read-only.',
+        parameters: { type: 'object', properties: { ref: { type: 'string', description: 'Record id (tinv_…), item id, or file path from the EXECUTION JOURNAL.' } }, required: ['ref'] },
+        execute: async (_id: string, args: any) => {
+          const out = recallJournal(db, journalScope, String(args?.ref ?? ''), { localModel: journalLocalModel });
+          return { content: [{ type: 'text', text: out.text }], ...(out.ok ? {} : { isError: true }) };
+        },
+      });
+      activeToolNames.add('recall_execution');
+    }
+
     // Questions about Pandesh itself (notifications, Gmail progress, running tasks, reminders) are answered from the
     // recorded state, with no model and no workspace: a model's prose is exactly where invented progress came from.
     // A follow-up about the task this chat was asked to do is answered from that task's record first: a bare "Status ?"
@@ -5031,6 +5187,9 @@ When the user asks to continue, resume, or check progress/updates, resume this w
       else turnStateParts.push(part);
     };
 
+    // P0: the journal travels with this message (it changes every turn, so it stays out of the cached system prompt).
+    if (journalCtx?.section) addTurnFact(journalCtx.section);
+
     // Load prior conversation turns for multi-turn continuity
     const priorMessages: any[] = [];
     let priorTurnsTotal = 0;
@@ -5126,6 +5285,18 @@ When the user asks to continue, resume, or check progress/updates, resume this w
     // Micro-test cluster C6 (D-LOC-5): local searches went to Berlin (from the time zone) although the user stored
     // "I live in Ulm". The main assistant gets the stored home place; specialists keep receiving no user memory.
     if (!agentScope || agentScope.agentId === 'chief') addTurnFact(homeLocationFact(readHomeLocation(db), String(ctx.currentMessage ?? prompt ?? '')));
+    // Personal Context mission: what Core knows about the user (facts with their source, goals, ranked deadlines, failed
+    // actions), chosen by relevance to this message, so the user never has to explain it again. Main assistant only;
+    // a model that does not run on this PC gets a one-line notice instead of the content.
+    if (!agentScope || agentScope.agentId === 'chief') {
+      try {
+        const personal = buildPersonalContextSection(db, { message: String(ctx.currentMessage ?? prompt ?? ''), agentId: agentScope?.agentId ?? null, localModel: !cloudTarget && !/(?:[:-]cloud)$/i.test(String(selectedModel ?? '')) });
+        if (personal.section) {
+          addTurnFact(personal.section);
+          safeRecordRuntimeEvent(db, broadcaster, attemptId, 'personal_context_carried', { facts: personal.facts, dated: personal.dated, withheld: personal.withheld, chars: personal.chars }, actor);
+        }
+      } catch { /* personal context is derived; its absence never blocks a turn */ }
+    }
     // A spoken message may contain misheard words (Core froze how it was entered): ask about an odd word, never refuse on it.
     let spokenSection = '';
     try {
@@ -5301,6 +5472,19 @@ When the user asks to continue, resume, or check progress/updates, resume this w
           };
         }
 
+        // P0 isolation: an id that Core recorded for another conversation or agent, and that nothing in this
+        // conversation or this turn produced, is refused here, whoever typed it (the user, a document, the model).
+        if (journalScope && toolName !== 'recall_execution') {
+          try {
+            const thisTurn = toolCallsRecorded.map((t) => extractToolResultText(t.result)).join(' ');
+            const foreign = foreignIdsInMessage(db, JSON.stringify(args ?? {}), journalScope).filter((id) => !thisTurn.includes(id));
+            if (foreign.length) {
+              safeRecordRuntimeEvent(db, broadcaster, attemptId, 'journal_foreign_reference_refused', { toolName, ids: foreign }, actor);
+              return { block: true, reason: `NOT DONE (refused by Pandesh Core): ${foreign.join(', ')} belongs to another conversation or agent and is not accessible here. Nothing was changed. Tell the user exactly that.` };
+            }
+          } catch { /* the check is best effort; the tool's own authorization still applies */ }
+        }
+
         let invRec: any;
         try {
           mutateWithBroadcast(db, broadcaster, () => {
@@ -5341,6 +5525,8 @@ When the user asks to continue, resume, or check progress/updates, resume this w
                 // A call cut short by Stop was cancelled, not a failure of the tool.
                 status: signal?.aborted ? 'cancelled' : afterCtx.result?.isError ? 'failed' : 'succeeded',
                 exitCode: afterCtx.result?.isError ? 1 : 0,
+                // The complete result feeds the tool execution journal that later turns read (P0).
+                result: { text: extractToolResultText(output), details: output?.details },
                 evidence: {
                   output: output?.content?.[0]?.text?.slice(0, 500),
                   // Every page the tool really returned, beyond the 500-char excerpt: what a citation can be checked against.
@@ -6321,6 +6507,13 @@ When the user asks to continue, resume, or check progress/updates, resume this w
     // second fabricated "I have now executed the commands" is withheld too.
     {
       const succeeded = toolCallsRecorded.filter((t) => t.status === 'completed').map((t) => t.tool);
+      // A question about a hand-off that finished in an EARLIER turn ("what did the agent find?") is answered from that
+      // turn's recorded delegate_to_agent result. It supports the attribution only when Core itself resolved this message
+      // to that recorded hand-off; a claim of a new hand-off in this turn still needs one that ran now.
+      if (journalCtx?.resolution.status === 'resolved') {
+        const item = journalCtx.resolution.item;
+        if (item.kind === 'delegation' || /^delegate_to/.test(item.createdIn?.toolName ?? '') || /^delegate_to/.test(item.byTool)) succeeded.push('delegate_to_agent');
+      }
       // A named output file must exist on disk (re-run of M4: ".md written, .pdf claimed, no .pdf").
       const fileExists = (reference: string): boolean => {
         const clean = reference.replace(/[\\/]+$/, '');

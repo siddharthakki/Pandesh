@@ -42,9 +42,28 @@ function hermesSkillRoots(): string[] {
 }
 
 function hermesProfileDir(): string | null {
-  if (process.env.HERMES_HOME) return process.env.HERMES_HOME;
   const localAppData = process.env.LOCALAPPDATA || (process.platform === 'win32' ? path.join(process.env.HOME ?? '', 'AppData', 'Local') : '');
-  return localAppData ? path.join(localAppData, 'hermes') : null;
+  const base = process.env.HERMES_HOME || (localAppData ? path.join(localAppData, 'hermes') : null);
+  if (!base) return null;
+  // A dedicated Hermes profile for Pandesh (`hermes profile create <name>`): its own config, memory and gateway port,
+  // isolated from the user's default profile and its messaging bots.
+  const profile = process.env.HERMES_PROFILE?.trim();
+  return profile && profile !== 'default' ? path.join(base, 'profiles', profile) : base;
+}
+
+/**
+ * Task classes Pandesh may route to Hermes on its own, from PANDESH_HERMES_ROUTES (comma-separated). Empty by default:
+ * a Hermes gateway that happens to be running never takes over work silently. A task the user explicitly gave to
+ * Hermes still goes there; HERMES_ENABLED=false switches every Hermes path off.
+ *   workspace_coding        autonomous change in a workspace when OpenCode is unavailable
+ *   autonomous_no_workspace autonomous task without a workspace
+ *   specialist              requests that ask for autonomous skills / a specialist
+ */
+export type HermesTaskClass = 'workspace_coding' | 'autonomous_no_workspace' | 'specialist';
+export function hermesAutoRouteAllowed(taskClass: HermesTaskClass, env: NodeJS.ProcessEnv = process.env): boolean {
+  if (env.HERMES_ENABLED === 'false' || env.HERMES_ENABLED === '0') return false;
+  const routes = String(env.PANDESH_HERMES_ROUTES ?? '').split(',').map((r) => r.trim()).filter(Boolean);
+  return routes.includes(taskClass) || routes.includes('all');
 }
 
 function endpointHostPort(url: string): string | null {
@@ -75,6 +94,20 @@ export function resolveHermesLocalOllamaProvider(configText?: string): string | 
   const target = endpointHostPort(DEFAULT_OLLAMA_URL);
   if (!target) return null;
   const lines = text.split(/\r?\n/);
+  // A profile whose own model block is pinned to a custom endpoint on local Ollama (the Pandesh profile) runs local
+  // models through provider "custom".
+  const modelStart = lines.findIndex((line) => /^model:\s*$/.test(line));
+  if (modelStart !== -1) {
+    let provider: string | null = null;
+    let baseUrl: string | null = null;
+    for (let i = modelStart + 1; i < lines.length && !/^\S/.test(lines[i]); i++) {
+      const p = /^ {2}provider:\s*['"]?([^'"\s#]+)/.exec(lines[i]);
+      if (p) provider = p[1];
+      const b = /^ {2}base_url:\s*['"]?([^'"\s#]+)/.exec(lines[i]);
+      if (b) baseUrl = b[1];
+    }
+    if (provider === 'custom' && baseUrl && endpointHostPort(baseUrl) === target) return 'custom';
+  }
   const start = lines.findIndex((line) => /^providers:\s*$/.test(line));
   if (start === -1) return null;
   let current: string | null = null;

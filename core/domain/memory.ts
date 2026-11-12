@@ -679,6 +679,16 @@ function isExpired(fact: MemoryFactRecord, atIso: string): boolean {
  * returned as a durable fact.
  */
 export function recallMemories(db: CoreDatabase, input: RecallMemoriesInput = {}): { entries: MemoryRecallEntry[]; recalledAt: string } {
+  const exact = recallMemoriesExact(db, input);
+  // Micro-test MEM-012: the model asked for predicate "model preference" while the fact was stored as
+  // "prefers gemma4:12b for quick questions"; the exact filter found nothing and Pandesh said no such preference
+  // existed. A guessed subject/predicate that matches nothing is retried as free words.
+  if (exact.entries.length || (!input.subject && !input.predicate)) return exact;
+  const words = [input.subject, input.predicate, input.query].filter(Boolean).join(' ');
+  return recallMemoriesExact(db, { ...input, subject: undefined, predicate: undefined, query: words });
+}
+
+function recallMemoriesExact(db: CoreDatabase, input: RecallMemoriesInput = {}): { entries: MemoryRecallEntry[]; recalledAt: string } {
   const recalledAt = nowIso();
   const clauses: string[] = [];
   const params: unknown[] = [];

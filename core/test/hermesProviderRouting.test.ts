@@ -1,5 +1,5 @@
 import { describe, it, expect, afterEach } from 'vitest';
-import { resolveHermesLocalOllamaProvider, hermesProviderFor } from '../runtime/hermesEngine';
+import { resolveHermesLocalOllamaProvider, hermesProviderFor, hermesAutoRouteAllowed } from '../runtime/hermesEngine';
 
 const CONFIG = [
   'model:',
@@ -26,6 +26,20 @@ describe('Hermes provider routing', () => {
   it('returns null when no provider points at local Ollama', () => {
     expect(resolveHermesLocalOllamaProvider('providers:\n  cloudy:\n    api: https://openrouter.ai/api/v1\n')).toBeNull();
     expect(resolveHermesLocalOllamaProvider('model:\n  provider: nous\n')).toBeNull();
+  });
+
+  it('a profile pinned to a custom endpoint on local Ollama runs as provider "custom"', () => {
+    const profile = ['model:', '  provider: custom', '  base_url: http://127.0.0.1:11434/v1', '  default: gemma4:12b', 'fallback_providers: []'].join('\n');
+    expect(resolveHermesLocalOllamaProvider(profile)).toBe('custom');
+    // A custom endpoint that is NOT local Ollama is not treated as local.
+    expect(resolveHermesLocalOllamaProvider(['model:', '  provider: custom', '  base_url: https://openrouter.ai/api/v1'].join('\n'))).toBeNull();
+  });
+
+  it('auto-routing to Hermes is opt-in per task class, with a kill switch', () => {
+    expect(hermesAutoRouteAllowed('workspace_coding', {})).toBe(false);
+    expect(hermesAutoRouteAllowed('workspace_coding', { PANDESH_HERMES_ROUTES: 'workspace_coding' })).toBe(true);
+    expect(hermesAutoRouteAllowed('specialist', { PANDESH_HERMES_ROUTES: 'workspace_coding' })).toBe(false);
+    expect(hermesAutoRouteAllowed('specialist', { PANDESH_HERMES_ROUTES: 'all', HERMES_ENABLED: 'false' })).toBe(false);
   });
 
   it('honors an explicit provider exactly', () => {

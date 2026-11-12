@@ -1,3 +1,4 @@
+import { classifyEffect } from '../domain/toolJournal';
 /**
  * What actually happened in a turn — decided from evidence, not from the
  * model's own claim that it finished.
@@ -97,6 +98,17 @@ export const CONSEQUENTIAL_PI_TOOLS: ReadonlySet<string> = new Set([
 ]);
 
 /**
+ * The list above names tools by hand, so a tool added later (or one it forgot, such as dismiss_reminder: P0 test 10,
+ * "Dismiss that reminder" failed and the reply "Done — all taken care of." stood) was judged as conversation. A tool the
+ * journal classifies as creating, changing or undoing something is consequential too.
+ */
+export function isConsequentialTool(toolName: string): boolean {
+  if (CONSEQUENTIAL_PI_TOOLS.has(toolName)) return true;
+  const effect = classifyEffect(toolName);
+  return effect === 'created' || effect === 'modified' || effect === 'undone';
+}
+
+/**
  * The words Core's own tools use when an action did not happen at all.
  *
  * A refusal is different from a failure. A refused action left the world
@@ -142,7 +154,7 @@ export function evaluateTurnOutcome(calls: readonly TurnToolCall[]): TurnOutcome
   const completed = new Map<string, TurnToolCall>();
   const started = new Set<string>();
   for (const call of calls) {
-    if (!CONSEQUENTIAL_PI_TOOLS.has(call.tool)) continue;
+    if (!isConsequentialTool(call.tool)) continue;
     if (call.status === 'running') {
       started.add(call.tool);
       continue;

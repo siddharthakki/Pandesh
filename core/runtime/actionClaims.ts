@@ -61,7 +61,8 @@ const CATEGORIES: ActionClaimCategory[] = [
     // The to-do must be what was changed, named or within two words of the verb ("I've updated the README with the
     // task list" is a file change; "I've completed the tasks you asked for" is the generic execution claim below).
     claim: /\bi(?:'ve|\s+have)?\s+(?:(?:now|just|already|successfully|also)\s+)*(?:created|added|updated|marked|renamed|moved|split|assigned|linked|archived|reopened|prioriti[sz]ed)\s+(?:(?:a|an|the|your|this|that|new|it|them)\s+)?(?:"[^"]{1,80}"\s+|“[^”]{1,80}”\s+|[\w'-]+\s+){0,2}?(?:tasks?|to-?dos?|checklists?|sub-?tasks?)\b|\b(?:tasks?|to-?dos?|checklists?)\b[^.!?]{0,60}?\b(?:has|have)\s+(?:now\s+|already\s+|successfully\s+)*been\s+(?:successfully\s+)?(?:created|added|updated|marked|renamed|moved|split|assigned|linked|archived|reopened)\b|\bmarked\s+(?:it|them|the\s+task|this\s+task|that\s+task)\s+as\s+(?:done|complete|completed|finished|in\s+progress)\b/i,
-    tools: /^(?:create_project|create_commitment|update_commitment|schedule_task|cancel_scheduled_task|create_reminder|dismiss_reminder)$|^dev_stor/i,
+    // add_task / update_task (personalTasks.ts) store a to-do's creation, deadline, status and the rest.
+    tools: /^(?:create_project|add_task|update_task|create_commitment|update_commitment|schedule_task|cancel_scheduled_task|create_reminder|dismiss_reminder)$|^dev_stor/i,
     label: 'task change',
   },
   {

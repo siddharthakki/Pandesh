@@ -552,7 +552,8 @@ describe('HermesEngine & HermesEngineAdapter', () => {
     const engine2 = await (executor as any).selectEngine(piContext, 'baat_kar');
     expect(engine2).toBe('pi');
 
-    // 3. Autonomous skills / specialist capability routes to hermes
+    // 3. Autonomous skills / specialist capability routes to hermes once that task class is enabled for Hermes, and
+    //    never merely because a Hermes gateway answers (PANDESH_HERMES_ROUTES is opt-in; HERMES_ENABLED=false wins).
     const specialistContext: any = {
       modelSelection: {
         requiredCapabilities: {
@@ -560,8 +561,20 @@ describe('HermesEngine & HermesEngineAdapter', () => {
         },
       },
     };
-    const engine3 = await (executor as any).selectEngine(specialistContext, 'karke_dikha');
-    expect(engine3).toBe('hermes');
+    const savedRoutes = process.env.PANDESH_HERMES_ROUTES;
+    const savedEnabled = process.env.HERMES_ENABLED;
+    try {
+      delete process.env.PANDESH_HERMES_ROUTES;
+      expect(await (executor as any).selectEngine(specialistContext, 'karke_dikha')).toBe('pi');
+      process.env.PANDESH_HERMES_ROUTES = 'specialist';
+      const engine3 = await (executor as any).selectEngine(specialistContext, 'karke_dikha');
+      expect(engine3).toBe('hermes');
+      process.env.HERMES_ENABLED = 'false';
+      expect(await (executor as any).selectEngine(specialistContext, 'karke_dikha')).toBe('pi');
+    } finally {
+      if (savedRoutes === undefined) delete process.env.PANDESH_HERMES_ROUTES; else process.env.PANDESH_HERMES_ROUTES = savedRoutes;
+      if (savedEnabled === undefined) delete process.env.HERMES_ENABLED; else process.env.HERMES_ENABLED = savedEnabled;
+    }
 
     // 4. Default conversation routes to pi
     const generalContext: any = {
