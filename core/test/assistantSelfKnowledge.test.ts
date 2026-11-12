@@ -54,7 +54,7 @@ describe('the permission modes section of the system prompt', () => {
     expect(section).toMatch(/Ask permission \(the default\)/);
     expect(section).toMatch(/Auto \(governed\)/);
     expect(section).toMatch(/Plan only: Pandesh researches and plans; nothing is created, changed, sent or run/);
-    expect(section).toMatch(/permission menu next to the model menu at the message box/);
+    expect(section).toMatch(/permission menu under the message box/);
     expect(section).toMatch(/You cannot switch it, and never claim you did/);
   });
 

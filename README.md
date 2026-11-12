@@ -137,8 +137,8 @@ sequenceDiagram
 
 Core is a local Node service bound to `127.0.0.1` with a SQLite database. It owns the permission modes and approvals,
 each agent's scope (tools, folders, network), the tool ledger, the checks on written files, and the final verdict for
-each turn. The desktop app (Electron 45) is a client of Core: the v2 interface (React) and the Classic interface read
-the same records. More in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+each turn. The desktop app (Electron 45) is a client of Core: its interface (React, "v2") reads the same records.
+The earlier Classic interface was retired; what was still useful in it now lives in v2. More in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 ## 🧰 What it does today
 
@@ -159,7 +159,7 @@ Everything below runs in the current source build. Most of it is shown in the re
 | 🎙️ **Voice** | Talk to Pandesh and hear it answer. Speech recognition (Whisper) and speech output (Piper, Pocket TTS) run locally on your PC. |
 | 💼 **Revenue team** | Sales, Marketing, Social Media and a Reviewer research public leads, write offers and drafts, and check them. Nothing is sent: drafts wait for your approval, and only you record responses, orders and money. |
 | ☀️ **One morning briefing** | Calendar, mail and decisions, plus a short "Pandesh at work" section with only what changed in the watchdog, AI Radar and revenue pipeline. |
-| 🐼 **Classic UI** | The previous interface is still there; switch from the tray or the System menu. |
+| 🗂️ **Chats, files and automations** | Search, rename, pin, archive and export chats; attach files and pictures to a message; reminders, timers, the daily brief and a command queue in Automations; version, updates and PC health in About & diagnostics. |
 
 ## 🔒 Safety you can check
 
@@ -214,7 +214,6 @@ ollama pull gemma4:12b          # fast default; qwen3.8:27b is used for heavier 
 
 # Use a separate data folder. Without it Pandesh uses (and migrates) your normal profile.
 $env:KARKEDIKHA_DESKTOP_DATA_DIR = "$env:USERPROFILE\PandeshDev"
-$env:PANDESH_UI_V2 = "1"        # 1 = new interface, 0 = Classic
 node apps\desktop\launch.mjs
 ```
 

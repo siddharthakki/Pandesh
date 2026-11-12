@@ -1,6 +1,6 @@
 /**
  * What the v2 Connections view says about Google (Gmail, Calendar). The same states and wording as the Classic
- * Google card (apps/desktop/renderer/renderer.js googleDeriveState / renderGoogleCard): before this, v2 had no place to
+ * Google card (the retired Classic renderer's googleDeriveState / renderGoogleCard): before this, v2 had no place to
  * enter the OAuth client or connect Google at all.
  */
 

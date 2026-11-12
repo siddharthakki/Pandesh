@@ -45,7 +45,6 @@ if (command === 'start') {
     KARKEDIKHA_MOBILE_PORT: String(opt.mobile ?? 3971),
     KARKEDIKHA_MOBILE_HOST: '127.0.0.1',
     KARKEDIKHA_MODEL_ROUTING_POLICY: 'local-only',
-    PANDESH_UI_V2: '1',
     // Only for a stand-in Image Studio in this isolated profile (scripts/acceptance/workshop-acceptance.mjs --scenario image).
     ...(opt['studio-url'] ? { KARKEDIKHA_IMAGE_STUDIO_URL: String(opt['studio-url']), KARKEDIKHA_IMAGE_STUDIO_ROOT: path.resolve(String(opt['studio-root'] ?? path.join(profile, '..', 'studio-stand-in'))) } : {}),
   });

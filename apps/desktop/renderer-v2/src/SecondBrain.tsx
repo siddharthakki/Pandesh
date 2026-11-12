@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { api, errorText } from './bridge';
+import { api, errorText, type Snapshot } from './bridge';
+import { NotesCard } from './Everyday';
 import { timeOf } from './ui';
 
 type ItemType = 'fact' | 'note' | 'commitment' | 'artifact' | 'entity' | 'document';
@@ -11,9 +12,10 @@ interface Status { index: { items: number; builtAt: string }; grants: Array<{ id
 
 const TYPE_LABEL: Record<string, string> = { fact: 'Memories', note: 'Notes', commitment: 'Commitments', artifact: 'Files Pandesh made', entity: 'Things', document: 'Your documents' };
 const NODE_TONE: Record<string, string> = { fact: 'var(--pulse)', entity: 'var(--verified)', document: 'var(--attention)', conversation: 'var(--muted)', cluster: 'var(--faint)' };
-type Tab = 'search' | 'timeline' | 'graph' | 'sources';
+type Tab = 'search' | 'timeline' | 'graph' | 'notes' | 'sources';
 
-export function SecondBrain({ narrow }: { narrow: boolean }) {
+export function SecondBrain({ narrow, snapshot, refresh }: { narrow: boolean; snapshot?: Snapshot | null; refresh?: () => void }) {
+  const [notesNote, setNotesNote] = useState<{ text: string; error?: boolean } | null>(null);
   const [tab, setTab] = useState<Tab>('search');
   const [q, setQ] = useState('');
   const [hits, setHits] = useState<Hit[] | null>(null);
@@ -101,7 +103,7 @@ export function SecondBrain({ narrow }: { narrow: boolean }) {
       <div className="board" style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
         {error && <div className="notice error" role="alert">{error}</div>}
         <div role="tablist" aria-label="Second Brain" style={{ display: 'flex', gap: 4, flexWrap: 'wrap', borderBottom: '1px solid var(--line)' }}>
-          {([['search', 'Search'], ['timeline', 'Timeline'], ['graph', 'Graph'], ['sources', 'Sources']] as Array<[Tab, string]>).map(([id, label]) => (
+          {([['search', 'Search'], ['timeline', 'Timeline'], ['graph', 'Graph'], ['notes', 'Notes'], ['sources', 'Sources']] as Array<[Tab, string]>).map(([id, label]) => (
             <button key={id} type="button" role="tab" aria-selected={tab === id} onClick={() => setTab(id)} style={{ height: 38, padding: '0 12px', border: 0, borderBottom: `2px solid ${tab === id ? 'var(--pulse)' : 'transparent'}`, background: 'transparent', color: tab === id ? 'var(--ink)' : 'var(--muted)', fontWeight: tab === id ? 600 : 400 }}>{label}</button>
           ))}
         </div>
@@ -141,6 +143,14 @@ export function SecondBrain({ narrow }: { narrow: boolean }) {
                   </button>
                 ))}
               </div>
+            )}
+            {tab === 'notes' && (
+              <section style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                {notesNote && <div className={`notice${notesNote.error ? ' error' : ''}`} role={notesNote.error ? 'alert' : 'status'} style={{ margin: 0, maxWidth: 'none' }}>{notesNote.text}</div>}
+                {snapshot?.everydayTools
+                  ? <NotesCard notes={snapshot.everydayTools.notes ?? []} run={async (work, done) => { setNotesNote(null); try { await work(); if (done) setNotesNote({ text: done }); } catch (err) { setNotesNote({ text: errorText(err), error: true }); } finally { refresh?.(); } }} />
+                  : <div className="notice" role="status">Reading notes from Core…</div>}
+              </section>
             )}
             {tab === 'graph' && (
               <>

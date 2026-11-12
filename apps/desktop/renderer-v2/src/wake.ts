@@ -2,7 +2,7 @@
  * The wake word in v2. The host detects the phrase (openWakeWord in a Node child); this page opens the microphone
  * with the shared capture module (`renderer/voiceCapture.js` → `startWakeMonitor`), streams its 16 kHz frames to the
  * host (`pushWakeAudio`) and, when the host answers with a `wake_detected` voice event, hands over to an ordinary
- * voice turn. Same rules as the Classic renderer (renderer.js: ensureWakeMonitor / stopWakeMonitor /
+ * voice turn. Same rules the retired Classic renderer had (ensureWakeMonitor / stopWakeMonitor /
  * syncWakeMonitorFromSnapshot): the wake microphone is open only while the host says the wake word is on and not
  * muted, nothing is being spoken, no task runs and no voice turn is in progress.
  *

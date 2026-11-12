@@ -35,13 +35,17 @@ describe('UI v2 composer — model menu', () => {
     expect(none.options.find((o) => o.value === '')).toMatchObject({ disabled: true });
   });
 
-  it('shows a cloud model chosen in the Classic UI as the selection, and lists no others', () => {
+  it('offers Auto free cloud and the free models of enabled providers, with the chosen one selected', () => {
     const menu = modelMenu({
       model: 'm1', modelIsAuto: false, installedModels: ['gemma4:12b'],
       cloud: { selectedModel: 'groq::m1', providers: [{ id: 'groq', displayName: 'Groq', enabled: true, configured: true }], listings: { groq: { pool: [{ id: 'm1' }, { id: 'm2' }] } } },
     });
     expect(menu.selected).toBe('groq::m1');
-    expect(menu.options.filter((o) => o.group === 'cloud').map((o) => o.value)).toEqual(['groq::m1']);
+    expect(menu.options.filter((o) => o.group === 'cloud').map((o) => o.value)).toEqual(['auto::free', 'groq::m1', 'groq::m2']);
+    // A provider that is off for chats offers nothing; a choice made earlier stays visible until discovered again.
+    const off = modelMenu({ model: null, modelIsAuto: false, installedModels: [], cloud: { selectedModel: 'groq::m9', providers: [{ id: 'groq', displayName: 'Groq', enabled: false, configured: true }], listings: { groq: { pool: [{ id: 'm1' }] } } } });
+    expect(off.options.filter((o) => o.group === 'cloud').map((o) => o.value)).toEqual(['groq::m9']);
+    expect(off.selected).toBe('groq::m9');
   });
 
   it('labels Auto as a choice, not as a missing model', () => {

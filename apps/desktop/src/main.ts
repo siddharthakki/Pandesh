@@ -22,7 +22,7 @@ import {
   resolveBuildIdentity,
   type DesktopBuildIdentity,
 } from './host/desktopBuildIdentity';
-import { ownsLoginItem, readHostPreferences, resolveUiVariant, writeHostPreferences } from './host/desktopHostPreferences';
+import { ownsLoginItem, readHostPreferences, writeHostPreferences } from './host/desktopHostPreferences';
 import { DESKTOP_CHANNELS, type DesktopAppMetadata, type DesktopUpdateStartResult, type DesktopUpdateStatus, type MobilePairingView } from './ipc';
 import {
   acknowledgeUpdateResult, inspectPackage, launchUpdater, quiesceCore, readCoreReadiness, readUpdateResult,
@@ -291,8 +291,6 @@ function syncTrayFromSession(): void {
     openAtLogin: prefs.openAtLogin,
     windowHidden,
     mobileServerStatus: mobileStatus,
-    uiVariant: resolveUiVariant(prefs),
-    uiVariantForced: Boolean(process.env.PANDESH_UI_V2?.trim()),
   });
 }
 
@@ -769,11 +767,9 @@ async function ensureMainWindow(): Promise<BrowserWindow> {
   return window;
 }
 
-/** Classic renderer unless the Phase 2 UI is selected (PANDESH_UI_V2 or the saved preference). */
+/** The Pandesh window (v2 is the only interface; the Classic renderer was retired). */
 function rendererEntry(): string {
-  return resolveUiVariant(prefs) === 'v2'
-    ? path.join(__dirname, '..', 'renderer', 'v2', 'index.html')
-    : path.join(__dirname, '..', 'renderer', 'index.html');
+  return path.join(__dirname, '..', 'renderer', 'v2', 'index.html');
 }
 
 async function createWindow(): Promise<void> {
@@ -808,11 +804,6 @@ async function createWindow(): Promise<void> {
         void shell.openExternal(`http://127.0.0.1:${info.port}/`);
       }
     },
-    setUiVariant: (variant) => {
-      prefs = writeHostPreferences(dataDir, { uiVariant: variant });
-      if (window && !window.isDestroyed()) void window.loadFile(rendererEntry());
-      syncTrayFromSession();
-    },
   }, hostLog);
   const trayInstance = tray.ensure();
   if (!trayInstance) {
@@ -832,7 +823,7 @@ async function createWindow(): Promise<void> {
     onQueueConfirmNotificationClick: (id) => showQueueConfirmFromNotification(id),
     deliverNotification: (input) => deliverOutboxNotification(input),
     // Messages typed in this window may ask the assistant to open places in it (navigate_to).
-    uiSurface: () => resolveUiVariant(prefs),
+    uiSurface: () => 'v2',
     notificationChannel: () => ({
       supported: Notification.isSupported(),
       detail: Notification.isSupported() ? 'Windows desktop notifications (toast)' : 'desktop notifications unsupported on this system',
@@ -1188,7 +1179,7 @@ function registerIpc(): void {
   });
   ipcMain.handle(DESKTOP_CHANNELS.confirmNavigation, async (_event, navigationId: unknown, ok: unknown, detail: unknown, surface: unknown) => {
     if (!session) throw new Error('desktop session is not started');
-    return session.confirmNavigation(String(navigationId ?? ''), ok === true, typeof detail === 'string' ? detail.slice(0, 300) : undefined, surface === 'classic' || surface === 'v2' ? surface : undefined);
+    return session.confirmNavigation(String(navigationId ?? ''), ok === true, typeof detail === 'string' ? detail.slice(0, 300) : undefined, surface === 'classic' || surface === 'v2' ? 'v2' : undefined);
   });
   ipcMain.handle(DESKTOP_CHANNELS.revokeAuthorization, async (_event, id: unknown) => {
     if (!session) throw new Error('desktop session is not started');
@@ -1762,42 +1753,8 @@ function registerIpc(): void {
       hideJarvisToTray();
     }
   });
-  ipcMain.handle(DESKTOP_CHANNELS.popoutWorkbench, async () => {
-    if (popoutWindow && !popoutWindow.isDestroyed()) {
-      popoutWindow.show();
-      popoutWindow.focus();
-      return { poppedOut: true };
-    }
-    popoutWindow = new BrowserWindow({
-      width: 880,
-      height: 740,
-      minWidth: 540,
-      minHeight: 460,
-      title: 'Panda Contextual Workbench',
-      backgroundColor: '#050a14',
-      icon: createAppIcon(),
-      show: true,
-      webPreferences: {
-        preload: path.join(__dirname, 'preload.js'),
-        nodeIntegration: false,
-        contextIsolation: true,
-        sandbox: !packageSmokeMode,
-        spellcheck: false,
-      },
-    });
-    popoutWindow.on('closed', () => {
-      popoutWindow = undefined;
-      sendToRenderer(DESKTOP_CHANNELS.event, {
-        kind: 'status',
-        at: new Date().toISOString(),
-        summary: 'popout_closed',
-      });
-    });
-    await popoutWindow.loadFile(path.join(__dirname, '..', 'renderer', 'index.html'), {
-      query: { mode: 'popout-workbench' },
-    });
-    return { poppedOut: true };
-  });
+  // The pop-out workbench was part of the retired Classic interface; v2 shows its workspace beside the chat.
+  ipcMain.handle(DESKTOP_CHANNELS.popoutWorkbench, () => ({ poppedOut: false }));
   ipcMain.handle(DESKTOP_CHANNELS.closePopoutWorkbench, () => {
     if (popoutWindow && !popoutWindow.isDestroyed()) {
       popoutWindow.close();
@@ -1807,17 +1764,6 @@ function registerIpc(): void {
   });
   ipcMain.handle(DESKTOP_CHANNELS.quitApp, () => {
     void shutdownAndQuit();
-  });
-  ipcMain.handle(DESKTOP_CHANNELS.getUiVariant, () => ({
-    variant: resolveUiVariant(prefs),
-    forcedByEnv: Boolean(process.env.PANDESH_UI_V2?.trim()),
-  }));
-  ipcMain.handle(DESKTOP_CHANNELS.setUiVariant, (event, variant: unknown) => {
-    prefs = writeHostPreferences(dataDir, { uiVariant: variant === 'v2' ? 'v2' : 'classic' });
-    // Reload only the window that asked, after the reply is delivered.
-    const target = BrowserWindow.fromWebContents(event.sender);
-    if (target && !target.isDestroyed()) setTimeout(() => { void target.loadFile(rendererEntry()); }, 50);
-    return { variant: resolveUiVariant(prefs), forcedByEnv: Boolean(process.env.PANDESH_UI_V2?.trim()) };
   });
   ipcMain.handle(DESKTOP_CHANNELS.getUpdateStatus, (): DesktopUpdateStatus => {
     const identity = currentBuildIdentity();

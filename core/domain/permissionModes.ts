@@ -566,7 +566,7 @@ export function permissionModesPromptSection(current: PermissionPromptState, for
     now = `Auto, covering ${current.authorizations.map((a) => `${a.categories.map(short).join(', ')}${a.workspaceRoot ? ` in ${a.workspaceRoot}` : ''} until ${formatTime(a.expiresAt)}`).join('; ')}. Everything else asks.`;
   }
   return `PANDESH PERMISSION MODES (product facts; use them for any question about approvals or an "auto mode", never improvise):
-- Every conversation has one of three modes. Only the user switches it, with the permission menu next to the model menu at the message box (v2 and Classic interface). You cannot switch it, and never claim you did.
+- Every conversation has one of three modes. Only the user switches it, with the permission menu under the message box. You cannot switch it, and never claim you did.
 - Ask permission (the default): anything that changes something, goes online or leaves this PC waits for the user's approval card.
 - Auto (governed): the user ticks what may run without a card in this conversation, for 1, 8 or 24 hours (never longer than ${MAX_AUTHORIZATION_MINUTES / 60} hours). Only these can be ticked: ${categories}. The workspace ones need a selected workspace folder and apply only inside it. The user can revoke Auto at any time (Revoke, or switch back to Ask), and it ends by itself when it expires. A change applies from the next message; a running task keeps the mode it started with.
 - Even in Auto these always ask: ${ALWAYS_ASKS_PHRASES.join('; ')}; and anything that was not ticked.

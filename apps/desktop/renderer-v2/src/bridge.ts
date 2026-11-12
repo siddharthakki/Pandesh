@@ -75,13 +75,19 @@ export interface Snapshot {
   /** Google (Gmail, Calendar) connection status, non-secret. */
   gmail?: GmailStatus;
   /** Everyday Tools catalog: Calendar counts as connected only when Core verified it with a live read. */
-  everydayTools?: { catalog?: Array<{ id: string; connectorState?: string; availability?: string }>; [k: string]: unknown };
+  everydayTools?: EverydayTools;
   modelNote?: string | null;
   /** openWakeWord readiness and the enable / mute preference (the host detects; the page feeds it microphone frames). */
   wakeWord?: WakeWordStatus;
   /** What the host's detector has received (frames, warm-up, capture errors). */
   wakeDiagnostics?: WakeDiagnostics;
   speechInterrupt?: { buttonStop?: boolean; spokenBargeIn?: boolean; spokenBargeInBlocker?: string };
+  /** Files staged by the host for the next message (never a path). */
+  stagedAttachments?: StagedAttachment[];
+  /** The command queue: waiting, confirming, active and recently finished queued instructions. */
+  commandQueue?: CommandQueue;
+  hostTelemetry?: HostTelemetry | null;
+  routingPolicy?: string;
 }
 
 export interface WakeWordStatus { capability: string; engine?: string | null; blocker?: string; phrase?: string; enabled: boolean; muted: boolean }
@@ -90,12 +96,82 @@ export interface WakeCaptureMeta { captureActive?: boolean; captureError?: strin
 /** Host voice events: wake_detected, wake_state, wake_score, speaking, speak_stopped, speak_finished, speak_failed. */
 export interface VoiceEvent { kind: string; score?: number; wakeDetectMs?: number | null; inferenceMs?: number; framesReceived?: number; enabled?: boolean; muted?: boolean; [k: string]: unknown }
 
-export interface TranscriptMessage { id: string; role: 'user' | 'assistant' | 'system'; content: string; createdAt: string; model?: string | null; provider?: string | null }
-export interface ConversationEntry { id: string; title: string | null; preview: string | null; state: string; updatedAt: string; archivedAt: string | null; pinnedAt: string | null }
+export type AttachmentKind = 'text' | 'image' | 'document' | 'audio';
+export interface StagedAttachment { id: string; name: string; byteSize: number; kind: AttachmentKind; mimeType: string }
+export interface TranscriptMessage {
+  id: string; role: 'user' | 'assistant' | 'system'; content: string; createdAt: string; model?: string | null; provider?: string | null;
+  /** Files sent with this message. */
+  attachments?: Array<{ id: string; name: string; kind: AttachmentKind; byteSize: number }>;
+}
+export interface ConversationEntry { id: string; title: string | null; preview: string | null; state: string; updatedAt: string; archivedAt: string | null; pinnedAt: string | null; repositoryName?: string | null; createdAt?: string }
+export interface ConversationSearchResult { conversationId: string; messageId: string | null; title: string | null; snippet: string; matchedKinds: string[]; updatedAt: string }
+/** What Core keeps about a conversation (bounded; no credentials, prompts or raw tool output). */
+export interface ConversationContext {
+  state: 'available' | 'not_recorded' | 'no_workspace'; repositoryName: string | null; objective: string | null; latestUserIntent: string | null;
+  executionPolicy: string | null; pendingAction: string | null; relevantFiles: string[]; relevantSymbols: string[]; constraints: string[];
+  findings: string | null; validation: string | null; attachmentNames: string[]; citationCount: number; researchSourceCount: number; messageCount: number; updatedAt: string;
+}
+
+/* ── Everyday tools, command queue, telemetry (ipc.ts) ── */
+export interface EverydayNote { id: string; title: string; body: string; createdAt: string; updatedAt: string }
+export interface EverydayReminder { id: string; title: string; body: string; dueAt: string; timezone: string; status: string; notifiedAt: string | null; overdue: boolean; overdueExplanation: string | null }
+export interface ActiveTimer { id: string; label: string; durationMs: number; startedAt: string; deadlineMs: number; remainingMs: number; state: 'running' | 'paused' | 'completed' | 'cancelled' }
+export interface EverydayTools {
+  timezone?: string; alertsWhileClosed?: boolean; alertsWhileClosedDetail?: string;
+  catalog?: Array<{ id: string; label?: string; availability?: string; detail?: string; connectorState?: string }>;
+  notes?: EverydayNote[]; reminders?: EverydayReminder[]; dueReminders?: EverydayReminder[]; activeTimers?: ActiveTimer[];
+}
+export interface QueueItem {
+  id: string; ordinal: number; status: string; title: string; instruction: string; revision: number; confirmationToken: string | null;
+  confirmationExpiresAt: string | null; dependsOnId: string | null; outcome: string | null; lastError: string | null; postponedUntil: string | null;
+}
+export interface CommandQueue { active: QueueItem | null; confirming: QueueItem | null; waiting: QueueItem[]; recentTerminal: QueueItem[] }
+export interface HostTelemetry {
+  collectedAt: string;
+  clock?: { localTime: string; timeZone: string };
+  cpu: { value: number | null; available: boolean; detail: string; model: string | null; cores: number };
+  memory: { available: boolean; usedBytes: number; totalBytes: number; usedPercent: number };
+  disk: { available: boolean; mount: string | null; freeBytes: number | null; totalBytes: number | null; usedPercent: number | null; blocker: string };
+  gpu: { available: boolean; name: string | null; usagePercent: number | null; temperatureC: number | null; vramUsedBytes: number | null; vramTotalBytes: number | null; blocker: string };
+  ollama: { reachable: boolean; apiBase: string; detail: string };
+  repository?: { available: boolean; branch: string | null; dirty: boolean | null; changedFileCount: number | null; blocker: string };
+}
+export type ImageGenerationResult =
+  | { outcome: 'approval_required'; approvalId: string; attemptId: string; presentation: Record<string, unknown> | null }
+  | { outcome: 'executed'; attemptId: string; artifactIds: string[]; message: string }
+  | { outcome: 'denied' | 'unavailable' | 'failed'; attemptId?: string; reason: string };
+export interface ImageStudioStatus { studio: boolean; comfyui: boolean; ollama: boolean; ollamaVersion?: string | null; detail: string; checkpoints: Array<{ name: string; category: string }> }
+export interface AppMetadata {
+  productName: string; version: string; buildNumber: number | null; buildKind: 'release' | 'development'; releaseChannel: string;
+  commit: string | null; builtAt: string | null; installerVersion: string | null; coreVersion: string | null; coreVersionMismatch: boolean;
+}
+export interface UpdateStatus {
+  available: boolean; installedRevision: number | null; version: string;
+  lastResult: { status: 'success' | 'rolled_back' | 'aborted' | 'rollback_failed'; at: string; acknowledged: boolean; reason?: string; revision?: number; attemptedRevision?: number } | null;
+}
+export interface DailyBriefRoutine { id: string; enabled: boolean; dailyTime: string; timezone: string; nextRunAt: string | null; lastRunAt: string | null; conversationId: string | null }
+export interface DevStoryPending { pendingId: string; what: string }
+export interface DevStory {
+  id: string; title: string; agent?: string; status: string; phase: string; verification?: string; updatedAt?: string; waitingReason?: string | null;
+  dependsOn?: string[]; commit?: string | null; branch?: string | null; activity?: Array<{ at: string; kind: string; text: string }>; evidence?: string | null;
+  pendingApprovals?: DevStoryPending[];
+}
+export interface DevStories { available: boolean; counts: Record<string, number>; stories: DevStory[] }
+export interface CloudModel { id: string; displayName: string; contextWindow?: number; vision: boolean | 'unknown'; tools: boolean | 'unknown' }
+export interface CloudProvider {
+  id: string; displayName: string; configured: boolean; enabled: boolean; requiresBaseUrlInput?: boolean; baseUrl?: string | null;
+  freeTier?: { kind: string; note?: string }; privacyWarning?: string | null; keyHint?: string | null; apiKeysUrl?: string; signupUrl?: string;
+}
+export interface CloudListing { ok: boolean; checkedAt: string; latencyMs: number; errorClass?: string; error?: string; pool: CloudModel[]; excluded?: Record<string, number> }
+export interface CloudTest { ok: boolean; model: string; checkedAt: string; latencyMs: number; errorClass?: string; error?: string }
+export interface CloudState {
+  off?: boolean; enabledProviders?: string[]; selectedModel?: string | null; providers?: CloudProvider[];
+  listings?: Record<string, CloudListing>; tests?: Record<string, CloudTest>;
+}
 export interface ActivityEvent {
   kind: string; at: string; conversationId?: string; messageRole?: string; attemptId?: string; eventType?: string; toolName?: string; summary: string; text?: string;
   /** For `navigate`: the place the assistant asked this window to open (navigate_to). */
-  navigation?: { id: string; destination: string; target: string; label: string; surface: 'v2' | 'classic' };
+  navigation?: { id: string; destination: string; target: string; label: string; surface?: string };
   /** For `workshop_command`: a view command Core asked the Workshop to carry out (confirm with confirmWorkshopCommand). */
   workshopCommand?: WorkshopCommandEvent;
   /** For `workshop_changed` / `workshop_progress`: which workshop, and the real stage reported. */
@@ -160,6 +236,8 @@ export interface FreeModelsState {
     schedule: { enabled: boolean; dailyTime: string } | null;
   };
   credentials: { backend: string; status: Record<string, { configured: boolean; source: string | null; hint: string | null }>; legacyOnly: string[] };
+  /** Which providers chats may use, the free models found for them, and the chat's cloud choice. */
+  cloud?: CloudState;
 }
 
 export interface DesktopApi {
@@ -177,7 +255,7 @@ export interface DesktopApi {
   listModels(): Promise<string[]>;
   setPermissionMode(mode: PermissionMode, grant?: { categories: string[]; expiresInMinutes: number }): Promise<Snapshot>;
   revokeAuthorization(id: string): Promise<Snapshot>;
-  /** Google: the same calls the Classic Google card makes. */
+  /** Google (Gmail, Calendar): connect, verify, disconnect and the OAuth client. */
   connectGmail(): Promise<GmailStatus>;
   cancelGoogleConnect(): Promise<GmailStatus>;
   retryGmailProbe(): Promise<GmailStatus>;
@@ -187,7 +265,7 @@ export interface DesktopApi {
   clearGoogleOAuthClient(): Promise<GmailStatus>;
   importGoogleOAuthClientFile(): Promise<{ cancelled: boolean; status?: GmailStatus }>;
   /** Tells Core whether this window opened the place the assistant asked for (navigate_to). */
-  confirmNavigation(navigationId: string, ok: boolean, detail?: string, surface?: 'v2' | 'classic'): Promise<{ recorded: boolean }>;
+  confirmNavigation(navigationId: string, ok: boolean, detail?: string): Promise<{ recorded: boolean }>;
   cancel(): Promise<void>;
   cancelTask(attemptId: string): Promise<{ requested: boolean }>;
   resumeTask(attemptId: string): Promise<{ attemptId: string }>;
@@ -196,13 +274,68 @@ export interface DesktopApi {
   resolveImageApproval(approvalId: string, resolution: ApprovalResolution): Promise<unknown>;
   resolveWeatherApproval(approvalId: string, resolution: ApprovalResolution): Promise<unknown>;
   listConversations(includeArchived?: boolean): Promise<ConversationEntry[]>;
-  openConversation(id: string, select?: boolean): Promise<{ conversation: ConversationEntry; messages: TranscriptMessage[] }>;
+  openConversation(id: string, select?: boolean): Promise<{ conversation: ConversationEntry; messages: TranscriptMessage[]; context?: ConversationContext }>;
   newConversation(): Promise<void>;
   getTaskOverview(): Promise<{ tasks: TaskRow[]; queued: QueuedCommand[] }>;
   getAssistantBrief(options?: { external?: boolean }): Promise<Brief>;
-  getUiVariant(): Promise<{ variant: 'classic' | 'v2'; forcedByEnv: boolean }>;
-  setUiVariant(variant: 'classic' | 'v2'): Promise<{ variant: 'classic' | 'v2'; forcedByEnv: boolean }>;
   retryCoreConnection(): Promise<Snapshot | null>;
+  /* Conversations: rename, pin, archive, search, export. Each returns the refreshed list. */
+  renameConversation(id: string, title: string): Promise<ConversationEntry[]>;
+  pinConversation(id: string): Promise<ConversationEntry[]>;
+  unpinConversation(id: string): Promise<ConversationEntry[]>;
+  archiveConversation(id: string): Promise<ConversationEntry[]>;
+  unarchiveConversation(id: string): Promise<ConversationEntry[]>;
+  searchConversations(query: string): Promise<ConversationSearchResult[]>;
+  exportConversation(id: string): Promise<{ saved: boolean; path: string | null }>;
+  /* Attachments: the host stages files for the next message. */
+  pickAttachments(): Promise<{ cancelled: boolean; errors: string[] }>;
+  stageAttachmentBytes(name: string, bytes: Uint8Array): Promise<{ ok: boolean; error?: string }>;
+  removeAttachment(id: string): Promise<void>;
+  /* Everyday tools. */
+  refreshEverydayTools(): Promise<Snapshot | null>;
+  createNote(input: { title?: string; body: string }): Promise<Snapshot | null>;
+  updateNote(id: string, input: { title?: string; body?: string }): Promise<Snapshot | null>;
+  deleteNote(id: string): Promise<Snapshot | null>;
+  createReminder(input: { title: string; body?: string; dueAt: string; timezone?: string }): Promise<Snapshot | null>;
+  completeReminder(id: string): Promise<Snapshot | null>;
+  cancelReminder(id: string): Promise<Snapshot | null>;
+  getHostTelemetry(): Promise<HostTelemetry>;
+  /* Command queue. */
+  enqueueCommand(instruction: string): Promise<Snapshot | null>;
+  confirmCommandRun(id: string, token: string, revision: number): Promise<Snapshot | null>;
+  skipCommand(id: string): Promise<Snapshot | null>;
+  postponeCommand(id: string, untilIso: string): Promise<Snapshot | null>;
+  editQueuedCommand(id: string, instruction: string): Promise<Snapshot | null>;
+  removeQueuedCommand(id: string): Promise<Snapshot | null>;
+  reorderQueuedCommand(id: string, ordinal: number): Promise<Snapshot | null>;
+  getDailyBriefRoutine(): Promise<DailyBriefRoutine | null>;
+  configureDailyBriefRoutine(input: { dailyTime: string; timezone?: string; enabled?: boolean }): Promise<DailyBriefRoutine | null>;
+  /* Image Studio. */
+  probeImageStudio(): Promise<ImageStudioStatus>;
+  generateImage(input: Record<string, unknown>): Promise<ImageGenerationResult>;
+  cancelImageGeneration(): Promise<void>;
+  openArtifactInStudio(artifactId: string): Promise<{ opened: boolean }>;
+  useArtifactAsReference(artifactId: string): Promise<{ opened: boolean }>;
+  saveArtifactCopy(artifactId: string): Promise<{ saved: boolean; path: string | null }>;
+  openWorkspaceFile(relativePath: string): Promise<{ opened: boolean }>;
+  openActivityDocument(activityId: string): Promise<{ opened: boolean }>;
+  /* Development stories (Kandev workers). */
+  getDevStories(): Promise<DevStories>;
+  decideDevStoryPermission(storyId: string, pendingId: string, allow: boolean): Promise<{ ok: boolean }>;
+  approveDevStoryReview(storyId: string): Promise<{ ok: boolean }>;
+  retryDevStory(storyId: string): Promise<{ ok: boolean }>;
+  verifyExistingDevStory(storyId: string): Promise<{ outcome: string; status: string; commit: string | null; reason: string | null }>;
+  stopAllDevStories(): Promise<{ stopped: string[]; stillRunning: string[]; kandevAvailable: boolean }>;
+  /* About, updates, diagnostics, engine. */
+  getAppMetadata(): Promise<AppMetadata>;
+  getDiagnosticsReport(): Promise<string>;
+  getUpdateStatus(): Promise<UpdateStatus>;
+  startUpdate(): Promise<{ status: string; message: string }>;
+  acknowledgeUpdateResult(): Promise<void>;
+  /* Free cloud models for chats. */
+  setCloudProviderEnabled(providerId: string, enabled: boolean): Promise<CloudState>;
+  discoverCloudModels(providerId: string): Promise<CloudState>;
+  testCloudProvider(providerId: string, model: string): Promise<CloudState>;
   household(action: string, args?: Record<string, unknown>): Promise<unknown>;
   openExternalUrl(url: string): Promise<{ opened: boolean }>;
   /** Writes text to the clipboard from the host. The app window grants pages no clipboard permission, so

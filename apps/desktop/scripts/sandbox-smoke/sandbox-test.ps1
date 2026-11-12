@@ -246,7 +246,7 @@ try {
 
     # 5. Installed layout.
     $required = @(
-        'electron\Pandesh.exe', 'app\package.json', 'app\out\main.js', 'app\renderer\index.html', 'runtime\core.js', 'runtime\node.exe',
+        'electron\Pandesh.exe', 'app\package.json', 'app\out\main.js', 'app\renderer\v2\index.html', 'runtime\core.js', 'runtime\node.exe',
         'build-fingerprint.json', 'build-identity.json', 'models\whisper-base-en', 'runtime-assets\node_modules\@xenova\transformers',
         'runtime\node_modules\@earendil-works\pi-agent-core', 'runtime\node_modules\@earendil-works\pi-ai',
         'runtime\node_modules\typebox', 'runtime\node_modules\partial-json', 'unins000.exe'
