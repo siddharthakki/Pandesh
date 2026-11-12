@@ -1,4 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
+import { DevStoriesPanel } from './DevStories';
 import { api, errorText, onDesktopEvent, type QueuedCommand, type Snapshot, type TaskRow } from './bridge';
 import { Icon, elapsed, timeOf } from './ui';
 import { columnOf, needsYouCount as countNeeds, type Column } from './boardModel';
@@ -122,6 +123,7 @@ export function Board({ overview, narrow, onOpenPalette, onOpenConversation }: {
             })}
           </div>
         )}
+        <div style={{ marginTop: 16 }}><DevStoriesPanel /></div>
       </div>
     </>
   );

@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { api, errorText, onDesktopEvent, type ApprovalCard, type BriefAction, type BriefItem, type Snapshot, type TranscriptMessage } from './bridge';
+import { api, errorText, onDesktopEvent, type ApprovalCard, type BriefAction, type BriefItem, type ConversationContext, type Snapshot, type TranscriptMessage } from './bridge';
 import { Icon, Mark, elapsed, timeOf } from './ui';
 import { ActivityAside } from './Activity';
 import { useWorkshop } from './workshop/useWorkshop';
@@ -10,6 +10,7 @@ import type { WakeWord } from './wake';
 import { useComposerControls } from './ComposerControls';
 import { useFolderControl } from './FolderControl';
 import { modelLabel as describeModel } from './composerModel';
+import { AttachmentChips, defaultAttachmentText, useAttachments } from './attachments';
 
 interface Props {
   snapshot: Snapshot | null;
@@ -18,6 +19,8 @@ interface Props {
   narrow: boolean;
   openConversationId: string | null;
   onOpenPalette: () => void;
+  /** Opens the full chat list (search, rename, pin, archive, export). */
+  onOpenChats?: () => void;
   onOpenBoard: () => void;
   /** Text to place in the composer (from a workspace's "Ask Pandesh"). */
   draft?: string | null;
@@ -93,8 +96,11 @@ function pendingDecision(s: Snapshot | null): null | { kind: 'tool' | 'image' | 
   return null;
 }
 
-export function Chat({ snapshot, snapshotError, refresh, narrow, openConversationId, onOpenPalette, onOpenBoard, draft, onDraftUsed, wake, wakeTurn, onWakeTurnTaken, onVoiceBusy }: Props) {
+export function Chat({ snapshot, snapshotError, refresh, narrow, openConversationId, onOpenPalette, onOpenChats, onOpenBoard, draft, onDraftUsed, wake, wakeTurn, onWakeTurnTaken, onVoiceBusy }: Props) {
   const [messages, setMessages] = useState<TranscriptMessage[]>([]);
+  const [context, setContext] = useState<ConversationContext | null>(null);
+  const [detailsOpen, setDetailsOpen] = useState(false);
+  const [exportNote, setExportNote] = useState('');
   const [loadedFor, setLoadedFor] = useState<string | null | undefined>(undefined);
   const [live, setLive] = useState<{ attemptId: string | null; text: string }>({ attemptId: null, text: '' });
   const [pendingUser, setPendingUser] = useState<string | null>(null);
@@ -124,10 +130,11 @@ export function Chat({ snapshot, snapshotError, refresh, narrow, openConversatio
   }, [openConversationId]);
 
   const loadTranscript = async (id: string | null) => {
-    if (!id) { setMessages([]); setLoadedFor(null); return; }
+    if (!id) { setMessages([]); setContext(null); setLoadedFor(null); return; }
     try {
       const opened = await api.openConversation(id, false);
       setMessages(opened.messages.filter((m) => m.role !== 'system'));
+      setContext(opened.context ?? null);
       setLoadedFor(id);
     } catch (err) {
       setNotice({ text: `Could not load this chat: ${errorText(err)}`, error: true });
@@ -186,8 +193,11 @@ export function Chat({ snapshot, snapshotError, refresh, narrow, openConversatio
   /** The transcript last put in the composer for review, with its voice turn: sent unchanged, it is still speech. */
   const heldTranscript = useRef<{ text: string; voiceTurnId: string } | null>(null);
   const send = async (spoken?: string, voiceTurnId?: string) => {
-    const goal = (spoken ?? text).trim();
-    if (!goal || busy || folder.asking) return;
+    // Files may go without typed text: Core is then asked to look at them.
+    const typed = (spoken ?? text).trim();
+    const files = spoken === undefined ? attach.staged.length : 0;
+    const goal = typed || (files ? defaultAttachmentText(files) : '');
+    if (!goal || busy || folder.asking || attach.staging) return;
     const held = heldTranscript.current;
     heldTranscript.current = null;
     // Core is told a message was spoken, so it can ask about a misheard word instead of acting on it.
@@ -322,12 +332,14 @@ export function Chat({ snapshot, snapshotError, refresh, narrow, openConversatio
   const coreDown = snapshot && snapshot.coreState !== 'connected' && snapshot.coreState !== 'ready';
   const needs = brief?.length ?? 0;
   const [controlNotice, setControlNotice] = useState<{ text: string; error?: boolean } | null>(null);
+  const attach = useAttachments({ snapshot, refresh, disabled: Boolean(coreDown) || !snapshot });
   const controls = useComposerControls({ snapshot, refresh, onNotice: setControlNotice, disabled: Boolean(coreDown) || !snapshot });
   const folder = useFolderControl({
     snapshot, refresh, onNotice: setControlNotice, disabled: Boolean(coreDown) || !snapshot,
     onSendHeld: (held, turnId) => submitNow(held, turnId),
     onRestoreText: (held) => { setText(held); setTimeout(() => textarea.current?.focus(), 0); },
   });
+  const canSend = (Boolean(text.trim()) || attach.staged.length > 0) && !attach.staging && !folder.asking;
 
   const awaitingSpokenAnswer = useRef<string | null>(null);
   const voice = useVoice({
@@ -373,14 +385,16 @@ export function Chat({ snapshot, snapshotError, refresh, narrow, openConversatio
   const wakeAction = (work: () => Promise<void>) => { void work().catch((err) => setControlNotice({ text: `Wake word: ${errorText(err)}`, error: true })); };
 
   const composer = (
-    <div className={`composer${text.trim() ? ' has-text' : ''}`}>
+    <div className={`composer${text.trim() || attach.staged.length ? ' has-text' : ''}`}>
       <label className="sr-only" htmlFor="v2-ask">Message Pandesh</label>
-      <textarea id="v2-ask" ref={textarea} rows={1} value={text} placeholder={wakeStatus?.kind === 'listening' ? `Ask Pandesh… or say “${wakeStatus.phrase}”` : 'Ask Pandesh…'} disabled={Boolean(coreDown)}
+      <button type="button" className="icon-btn" aria-label="Attach files or images" title="Attach files or images (or drop them on the window, or paste a picture)" disabled={Boolean(coreDown) || !snapshot} onClick={() => void attach.pick()}><Icon name="attach" /></button>
+      <textarea id="v2-ask" ref={textarea} rows={1} value={text} placeholder={attach.staged.length ? 'Add a message about your file (optional)…' : wakeStatus?.kind === 'listening' ? `Ask Pandesh… or say “${wakeStatus.phrase}”` : 'Ask Pandesh…'} disabled={Boolean(coreDown)}
+        onPaste={attach.onPaste}
         onChange={(e) => { setText(e.target.value); e.target.style.height = 'auto'; e.target.style.height = `${Math.min(e.target.scrollHeight, 200)}px`; }}
         onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) { e.preventDefault(); void send(); } }} />
       <button type="button" className="icon-btn" aria-label="Talk to Pandesh" title={speechReady ? 'Talk to Pandesh (local speech recognition)' : speechBlocker} disabled={!speechReady || Boolean(coreDown)} onClick={() => void voice.listen()}><Icon name="mic" /></button>
       {runningHere && <button type="button" className="icon-btn" title="Stop the running task" aria-label="Stop the running task" onClick={() => void stop()}><Icon name="stop" /></button>}
-      <button type="button" className={`icon-btn send-btn${text.trim() && !folder.asking ? ' ready' : ''}`} title={folder.asking ? 'Answer the folder question first' : 'Send (Enter)'} aria-label="Send" disabled={!text.trim() || busy || folder.asking} onClick={() => void send()}><Icon name="send" /></button>
+      <button type="button" className={`icon-btn send-btn${canSend ? ' ready' : ''}`} title={folder.asking ? 'Answer the folder question first' : attach.staging ? 'Wait until the files are attached' : 'Send (Enter)'} aria-label="Send" disabled={!canSend || busy} onClick={() => void send()}><Icon name="send" /></button>
     </div>
   );
 
@@ -426,7 +440,7 @@ export function Chat({ snapshot, snapshotError, refresh, narrow, openConversatio
     <div style={{ flex: '1 1 auto', minHeight: 0, display: 'flex', position: 'relative' }}>
     <div style={{ flex: '1 1 auto', minWidth: 0, display: 'flex', flexDirection: 'column' }}>
       <div className="topbar">
-        <button type="button" className="ghost-icon" title="Chats (Ctrl K)" aria-label="Open chats" onClick={onOpenPalette}><Icon name="chats" size={18} /></button>
+        <button type="button" className="ghost-icon" title="All chats: search, rename, pin, archive, export" aria-label="Open chats" onClick={onOpenChats ?? onOpenPalette}><Icon name="chats" size={18} /></button>
         <span className="title">{idle ? 'New chat' : 'Chat'}</span>
         {snapshot?.selectedAgentId && (
           <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8, padding: '2px 4px 2px 10px', border: '1px solid var(--pulse)', borderRadius: 999, fontSize: 13 }}>
@@ -440,6 +454,22 @@ export function Chat({ snapshot, snapshotError, refresh, narrow, openConversatio
             onClick={() => workshop.setUi(workshop.ui ? null : { workshopId: workshop.list[0]?.workshopId ?? null, artifactId: null, mode: 'side' })}>
             Workshop{workshop.list.length ? ` · ${workshop.list.length}` : ''}
           </button>
+        )}
+        {convId && !idle && (
+          <div className="route-wrap">
+            <button type="button" className="btn small" aria-expanded={detailsOpen} title="What Pandesh keeps about this chat, and export" onClick={() => { setDetailsOpen(!detailsOpen); setExportNote(''); }}>Details</button>
+            {detailsOpen && (
+              <div className="popover" role="dialog" aria-label="About this chat" style={{ top: 34, right: 0, width: 380, maxHeight: '70vh', overflow: 'auto' }}>
+                <h2>ABOUT THIS CHAT</h2>
+                <ChatContext context={context} messages={messages.length} />
+                <div className="actions" style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 8 }}>
+                  <button type="button" className="btn small" onClick={() => void api.exportConversation(convId).then((r) => setExportNote(r.saved ? `Saved to ${r.path}` : 'Export cancelled.')).catch((err) => setExportNote(errorText(err)))}>Export this chat…</button>
+                  <button type="button" className="btn small" onClick={() => { setDetailsOpen(false); onOpenChats?.(); }}>All chats</button>
+                </div>
+                {exportNote && <p role="status" style={{ margin: '6px 0 0', fontSize: 13, overflowWrap: 'anywhere' }}>{exportNote}</p>}
+              </div>
+            )}
+          </div>
         )}
         {activities.length > 0 && !asideOpen && <button type="button" className="btn small" title="Show what Pandesh did in this chat" onClick={() => { setClosedFor(null); setForcedOpen(true); }}>Activity · {activities.length}</button>}
         <button type="button" className="ghost-icon" title="New chat" aria-label="New chat" onClick={() => { void api.newConversation().then(() => { setMessages([]); setLoadedFor(null); refresh(); }); }}><Icon name="plus" size={18} /></button>
@@ -493,7 +523,7 @@ export function Chat({ snapshot, snapshotError, refresh, narrow, openConversatio
             <div className="transcript-inner">
               <div />
               {messages.map((m) => m.role === 'user'
-                ? <div key={m.id} className="msg-user">{m.content}</div>
+                ? <div key={m.id} className="msg-user">{m.content}{m.attachments?.length ? <AttachmentChips items={m.attachments} /> : null}</div>
                 : (
                   <div key={m.id} className="msg-assistant">
                     <Mark />
@@ -574,6 +604,7 @@ export function Chat({ snapshot, snapshotError, refresh, narrow, openConversatio
                 {voice.state === 'interrupted' && <div role="status" style={{ alignSelf: 'flex-start', display: 'flex', alignItems: 'center', gap: 8, padding: '4px 12px', borderRadius: 999, background: 'var(--raised)', fontSize: 14 }}>Stopped speaking. <button type="button" className="btn link" style={{ minHeight: 0, padding: 0 }} onClick={() => voice.clear()}>OK</button></div>}
                 {voice.state === 'error' && <div role="alert" className="notice error" style={{ margin: 0 }}>{voice.detail} <button type="button" className="btn link" style={{ minHeight: 0, padding: 0 }} onClick={() => voice.clear()}>OK</button></div>}
                 {voice.state === 'idle' && voice.detail && <div role="status" style={{ fontSize: 14, color: 'var(--muted)' }}>{voice.detail}</div>}
+                {attach.chips}
                 {composer}
               </>
             )}
@@ -591,8 +622,34 @@ export function Chat({ snapshot, snapshotError, refresh, narrow, openConversatio
       </div>
     </div>
     {workshop.ui && !workshopFull && <WorkshopPanel conversationId={convId} workshop={workshop} narrow={narrow} />}
+    {attach.overlay}
     {asideOpen && <ActivityAside activities={activities} conversationId={convId} narrow={narrow} onClose={() => { setClosedFor(activeTaskKey); setForcedOpen(false); }} />}
     </div>
+  );
+}
+
+/** What Core keeps about a chat (Conversation context): bounded facts, never prompts, keys or raw tool output. */
+function ChatContext({ context, messages }: { context: ConversationContext | null; messages: number }) {
+  if (!context) return <p style={{ margin: 0, fontSize: 14 }}>{messages} message{messages === 1 ? '' : 's'}. Core has not reported more about this chat.</p>;
+  const rows: Array<[string, string]> = [];
+  if (context.objective) rows.push(['Goal', context.objective]);
+  if (context.latestUserIntent) rows.push(['Latest request', context.latestUserIntent]);
+  if (context.repositoryName) rows.push(['Folder', context.repositoryName]);
+  if (context.executionPolicy) rows.push(['Policy', context.executionPolicy.replace(/_/g, ' ').toLowerCase()]);
+  if (context.pendingAction) rows.push(['Waiting on', context.pendingAction]);
+  if (context.relevantFiles.length) rows.push(['Files', context.relevantFiles.slice(0, 12).join('\n')]);
+  if (context.constraints.length) rows.push(['Constraints', context.constraints.join('\n')]);
+  if (context.findings) rows.push(['Findings', context.findings]);
+  if (context.validation) rows.push(['Checks', context.validation]);
+  if (context.attachmentNames.length) rows.push(['Attached', context.attachmentNames.join(', ')]);
+  rows.push(['Sources', `${context.citationCount} citation${context.citationCount === 1 ? '' : 's'} · ${context.researchSourceCount} research source${context.researchSourceCount === 1 ? '' : 's'}`]);
+  rows.push(['Messages', String(context.messageCount)]);
+  return (
+    <>
+      {context.state !== 'available' && <p style={{ margin: '0 0 6px', fontSize: 13, color: 'var(--muted)' }}>{context.state === 'no_workspace' ? 'No workspace folder was used in this chat.' : 'No working notes were recorded for this chat.'}</p>}
+      {rows.map(([k, v]) => <div key={k} className="kv"><span className="k">{k}</span><span style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{v}</span></div>)}
+      <p style={{ margin: '6px 0 0', fontSize: 12.5, color: 'var(--muted)' }}>Updated {new Date(context.updatedAt).toLocaleString()}. Kept on this PC; it never includes keys, system prompts or raw tool output.</p>
+    </>
   );
 }
 

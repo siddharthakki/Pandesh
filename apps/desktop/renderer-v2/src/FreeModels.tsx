@@ -92,6 +92,25 @@ export function FreeModelsCard() {
           {cred?.configured && <button type="button" className="btn small" disabled={Boolean(busy)} onClick={() => { if (window.confirm(`Remove the ${p.displayName} key from this PC?`)) void run(`del:${p.id}`, async () => { await api.clearCloudProviderKey(p.id); return api.getFreeModels(); }, 'Key removed.'); }}>Remove</button>}
           {p.keyUrl && !cred?.configured && <button type="button" className="btn link" onClick={() => void api.openExternalUrl(p.keyUrl!)}>Get a key</button>}
         </form>
+        {cred?.configured && p.hasAdapter && (() => {
+          const chat = state?.cloud?.providers?.find((x) => x.id === p.id);
+          const listing = state?.cloud?.listings?.[p.id];
+          return (
+            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+              <label style={{ fontSize: 13, display: 'flex', gap: 6, alignItems: 'center' }} title="Lets you pick this provider's free models in the model menu under the message box">
+                <input type="checkbox" disabled={Boolean(busy) || !chat?.configured} checked={Boolean(chat?.enabled)}
+                  onChange={(e) => { const on = e.target.checked; void run(`chat:${p.id}`, async () => { await api.setCloudProviderEnabled(p.id, on); }, on ? `${p.displayName} can now be picked for chats. Find its free models next.` : `${p.displayName} is off for chats.`); }} />
+                Offer in the model menu
+              </label>
+              <button type="button" className="btn small" disabled={Boolean(busy) || !chat?.enabled} onClick={() => void run(`disc:${p.id}`, async () => {
+                const st = await api.discoverCloudModels(p.id);
+                const l = st.listings?.[p.id];
+                setNote(l?.ok ? { text: l.pool.length ? `${l.pool.length} free model${l.pool.length === 1 ? '' : 's'} found in ${l.latencyMs} ms. Pick one in the model menu.` : 'The key works, but no model passed the free-only check.' } : { text: `Could not list models: ${l?.error ?? l?.errorClass ?? 'no result'}`, error: true });
+              })}>{busy === `disc:${p.id}` ? 'Finding…' : 'Find free models for chats'}</button>
+              {listing && <span style={small}>{listing.ok ? `${listing.pool.length} offered · checked ${timeOf(listing.checkedAt)}` : `last check failed: ${listing.errorClass ?? 'error'}`}</span>}
+            </div>
+          );
+        })()}
         {verifiedModels.length > 0 && (
           <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
             <select aria-label="Model to qualify" value={pick} onChange={(e) => setQualifyPick((x) => ({ ...x, [p.id]: e.target.value }))} style={{ ...input, flex: '1 1 200px' }}>

@@ -12,7 +12,7 @@ The last published installers (Build 144 and earlier) predate v2. No v2 installe
 
 ## Done in v2
 
-- New React interface with a Classic fallback, switchable at runtime
+- New React interface; the Classic interface was retired once v2 had what was still useful from it
 - Chief Agent with real specialist delegation (Coding, Research, Personal, Operations), scoped tools and folders
 - Visual execution: live activity with commands, exit codes and test output; Board from Core records
 - Second Brain: remember, recall, correct and forget with provenance, history and search

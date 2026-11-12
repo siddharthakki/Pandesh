@@ -97,7 +97,7 @@ async function probeCdpPage() {
     const res = await fetch(`http://127.0.0.1:${cdpPort}/json`, { signal: AbortSignal.timeout(600) });
     if (!res.ok) return false;
     const list = await res.json();
-    return Array.isArray(list) && list.some((t) => t.type === 'page' && typeof t.url === 'string' && t.url.includes('renderer/index.html'));
+    return Array.isArray(list) && list.some((t) => t.type === 'page' && typeof t.url === 'string' && t.url.includes('renderer/v2/index.html'));
   } catch {
     return false;
   }

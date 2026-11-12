@@ -107,15 +107,13 @@ describe('v2 Connections view', () => {
 });
 
 describe('the assistant names only menus that exist', () => {
-  it('v2 System → Connections and Classic Connections → Google are real', () => {
+  it('v2 System → Connections is real, and no Classic interface is named', () => {
     const app = fs.readFileSync(path.join(__dirname, '../renderer-v2/src/App.tsx'), 'utf8');
     expect(app).toMatch(/\{ name: 'Connections', sub: 'Google \(Gmail, Calendar\): set up and connect', run: \(\) => go\('connections'\) \}/);
-    const classic = fs.readFileSync(path.join(__dirname, '../renderer/index.html'), 'utf8');
-    expect(classic).toContain('<h2 class="integrations-main-title">Connections</h2>');
-    expect(classic).toContain('id="integ-card-google"');
-    expect(classic).toContain('<h3 class="int-card-title">Google Services</h3>');
-    expect(GOOGLE_SETUP_WHERE).toBe('System (bottom of the left rail) → Connections in the v2 interface, or Connections and settings (left sidebar) → Add / Configure → Google Services in the Classic interface');
-    expect(classic).toContain('data-conn-tab="configure"');
+    expect(fs.existsSync(path.join(__dirname, '../renderer/index.html'))).toBe(false);
+    expect(GOOGLE_SETUP_WHERE).toBe('System (bottom of the left rail) → Connections');
+    expect(navigationPromptLines('v2')).toMatch(/Never tell the user to switch to, or do something in, a "Classic" interface/);
+    expect(navigationPromptLines(undefined)).toMatch(/Never tell the user to switch to, or do something in, a "Classic" interface/);
     expect(navigationPromptLines('v2')).toMatch(/Never ask the user to paste a client secret, password, API key or token into the chat/);
     const engine = fs.readFileSync(path.join(__dirname, '../../../core/runtime/piAgentEngine.ts'), 'utf8');
     expect(engine).not.toContain('Google Services');

@@ -88,7 +88,13 @@ export function ActivityAside({ activities, conversationId, narrow, onClose }: {
             <div style={{ fontSize: 13, color: 'var(--muted)' }}>{selected.capability ?? 'step'} · started {timeOf(selected.startedAt)}{selected.endedAt ? ` · ended ${timeOf(selected.endedAt)}` : ''}</div>
             <div style={{ fontWeight: 600 }}>{selected.preview?.title ?? selected.title}</div>
             {selected.detail && <p style={{ margin: 0, fontSize: 14 }}>{selected.detail}</p>}
-            {selected.preview?.path && <div style={{ fontFamily: 'var(--font-mono)', fontSize: 13 }}>{selected.preview.path}</div>}
+            {selected.preview?.path && (
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                <span style={{ fontFamily: 'var(--font-mono)', fontSize: 13, overflowWrap: 'anywhere' }}>{selected.preview.path}</span>
+                {selected.state === 'completed' && <button type="button" className="btn small" title="Open this file from the workspace folder" onClick={() => void open(() => api.openWorkspaceFile(selected.preview!.path!), 'File')}>Open file</button>}
+              </div>
+            )}
+            {selected.id.startsWith('doc-') && <button type="button" className="btn small" style={{ alignSelf: 'flex-start' }} onClick={() => void open(() => api.openActivityDocument(selected.id), 'Document')}>Open original</button>}
             {selected.preview?.url && <button type="button" className="btn link" style={{ alignSelf: 'flex-start', overflowWrap: 'anywhere' }} onClick={() => void open(() => api.openExternalUrl(selected.preview!.url!), 'Page')}>{selected.preview.url}</button>}
             {selected.preview?.command && <CommandFacts p={selected.preview} />}
             {selected.preview?.diff && <DiffView diff={selected.preview.diff} />}

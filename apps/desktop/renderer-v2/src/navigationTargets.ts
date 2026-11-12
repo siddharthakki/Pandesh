@@ -3,7 +3,7 @@
  * menu and the two composer menus are accepted; anything else is refused, so the window never pretends to open it.
  */
 /** The v2 views and spaces navigate_to may open (a subset of App's View and Workspaces' SpaceId). */
-export type V2View = 'chat' | 'board' | 'team' | 'connections' | 'tools' | 'software' | 'processes' | 'brain' | 'radar' | 'revenue';
+export type V2View = 'chat' | 'board' | 'team' | 'connections' | 'tools' | 'software' | 'processes' | 'brain' | 'radar' | 'revenue' | 'about';
 export type V2Space = 'projects' | 'wish' | 'social' | 'media' | 'automations';
 
 export type V2Action =
@@ -13,7 +13,7 @@ export type V2Action =
   | { kind: 'focus'; id: 'v2-permission-mode' | 'v2-model' }
   | { kind: 'unknown'; detail: string };
 
-const VIEWS: ReadonlySet<string> = new Set(['chat', 'board', 'team', 'connections', 'tools', 'software', 'processes', 'brain', 'radar', 'revenue']);
+const VIEWS: ReadonlySet<string> = new Set(['chat', 'board', 'team', 'connections', 'tools', 'software', 'processes', 'brain', 'radar', 'revenue', 'about']);
 const SPACES: ReadonlySet<string> = new Set(['projects', 'wish', 'social', 'media', 'automations']);
 
 export function parseV2Target(target: string): V2Action {

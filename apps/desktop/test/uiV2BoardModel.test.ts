@@ -1,6 +1,5 @@
 import { describe, it, expect } from 'vitest';
 import { columnOf, needsYouCount } from '../renderer-v2/src/boardModel';
-import { resolveUiVariant } from '../src/host/desktopHostPreferences';
 
 describe('UI v2 Board model — Core attempt status to column', () => {
   it('shows running only while Core proves a worker holds the task', () => {
@@ -34,18 +33,5 @@ describe('UI v2 Board model — Core attempt status to column', () => {
     expect(needsYouCount(tasks, false)).toBe(2);
     expect(needsYouCount([], true)).toBe(1);
     expect(needsYouCount([], false)).toBe(0);
-  });
-});
-
-describe('UI v2 feature flag', () => {
-  it('keeps the classic renderer by default', () => {
-    expect(resolveUiVariant({ uiVariant: 'classic' }, {})).toBe('classic');
-  });
-  it('uses the saved preference when the environment is silent', () => {
-    expect(resolveUiVariant({ uiVariant: 'v2' }, {})).toBe('v2');
-  });
-  it('lets PANDESH_UI_V2 override the preference both ways', () => {
-    expect(resolveUiVariant({ uiVariant: 'classic' }, { PANDESH_UI_V2: '1' })).toBe('v2');
-    expect(resolveUiVariant({ uiVariant: 'v2' }, { PANDESH_UI_V2: '0' })).toBe('classic');
   });
 });

@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
-import { api, errorText, type ArtifactView } from './bridge';
+import { api, errorText, type ArtifactView, type CommandQueue, type DailyBriefRoutine, type ImageGenerationResult, type ImageStudioStatus, type QueueItem, type Snapshot } from './bridge';
+import { RemindersCard } from './Everyday';
 
 export type SpaceId = 'projects' | 'wish' | 'social' | 'media' | 'automations';
 const TITLES: Record<SpaceId, string> = { projects: 'Projects', wish: 'Wish to Reality', social: 'Social Studio', media: 'Media Studio', automations: 'Automations' };
@@ -30,7 +31,7 @@ function RecordCard({ r, extra, actions }: { r: Rec; extra?: React.ReactNode; ac
   );
 }
 
-export function Workspace({ space, narrow, onAskPandesh }: { space: SpaceId; narrow: boolean; onAskPandesh: (text: string) => void }) {
+export function Workspace({ space, narrow, onAskPandesh, snapshot, refresh }: { space: SpaceId; narrow: boolean; onAskPandesh: (text: string) => void; snapshot: Snapshot | null; refresh: () => void }) {
   const [data, setData] = useState<Rec | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [note, setNote] = useState('');
@@ -44,12 +45,11 @@ export function Workspace({ space, narrow, onAskPandesh }: { space: SpaceId; nar
     if (space === 'social') tag((await call<Rec>('socialDrafts')) ?? {});
     if (space === 'automations') {
       const overview = await call<Rec>('overview');
-      let routine: unknown = null; try { routine = await (api as unknown as { getDailyBriefRoutine(): Promise<unknown> }).getDailyBriefRoutine(); } catch { /* not configured */ }
-      const snap = await api.getSnapshot().catch(() => null) as Rec | null;
-      tag({ routines: firstArray(overview?.routines), obligations: firstArray(overview?.obligations), dailyBrief: routine, queue: firstArray((snap?.commandQueue as Rec | undefined)?.items ?? snap?.commandQueue) });
+      let routine: DailyBriefRoutine | null = null; try { routine = await api.getDailyBriefRoutine(); } catch { /* not configured */ }
+      tag({ routines: firstArray(overview?.routines), obligations: firstArray(overview?.obligations), dailyBrief: routine });
     }
     if (space === 'media') {
-      let studio: unknown = null; try { studio = await (api as unknown as { probeImageStudio(): Promise<unknown> }).probeImageStudio(); } catch (err) { studio = { detail: errorText(err) }; }
+      let studio: unknown = null; try { studio = await api.probeImageStudio(); } catch (err) { studio = { detail: errorText(err), checkpoints: [] }; }
       const files = await api.listArtifacts().catch(() => [] as ArtifactView[]);
       tag({ studio, files: files.filter((f) => f.kind === 'image' || f.kind === 'video') });
     }
@@ -68,8 +68,8 @@ export function Workspace({ space, narrow, onAskPandesh }: { space: SpaceId; nar
         {current && space === 'projects' && <ProjectsView projects={current.projects as Rec[]} />}
         {current && space === 'wish' && <WishView goals={current.goals as Rec[]} business={current.business as Rec | null} />}
         {current && space === 'social' && <SocialView data={current} call={call} reload={load} setNote={setNote} onAskPandesh={onAskPandesh} />}
-        {current && space === 'media' && <MediaView studio={current.studio as Rec | null} files={current.files as ArtifactView[]} onAskPandesh={onAskPandesh} narrow={narrow} />}
-        {current && space === 'automations' && <AutomationsView data={current} call={call} reload={load} setNote={setNote} />}
+        {current && space === 'media' && <MediaView studio={current.studio as ImageStudioStatus | null} files={current.files as ArtifactView[]} onAskPandesh={onAskPandesh} narrow={narrow} reload={load} setNote={setNote} />}
+        {current && space === 'automations' && <AutomationsView data={current} call={call} reload={load} setNote={setNote} snapshot={snapshot} refresh={refresh} />}
       </div>
     </>
   );
@@ -143,17 +143,85 @@ function SocialView({ data, call, reload, setNote, onAskPandesh }: { data: Rec; 
   );
 }
 
-function MediaView({ studio, files, onAskPandesh, narrow }: { studio: Rec | null; files: ArtifactView[]; onAskPandesh: (t: string) => void; narrow: boolean }) {
+function MediaView({ studio, files, onAskPandesh, narrow, reload, setNote }: { studio: ImageStudioStatus | null; files: ArtifactView[]; onAskPandesh: (t: string) => void; narrow: boolean; reload: () => Promise<void>; setNote: (s: string) => void }) {
   const [thumbs, setThumbs] = useState<Record<string, string>>({});
   useEffect(() => { for (const f of files.slice(0, 24)) if (f.kind === 'image' && f.availability === 'ready') api.loadArtifactPreview(f.id).then((p) => setThumbs((m) => ({ ...m, [f.id]: p.dataUrl }))).catch(() => undefined); }, [files.length]);
+  const checkpoints = studio?.checkpoints ?? [];
+  const [prompt, setPrompt] = useState('');
+  const [size, setSize] = useState('1024x1024');
+  const [steps, setSteps] = useState(20);
+  const [checkpoint, setCheckpoint] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [status, setStatus] = useState('');
+  const [approval, setApproval] = useState<{ approvalId: string; presentation: Record<string, unknown> | null } | null>(null);
+  useEffect(() => { if (!checkpoint && checkpoints[0]) setCheckpoint(checkpoints[0].name); }, [checkpoints.length]);
+
+  const handle = async (r: ImageGenerationResult) => {
+    if (r.outcome === 'approval_required') { setApproval({ approvalId: r.approvalId, presentation: r.presentation }); setStatus('Check the exact request before generation starts.'); return; }
+    setApproval(null);
+    setStatus(r.outcome === 'executed' ? r.message : r.reason);
+    if (r.outcome === 'executed') await reload();
+  };
+  const generate = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!prompt.trim() || !checkpoint) return;
+    const [width, height] = size.split('x').map(Number);
+    setBusy(true); setStatus('Preparing the request…');
+    try { await handle(await api.generateImage({ prompt: prompt.trim(), width, height, steps, checkpoint, outputCount: 1 })); }
+    catch (err) { setStatus(errorText(err)); } finally { setBusy(false); }
+  };
+  const decide = async (resolution: 'approved' | 'rejected') => {
+    if (!approval) return;
+    const id = approval.approvalId;
+    setApproval(null);
+    setBusy(resolution === 'approved');
+    setStatus(resolution === 'approved' ? 'Generating on this PC…' : 'Not generated.');
+    try {
+      const r = await api.resolveImageApproval(id, resolution);
+      if (resolution === 'approved' && r && typeof r === 'object' && 'outcome' in (r as Rec)) await handle(r as ImageGenerationResult);
+      else if (resolution === 'approved') await reload();
+    } catch (err) { setStatus(errorText(err)); } finally { setBusy(false); }
+  };
+  type FileResult = { opened?: boolean; saved?: boolean; path?: string | null };
+  const fileAction = async (work: () => Promise<FileResult>, done: (r: FileResult) => string) => {
+    try { setNote(done(await work())); } catch (err) { setNote(errorText(err)); }
+  };
+  const ready = Boolean(studio?.comfyui || studio?.studio) && checkpoints.length > 0;
   return (
     <>
       <div className="card">
         <span className="title">Local image studio</span>
         <span className="meta">{studio ? `Image Studio ${studio.studio ? 'running' : 'not running'} · ComfyUI ${studio.comfyui ? 'answering' : 'not answering'} · Ollama ${studio.ollama ? `answering${studio.ollamaVersion ? ` (v${str(studio.ollamaVersion)})` : ''}` : 'not answering'}` : 'Status unknown'}</span>
         {studio?.detail ? <span style={{ fontSize: 14 }}>{str(studio.detail)}</span> : null}
-        <div className="actions"><button type="button" className="btn small" onClick={() => onAskPandesh('Generate an image of ')}>Ask Pandesh for an image</button></div>
-        <span className="meta">Generation runs locally and asks for your approval first.</span>
+        <form style={{ display: 'flex', flexDirection: 'column', gap: 6 }} onSubmit={(e) => void generate(e)}>
+          <label className="sr-only" htmlFor="img-prompt">Describe the image</label>
+          <textarea id="img-prompt" className="field" rows={3} value={prompt} onChange={(e) => setPrompt(e.target.value)} placeholder="Describe the image you want…" disabled={busy || Boolean(approval)} />
+          <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
+            <label className="sr-only" htmlFor="img-model">Image model</label>
+            <select id="img-model" className="field" value={checkpoint} onChange={(e) => setCheckpoint(e.target.value)} disabled={!checkpoints.length}>
+              {checkpoints.length === 0 && <option value="">No image model found</option>}
+              {checkpoints.map((c) => <option key={c.name} value={c.name}>{c.name}</option>)}
+            </select>
+            <label className="sr-only" htmlFor="img-size">Size</label>
+            <select id="img-size" className="field" value={size} onChange={(e) => setSize(e.target.value)}>
+              {['1024x1024', '1152x896', '896x1152', '1344x768', '768x1344', '512x512'].map((x) => <option key={x}>{x}</option>)}
+            </select>
+            <label style={{ fontSize: 14, display: 'flex', gap: 6, alignItems: 'center' }}>Steps <input className="field" type="number" min={1} max={80} value={steps} onChange={(e) => setSteps(Math.max(1, Math.min(80, Number(e.target.value) || 20)))} style={{ width: 70 }} /></label>
+            <button type="submit" className="btn small primary" disabled={!ready || busy || Boolean(approval) || !prompt.trim()}>Generate</button>
+            {busy && <button type="button" className="btn small" onClick={() => void api.cancelImageGeneration().then(() => setStatus('Cancel requested.')).catch((err) => setStatus(errorText(err)))}>Cancel</button>}
+            <button type="button" className="btn small" onClick={() => onAskPandesh('Generate an image of ')}>Ask Pandesh instead</button>
+          </div>
+        </form>
+        {approval && (
+          <section className="approval" aria-label="Approval needed: generate image" style={{ margin: 0 }}>
+            <div className="approval-head"><span className="dot attention" aria-hidden="true" /><span className="title">Needs your OK · Generate image</span></div>
+            <div className="detail" style={{ whiteSpace: 'pre-wrap', fontFamily: 'var(--font-mono)', fontSize: 12.5 }}>{JSON.stringify(approval.presentation ?? { prompt, size, checkpoint, steps }, null, 2)}</div>
+            <div className="actions"><button type="button" className="btn primary" onClick={() => void decide('approved')}>Generate image</button><button type="button" className="btn" onClick={() => void decide('rejected')}>Don't allow</button></div>
+            <div className="foot">Generation runs on this PC only. Core records your decision.</div>
+          </section>
+        )}
+        {status && <span role="status" style={{ fontSize: 14 }}>{status}</span>}
+        <div className="actions"><button type="button" className="btn small" onClick={() => void api.openExternalUrl('http://127.0.0.1:8989/').catch((err) => setStatus(errorText(err)))}>Open the Studio web page</button></div>
       </div>
       <h2 style={{ margin: 0, fontSize: 15 }}>Images and videos Pandesh made ({files.length})</h2>
       {files.length === 0 && <div className="empty" style={{ color: 'var(--faint)' }}>None yet.</div>}
@@ -163,7 +231,14 @@ function MediaView({ studio, files, onAskPandesh, narrow }: { studio: Rec | null
             {thumbs[f.id] ? <img src={thumbs[f.id]} alt={f.title || f.fileName} style={{ width: '100%', borderRadius: 8 }} /> : <div style={{ height: 120, display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--muted)', fontSize: 13 }}>{f.kind}</div>}
             <span style={{ fontSize: 13, overflowWrap: 'anywhere' }}>{f.title || f.fileName}</span>
             <span className="meta">{f.availability === 'ready' ? 'verified on disk' : f.availability}</span>
-            {f.availability === 'ready' && <div className="actions"><button type="button" className="btn small" onClick={() => void api.openArtifactFile(f.id)}>Open</button></div>}
+            {f.availability === 'ready' && (
+              <div className="actions">
+                <button type="button" className="btn small" onClick={() => void api.openArtifactFile(f.id)}>Open</button>
+                <button type="button" className="btn small" onClick={() => void fileAction(() => api.saveArtifactCopy(f.id), (r) => (r.saved ? `Saved a copy to ${r.path}` : 'Not saved.'))}>Save a copy…</button>
+                {f.kind === 'image' && <button type="button" className="btn small" onClick={() => void fileAction(() => api.openArtifactInStudio(f.id), (r) => (r.opened ? 'Opened in the Studio.' : 'The Studio did not open it.'))}>Open in Studio</button>}
+                {f.kind === 'image' && <button type="button" className="btn small" title="Opens the Studio with this picture as the reference for a new image" onClick={() => void fileAction(() => api.useArtifactAsReference(f.id), (r) => (r.opened ? 'Opened in the Studio as the reference picture.' : 'The Studio did not open it.'))}>Use as reference</button>}
+              </div>
+            )}
           </div>
         ))}
       </div>
@@ -171,21 +246,99 @@ function MediaView({ studio, files, onAskPandesh, narrow }: { studio: Rec | null
   );
 }
 
-function AutomationsView({ data, call, reload, setNote }: { data: Rec; call: <T>(a: string, args?: Rec) => Promise<T | null>; reload: () => Promise<void>; setNote: (s: string) => void }) {
-  const routines = firstArray(data.routines); const queue = firstArray(data.queue); const daily = data.dailyBrief as Rec | null;
+function localInput(d: Date): string {
+  const p = (x: number) => String(x).padStart(2, '0');
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}`;
+}
+
+function AutomationsView({ data, call, reload, setNote, snapshot, refresh }: { data: Rec; call: <T>(a: string, args?: Rec) => Promise<T | null>; reload: () => Promise<void>; setNote: (s: string) => void; snapshot: Snapshot | null; refresh: () => void }) {
+  const routines = firstArray(data.routines); const queue: CommandQueue | null = snapshot?.commandQueue ?? null; const daily = data.dailyBrief as DailyBriefRoutine | null;
+  const [now, setNow] = useState(Date.now());
+  useEffect(() => { const t = setInterval(() => setNow(Date.now()), 1000); return () => clearInterval(t); }, []);
+  const tools = snapshot?.everydayTools;
+  const timers = (tools?.activeTimers ?? []).filter((t) => t.state === 'running' || t.state === 'paused');
   const control = async (id: string, op: string) => { if (await call('routine', { id, op })) { setNote(`Routine ${op === 'run' ? 'started' : op + 'd'}.`); await reload(); } };
+  const [time, setTime] = useState(daily?.dailyTime ?? '08:00');
+  const [instruction, setInstruction] = useState('');
+  const [editing, setEditing] = useState<{ id: string; text: string } | null>(null);
+  const [postponing, setPostponing] = useState<{ id: string; at: string } | null>(null);
+  const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
+  const act = async (work: () => Promise<unknown>, done: string): Promise<boolean> => {
+    try { await work(); setNote(done); return true; } catch (err) { setNote(errorText(err)); return false; } finally { refresh(); await reload(); }
+  };
+  const confirming = queue?.confirming ?? null;
+  const item = (q: QueueItem) => (
+    <div key={q.id} className="card">
+      {editing?.id === q.id ? (
+        <form style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }} onSubmit={(e) => { e.preventDefault(); if (!editing.text.trim()) return; void act(() => api.editQueuedCommand(q.id, editing.text.trim()), 'Queued instruction changed.').then((ok) => { if (ok) setEditing(null); }); }}>
+          <label className="sr-only" htmlFor={`qe-${q.id}`}>Queued instruction</label>
+          <input id={`qe-${q.id}`} className="field" style={{ flex: '1 1 260px' }} autoFocus value={editing.text} onChange={(e) => setEditing({ id: q.id, text: e.target.value })} />
+          <button type="submit" className="btn small primary">Save</button><button type="button" className="btn small" onClick={() => setEditing(null)}>Cancel</button>
+        </form>
+      ) : <span className="title">{q.ordinal}. {q.title || q.instruction}</span>}
+      <span className="meta">{q.status.replace(/_/g, ' ')}{q.postponedUntil ? ` until ${new Date(q.postponedUntil).toLocaleString()}` : ''}{q.dependsOnId ? ' · waits for an earlier one' : ''}{q.lastError ? ` · ${q.lastError}` : ''}</span>
+      {postponing?.id === q.id && (
+        <form style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }} onSubmit={(e) => { e.preventDefault(); const at = new Date(postponing.at); if (Number.isNaN(at.getTime())) return; void act(() => api.postponeCommand(q.id, at.toISOString()), 'Postponed.').then((ok) => { if (ok) setPostponing(null); }); }}>
+          <label className="sr-only" htmlFor={`qp-${q.id}`}>Postpone until</label>
+          <input id={`qp-${q.id}`} className="field" type="datetime-local" value={postponing.at} onChange={(e) => setPostponing({ id: q.id, at: e.target.value })} />
+          <button type="submit" className="btn small primary">Postpone</button><button type="button" className="btn small" onClick={() => setPostponing(null)}>Cancel</button>
+        </form>
+      )}
+      <div className="actions">
+        <button type="button" className="btn small" onClick={() => setEditing({ id: q.id, text: q.instruction })}>Edit</button>
+        <button type="button" className="btn small" disabled={q.ordinal <= 1} onClick={() => void act(() => api.reorderQueuedCommand(q.id, Math.max(1, q.ordinal - 1)), 'Moved up.')}>Up</button>
+        <button type="button" className="btn small" onClick={() => void act(() => api.reorderQueuedCommand(q.id, q.ordinal + 1), 'Moved down.')}>Down</button>
+        <button type="button" className="btn small" onClick={() => setPostponing({ id: q.id, at: localInput(new Date(Date.now() + 3600_000)) })}>Postpone…</button>
+        <button type="button" className="btn small" onClick={() => void act(() => api.skipCommand(q.id), 'Skipped.')}>Skip</button>
+        <button type="button" className="btn small" onClick={() => void act(() => api.removeQueuedCommand(q.id), 'Removed from the queue.')}>Remove</button>
+      </div>
+    </div>
+  );
   return (
     <>
-      <div className="card"><span className="title">Daily brief</span><span className="meta">{daily ? `${daily.enabled ? 'On' : 'Off'} · daily at ${str(daily.dailyTime)} (${str(daily.timezone)})${daily.nextRunAt ? ` · next ${when(daily.nextRunAt)}` : ''}${daily.lastRunAt ? ` · last ${when(daily.lastRunAt)}` : ''}` : 'Not set up.'}</span></div>
+      <div className="card">
+        <span className="title">Daily brief</span>
+        <span className="meta">{daily ? `${daily.enabled ? 'On' : 'Off'} · daily at ${str(daily.dailyTime)} (${str(daily.timezone)})${daily.nextRunAt ? ` · next ${when(daily.nextRunAt)}` : ''}${daily.lastRunAt ? ` · last ${when(daily.lastRunAt)}` : ''}` : 'Not set up.'}</span>
+        <form style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }} onSubmit={(e) => { e.preventDefault(); void act(() => api.configureDailyBriefRoutine({ dailyTime: time, timezone: tz, enabled: true }), `Daily brief set for ${time} every day.`); }}>
+          <label htmlFor="db-time" style={{ fontSize: 14 }}>Every day at</label>
+          <input id="db-time" className="field" type="time" value={time} onChange={(e) => setTime(e.target.value)} required />
+          <button type="submit" className="btn small primary">{daily?.enabled ? 'Change time' : 'Turn on'}</button>
+          {daily?.enabled && <button type="button" className="btn small" onClick={() => void act(() => api.configureDailyBriefRoutine({ dailyTime: daily.dailyTime, timezone: daily.timezone, enabled: false }), 'Daily brief turned off.')}>Turn off</button>}
+        </form>
+        <span className="meta">The brief arrives as a chat from Pandesh at that time, while Pandesh runs.</span>
+      </div>
+      {tools && <RemindersCard tools={tools} timers={timers} now={now} run={async (w, done) => { await act(w, done ?? 'Done.'); }} />}
       <h2 style={{ margin: 0, fontSize: 15 }}>Routines ({routines.length})</h2>
       {routines.length === 0 && <div className="empty" style={{ color: 'var(--faint)' }}>No routines. Ask Pandesh to set one up ("every Friday, check my folders").</div>}
       {routines.map((r) => (
         <RecordCard key={str(r.id)} r={r} extra={<span className="meta">{r.nextRunAt ? `Next ${when(r.nextRunAt)}` : ''}{r.lastRunAt ? ` · last ${when(r.lastRunAt)}` : ''}</span>}
           actions={<><button type="button" className="btn small" onClick={() => void control(str(r.id), 'run')}>Run now</button>{statusOf(r) === 'paused' ? <button type="button" className="btn small" onClick={() => void control(str(r.id), 'resume')}>Resume</button> : <button type="button" className="btn small" onClick={() => void control(str(r.id), 'pause')}>Pause</button>}</>} />
       ))}
-      <h2 style={{ margin: 0, fontSize: 15 }}>Command queue ({queue.length})</h2>
-      {queue.length === 0 && <div className="empty" style={{ color: 'var(--faint)' }}>Empty.</div>}
-      {queue.map((q) => <RecordCard key={str(q.id)} r={q} />)}
+      <h2 style={{ margin: 0, fontSize: 15 }}>Command queue</h2>
+      <form className="card" style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 6 }} onSubmit={(e) => { e.preventDefault(); if (!instruction.trim()) return; void act(() => api.enqueueCommand(instruction.trim()), 'Added to the queue.').then((ok) => { if (ok) setInstruction(''); }); }}>
+        <label className="sr-only" htmlFor="q-new">Instruction to queue</label>
+        <input id="q-new" className="field" style={{ flex: '1 1 260px' }} value={instruction} onChange={(e) => setInstruction(e.target.value)} placeholder="Queue an instruction to run after the current work…" />
+        <button type="submit" className="btn small primary" disabled={!instruction.trim()}>Add to queue</button>
+      </form>
+      {confirming && (
+        <section className="approval" aria-label="Confirm the next queued instruction" style={{ margin: 0 }}>
+          <div className="approval-head"><span className="dot attention" aria-hidden="true" /><span className="title">Needs your OK · Run the next queued instruction</span></div>
+          <div className="detail">{confirming.title || confirming.instruction}{confirming.title && confirming.title !== confirming.instruction ? ` — ${confirming.instruction}` : ''}{confirming.confirmationExpiresAt ? ` (confirm before ${new Date(confirming.confirmationExpiresAt).toLocaleTimeString()})` : ''}</div>
+          <div className="actions">
+            <button type="button" className="btn primary" disabled={!confirming.confirmationToken} onClick={() => void act(() => api.confirmCommandRun(confirming.id, confirming.confirmationToken ?? '', confirming.revision || 1), 'Running it now.')}>Run it</button>
+            <button type="button" className="btn" onClick={() => void act(() => api.skipCommand(confirming.id), 'Skipped.')}>Skip</button>
+          </div>
+        </section>
+      )}
+      {queue?.active && <div className="notice" role="status" style={{ margin: 0, maxWidth: 'none' }}>Running now: {queue.active.title || queue.active.instruction}</div>}
+      {(queue?.waiting ?? []).length === 0 && !confirming && <div className="empty" style={{ color: 'var(--faint)' }}>Nothing is waiting.</div>}
+      {(queue?.waiting ?? []).map(item)}
+      {(queue?.recentTerminal ?? []).length > 0 && (
+        <>
+          <h3 style={{ margin: 0, fontSize: 14 }}>Recently finished</h3>
+          <ul style={{ margin: 0, paddingLeft: 18, fontSize: 14 }}>{[...(queue?.recentTerminal ?? [])].reverse().map((q) => <li key={q.id}>{q.status.replace(/_/g, ' ')}: {q.title || q.instruction}{q.outcome ? ` (${q.outcome})` : ''}</li>)}</ul>
+        </>
+      )}
     </>
   );
 }

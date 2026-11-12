@@ -3,8 +3,7 @@
  * message: which model answers, and the conversation's permission mode
  * (Ask / Auto / Plan only). Pure functions over the host snapshot, so the
  * Chat component and the tests share one decision. Core stores and enforces
- * both choices; this only presents them (same rules as the Classic composer,
- * apps/desktop/renderer/renderer.js renderModels / renderPermission).
+ * both choices; this only presents them.
  */
 
 /** The host's value for "let Core pick the local model per request" (apps/desktop/src/host/desktopSession.ts AUTO_MODEL). */
@@ -45,16 +44,19 @@ export const EXPIRY_CHOICES: ReadonlyArray<{ minutes: number; label: string }> =
   { minutes: 1440, label: '24 hours' },
 ];
 
-/** Same note as the Classic grant form: what Auto never covers (core/domain/permissionModes.ts alwaysEscalateReason). */
+/** What Auto never covers (core/domain/permissionModes.ts alwaysEscalateReason). */
 export const STILL_ASKS_NOTE = 'Still asks you: outbound email and messages, purchases, payments, contracts, file edits, installs, git push, anything destructive and anything outside what you tick here.';
 
 /** Categories Core binds to the selected workspace folder; without a folder they cannot be granted. */
 export const WORKSPACE_PERMISSION_CATEGORIES: ReadonlySet<string> = new Set(['workspace_read_commands', 'workspace_validation', 'workspace_git_commit', 'workspace_inspect_page']);
 
+/** The host's value for "Auto picks the best free cloud model you approved, per send". */
+export const AUTO_FREE_CLOUD = 'auto::free';
+
 /**
- * The model menu: Auto first, then the installed local models. The selected value is always one of the options, so
- * the menu never shows a model that is not chosen. Free cloud models are chosen in the Classic UI, which has the
- * exact-text approval a cloud send needs; a cloud model chosen there is shown here as the selection.
+ * The model menu: Auto first, then the installed local models, then the free cloud models of providers you set up
+ * and enabled (Connections → Free cloud models), which the window confirms before choosing. The selected value is
+ * always one of the options, so the menu never shows a model that is not chosen.
  */
 export function modelMenu(s: ModelSnapshot | null): { options: ModelOption[]; selected: string } {
   const options: ModelOption[] = [{ value: AUTO_MODEL, label: 'Auto (recommended)', group: 'auto' }];
@@ -63,11 +65,17 @@ export function modelMenu(s: ModelSnapshot | null): { options: ModelOption[]; se
   const cloud = s?.cloud ?? null;
   const selectedCloud = cloud?.selectedModel ?? null;
   if (installed.length === 0) options.push({ value: '', label: 'No local Ollama models found', group: 'local', disabled: true });
-  if (selectedCloud) {
+  const cloudOptions: ModelOption[] = [];
+  for (const provider of (cloud?.providers ?? []).filter((p) => p.enabled && p.configured)) {
+    for (const m of cloud?.listings?.[provider.id]?.pool ?? []) cloudOptions.push({ value: `${provider.id}::${m.id}`, label: `${provider.displayName ?? provider.id} — ${m.displayName || m.id}`, group: 'cloud' });
+  }
+  if (cloudOptions.length) options.push({ value: AUTO_FREE_CLOUD, label: 'Auto — best approved free model', group: 'cloud' }, ...cloudOptions);
+  // A choice survives a restart although the discovered list does not: keep it visible, never snap back silently.
+  if (selectedCloud && !options.some((o) => o.value === selectedCloud)) {
     const at = selectedCloud.indexOf('::');
     const providerId = at > 0 ? selectedCloud.slice(0, at) : 'cloud';
     const provider = (cloud?.providers ?? []).find((p) => p.id === providerId);
-    options.push({ value: selectedCloud, label: `${provider?.displayName ?? providerId} — ${selectedCloud.slice(at + 2)} (cloud)`, group: 'cloud' });
+    options.push({ value: selectedCloud, label: selectedCloud === AUTO_FREE_CLOUD ? 'Auto — best approved free model' : `${provider?.displayName ?? providerId} — ${selectedCloud.slice(at + 2)} (discover again to verify)`, group: 'cloud' });
   }
   let selected = selectedCloud ?? (s?.modelIsAuto ? AUTO_MODEL : (s?.model ?? ''));
   if (!selected) {

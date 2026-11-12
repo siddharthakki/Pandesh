@@ -10,9 +10,8 @@ to, executes it, records the result and decides what the turn actually achieved.
 
 | Part | Where | What it does |
 |---|---|---|
-| Desktop host | `apps/desktop/src` | Electron main process: window, tray, approvals, voice, updater, Classic/v2 switch. Starts Core and talks to it over a token-authenticated localhost API. |
-| v2 interface | `apps/desktop/renderer-v2` | React UI: Chat, Activity (visual execution), Board, Team, Second Brain, Projects, Automations, Tools & Skills, Software & Services, Processes. Reaches Pandesh only through the preload bridge. |
-| Classic interface | `apps/desktop/renderer` | The previous UI, still available and switchable. |
+| Desktop host | `apps/desktop/src` | Electron main process: window, tray, approvals, voice, updater. Starts Core and talks to it over a token-authenticated localhost API. |
+| Interface (v2) | `apps/desktop/renderer-v2` (built to `renderer/v2`) | The only UI. React: Chat with its chats drawer and attachments, Activity (visual execution), Board, Team, Second Brain, Projects, Media Studio, Automations, Connections, Tools & Skills, Software & Services, Processes, About & diagnostics. Reaches Pandesh only through the preload bridge. The Classic renderer was retired on 2026-11-12. |
 | Core API | `core/api` | HTTP + WebSocket on `127.0.0.1` with a per-launch token. Routes for conversations, agents, memory, projects, software, tools, processes. |
 | Agent engine | `core/runtime/piAgentEngine.ts` | Runs a turn with the Pi agent core against Ollama's native API. Selects the tools offered for the request, applies the agent's scope, and runs the completion and verification passes. The system prompt stays identical between messages so Ollama reuses its cached prefix; what changes per message travels in a state block on the user's message (`turnState.ts`). How the prompt is built, and why: [agent harness playbook](agent-harness/PLAYBOOK.md). |
 | Delegation | `core/domain/delegation.ts`, `core/runtime/agentRouting.ts` | The Chief Agent hands work to Coding, Research, Personal or Operations. A child attempt can only narrow what its parent may do. Child approvals appear in the parent chat. |

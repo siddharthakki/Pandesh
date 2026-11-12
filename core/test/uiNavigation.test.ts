@@ -36,8 +36,9 @@ describe('the destination registry', () => {
     expect(new Set(UI_DESTINATIONS.map((d) => d.id)).size).toBe(UI_DESTINATIONS.length);
     for (const d of UI_DESTINATIONS) expect(Object.keys(d.targets).sort(), d.id).toEqual(Object.keys(d.where).sort());
     expect(destinationsFor('v2').map((d) => d.id)).toContain('google_setup');
-    expect(destinationsFor('classic').map((d) => d.id)).toContain('google_setup');
-    expect(destinationsFor('classic').map((d) => d.id)).not.toContain('software_discovery');
+    // One interface: every place is a v2 place, and nothing names the retired Classic interface.
+    expect(destinationsFor('v2').length).toBe(UI_DESTINATIONS.length);
+    expect(JSON.stringify(UI_DESTINATIONS)).not.toMatch(/classic/i);
   });
 
   it('suggests the nearest real places for a request that has none', () => {
@@ -45,10 +46,12 @@ describe('the destination registry', () => {
     expect(nearestDestinations('bluetooth pairing', 'v2')).toEqual([]);
     expect(parseUiSurface('v2')).toBe('v2');
     expect(parseUiSurface('mobile')).toBeUndefined();
+    // An older window that still says "classic" gets the only interface there is.
+    expect(parseUiSurface('classic')).toBe('v2');
   });
 
-  it('says where Google is really set up in both interfaces', () => {
-    expect(GOOGLE_SETUP_WHERE).toBe('System (bottom of the left rail) → Connections in the v2 interface, or Connections and settings (left sidebar) → Add / Configure → Google Services in the Classic interface');
+  it('says where Google is really set up', () => {
+    expect(GOOGLE_SETUP_WHERE).toBe('System (bottom of the left rail) → Connections');
   });
 });
 
@@ -85,8 +88,6 @@ describe('navigate_to', () => {
     expect(missing.status).toBe('unknown_destination');
     expect(missing.text).toMatch(/^NOT OPENED: "google_services" is not a place in this Pandesh window, so nothing was opened\./);
     expect(missing.text).toMatch(/Nearest real places: google_setup \(Google account setup/);
-    const classicOnly = await navigateTo(db, { attemptId: 'att_5', surface: 'classic', destination: 'software_discovery', actor: 'pi', sleep: noWait });
-    expect(classicOnly.status).toBe('unknown_destination');
     expect(requested().length).toBe(before);
   });
 
@@ -115,11 +116,12 @@ describe('which window sent the message', () => {
 
   it('decides what the model is told: the real places it may open, or that it can only give the way', () => {
     const v2 = navigationPromptLines('v2');
-    expect(v2).toMatch(/You can open places in this Pandesh window \(v2 interface\) with 'navigate_to'\. These are the only places that exist: home = Home and chats/);
+    expect(v2).toMatch(/You can open places in this Pandesh window with 'navigate_to'\. These are the only places that exist: home = Home and chats/);
     expect(v2).toMatch(/says "take me there" \/ "open it" about a place you or they just named, call navigate_to at once/);
     expect(v2).toMatch(/Say it is open only when navigate_to answered OPENED/);
-    expect(v2).not.toMatch(/cloud_providers/);
-    expect(navigationPromptLines('classic')).not.toMatch(/software_discovery/);
+    expect(v2).toMatch(/cloud_providers = Free cloud providers \(System → Connections → Free cloud models/);
+    expect(v2).toMatch(/diagnostics = About & diagnostics/);
+    expect(navigationPromptLines(undefined)).toMatch(/Never tell the user to switch to, or do something in, a "Classic" interface/);
     expect(navigationPromptLines(undefined)).toMatch(/You cannot open screens in this conversation/);
     expect(navigationPromptLines(undefined)).toMatch(/Never ask the user to paste a client secret, password, API key or token into the chat/);
   });

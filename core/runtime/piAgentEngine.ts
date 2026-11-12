@@ -4018,7 +4018,7 @@ ${String(args.objective ?? '').slice(0, 600)}`,
       tools.push({
         name: 'navigate_to',
         label: 'navigate_to',
-        description: `Open a place in the Pandesh window the user is looking at (${surface === 'v2' ? 'v2' : 'Classic'} interface): ${places.map((d) => `${d.id} (${d.label})`).join(', ')}. Use it when the user asks to open, show or go somewhere in Pandesh, or says "take me there" about a place just named. It only changes what the window shows: no setting is changed and a running task keeps running. Say the place is open only if the result says OPENED.`,
+        description: `Open a place in the Pandesh window the user is looking at: ${places.map((d) => `${d.id} (${d.label})`).join(', ')}. Use it when the user asks to open, show or go somewhere in Pandesh, or says "take me there" about a place just named. It only changes what the window shows: no setting is changed and a running task keeps running. Say the place is open only if the result says OPENED.`,
         parameters: { type: 'object', properties: { destination: { type: 'string', enum: places.map((d) => d.id), description: 'One of the listed place ids.' } }, required: ['destination'] },
         execute: async (_id: string, args: any) => {
           const result = await navigateTo(db, {

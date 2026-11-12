@@ -128,22 +128,3 @@ describe('everyday tool catalog', () => {
     expect(gmail?.permissions).toEqual({ read: true, draft: true, execute: false });
   });
 });
-
-describe('Jarvis Tools UI entry', () => {
-  it('includes Tools tab and proof phrases in the control-center HTML', () => {
-    const html = fs.readFileSync(path.join(__dirname, '../renderer/index.html'), 'utf8');
-    expect(html).toContain('data-tab="tab-tools"');
-    expect(html).toContain('id="tab-tools"');
-    expect(html).toContain('id="tools-catalog"');
-    expect(html).toContain('id="today-due-list"');
-    expect(html).toContain('id="queue-confirm"');
-    expect(html).toContain('id="queue-waiting"');
-    expect(html).toContain('id="research-query"');
-    expect(html).toContain('id="research-approval"');
-    expect(html).toContain('id="tools-health-cpu"');
-    expect(html).toMatch(/Approval before access/);
-    expect(html).toMatch(/Remember that my printer uses A4/);
-    expect(html).toMatch(/Remind me in two minutes to check the oven/);
-    expect(html).toMatch(/Add to queue/);
-  });
-});

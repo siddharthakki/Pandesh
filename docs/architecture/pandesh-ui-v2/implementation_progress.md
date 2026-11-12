@@ -223,3 +223,23 @@ Real-app evidence (isolated profile, gemma4:12b). Chromium's fake microphone pla
 Tests: `apps/desktop/test/uiV2WakeWordRendererUi.test.ts` (14). Desktop: 668 passed, 3 skipped. Core: 2741 passed, 16 skipped. All three type-checks are clean.
 
 Not done: a person speaking the wake word into a real microphone. The wake word stays paused while a task runs, as in Classic.
+
+## v2 is the only interface · STATUS: done (2026-11-12)
+
+The owner asked to stop seeing "do this in the Classic UI" and to make v2 Pandesh's interface. What Classic still had was ported into v2 only where this plan puts it (`ui_information_architecture.md`); the rest was dropped with Classic.
+
+Ported:
+- Chats: a drawer inside Home (§2 "past chats are a left drawer"), with search, rename, pin, archive / restore and export; a chat's Details popover shows what Core keeps about it and exports it.
+- Composer attachments: attach button, drop on the window, paste a picture, chips with Remove, send files without typed text. Sent messages show their files.
+- Free cloud models for chats: the model menu lists the free models of providers you enabled (Connections → Free cloud models: "Offer in the model menu", "Find free models for chats") and asks the same consent Classic asked before a chat runs in the cloud.
+- Automations (System): daily brief on/off and time, reminders and timers, the full command queue (confirm "Run it", edit, reorder, postpone, skip, remove, add).
+- Second Brain → Notes (create, edit, delete). Media Studio: generate an image (with the approval card), cancel, save a copy, open in the Studio, use as reference.
+- Board: development stories (approve after review, retry / resume, verify existing work, stop all). Worker requests (Allow once / Deny) show on every view.
+- About & diagnostics (System): version and build, Update & restart, copy diagnostics, this PC, local models, voice, Image Studio, what each tool can do now.
+- Activity: Open file and Open original.
+
+Dropped with Classic (chat-first in this plan, or legacy): the standalone Mail workspace and web-research form (both run in chat with the same approvals), the engine / OpenRouter selectors, the pop-out workbench, window buttons and the decorative reactor and topology panels.
+
+Removed: `renderer/index.html`, `renderer.js`, `styles.css`, `workspace.css`, the apex scripts and fonts; the tray switch, `uiVariant` preference, `PANDESH_UI_V2`, and the `getUiVariant` / `setUiVariant` channels. Core's navigation registry and prompts name only v2 places and tell the model never to send the user to a Classic interface; an older window that still says `classic` is treated as v2. The update and release manifests now check `app/renderer/v2/index.html` and `app/renderer/v2/app.js`.
+
+Note: an installed updater from Build 166 or earlier still expects `app/renderer/renderer.js`, so the first build after this goes in with the installer, not Update & restart.

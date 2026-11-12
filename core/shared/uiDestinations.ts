@@ -1,12 +1,12 @@
 /**
  * The places in Pandesh's own window that the assistant may open with `navigate_to`, per interface. This list is the
  * only source of destinations: a place missing here is not offered to the model and cannot be "opened". Each target is
- * an instruction for the window's existing navigation (v2: its view switch, Classic: `switchSurface` and the
- * Connections tabs); each `where` is the same place in words, for the user to find it again.
+ * an instruction for the window's own navigation (its view switch); each `where` is the same place in words, for the
+ * user to find it again. Pandesh has one interface (v2); the Classic interface was retired.
  *
- * Kept free of Node APIs: Core, the desktop host and both renderers read it.
+ * Kept free of Node APIs: Core, the desktop host and the renderer read it.
  */
-export type UiSurface = 'v2' | 'classic';
+export type UiSurface = 'v2';
 
 export interface UiDestination {
   id: string;
@@ -19,24 +19,24 @@ export interface UiDestination {
 
 export const UI_DESTINATIONS: readonly UiDestination[] = [
   { id: 'home', label: 'Home and chats', keywords: ['home', 'chat', 'chats', 'conversation', 'start'],
-    targets: { v2: 'view:chat', classic: 'surface:assistant' }, where: { v2: 'Pandesh (top of the left rail)', classic: 'Home (left sidebar)' } },
+    targets: { v2: 'view:chat' }, where: { v2: 'Pandesh (top of the left rail)' } },
   { id: 'google_setup', label: 'Google account setup (Gmail, Calendar)', keywords: ['google', 'gmail', 'calendar', 'oauth', 'credentials', 'client', 'account', 'sign in', 'email'],
-    targets: { v2: 'view:connections', classic: 'surface:integrations/configure#google' },
-    where: { v2: 'System (bottom of the left rail) → Connections', classic: 'Connections and settings (left sidebar) → Add / Configure → Google Services' } },
+    targets: { v2: 'view:connections' },
+    where: { v2: 'System (bottom of the left rail) → Connections' } },
   { id: 'connected_services', label: 'Connected services and their status', keywords: ['connected', 'services', 'connectors', 'connections', 'integrations', 'accounts', 'status'],
-    targets: { v2: 'view:tools#connectors', classic: 'surface:integrations/connected' },
-    where: { v2: 'System → Tools & Skills → Connectors', classic: 'Connections and settings (left sidebar) → Connected' } },
+    targets: { v2: 'view:tools#connectors' },
+    where: { v2: 'System → Tools & Skills → Connectors' } },
   { id: 'settings', label: 'Settings', keywords: ['settings', 'preferences', 'options', 'setup', 'configure', 'theme'],
-    targets: { v2: 'menu:system', classic: 'surface:integrations/connected' },
-    where: { v2: 'System (bottom of the left rail): Connections, Tools & Skills, Processes, Software & Services, theme, Classic UI', classic: 'Connections and settings (left sidebar)' } },
+    targets: { v2: 'menu:system' },
+    where: { v2: 'System (bottom of the left rail): Connections, Phone, Automations, Tools & Skills, Processes, Software & Services, About & diagnostics, theme' } },
   { id: 'permission_mode', label: 'Permission mode (Ask / Auto / Plan only)', keywords: ['permission', 'permissions', 'mode', 'auto', 'ask', 'plan', 'approvals', 'approve'],
-    targets: { v2: 'focus:permission', classic: 'focus:permission' },
-    where: { v2: 'the permission menu under the message box', classic: 'the permission menu next to the model menu at the message box' } },
+    targets: { v2: 'focus:permission' },
+    where: { v2: 'the permission menu under the message box' } },
   { id: 'model_menu', label: 'Model choice', keywords: ['model', 'models', 'llm', 'gemma', 'qwen', 'ollama'],
-    targets: { v2: 'focus:model', classic: 'focus:model' },
-    where: { v2: 'the model menu under the message box', classic: 'the model menu at the message box' } },
+    targets: { v2: 'focus:model' },
+    where: { v2: 'the model menu under the message box' } },
   { id: 'tasks', label: 'Tasks and their real status', keywords: ['tasks', 'board', 'missions', 'running', 'status', 'jobs'],
-    targets: { v2: 'view:board', classic: 'surface:tasks' }, where: { v2: 'Board (left rail)', classic: 'Tasks and missions (left sidebar)' } },
+    targets: { v2: 'view:board' }, where: { v2: 'Board (left rail)' } },
   { id: 'software_discovery', label: 'Software & Services (Software Discovery)', keywords: ['software', 'discovery', 'installed', 'updates', 'ports', 'services', 'versions', 'programs'],
     targets: { v2: 'view:software' }, where: { v2: 'System → Software & Services' } },
   { id: 'projects', label: 'Projects', keywords: ['projects', 'project', 'repositories', 'stories'],
@@ -47,10 +47,10 @@ export const UI_DESTINATIONS: readonly UiDestination[] = [
     targets: { v2: 'view:tools' }, where: { v2: 'System → Tools & Skills' } },
   { id: 'processes', label: 'Processes Pandesh started', keywords: ['processes', 'process', 'programs running'],
     targets: { v2: 'view:processes' }, where: { v2: 'System → Processes' } },
-  { id: 'second_brain', label: 'Second Brain (memories, notes, documents)', keywords: ['brain', 'memory', 'memories', 'notes', 'documents', 'knowledge'],
+  { id: 'second_brain', label: 'Second Brain (memories, notes, documents; notes are on its Notes tab)', keywords: ['brain', 'memory', 'memories', 'notes', 'documents', 'knowledge'],
     targets: { v2: 'view:brain' }, where: { v2: 'Spaces → Second Brain' } },
-  { id: 'automations', label: 'Automations (routines, daily brief, command queue)', keywords: ['automations', 'routines', 'schedule', 'brief', 'queue'],
-    targets: { v2: 'space:automations' }, where: { v2: 'Spaces → Automations' } },
+  { id: 'automations', label: 'Automations (routines, daily brief, reminders and timers, command queue)', keywords: ['automations', 'routines', 'schedule', 'brief', 'queue', 'reminders', 'reminder', 'timers', 'timer'],
+    targets: { v2: 'space:automations' }, where: { v2: 'System → Automations' } },
   { id: 'media_studio', label: 'Media Studio', keywords: ['media', 'images', 'image', 'studio', 'pictures'],
     targets: { v2: 'space:media' }, where: { v2: 'Spaces → Media Studio' } },
   { id: 'social_studio', label: 'Social Studio', keywords: ['social', 'posts', 'drafts'],
@@ -62,11 +62,16 @@ export const UI_DESTINATIONS: readonly UiDestination[] = [
   { id: 'revenue', label: 'Revenue', keywords: ['revenue', 'leads', 'sales', 'money'],
     targets: { v2: 'view:revenue' }, where: { v2: 'Spaces → Revenue' } },
   { id: 'cloud_providers', label: 'Free cloud providers', keywords: ['cloud', 'providers', 'openrouter', 'api key'],
-    targets: { classic: 'surface:integrations/cloud' }, where: { classic: 'Connections and settings (left sidebar) → Cloud Providers' } },
+    targets: { v2: 'view:connections' }, where: { v2: 'System → Connections → Free cloud models (then pick the model in the model menu under the message box)' } },
+  { id: 'chats', label: 'All chats (search, rename, pin, archive, export)', keywords: ['chats', 'history', 'conversations', 'archive', 'archived', 'export', 'rename', 'pin'],
+    targets: { v2: 'view:chat' }, where: { v2: 'Pandesh (top of the left rail) → the chats button at the top left of the chat' } },
+  { id: 'diagnostics', label: 'About & diagnostics (version, update, diagnostics, this PC)', keywords: ['about', 'version', 'build', 'update', 'diagnostics', 'hardware', 'gpu', 'health'],
+    targets: { v2: 'view:about' }, where: { v2: 'System → About & diagnostics' } },
 ];
 
+/** The window's interface. A request from an older window that still says `classic` gets the only interface there is. */
 export function parseUiSurface(value: unknown): UiSurface | undefined {
-  return value === 'v2' || value === 'classic' ? value : undefined;
+  return value === 'v2' || value === 'classic' ? 'v2' : undefined;
 }
 
 /** The destinations that really exist in this interface. */

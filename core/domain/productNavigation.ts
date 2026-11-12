@@ -7,8 +7,8 @@ import { destinationById, destinationsFor, type UiSurface } from '../shared/uiDe
 
 const google = destinationById('google_setup')!;
 
-/** Where the user connects Google (Gmail, Calendar) in this build, in both interfaces. */
-export const GOOGLE_SETUP_WHERE = `${google.where.v2} in the v2 interface, or ${google.where.classic} in the Classic interface`;
+/** Where the user connects Google (Gmail, Calendar) in this build. */
+export const GOOGLE_SETUP_WHERE = `${google.where.v2}`;
 
 /** The steps, as the assistant should give them. */
 export const GOOGLE_SETUP_STEPS = 'One time: in Google Cloud create an OAuth client of type "Desktop app" (with the Gmail API and the Google Calendar API enabled, and the user\'s own Google account added as a test user on the consent screen), download its JSON file and import it there (or paste the Client ID), then press Connect Google and finish signing in in the browser';
@@ -18,9 +18,12 @@ export const GOOGLE_SETUP_STEPS = 'One time: in Google Cloud create an OAuth cli
  * listed places with `navigate_to`; without it, it can only give the way there.
  */
 export function navigationPromptLines(surface: UiSurface | undefined): string {
-  const lines = [`- Google (Gmail, Calendar) is connected by the user in ${GOOGLE_SETUP_WHERE}. ${GOOGLE_SETUP_STEPS}.`];
+  const lines = [
+    `- Google (Gmail, Calendar) is connected by the user in ${GOOGLE_SETUP_WHERE}. ${GOOGLE_SETUP_STEPS}.`,
+    '- Pandesh has one interface. Never tell the user to switch to, or do something in, a "Classic" interface: it no longer exists.',
+  ];
   if (surface) {
-    lines.push(`- You can open places in this Pandesh window (${surface === 'v2' ? 'v2' : 'Classic'} interface) with 'navigate_to'. These are the only places that exist: ${destinationsFor(surface).map((d) => `${d.id} = ${d.label} (${d.where[surface]})`).join('; ')}.`);
+    lines.push(`- You can open places in this Pandesh window with 'navigate_to'. These are the only places that exist: ${destinationsFor(surface).map((d) => `${d.id} = ${d.label} (${d.where[surface]})`).join('; ')}.`);
     lines.push('- When the user asks to open, show or go to one of them, or says "take me there" / "open it" about a place you or they just named, call navigate_to at once instead of describing the way. Say it is open only when navigate_to answered OPENED. For anything not in the list, say it does not exist here and offer the nearest listed place; never invent a menu or page.');
   } else {
     lines.push('- You cannot open screens in this conversation (it did not come from the Pandesh window): give the exact way there instead, and never claim a menu exists unless it is named here.');

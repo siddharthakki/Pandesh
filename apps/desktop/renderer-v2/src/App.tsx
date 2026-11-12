@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { api, errorText, onDesktopEvent, useSnapshot, type ConversationEntry } from './bridge';
+import { api, onDesktopEvent, useSnapshot, type ConversationEntry } from './bridge';
 import { parseV2Target } from './navigationTargets';
 import { Icon, useNarrow, type IconName } from './ui';
 import { Chat } from './Chat';
@@ -15,8 +15,11 @@ import { Workspace, type SpaceId } from './Workspaces';
 import { Connections } from './Connections';
 import { useWakeWord } from './wake';
 import { startWorkshopIntake } from './workshop/useWorkshop';
+import { Chats } from './Chats';
+import { About } from './About';
+import { WorkerApprovalsBanner } from './DevStories';
 
-export type View = 'chat' | 'board' | 'team' | 'space' | 'system' | 'software' | 'tools' | 'brain' | 'processes' | 'workspace' | 'radar' | 'revenue' | 'connections';
+export type View = 'chat' | 'board' | 'team' | 'software' | 'tools' | 'brain' | 'processes' | 'workspace' | 'radar' | 'revenue' | 'connections' | 'about';
 
 interface PaletteEntry { group: string; label: string; run: () => void }
 
@@ -25,13 +28,11 @@ export function App() {
   const { snapshot, error, refresh } = useSnapshot();
   const overview = useTaskOverview();
   const [view, setView] = useState<View>('chat');
-  const [placeholder, setPlaceholder] = useState<{ title: string; text: string } | null>(null);
   const [pop, setPop] = useState<null | 'spaces' | 'system' | 'palette'>(null);
   const [labels, setLabels] = useState<boolean>(() => { try { return localStorage.getItem('pandesh.v2.labels') === '1'; } catch { return false; } });
   const [theme, setTheme] = useState<string>(() => document.documentElement.dataset.theme ?? 'system');
   const opener = useRef<HTMLElement | null>(null);
-  const [variantForced, setVariantForced] = useState(false);
-  useEffect(() => { api.getUiVariant().then((v) => setVariantForced(v.forcedByEnv)).catch(() => setVariantForced(false)); }, []);
+  const [chatsOpen, setChatsOpen] = useState(false);
 
   const needs = needsYouCount(overview.data?.tasks ?? [], snapshot);
 
@@ -68,8 +69,6 @@ export function App() {
     if (next === 'system') delete document.documentElement.dataset.theme; else document.documentElement.dataset.theme = next;
     try { if (next === 'system') localStorage.removeItem('pandesh.v2.theme'); else localStorage.setItem('pandesh.v2.theme', next); } catch { /* ignore */ }
   };
-  const showPlaceholder = (title: string, text: string) => { setPlaceholder({ title, text }); setView('space'); setPop(null); };
-  const useClassic = async () => { try { await api.setUiVariant('classic'); } catch (err) { alert(errorText(err)); } };
 
   const go = (v: View) => { setView(v); setPop(null); };
   const openSpace = (id: SpaceId) => { setSpace(id); go('workspace'); };
@@ -85,19 +84,17 @@ export function App() {
     { name: 'Wish to Reality', sub: 'Goals and offers (feature-frozen)', run: () => openSpace('wish') },
     { name: 'Social Studio', sub: 'Drafts and your decisions (no publishing)', run: () => openSpace('social') },
     { name: 'Media Studio', sub: 'Local image studio and media Pandesh made', run: () => openSpace('media') },
-    { name: 'Automations', sub: 'Routines, daily brief, command queue', run: () => openSpace('automations') },
     { name: 'AI Radar', sub: 'New local-AI releases and advisories vs this PC', run: () => go('radar') },
     { name: 'Revenue', sub: 'Leads, offers, drafts awaiting you, verified results', run: () => go('revenue') },
   ];
   const system = [
-    variantForced
-      ? { name: 'Classic UI is locked off', sub: 'PANDESH_UI_V2=1 is set for this launch; start without it to switch', run: () => {} }
-      : { name: 'Use the Classic UI', sub: 'Reloads the window in the existing interface', run: () => void useClassic() },
     { name: 'Connections', sub: 'Google (Gmail, Calendar): set up and connect', run: () => go('connections') },
     { name: 'Phone', sub: 'Pair a phone with Pandesh (in Connections): QR code, secure link, paired phones', run: () => go('connections') },
+    { name: 'Automations', sub: 'Routines, daily brief, reminders and timers, command queue', run: () => openSpace('automations') },
     { name: 'Tools & Skills', sub: 'Capabilities, agents × tools, skills, MCP, capability tests', run: () => go('tools') },
     { name: 'Processes', sub: 'What Pandesh started, checked against Windows now', run: () => go('processes') },
     { name: 'Software & Services', sub: 'Ports, installed tools, GitHub projects, updates (read-only)', run: () => go('software') },
+    { name: 'About & diagnostics', sub: 'Version and build, Update & restart, copy diagnostics, this PC', run: () => go('about') },
     { name: `Theme: ${theme}`, sub: 'Cycle dark → light → follow Windows', run: cycleTheme },
     { name: labels ? 'Hide rail labels' : 'Show rail labels', sub: 'Names next to the navigation icons', run: toggleLabels },
   ];
@@ -120,7 +117,7 @@ export function App() {
   useEffect(() => onDesktopEvent((e) => {
     const nav = e.navigation;
     if (e.kind !== 'navigate' || !nav) return;
-    const action = nav.surface === 'v2' ? parseV2Target(nav.target) : { kind: 'unknown' as const, detail: 'this window shows the v2 interface' };
+    const action = parseV2Target(nav.target);
     if (action.kind === 'view') { if (action.toolsTab) setToolsTab({ tab: action.toolsTab, n: Date.now() }); setPop(null); setView(action.view); }
     else if (action.kind === 'space') { setSpace(action.space); setPop(null); setView('workspace'); }
     else if (action.kind === 'menu') setPop(narrowRef.current ? 'spaces' : 'system');
@@ -139,7 +136,7 @@ export function App() {
       const ok = action.kind !== 'unknown' && shows();
       if (!ok && action.kind !== 'unknown' && ++tries < 20) { setTimeout(check, 50); return; }
       const detail = action.kind === 'unknown' ? action.detail : ok ? undefined : 'the window did not switch';
-      void api.confirmNavigation(nav.id, ok, detail, 'v2').catch(() => undefined);
+      void api.confirmNavigation(nav.id, ok, detail).catch(() => undefined);
     };
     setTimeout(check, 50);
   }), []);
@@ -155,8 +152,11 @@ export function App() {
     { group: 'GO TO', label: 'Connections (Google, Gmail, Calendar)', run: () => go('connections') },
     { group: 'GO TO', label: 'Second Brain', run: () => go('brain') },
     { group: 'GO TO', label: 'Processes', run: () => go('processes') },
+    { group: 'GO TO', label: 'Chats (all, with search)', run: () => { go('chat'); setChatsOpen(true); } },
+    { group: 'GO TO', label: 'Automations, reminders and command queue', run: () => openSpace('automations') },
+    { group: 'GO TO', label: 'Media Studio', run: () => openSpace('media') },
+    { group: 'GO TO', label: 'About & diagnostics', run: () => go('about') },
     { group: 'ACTIONS', label: 'New chat', run: () => { void api.newConversation().then(refresh); setOpenConversationId(null); go('chat'); } },
-    { group: 'ACTIONS', label: 'Use the Classic UI', run: () => void useClassic() },
     { group: 'ACTIONS', label: 'Change theme', run: cycleTheme },
     ...conversations.slice(0, 12).map((c) => ({ group: 'RECENT CHATS', label: c.title || c.preview || 'Untitled chat', run: () => { setOpenConversationId(c.id); go('chat'); } })),
   ], [conversations, theme, labels]);
@@ -178,7 +178,7 @@ export function App() {
             <Icon name="spaces" />{labels && <span className="label">Spaces</span>}
           </button>
           <div className="spacer" />
-          <button type="button" className="rail-btn" title="System — Classic UI, theme, labels" aria-label="System" aria-expanded={pop === 'system'} onClick={() => openPop('system')}>
+          <button type="button" className="rail-btn" title="System — connections, automations, tools, diagnostics, theme" aria-label="System" aria-expanded={pop === 'system'} onClick={() => openPop('system')}>
             <Icon name="system" />{labels && <span className="label">System</span>}
           </button>
           <button type="button" className="rail-btn" title={labels ? 'Hide labels' : 'Show labels'} aria-label={labels ? 'Hide labels' : 'Show labels'} aria-pressed={labels} onClick={toggleLabels}>
@@ -188,7 +188,11 @@ export function App() {
       )}
 
       <div className="main" data-view={view}>
-        {view === 'chat' && <Chat snapshot={snapshot} snapshotError={error} refresh={refresh} narrow={narrow} openConversationId={openConversationId} onOpenPalette={() => openPop('palette')} onOpenBoard={() => go('board')} draft={draft} onDraftUsed={() => setDraft(null)}
+        <WorkerApprovalsBanner />
+        {view === 'chat' && chatsOpen && <Chats narrow={narrow} currentId={openConversationId ?? snapshot?.selectedConversationId ?? null} onClose={() => setChatsOpen(false)}
+          onOpen={(id) => { setOpenConversationId(id); if (narrow) setChatsOpen(false); }}
+          onNew={() => { void api.newConversation().then(refresh); setOpenConversationId(null); if (narrow) setChatsOpen(false); }} />}
+        {view === 'chat' && <Chat snapshot={snapshot} snapshotError={error} refresh={refresh} narrow={narrow} openConversationId={openConversationId} onOpenPalette={() => openPop('palette')} onOpenChats={() => setChatsOpen(!chatsOpen)} onOpenBoard={() => go('board')} draft={draft} onDraftUsed={() => setDraft(null)}
           wake={wake} wakeTurn={wakeTurn} onWakeTurnTaken={() => setWakeTurn(null)} onVoiceBusy={setVoiceBusy} />}
         {view === 'board' && <Board overview={overview} narrow={narrow} onOpenPalette={() => openPop('palette')} onOpenConversation={(id) => { setOpenConversationId(id); go('chat'); }} />}
         {view === 'software' && <Software narrow={narrow} />}
@@ -196,19 +200,12 @@ export function App() {
         {view === 'revenue' && <Revenue />}
         {view === 'tools' && <ToolsHub narrow={narrow} initialTab={toolsTab} />}
         {view === 'connections' && <Connections snapshot={snapshot} refresh={refresh} />}
-        {view === 'brain' && <SecondBrain narrow={narrow} />}
+        {view === 'brain' && <SecondBrain narrow={narrow} snapshot={snapshot} refresh={refresh} />}
+        {view === 'about' && <About snapshot={snapshot} refresh={refresh} narrow={narrow} />}
         {view === 'processes' && <Processes narrow={narrow} />}
-        {view === 'workspace' && <Workspace space={space} narrow={narrow} onAskPandesh={(t) => { setDraft(t); go('chat'); }} />}
+        {view === 'workspace' && <Workspace space={space} narrow={narrow} snapshot={snapshot} refresh={refresh} onAskPandesh={(t) => { setDraft(t); go('chat'); }} />}
         {view === 'team' && <Team narrow={narrow} latestAttemptId={(overview.data?.tasks ?? []).find((t) => t.conversationId === snapshot?.selectedConversationId)?.attemptId ?? overview.data?.tasks?.[0]?.attemptId ?? null}
           onMessage={(agentId) => { void (async () => { await api.household('selectAgent', { agentId }); await api.newConversation(); setOpenConversationId(null); refresh(); go('chat'); })(); }} />}
-        {view === 'space' && placeholder && (
-          <div className="placeholder" role="region" aria-label={placeholder.title}>
-            <h1>{placeholder.title}</h1>
-            <p>{placeholder.text}</p>
-            <button type="button" className="btn" onClick={() => void useClassic()}>Open the Classic UI</button>{' '}
-            <button type="button" className="btn" onClick={() => go('chat')}>Back to chat</button>
-          </div>
-        )}
 
         {pop === 'spaces' && (
           <div className="popover" role="dialog" aria-label="Spaces" style={narrow ? { left: 16, right: 16, bottom: 8, width: 'auto' } : { left: labels ? 192 : 64, top: 150 }}>

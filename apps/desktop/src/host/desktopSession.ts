@@ -200,7 +200,7 @@ export const FOLDER_MENTION_TIMEOUT_MS = 1_500;
 export interface DesktopSessionOptions {
   productRoot: string;
   /** The interface this host's window shows. Messages from the window carry it, so the assistant can open places there. */
-  uiSurface?: () => 'v2' | 'classic' | null;
+  uiSurface?: () => 'v2' | null;
   dataDir?: string;
   corePath?: string;
   bundledCoreVersion?: string;
@@ -1523,7 +1523,7 @@ export class DesktopSession {
   }
 
   /**
-   * Makes `folder` the workspace. Without `grant` (the Classic folder picker, which has no access choice) the folder
+   * Makes `folder` the workspace. Without `grant` (the plain folder picker, which has no access choice) the folder
    * gets read and write access, as it always did; the v2 card passes the person's choice through `useWorkspace`.
    */
   setFolder(folder: string, grant: { access?: WorkspaceAccess; source?: WorkspaceSource; grantedAt?: string } = {}): DesktopSnapshot {
@@ -5142,15 +5142,16 @@ export class DesktopSession {
   }
 
   /** Which Pandesh window sends this message (never the phone), so Core lets the assistant open places in it. */
-  private uiSurfaceField(clientOrigin: 'desktop' | 'mobile' = 'desktop'): { uiSurface?: 'v2' | 'classic' } {
+  private uiSurfaceField(clientOrigin: 'desktop' | 'mobile' = 'desktop'): { uiSurface?: 'v2' } {
     const surface = clientOrigin === 'desktop' ? (this.options.uiSurface?.() ?? null) : null;
     return surface ? { uiSurface: surface } : {};
   }
 
   /** The window's answer to a navigate_to request, passed to Core, which only then lets the assistant say it is open. */
-  async confirmNavigation(navigationId: string, ok: boolean, detail?: string, surface?: 'v2' | 'classic'): Promise<{ recorded: boolean }> {
+  async confirmNavigation(navigationId: string, ok: boolean, detail?: string, _surface?: string): Promise<{ recorded: boolean }> {
     if (!/^uinav_[\w-]+$/.test(navigationId)) throw new Error('unknown navigation');
-    return this.requireClient().confirmUiNavigation(navigationId, { ok, ...(detail ? { detail } : {}), ...(surface ? { surface } : {}) });
+    // The window is always the v2 interface (the Classic renderer was retired).
+    return this.requireClient().confirmUiNavigation(navigationId, { ok, ...(detail ? { detail } : {}), surface: 'v2' });
   }
 
   private async handleRuntimeEvent(event: RuntimeEventRecord): Promise<void> {

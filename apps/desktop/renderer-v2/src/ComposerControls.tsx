@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { api, errorText, type Snapshot } from './bridge';
 import {
-  AUTO_MODEL, EXPIRY_CHOICES, PERMISSION_LABELS, STILL_ASKS_NOTE,
+  AUTO_FREE_CLOUD, AUTO_MODEL, EXPIRY_CHOICES, PERMISSION_LABELS, STILL_ASKS_NOTE,
   grantProblem, grantRows, modelMenu, permissionChip, permissionStatus, type PermissionMode,
 } from './composerModel';
 
@@ -47,12 +47,40 @@ export function useComposerControls(opts: { snapshot: Snapshot | null; refresh: 
     void run(async () => { await api.setPermissionMode('auto', { categories: ticked, expiresInMinutes: expiry }); setGranting(false); });
   };
 
+  const [cloudAsk, setCloudAsk] = useState<{ value: string; model: string; provider: string } | null>(null);
   const chooseModel = (value: string) => {
     if (!value) return;
+    const at = value.indexOf('::');
+    // A cloud model runs the whole chat on someone else's servers: say exactly what leaves this PC first.
+    if (at > 0 && value !== snapshot?.cloud?.selectedModel) {
+      const providerId = value.slice(0, at);
+      const provider = (snapshot?.cloud?.providers ?? []).find((p) => p.id === providerId);
+      setCloudAsk(value === AUTO_FREE_CLOUD
+        ? { value, model: 'Auto (best approved free model)', provider: 'the free cloud provider Auto picks' }
+        : { value, model: value.slice(at + 2), provider: provider?.displayName ?? providerId });
+      return;
+    }
     void run(() => api.selectModel(value));
   };
 
-  const panel = (granting || status.length > 0) ? (
+  const cloudPanel = cloudAsk ? (
+    <section className="approval" aria-label={`Run your chats on ${cloudAsk.model}?`} style={{ margin: 0 }}>
+      <div className="approval-head"><span className="dot attention" aria-hidden="true" /><span className="title">Run your chats on {cloudAsk.model} ({cloudAsk.provider})?</span></div>
+      <p style={{ margin: 0, fontSize: 14 }}>Chats you send while this model is selected run on {cloudAsk.provider}'s servers, not on this PC. They receive:</p>
+      <ul style={{ margin: 0, paddingLeft: 20, fontSize: 14 }}>
+        <li>the messages in that chat, including earlier ones;</li>
+        <li>documents you attach (as text extracted on this PC; images stay local);</li>
+        <li>what Pandesh's tools return while it works: files it reads in the selected folder, web pages, and — only if it uses those tools — your Gmail, Calendar or memory content.</li>
+      </ul>
+      <p style={{ margin: 0, fontSize: 13.5, color: 'var(--muted)' }}>Only verified-free models are used, and a failure never falls back to a paid service. Pick a local model again at any time to keep everything on this PC.</p>
+      <div className="actions">
+        <button type="button" className="btn primary" disabled={saving} onClick={() => { const v = cloudAsk.value; setCloudAsk(null); void run(() => api.selectModel(v)); }}>Use this cloud model</button>
+        <button type="button" className="btn" onClick={() => setCloudAsk(null)}>Keep the current model</button>
+      </div>
+    </section>
+  ) : null;
+
+  const panel = cloudPanel ?? ((granting || status.length > 0) ? (
     <section className="perm-panel" aria-label="What the permission mode allows">
       {status.length > 0 && (
         <ul className="perm-status" aria-live="polite">
@@ -96,7 +124,7 @@ export function useComposerControls(opts: { snapshot: Snapshot | null; refresh: 
         </form>
       )}
     </section>
-  ) : null;
+  ) : null);
 
   const controls = (
     <>
@@ -110,7 +138,7 @@ export function useComposerControls(opts: { snapshot: Snapshot | null; refresh: 
         value={menu.selected} disabled={disabled || saving || !snapshot || Boolean(snapshot?.running)} onChange={(e) => chooseModel(e.target.value)}>
         {menu.options.filter((o) => o.group !== 'cloud').map((o) => <option key={o.value || 'none'} value={o.value} disabled={o.disabled}>{o.label}</option>)}
         {menu.options.some((o) => o.group === 'cloud') && (
-          <optgroup label="Cloud — the whole chat runs there (chosen in the Classic UI)">
+          <optgroup label="Free cloud — the whole chat runs there">
             {menu.options.filter((o) => o.group === 'cloud').map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
           </optgroup>
         )}
