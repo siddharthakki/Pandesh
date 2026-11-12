@@ -196,9 +196,9 @@ export function cloudOfferText(offer: PreferredCloudModel): string {
   const label = cloudProviderLabel(offer.provider);
   return [
     `**Want me to hand this to the cloud model ${offer.model} (${label})?** It is free and runs on ${label}'s servers, not on this PC. If you say yes, it receives:`,
-    '- this request and what the local model tried (tool names only, no results);',
+    '- this request, and which local models tried it;',
     '- public web search results, if it searches.',
-    'It does not receive your files, folders, email, calendar, memory or the earlier messages of this chat, so it cannot do work that needs them.',
+    'It does not receive your files, folders, attachments, email, calendar, memory or the earlier messages of this chat, so it cannot do work that needs them.',
     'Nothing has been sent yet. Reply **yes** to hand it over, or **no** to keep everything on this PC.',
   ].join('\n');
 }
@@ -259,7 +259,7 @@ export function pendingCloudOffer(db: CoreDatabase, conversationId: string, curr
 }
 
 export function cloudOfferAcceptedReply(offer: PendingCloudOffer): string {
-  return `Handing this to **${offer.model}** (${cloudProviderLabel(offer.provider)}) now. It works on the same request without your files, email, calendar, memory or the earlier messages of this chat, which stay on this PC; its answer will appear here.`;
+  return `Handing this to **${offer.model}** (${cloudProviderLabel(offer.provider)}) now. It works on the same request without your files, attachments, email, calendar, memory or the earlier messages of this chat, which stay on this PC; its answer will appear here.`;
 }
 
 export const CLOUD_OFFER_DECLINED_REPLY = 'OK — nothing was sent to a cloud model, and the request stays as it is. You can rephrase it, split it into smaller steps, or pick another model and ask again.';
@@ -291,7 +291,8 @@ export function startAcceptedCloudOffer(deps: Pick<EscalationDeps, 'db' | 'actor
         reason: `Cloud model approved by the user after ${tried.join(', ')} did not finish`,
         rerouteIndex: chain.length,
         continuesUnfinishedTurn: true,
-        guidance: `Pandesh handed this request to you after the local models ${tried.join(', ')} did not finish it (the last one: ${why.detail}). The user approved using you for it. Ignore any earlier reply in this chat that says the work is starting or under way — it is not. Do the work now with your tools in this turn, then say exactly what exists.`,
+        // No failure text from the local attempt: it can carry local paths or error output (verification of #78, L6).
+        guidance: `Pandesh handed this request to you after the local models ${tried.join(', ')} did not finish it. The user approved using you for it. Ignore any earlier reply in this chat that says the work is starting or under way — it is not. Do the work now with your tools in this turn, then say exactly what exists.`,
       });
       recordRuntimeEvent(db, { domain: 'attempt', entityId: successor.id, eventType: 'attempt_escalated', actor: deps.actor, metadata: { predecessorAttemptId: offered.id, failedModel: tried.at(-1), selectedModel: offer.model, provider: offer.provider, why: why.reason, reason: 'approved cloud offer' } });
       return successor;

@@ -1216,7 +1216,15 @@ function registerIpc(): void {
   });
   ipcMain.handle(DESKTOP_CHANNELS.allowInboxOrganization, async () => {
     if (!session) throw new Error('desktop session is not started');
+    // A new Google consent (gmail.modify): the same test-copy rule and log line as Connect (tracker item 23).
+    const refusal = googleConnectRefusal(dataDir, defaultDesktopDataDir());
+    if (refusal) {
+      hostLog(`Google inbox organization refused: ${refusal}`);
+      throw new Error(refusal);
+    }
+    hostLog(`Google inbox organization (gmail.modify) consent started from the Pandesh window (profile ${dataDir})`);
     const result = await session.allowInboxOrganization();
+    hostLog(`Google inbox organization finished: ${result.inboxOrganization}`);
     sendSnapshot();
     return result;
   });
@@ -1288,6 +1296,7 @@ function registerIpc(): void {
   ipcMain.handle(DESKTOP_CHANNELS.clearGoogleOAuthClient, async () => {
     if (!session) throw new Error('desktop session is not started');
     const result = await session.clearGoogleOAuthClient();
+    hostLog('Google OAuth client removed and Google disconnected from the Pandesh window; Gmail and Calendar permissions revoked in Core');
     sendSnapshot();
     return result;
   });

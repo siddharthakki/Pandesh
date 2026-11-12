@@ -54,22 +54,46 @@ export function isCloudProvider(provider: string | null | undefined): boolean {
 }
 
 /**
- * The part of the history a cloud turn may see: only the trailing run of exchanges that already happened on a cloud
- * model. Everything up to and including the last assistant reply that did not come from a cloud model is withheld,
- * with the user messages of those turns (they were written for a local model).
+ * The part of the history a cloud turn may see: only what was written after the last turn of this conversation that
+ * did NOT run on a cloud model. `localCutoffIso` is when that local turn last changed (null when every earlier turn ran
+ * on a cloud model). Everything at or before it is withheld, user messages included, also those of a local turn that
+ * never got a reply (verification of #78: a cut at assistant replies only let such a message through).
  */
-export function cloudVisibleHistory<T extends { role: string; provider?: string | null }>(messages: readonly T[]): { kept: T[]; withheld: number } {
-  let cut = -1;
-  for (let i = 0; i < messages.length; i += 1) {
-    if (messages[i].role === 'assistant' && !isCloudProvider(messages[i].provider)) cut = i;
-  }
-  return { kept: messages.slice(cut + 1), withheld: cut + 1 };
+export function cloudVisibleHistory<T extends { createdAt: string }>(messages: readonly T[], localCutoffIso: string | null): { kept: T[]; withheld: number } {
+  if (!localCutoffIso) return { kept: [...messages], withheld: 0 };
+  const kept = messages.filter((m) => m.createdAt > localCutoffIso);
+  return { kept, withheld: messages.length - kept.length };
+}
+
+/** SQL for the cutoff: the latest change of any earlier attempt in the conversation that did not start a cloud turn. */
+export const LOCAL_CUTOFF_SQL = `SELECT MAX(MAX(a.createdAt, a.updatedAt, COALESCE(a.completedAt, ''))) AS t
+  FROM attempts a JOIN requests r ON r.id = a.requestId
+ WHERE r.conversationId = ? AND a.id != ?
+   AND NOT EXISTS (SELECT 1 FROM runtime_events e WHERE e.entityId = a.id AND e.eventType = 'cloud_turn_started')`;
+
+/**
+ * Replaces local paths in text bound for a cloud model: the selected folder becomes "the selected folder" and the home
+ * folder "~". Both spellings (backslash and slash) and any letter case of a Windows path are matched.
+ */
+export function scrubLocalPaths(text: string, paths: { workspace?: string | null; home?: string | null }): string {
+  let out = text;
+  const replaceAll = (target: string | null | undefined, by: string) => {
+    if (!target || target.length < 3) return;
+    const variants = new Set([target, target.replace(/\\/g, '/'), target.replace(/\//g, '\\'), target.replace(/\\/g, '\\\\')]);
+    for (const v of variants) {
+      const escaped = v.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      out = out.replace(new RegExp(escaped, 'gi'), by);
+    }
+  };
+  replaceAll(paths.workspace?.replace(/[\\/]+$/, ''), 'the selected folder');
+  replaceAll(paths.home?.replace(/[\\/]+$/, ''), '~');
+  return out;
 }
 
 /** The turn fact that tells the cloud model what it cannot see, so it says so instead of guessing. */
 export function cloudBoundaryFact(label: string, input: { withheldTools: number; withheldHistory: number }): string {
   const parts = [
-    `PRIVATE DATA BOUNDARY: this chat runs on ${label}, a cloud model, not on this PC. Pandesh does not send the user's files, folders, email, calendar, memory, tasks, reminders or PC details to cloud models, so tools that read them are not available in this chat.`,
+    `PRIVATE DATA BOUNDARY: this chat runs on ${label}, a cloud model, not on this PC. Pandesh does not send the user's files, folders, earlier attachments, email, calendar, memory, tasks or reminders to cloud models, so tools that read them are not available in this chat.`,
     'If the request needs any of that, say plainly that it needs a local model and that the user can switch to one; do not guess the content.',
   ];
   if (input.withheldHistory > 0) parts.push(`Earlier parts of this conversation ran on the local model and are not shared with ${label}.`);
