@@ -1996,7 +1996,7 @@ export class DesktopSession {
     const exclude = auto ? [] : [`${selection.providerId}::${selection.modelId}`];
     let route: { decision: { kind: 'selected'; candidate: { descriptor: { provider: string; modelId: string } }; alternatives: Array<{ descriptor: { provider: string; modelId: string } }> } | { kind: 'blocked'; reason: string }; preferences: { fallbackOnRateLimit: boolean } } | null = null;
     try {
-      route = await this.requireClient().request('/v1/cloud/route', { method: 'POST', body: { task: 'chat', privacy: 'public', exclude } });
+      route = await this.requireClient().requestAsHost('/v1/cloud/route', { method: 'POST', body: { task: 'chat', privacy: 'public', exclude } });
     } catch (error) {
       this.options.log?.(`cloud route unavailable: ${(error as Error).message}`);
     }
@@ -2071,25 +2071,25 @@ export class DesktopSession {
   /** Registry, routing preferences, credential status. Never a key. */
   async getFreeModels(): Promise<DesktopFreeModelsState> {
     if (!this.cloudCatalogCache) await this.refreshCloudCatalog();
-    const registry = await this.requireClient().request<Record<string, unknown>>('/v1/cloud/registry');
+    const registry = await this.requireClient().requestAsHost<Record<string, unknown>>('/v1/cloud/registry');
     const legacyOnly = await this.vault.legacyOnly((this.cloudCatalogCache?.providers ?? []).map((p) => p.id)).catch(() => []);
     return { registry, credentials: { backend: this.vault.backendKind, status: this.credentialStatus, legacyOnly }, cloud: this.getCloudState() } as DesktopFreeModelsState;
   }
 
   async refreshFreeModels(): Promise<DesktopFreeModelsState> {
     await this.pushCloudCredentials();
-    const result = await this.requireClient().request<{ outcome: { report: { summary: string }; errors: string[] } }>('/v1/cloud/registry/refresh', { method: 'POST', body: {} });
+    const result = await this.requireClient().requestAsHost<{ outcome: { report: { summary: string }; errors: string[] } }>('/v1/cloud/registry/refresh', { method: 'POST', body: {} });
     this.emit({ kind: 'status', at: nowIso(), summary: `Free model registry: ${result.outcome.report.summary}${result.outcome.errors.length ? ` (${result.outcome.errors.length} source problem(s); last good data kept)` : ''}` });
     return this.getFreeModels();
   }
 
   async setFreeModelPreferences(prefs: { autoProviders?: string[]; disabledProviders?: string[]; preferredOrder?: string[]; fallbackOnRateLimit?: boolean }): Promise<DesktopFreeModelsState> {
-    await this.requireClient().request('/v1/cloud/registry/preferences', { method: 'POST', body: prefs });
+    await this.requireClient().requestAsHost('/v1/cloud/registry/preferences', { method: 'POST', body: prefs });
     return this.getFreeModels();
   }
 
   async setFreeModelSchedule(enabled: boolean): Promise<DesktopFreeModelsState> {
-    await this.requireClient().request('/v1/cloud/registry/schedule', { method: 'POST', body: { enabled } });
+    await this.requireClient().requestAsHost('/v1/cloud/registry/schedule', { method: 'POST', body: { enabled } });
     return this.getFreeModels();
   }
 
@@ -2108,7 +2108,7 @@ export class DesktopSession {
 
   /** Runs the small qualification suite for one verified-free model. Explicit user action only. */
   async qualifyFreeModel(providerId: string, model: string): Promise<DesktopFreeModelsState> {
-    const result = await this.requireClient().request<{ record?: { capabilities: Record<string, boolean> }; message?: string }>(
+    const result = await this.requireClient().requestAsHost<{ record?: { capabilities: Record<string, boolean> }; message?: string }>(
       `/v1/cloud/registry/providers/${encodeURIComponent(providerId)}/qualify`, { method: 'POST', body: { model } },
     );
     if (!result.record) throw new Error(result.message ?? 'qualification was refused');
