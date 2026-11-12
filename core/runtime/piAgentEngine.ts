@@ -3,7 +3,7 @@ import { answerTaskStatusQuestion, isTaskStatusQuestion, listPriorTurns, renderT
 import { listEarlierReads, renderEarlierReadsSection } from '../domain/earlierReads';
 import { listOpenGmailPlans, renderOpenGmailPlansSection } from '../domain/openGmailPlans';
 import { homeLocationFact, readHomeLocation } from '../domain/homeLocation';
-import { cloudBoundaryFact, cloudVisibleHistory, isCloudSafeTool, LOCAL_CUTOFF_SQL, partitionCloudTools, scrubLocalPaths } from './cloudDataBoundary';
+import { cloudBoundaryFact, cloudVisibleHistory, isCloudProvider, isCloudSafeTool, partitionCloudTools, scrubLocalPaths } from './cloudDataBoundary';
 import { checkPublicQuery, derivePublicQuery, explicitlyRequestsWebSearch, referencesLocalContent } from './publicQueryGuard';
 import { commandOpinionWarnings, readCommandReviewSettings, recordCommandReview, reviewCommand, warmCommandReview, type CommandOpinion, type CommandReviewOutcome } from './commandSecondOpinion';
 import { queryPrivacySummary, queryPrivacyWarning, readQueryPrivacySettings, recordQueryPrivacyReview, reviewQueryPrivacy, warmQueryPrivacy, type QueryPrivacyOpinion } from './queryPrivacySecondOpinion';
@@ -5340,11 +5340,16 @@ When the user asks to continue, resume, or check progress/updates, resume this w
         // Private-data boundary (SEC-2): a cloud model sees only the exchanges that already ran on a cloud model.
         // Earlier local turns (whose replies may quote files, email or memory) stay on this PC.
         if (cloudTarget) {
-          let localCutoff: string | null = null;
-          // Fail closed: if the cutoff cannot be read, no earlier message is shown to the cloud model.
-          try { localCutoff = db.get<{ t: string | null }>(LOCAL_CUTOFF_SQL, [conversationId, attemptId])?.t || null; } catch { localCutoff = '9999'; }
-          const visible = cloudVisibleHistory(turns.map((m) => ({ ...m, createdAt: String(m.createdAt) })), localCutoff);
-          turns = visible.kept;
+          // A message counts as the cloud model's own only through its model call; any lookup error withholds it.
+          const isCloudInvocation = (id: string): boolean => {
+            try {
+              const row = db.get<{ p: string | null }>('SELECT COALESCE(actualProvider, requestedProvider) AS p FROM model_invocations WHERE id = ?', [id]);
+              return isCloudProvider(row?.p ?? null);
+            } catch { return false; }
+          };
+          const visible = cloudVisibleHistory(turns, isCloudInvocation);
+          // Kept cloud replies may still name local paths (a refusal that quotes a folder): scrubbed like the prompt.
+          turns = visible.kept.map((m) => ({ ...m, content: scrubLocalPaths(String(m.content), { workspace: selectedWorkspace || null, home: os.homedir() }) }));
           cloudWithheldHistory = visible.withheld;
           if (visible.withheld > 0) safeRecordRuntimeEvent(db, broadcaster, attemptId, 'cloud_history_withheld', { provider: cloudTarget.provider, withheldMessages: visible.withheld, keptMessages: visible.kept.length }, actor);
         }
