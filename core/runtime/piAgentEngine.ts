@@ -389,6 +389,21 @@ export function describeUnansweredApproval(outcome: PiToolApprovalOutcome): stri
   return 'The web-access approval request was not answered, so nothing was searched.';
 }
 
+/** An internal record id (proj_<uuid>, ptask_<uuid>, artifact_<uuid>…): context for the model and the journal, not chat text. */
+const INTERNAL_RECORD_ID_SOURCE = String.raw`\b(?:[a-z]+_)+[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b`;
+
+/**
+ * A tool receipt made fit for the chat when Core has to show it as the reply: "(ref proj_…/ptask_…)" parentheticals
+ * and any other internal record id are removed; the rest of the receipt (what was done, where) stays.
+ */
+export function withoutInternalRecordIds(text: string): string {
+  const hasId = new RegExp(INTERNAL_RECORD_ID_SOURCE, 'i');
+  return text
+    .replace(/[ \t]*\((?:ref|id)\b[^()\n]*\)/gi, (m) => (hasId.test(m) ? '' : m))
+    .replace(new RegExp(String.raw`[ \t]*\(?${INTERNAL_RECORD_ID_SOURCE}(?:\/${INTERNAL_RECORD_ID_SOURCE})*\)?`, 'gi'), '')
+    .replace(/[ \t]+([.,;:])/g, '$1');
+}
+
 /**
  * The reply for a turn whose model wrote no answer: what the recorded tool
  * calls show, in plain words, ending at the step that failed. Never claims
@@ -5702,6 +5717,24 @@ When the user asks to continue, resume, or check progress/updates, resume this w
           await agent.waitForIdle();
         });
       }
+      // CI flake (PR #75/#76, 2026-11-12): add_task succeeded, then the model call that should have answered failed at
+      // the transport in 1 ms. Nothing re-asked the model, so the turn fell through to Core's fallbacks and showed the raw
+      // tool receipt. A model call that fails right after tool results is sent once more from the same transcript: the
+      // tools are not run again, and the model's own answer stays the reply.
+      const messagesNow: any[] = agent.state.messages;
+      const failedCall: any = messagesNow[messagesNow.length - 1];
+      const beforeFailure: any = messagesNow[messagesNow.length - 2];
+      if (!signal?.aborted && supersedeWith === null
+        && failedCall?.role === 'assistant' && (failedCall.stopReason === 'error' || failedCall.errorMessage)
+        && !(failedCall.content || []).some((c: any) => (c.type === 'text' && String(c.text ?? '').trim()) || c.type === 'toolCall')
+        && (beforeFailure?.role === 'toolResult' || beforeFailure?.role === 'tool')) {
+        safeRecordRuntimeEvent(db, broadcaster, attemptId, 'model_call_retried_after_error', { error: String(failedCall.errorMessage ?? '').slice(0, 300) }, actor);
+        agent.state.messages = messagesNow.slice(0, -1);
+        await tolerateSupersede(async () => {
+          await agent.continue();
+          await agent.waitForIdle();
+        });
+      }
     } catch (err: any) {
       steerableAgents.delete(attemptId);
       if (err?.name === 'AbortError' || signal?.aborted) return settleCancelled();
@@ -6280,7 +6313,8 @@ When the user asks to continue, resume, or check progress/updates, resume this w
             isUnanswered = true;
           }
         } else {
-          const rawOutputs = successfulTools.map((t) => extractToolResultText(t.result));
+          // A receipt shown as the reply keeps what was done but never Core's internal record ids (CI flake, PR #75/#76).
+          const rawOutputs = successfulTools.map((t) => withoutInternalRecordIds(extractToolResultText(t.result)));
           const nonJsonOutputs = rawOutputs.filter(o => o && !o.trim().startsWith('{') && !o.trim().startsWith('['));
           if (nonJsonOutputs.length > 0) {
             finalReply = nonJsonOutputs.join('\n\n');
