@@ -90,6 +90,10 @@ beforeAll(async () => {
           { index: 1, id: 'call_2', type: 'function', function: { name: 'list_directory', arguments: '{"dirPath":"."}' } },
         ] }, null);
         sse(res, {}, 'tool_calls');
+      } else if (body.includes('SUGGEST-COMMANDS')) {
+        // A cloud model probing the disk by naming files and scripts it guesses (verification round 3, L9).
+        sse(res, { role: 'assistant', content: 'To finish, run `node probe-file-x9.js` and then `npm run probe-script-x9`.' }, null);
+        sse(res, {}, 'stop');
       } else {
         sse(res, { role: 'assistant', content: 'That needs a local model; I cannot see your files here.' }, null);
         sse(res, {}, 'stop');
@@ -201,6 +205,14 @@ describe('a cloud turn in a chat that holds private data', () => {
     expect(JSON.parse(withheld!.metadata).withheldMessages).toBeGreaterThanOrEqual(3);
     const mi = db.get<{ requestedProvider: string; actualProvider: string }>('SELECT requestedProvider, actualProvider FROM model_invocations WHERE attemptId = ?', [first]);
     expect(mi).toMatchObject({ requestedProvider: 'orcarouter', actualProvider: 'orcarouter' });
+  }, 60_000);
+
+  it('does not tell a cloud model which of the files and scripts it names exist on this PC', async () => {
+    const conv = createConversation(db, { mode: 'saath_kar', actor: 'user', title: 'Probe' });
+    await cloudTurn(conv.id, 'SUGGEST-COMMANDS How do I finish the setup?');
+    await cloudTurn(conv.id, 'And then?');
+    const sent = cloudCalls.map((c) => c.body).join('\n');
+    expect(sent).not.toMatch(/does not exist|has no "probe-script-x9"|Checked by Pandesh — commands|Completion check by Pandesh/);
   }, 60_000);
 
   it('answers a project question locally instead of sending the project files to the cloud model', async () => {

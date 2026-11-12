@@ -6443,13 +6443,14 @@ When the user asks to continue, resume, or check progress/updates, resume this w
     if (!signal?.aborted && finalReply && selectedWorkspace) {
       const missingSteps = unfinishedRequestedSteps(requestText, finalReply, toolCallsRecorded.filter((t) => t.status === 'completed').map((t) => t.tool), tools.some((t) => t.name === 'write_file'));
       // Gap 4 (T14: "python -m board.cli" could not work): commands the reply tells the user to run are checked too.
-      const commandProblems = suggestedCommandProblems(finalReply, selectedWorkspace, commandRunDirs(toolCallsRecorded, selectedWorkspace));
+      // Not on a cloud turn: naming which files or scripts exist on disk would tell the cloud model about this PC (verification round 3, L9).
+      const commandProblems = cloudTarget ? [] : suggestedCommandProblems(finalReply, selectedWorkspace, commandRunDirs(toolCallsRecorded, selectedWorkspace));
       if (commandProblems.length) missingSteps.push(`the reply suggests commands that cannot work as written (${commandProblems.join('; ')}); give commands that do work, checked against the files`);
       if (missingSteps.length) {
         safeRecordRuntimeEvent(db, broadcaster, attemptId, 'requested_steps_completion', { missing: missingSteps }, actor);
         try {
           const floor = agent.state.messages.length;
-          for (const name of ['open_local_file', 'write_file', 'read_file']) activeToolNames.add(name);
+          if (!cloudTarget) for (const name of ['open_local_file', 'write_file', 'read_file']) activeToolNames.add(name);
           await agent.prompt(`Completion check by Pandesh: the request is not finished yet — ${missingSteps.join('; ')}. Do these now with your tools in this turn, then give the final answer stating what really happened. If one cannot be done, say exactly why.`);
           await agent.waitForIdle();
           const finished = lastAssistantTextFrom(floor);
@@ -6463,7 +6464,7 @@ When the user asks to continue, resume, or check progress/updates, resume this w
     // Challenge T13: the Coding agent replied "The file has been verified as created" without ever calling write_file.
     // When the reply presents a file that is not on disk, the model gets one chance to really write it (same tool, same
     // approval) or to say it was not created; the claim guard below still judges whatever it says.
-    if (!signal?.aborted && finalReply && selectedWorkspace && tools.some((t) => t.name === 'write_file')) {
+    if (!cloudTarget && !signal?.aborted && finalReply && selectedWorkspace && tools.some((t) => t.name === 'write_file')) {
       const onDisk = (ref: string) => {
         const clean = ref.replace(/[\\/]+$/, '');
         if (path.isAbsolute(clean)) return fs.existsSync(clean);
@@ -6742,7 +6743,7 @@ When the user asks to continue, resume, or check progress/updates, resume this w
         }
       }
     } catch { /* the memory tables are absent in some test databases */ }
-    if (selectedWorkspace && finalReply && !signal?.aborted) {
+    if (!cloudTarget && selectedWorkspace && finalReply && !signal?.aborted) {
       const stillBroken = suggestedCommandProblems(finalReply, selectedWorkspace, commandRunDirs(toolCallsRecorded, selectedWorkspace));
       if (stillBroken.length) coreNotes.push(`**Checked by Pandesh — commands:** ${stillBroken.join('; ')}.`);
     }
