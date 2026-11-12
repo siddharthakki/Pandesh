@@ -2474,7 +2474,7 @@ export class DesktopSession {
             ? 'Operator explicitly selected OpenRouter for this submit'
             : `Operator explicitly selected local model ${model} (${this.provider!.source}); no substitution`,
         suitabilitySummary: useCloud
-          ? `Using ${selectedProvider} ${model} (free, cloud): this chat's messages go to ${selectedProvider}. Your files, email, calendar and memory stay on this PC; tools that read them are off in this chat. No local fallback.`
+          ? `Using ${selectedProvider} ${model} (free, cloud): this chat's messages, and files you attach to them, go to ${selectedProvider}. Your other files, email, calendar and memory stay on this PC; tools that read them are off in this chat. No local fallback.`
           : useOpenRouter
             ? `Using OpenRouter ${model} with a $${openRouterSelection!.maxUsd} cap. No fallback.`
             : `Using local ${model}. Cloud fallback is disabled.`,

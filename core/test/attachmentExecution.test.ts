@@ -414,3 +414,35 @@ describe('F5: follow-ups keep resolving earlier attachments without a re-upload'
     expect(followUp.content).not.toContain('Earlier attachment');
   });
 });
+
+describe('private-data boundary: a cloud model never gets earlier attachments (verification of #78, L1)', () => {
+  it('a follow-up on a cloud model gets no earlier attachment; a handed-over cloud turn gets none of its own either', async () => {
+    const { RuntimeExecutor } = await import('../runtime/executor');
+    const { createRequest } = await import('../domain/requests');
+    const { appendMessage } = await import('../domain/conversations');
+    const conv = await jsonOf(await authedFetch('/v1/conversations', { method: 'POST', idempotencyKey: nextIdemp(), body: JSON.stringify({ mode: 'baat_kar' }) }));
+    const note = await createAndUploadAttachment(conv.id, { name: 'contract.txt', declaredMimeType: 'text/plain', kind: 'text', bytes: Buffer.from('ATTACH-SECRET-A7 salary 91000') });
+    const submission = await jsonOf(await authedFetch('/v1/submit', { method: 'POST', idempotencyKey: nextIdemp(), body: JSON.stringify({ currentMessage: 'Summarize this contract.', requestedMode: 'baat_kar', conversationId: conv.id, attachmentIds: [note.id], modelSelection: textOnlySelection }) }));
+    await authedFetch(`/v1/attempts/${submission.attempt.id}/execute`, { method: 'POST', idempotencyKey: nextIdemp() });
+    await pollAttempt(submission.attempt.id, (a) => a.status === 'completed');
+
+    appendMessage(db, conv.id, { role: 'user', content: 'What did that contract say about the salary?', actor: 'user' });
+    const followUp = createRequest(db, { clientId: 'desktop', conversationId: conv.id, currentMessage: 'What did that contract say about the salary?', requestedMode: 'baat_kar', resolvedMode: 'baat_kar', routeReason: 'user_prompt', contextPolicy: { includeConversationHistory: true, includeProjectContext: false, includeRepositoryContext: false, includeGlobalStoryContext: false }, correlationId: 'cloud-follow-up' });
+    const executor = new RuntimeExecutor(db, broadcaster, { backend, dataDir: dir }) as any;
+    const local = { requestId: followUp.id, selectedProvider: 'ollama', selectedModel: 'qwen2.5-coder:1.5b', modelSelection: textOnlySelection, attachments: [] } as any;
+    const localMsg = [{ role: 'user', content: 'What did that contract say about the salary?' }];
+    expect(executor.applyAttachments('att_x', localMsg, local, 'fence')).toBe(true);
+    expect(localMsg[0].content).toContain('ATTACH-SECRET-A7'); // the local model still gets it
+
+    const cloud = { ...local, selectedProvider: 'orcarouter', selectedModel: 'z-ai/glm-5.3-flash-free', modelSelection: { ...textOnlySelection, cloudChatApproved: true, cloudChatSource: 'picked_before_chat' } };
+    const cloudMsg = [{ role: 'user', content: 'What did that contract say about the salary?' }];
+    expect(executor.applyAttachments('att_x', cloudMsg, cloud, 'fence')).toBe(true);
+    expect(cloudMsg[0].content).not.toContain('ATTACH-SECRET-A7');
+    expect(cloudMsg[0].content).not.toContain('Earlier attachment');
+
+    const handedOver = { ...cloud, modelSelection: { ...cloud.modelSelection, cloudChatSource: 'approved_offer' }, attachments: [{ attachmentId: note.id, kind: 'text', sha256: note.sha256, originalName: 'contract.txt' }] };
+    const handedMsg = [{ role: 'user', content: 'Summarize this contract.' }];
+    expect(executor.applyAttachments('att_x', handedMsg, handedOver, 'fence')).toBe(true);
+    expect(handedMsg[0].content).not.toContain('ATTACH-SECRET-A7');
+  });
+});

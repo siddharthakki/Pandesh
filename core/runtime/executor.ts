@@ -3599,8 +3599,16 @@ export class RuntimeExecutor {
     context: AttemptContextRecord,
     fenceToken: string,
   ): boolean {
-    const attachments = context.attachments ?? [];
-    const continued = this.continuationAttachmentsFor(context, attachments);
+    // Private-data boundary (verification of #78, L1): a cloud model never gets earlier attachments, and a cloud model
+    // the user accepted after the local models gave up gets none at all (they were attached for a local model). Only
+    // what the user attaches in a chat they started on a cloud model goes out with that message.
+    const cloud = isCloudAttemptProvider(context.selectedProvider);
+    const handedOver = cloud && context.modelSelection?.cloudChatSource === 'approved_offer';
+    const attachments = handedOver ? [] : (context.attachments ?? []);
+    const continued = cloud ? [] : this.continuationAttachmentsFor(context, attachments);
+    if (handedOver && (context.attachments?.length ?? 0) > 0) {
+      try { this.mutate(() => recordRuntimeEvent(this.db, { domain: 'attempt', entityId: attemptId, eventType: 'cloud_attachments_withheld', actor: CORE_ACTOR, metadata: { count: context.attachments!.length, reason: 'approved cloud offer' } })); } catch { /* bookkeeping only */ }
+    }
     if (attachments.length === 0 && continued.length === 0) return true;
 
     const hasImage = attachments.some((attachment) => attachment.kind === 'image');

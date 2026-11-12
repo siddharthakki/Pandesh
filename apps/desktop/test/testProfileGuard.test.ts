@@ -33,5 +33,11 @@ describe('test-copy guard', () => {
     expect(handler.indexOf('googleConnectRefusal(')).toBeLessThan(handler.indexOf('session.connectGmail()'));
     expect(handler).toContain("hostLog(`Google connect started");
     expect(main).toContain("window.on('page-title-updated', (event) => event.preventDefault())");
+    // The gmail.modify consent follows the same rule, and the OAuth-client removal is logged too.
+    const inbox = main.slice(main.indexOf('ipcMain.handle(DESKTOP_CHANNELS.allowInboxOrganization'), main.indexOf('ipcMain.handle(DESKTOP_CHANNELS.saveGoogleOAuthClient'));
+    expect(inbox.indexOf('googleConnectRefusal(')).toBeGreaterThan(-1);
+    expect(inbox.indexOf('googleConnectRefusal(')).toBeLessThan(inbox.indexOf('session.allowInboxOrganization()'));
+    const clear = main.slice(main.indexOf('ipcMain.handle(DESKTOP_CHANNELS.clearGoogleOAuthClient'));
+    expect(clear.slice(0, 400)).toContain("hostLog('Google OAuth client removed");
   });
 });

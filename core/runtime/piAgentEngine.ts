@@ -3,7 +3,7 @@ import { answerTaskStatusQuestion, isTaskStatusQuestion, listPriorTurns, renderT
 import { listEarlierReads, renderEarlierReadsSection } from '../domain/earlierReads';
 import { listOpenGmailPlans, renderOpenGmailPlansSection } from '../domain/openGmailPlans';
 import { homeLocationFact, readHomeLocation } from '../domain/homeLocation';
-import { cloudBoundaryFact, cloudVisibleHistory, partitionCloudTools } from './cloudDataBoundary';
+import { cloudBoundaryFact, cloudVisibleHistory, isCloudSafeTool, LOCAL_CUTOFF_SQL, partitionCloudTools, scrubLocalPaths } from './cloudDataBoundary';
 import { checkPublicQuery, derivePublicQuery, explicitlyRequestsWebSearch, referencesLocalContent } from './publicQueryGuard';
 import { commandOpinionWarnings, readCommandReviewSettings, recordCommandReview, reviewCommand, warmCommandReview, type CommandOpinion, type CommandReviewOutcome } from './commandSecondOpinion';
 import { queryPrivacySummary, queryPrivacyWarning, readQueryPrivacySettings, recordQueryPrivacyReview, reviewQueryPrivacy, warmQueryPrivacy, type QueryPrivacyOpinion } from './queryPrivacySecondOpinion';
@@ -4835,7 +4835,8 @@ Report this to the user, saying the ${name} agent did the work. Do not add facts
       safeRecordRuntimeEvent(db, broadcaster, attemptId, 'step_finish', { step: 1, engine: 'pi', durationMs: Date.now() - startTime, outcome: 'completed', reason: 'ambiguous_reference' }, actor);
       return { success: true, reply: question };
     }
-    if (journalScope && journalCtx && journalCtx.entries > 0) {
+    // Not on a cloud turn: the journal returns earlier local tool results (verification of #78, L2).
+    if (journalScope && journalCtx && journalCtx.entries > 0 && !cloudTarget) {
       tools.push({
         name: 'recall_execution',
         label: 'recall_execution',
@@ -5184,8 +5185,9 @@ ${filesPromptSection}${webResearchPromptSection}${wishesPromptSection}${emailCal
     // A small-talk turn keeps its short prompt as before; every other turn collects these facts and rules here.
     const turnStateParts: string[] = simpleInteractive ? [] : [
       `Current local time: ${new Date().toLocaleString('en-GB', { timeZone: localTimeZone, weekday: 'long', year: 'numeric', month: 'long', day: 'numeric', hour: '2-digit', minute: '2-digit' })} in time zone ${localTimeZone} (UTC${utcOffsetLabel()}). Reference days: ${upcomingDaysTable(Date.now(), localTimeZone)}.`,
-      `MOBILE COMPANION STATUS:\n${mobileCompanionState}`,
-      activeTask ? `ACTIVE WORKFLOW IN THIS CONVERSATION:
+      // A cloud turn gets neither PC details nor earlier local requests (verification of #78, L3/L5).
+      cloudTarget ? '' : `MOBILE COMPANION STATUS:\n${mobileCompanionState}`,
+      activeTask && !cloudTarget ? `ACTIVE WORKFLOW IN THIS CONVERSATION:
 - Objective: ${activeTask.objective}
 - Status: ${activeTask.status}
 - Next Action: ${activeTask.nextAction || 'none'}
@@ -5204,7 +5206,7 @@ When the user asks to continue, resume, or check progress/updates, resume this w
     };
 
     // P0: the journal travels with this message (it changes every turn, so it stays out of the cached system prompt).
-    if (journalCtx?.section) addTurnFact(journalCtx.section);
+    if (journalCtx?.section && !cloudTarget) addTurnFact(journalCtx.section);
 
     // Load prior conversation turns for multi-turn continuity
     const priorMessages: any[] = [];
@@ -5272,7 +5274,8 @@ When the user asks to continue, resume, or check progress/updates, resume this w
     }
     // Earlier tasks' real outcomes (cancelled / failed / interrupted), so the model never presents them as pending (D4).
     const taskHistorySection = renderTaskHistorySection(priorTurns);
-    addTurnFact(taskHistorySection);
+    // It quotes earlier requests verbatim, so a cloud turn does not get it (verification of #78, L3).
+    if (!cloudTarget) addTurnFact(taskHistorySection);
     // Micro-test cluster C4 (D-JOB-1): tool results are not part of the history, so a file read two turns ago was
     // "reviewed" from memory and its deadline, salary and link reported missing. Carry the latest content of each file
     // read earlier in this conversation, bounded.
@@ -5337,7 +5340,10 @@ When the user asks to continue, resume, or check progress/updates, resume this w
         // Private-data boundary (SEC-2): a cloud model sees only the exchanges that already ran on a cloud model.
         // Earlier local turns (whose replies may quote files, email or memory) stay on this PC.
         if (cloudTarget) {
-          const visible = cloudVisibleHistory(turns);
+          let localCutoff: string | null = null;
+          // Fail closed: if the cutoff cannot be read, no earlier message is shown to the cloud model.
+          try { localCutoff = db.get<{ t: string | null }>(LOCAL_CUTOFF_SQL, [conversationId, attemptId])?.t || null; } catch { localCutoff = '9999'; }
+          const visible = cloudVisibleHistory(turns.map((m) => ({ ...m, createdAt: String(m.createdAt) })), localCutoff);
           turns = visible.kept;
           cloudWithheldHistory = visible.withheld;
           if (visible.withheld > 0) safeRecordRuntimeEvent(db, broadcaster, attemptId, 'cloud_history_withheld', { provider: cloudTarget.provider, withheldMessages: visible.withheld, keptMessages: visible.kept.length }, actor);
@@ -5443,6 +5449,33 @@ When the user asks to continue, resume, or check progress/updates, resume this w
       addTurnFact(`READ-ONLY FOLDER: the user let Pandesh read ${selectedWorkspace ?? 'the selected folder'} but not change it. Read, list and search its files freely. Do not create, change or delete files and do not run programs (plain read commands such as dir or git status are fine); those tools are refused. If the user asks for a change, describe it and say they can allow changes with the folder menu next to the message box.`);
     }
 
+    // Private-data boundary, enforced where tools run (verification of #78, L2): after every tool has been added, a
+    // cloud turn keeps only CLOUD_SAFE_TOOLS, and each kept tool re-checks its name when it executes. A tool added
+    // after the first partition (recall_execution was) can no longer slip through.
+    if (cloudTarget) {
+      const late = tools.filter((t) => !isCloudSafeTool(t.name)).map((t) => t.name);
+      if (late.length > 0) {
+        const kept = tools.filter((t) => isCloudSafeTool(t.name));
+        tools.length = 0;
+        tools.push(...kept);
+        for (const name of late) activeToolNames.delete(name);
+        safeRecordRuntimeEvent(db, broadcaster, attemptId, 'cloud_private_tools_withheld', { provider: cloudTarget.provider, stage: 'before_execution', withheld: late.slice(0, 80) }, actor);
+      }
+      for (let i = 0; i < tools.length; i += 1) {
+        const tool = tools[i];
+        const original = tool.execute;
+        tools[i] = {
+          ...tool,
+          execute: async (id: string, args: any, ...rest: any[]) => {
+            if (!isCloudSafeTool(tool.name)) {
+              return { content: [{ type: 'text', text: `NOT DONE (private-data boundary): ${tool.name} reads data on this PC, and this chat runs on a cloud model. It was not run.` }], isError: true };
+            }
+            return original(id, args, ...rest);
+          },
+        };
+      }
+    }
+
     // A local model Ollama says cannot use tools (qwen2.5vl:7b) is sent none: with 52 tool definitions Ollama refused
     // the call ("does not support tools") and the turn failed before a word was written (owner test, 2026-11-12).
     const modelWithoutTools = !cloudTarget && !simpleInteractive && await modelLacksTools(ollamaRoot, selectedModel);
@@ -5458,7 +5491,11 @@ When the user asks to continue, resume, or check progress/updates, resume this w
     }
 
     // Messages that were in the conversation before this turn: the state block goes on the first user message after them.
-    const turnState = formatTurnState(turnStateParts);
+    // A cloud turn does not learn local paths (they carry the Windows user name): the selected folder and the home folder
+    // are replaced by neutral words (verification of #78, L5).
+    const scrubForCloud = (text: string): string => cloudTarget ? scrubLocalPaths(text, { workspace: selectedWorkspace || null, home: os.homedir() }) : text;
+    systemPrompt = scrubForCloud(systemPrompt);
+    const turnState = scrubForCloud(formatTurnState(turnStateParts));
     const earlierMessages = new Set<any>(priorMessages);
     safeRecordRuntimeEvent(db, broadcaster, attemptId, 'prompt_layout', { systemChars: systemPrompt.length, turnStateChars: turnState.length, historyMessages: priorMessages.length }, actor);
 
@@ -5863,7 +5900,9 @@ When the user asks to continue, resume, or check progress/updates, resume this w
     // no tool call and the user's words clearly ask for system diagnostics,
     // run the read-only diagnostics capability directly and present the real
     // evidence rather than leaving a manual-instructions reply standing.
-    if (toolCallsRecorded.length === 0 && isDiagnosticsRequest(ctx.currentMessage ?? prompt) && !signal?.aborted) {
+    // None of Core's local-data fallbacks below run on a cloud turn: their output would be stored as the cloud model's
+    // reply and sent on the next cloud turn, or (model comparison) prompted to the cloud model directly (verification of #78, L4).
+    if (!cloudTarget && toolCallsRecorded.length === 0 && isDiagnosticsRequest(ctx.currentMessage ?? prompt) && !signal?.aborted) {
       safeRecordRuntimeEvent(db, broadcaster, attemptId, 'diagnostics_fallback_invoked', { reason: 'model produced no tool call for a diagnostics request' }, actor);
       try {
         const bridge = ctx.capabilities;
@@ -5891,7 +5930,9 @@ When the user asks to continue, resume, or check progress/updates, resume this w
     }
 
     const currentMsg = ctx.currentMessage ?? prompt;
-    if (isModelComparisonOrAnalysisRequest(currentMsg) && !signal?.aborted) {
+    if (cloudTarget) {
+      // (see above) no local-data fallback on a cloud turn
+    } else if (isModelComparisonOrAnalysisRequest(currentMsg) && !signal?.aborted) {
       const hasListModels = toolCallsRecorded.some(t => t.tool.includes('list_models') && t.status === 'completed');
       let inventoryOutput = '';
       if (!hasListModels) {
@@ -5961,7 +6002,7 @@ When the user asks to continue, resume, or check progress/updates, resume this w
       }
     }
 
-    if (toolCallsRecorded.length === 0 && isWeatherRequest(ctx.currentMessage ?? prompt) && !signal?.aborted) {
+    if (!cloudTarget && toolCallsRecorded.length === 0 && isWeatherRequest(ctx.currentMessage ?? prompt) && !signal?.aborted) {
       const loc = resolveWeatherLocation(ctx.currentMessage ?? prompt);
       if (loc) {
         safeRecordRuntimeEvent(db, broadcaster, attemptId, 'weather_fallback_invoked', { location: loc }, actor);
@@ -5989,7 +6030,7 @@ When the user asks to continue, resume, or check progress/updates, resume this w
       }
     }
 
-    if (toolCallsRecorded.length === 0 && !signal?.aborted) {
+    if (!cloudTarget && toolCallsRecorded.length === 0 && !signal?.aborted) {
       const userText = ctx.currentMessage ?? prompt;
       // Only an explicit memory request (audit D3: "Save it in the same workspace…" stored junk memory).
       const isRememberIntent = isMemorySaveIntent(userText);
@@ -6062,7 +6103,8 @@ When the user asks to continue, resume, or check progress/updates, resume this w
       // Re-run M9: the governed research capability is web research too; ignoring it re-searched and re-prompted a
       // turn that had already answered from two real searches, and the 1-token re-answer replaced the real answer.
       const hasWebResearch = toolCallsRecorded.some(t => (t.tool === 'web_research' || t.tool === 'governed_research') && t.status === 'completed');
-      const derivedQuery = derivePublicQuery(fallbackIsLocal ? fallbackMessage : extractSearchQueryWithContext(fallbackMessage));
+      // On a cloud turn the query is built from this message alone: earlier user messages may belong to local turns.
+      const derivedQuery = derivePublicQuery(fallbackIsLocal || cloudTarget ? fallbackMessage : extractSearchQueryWithContext(fallbackMessage));
       if (!hasWebResearch && derivedQuery) {
         const webTool = tools.find(t => t.name === 'web_research');
         if (webTool) {
