@@ -3,6 +3,7 @@ import { answerTaskStatusQuestion, isTaskStatusQuestion, listPriorTurns, renderT
 import { listEarlierReads, renderEarlierReadsSection } from '../domain/earlierReads';
 import { listOpenGmailPlans, renderOpenGmailPlansSection } from '../domain/openGmailPlans';
 import { homeLocationFact, readHomeLocation } from '../domain/homeLocation';
+import { cloudBoundaryFact, cloudVisibleHistory, partitionCloudTools } from './cloudDataBoundary';
 import { checkPublicQuery, derivePublicQuery, explicitlyRequestsWebSearch, referencesLocalContent } from './publicQueryGuard';
 import { commandOpinionWarnings, readCommandReviewSettings, recordCommandReview, reviewCommand, warmCommandReview, type CommandOpinion, type CommandReviewOutcome } from './commandSecondOpinion';
 import { queryPrivacySummary, queryPrivacyWarning, readQueryPrivacySettings, recordQueryPrivacyReview, reviewQueryPrivacy, warmQueryPrivacy, type QueryPrivacyOpinion } from './queryPrivacySecondOpinion';
@@ -4598,6 +4599,18 @@ Report this to the user, saying the ${name} agent did the work. Do not add facts
       safeRecordRuntimeEvent(db, broadcaster, attemptId, 'agent_scope_applied', { agentId: agentScope.agentId, agentVersion: agentScope.agentVersion, depth: agentScope.depth, offered: kept.map((t) => t.name), removedCount: removed.length }, actor);
     }
 
+    // Private-data boundary (audit 2026-11-12, SEC-2): a cloud turn gets only tools that cannot return local private
+    // data. Fail closed: a tool nobody has classified is withheld too. Removed here, before selection, so they are
+    // neither offered nor addable with request_tools, and Pi cannot execute a tool it does not have.
+    let cloudWithheldTools = 0;
+    if (cloudTarget) {
+      const { allowed, withheld } = partitionCloudTools(tools);
+      tools.length = 0;
+      tools.push(...allowed);
+      cloudWithheldTools = withheld.length;
+      safeRecordRuntimeEvent(db, broadcaster, attemptId, 'cloud_private_tools_withheld', { provider: cloudTarget.provider, offered: allowed.map((t) => t.name), withheldCount: withheld.length, withheld: withheld.slice(0, 80) }, actor);
+    }
+
     // A request about the user's own files (CV, price lists in this folder) is answered from those files first: research
     // scoping would remove every local tool, so the private file is never read (audit D2, M9).
     const requestReferencesLocalContent = referencesLocalContent(requestText);
@@ -4709,7 +4722,8 @@ Report this to the user, saying the ${name} agent did the work. Do not add facts
     const projectEvidence = projectResolution?.ok ? gatherProjectEvidence(projectResolution.root) : null;
     const ollamaEndpoint = (process.env.KARKEDIKHA_OLLAMA_URL || 'http://127.0.0.1:11434').replace(/\/$/, '');
     // Private project files only ever reach a model that runs on this machine.
-    const projectModelIsLocal = isLocalModelEndpoint(ollamaEndpoint, selectedModel);
+    // A cloud chat model is served by its provider, not by the local Ollama endpoint (audit 2026-11-12, SEC-2).
+    const projectModelIsLocal = !cloudTarget && isLocalModelEndpoint(ollamaEndpoint, selectedModel);
 
     if (projectInspection && (projectResolution && (!projectResolution.ok || !projectEvidence || !projectModelIsLocal))) {
       const reply = !projectResolution!.ok
@@ -5223,7 +5237,7 @@ When the user asks to continue, resume, or check progress/updates, resume this w
     }
     // The selected folder's AGENTS.md / CLAUDE.md (projectNotes.ts): how this project is built and tested, for the
     // agents that work in it. Stable for the folder, so it stays in the cached part of the prompt.
-    if (!simpleInteractive && selectedWorkspace && (!agentScope || agentScope.agentId === 'chief' || agentScope.agentId === 'coding')) {
+    if (!cloudTarget && !simpleInteractive && selectedWorkspace && (!agentScope || agentScope.agentId === 'chief' || agentScope.agentId === 'coding')) {
       const notes = readProjectNotes(selectedWorkspace);
       if (notes) {
         systemPrompt += `\n\n${formatProjectNotesSection(notes)}`;
@@ -5263,7 +5277,7 @@ When the user asks to continue, resume, or check progress/updates, resume this w
     // "reviewed" from memory and its deadline, salary and link reported missing. Carry the latest content of each file
     // read earlier in this conversation, bounded.
     try {
-      if (conversationId) {
+      if (conversationId && !cloudTarget) {
         const earlier = listEarlierReads(db, conversationId, { excludeRequestId: requestId, workspaceRoot: selectedWorkspace || undefined });
         const section = renderEarlierReadsSection(earlier);
         if (section) {
@@ -5275,7 +5289,7 @@ When the user asks to continue, resume, or check progress/updates, resume this w
     // Production, 2026-11-12: a Gmail preview made in one turn could not be applied in the next. The reply had named it
     // "gplan_1a2b3c4d...", so the model made up the rest of the id. Carry the open previews with their exact ids.
     try {
-      if (conversationId && availableToolNames.has('gmail_apply_plan')) {
+      if (conversationId && !cloudTarget && availableToolNames.has('gmail_apply_plan')) {
         const openPlans = listOpenGmailPlans(db, conversationId, { excludeRequestId: requestId });
         const section = renderOpenGmailPlansSection(openPlans);
         if (section) {
@@ -5286,7 +5300,7 @@ When the user asks to continue, resume, or check progress/updates, resume this w
     } catch { /* best effort, like the earlier reads; the turn still runs */ }
     // Micro-test cluster C6 (D-LOC-5): local searches went to Berlin (from the time zone) although the user stored
     // "I live in Ulm". The main assistant gets the stored home place; specialists keep receiving no user memory.
-    if (!agentScope || agentScope.agentId === 'chief') addTurnFact(homeLocationFact(readHomeLocation(db), String(ctx.currentMessage ?? prompt ?? '')));
+    if (!cloudTarget && (!agentScope || agentScope.agentId === 'chief')) addTurnFact(homeLocationFact(readHomeLocation(db), String(ctx.currentMessage ?? prompt ?? '')));
     // Personal Context mission: what Core knows about the user (facts with their source, goals, ranked deadlines, failed
     // actions), chosen by relevance to this message, so the user never has to explain it again. Main assistant only;
     // a model that does not run on this PC gets a one-line notice instead of the content.
@@ -5308,6 +5322,7 @@ When the user asks to continue, resume, or check progress/updates, resume this w
     }
     addTurnFact(spokenSection);
 
+    let cloudWithheldHistory = 0;
     if (conversationId) {
       try {
         const dbMsgs = listMessages(db, conversationId);
@@ -5318,6 +5333,14 @@ When the user asks to continue, resume, or check progress/updates, resume this w
         // Exclude current user prompt if already appended by submission.ts so agent.prompt(prompt) doesn't duplicate it
         if (turns.length > 0 && turns[turns.length - 1].role === 'user' && turns[turns.length - 1].content === (ctx.currentMessage ?? prompt)) {
           turns = turns.slice(0, -1);
+        }
+        // Private-data boundary (SEC-2): a cloud model sees only the exchanges that already ran on a cloud model.
+        // Earlier local turns (whose replies may quote files, email or memory) stay on this PC.
+        if (cloudTarget) {
+          const visible = cloudVisibleHistory(turns);
+          turns = visible.kept;
+          cloudWithheldHistory = visible.withheld;
+          if (visible.withheld > 0) safeRecordRuntimeEvent(db, broadcaster, attemptId, 'cloud_history_withheld', { provider: cloudTarget.provider, withheldMessages: visible.withheld, keptMessages: visible.kept.length }, actor);
         }
         // Rule 4: Preserve historical conversation messages. Supply truthful connector
         // status, distinguishing tool availability from authentication and execution.
@@ -5353,12 +5376,15 @@ When the user asks to continue, resume, or check progress/updates, resume this w
       } catch {}
     }
 
+    if (cloudTarget) addTurnFact(cloudBoundaryFact(cloudTarget.label, { withheldTools: cloudWithheldTools, withheldHistory: cloudWithheldHistory }));
+
     let modelInvocationRecord: any = null;
     try {
       mutateWithBroadcast(db, broadcaster, () => {
         modelInvocationRecord = startModelInvocation(db, {
           attemptId,
-          requestedProvider: 'ollama',
+          // A cloud turn is recorded as the provider it really went to (it was recorded as 'ollama' before the 2026-11-12 audit).
+          requestedProvider: cloudTarget?.provider ?? 'ollama',
           requestedModel: selectedModel,
           policyModel: selectedModel,
           actor,
@@ -6772,7 +6798,7 @@ When the user asks to continue, resume, or check progress/updates, resume this w
         mutateWithBroadcast(db, broadcaster, () => {
           completeModelInvocation(db, modelInvocationRecord.id, {
             status: isUnanswered ? 'failed' : 'succeeded',
-            actualProvider: 'ollama',
+            actualProvider: cloudTarget?.provider ?? 'ollama',
             actualModel: selectedModel,
             usageMetadata: diagnostics as Record<string, unknown>,
             actor,

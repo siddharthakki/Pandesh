@@ -196,8 +196,9 @@ export function cloudOfferText(offer: PreferredCloudModel): string {
   const label = cloudProviderLabel(offer.provider);
   return [
     `**Want me to hand this to the cloud model ${offer.model} (${label})?** It is free and runs on ${label}'s servers, not on this PC. If you say yes, it receives:`,
-    '- the messages in this chat, including this request;',
-    '- whatever its tools return while it works: files it reads in the selected folder, web pages, and — only if it uses those tools — your Gmail, Calendar or memory content.',
+    '- this request and what the local model tried (tool names only, no results);',
+    '- public web search results, if it searches.',
+    'It does not receive your files, folders, email, calendar, memory or the earlier messages of this chat, so it cannot do work that needs them.',
     'Nothing has been sent yet. Reply **yes** to hand it over, or **no** to keep everything on this PC.',
   ].join('\n');
 }
@@ -258,7 +259,7 @@ export function pendingCloudOffer(db: CoreDatabase, conversationId: string, curr
 }
 
 export function cloudOfferAcceptedReply(offer: PendingCloudOffer): string {
-  return `Handing this to **${offer.model}** (${cloudProviderLabel(offer.provider)}) now. It works on the same request with this chat's messages and its tools; its answer will appear here.`;
+  return `Handing this to **${offer.model}** (${cloudProviderLabel(offer.provider)}) now. It works on the same request without your files, email, calendar, memory or the earlier messages of this chat, which stay on this PC; its answer will appear here.`;
 }
 
 export const CLOUD_OFFER_DECLINED_REPLY = 'OK — nothing was sent to a cloud model, and the request stays as it is. You can rephrase it, split it into smaller steps, or pick another model and ask again.';

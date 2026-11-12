@@ -51,6 +51,29 @@ export function ownsLoginItem(dataDir: string, realDesktopDataDir: string): bool
   return norm(dataDir) === norm(realDesktopDataDir);
 }
 
+/**
+ * A test, dev or scratch copy of Pandesh (any profile other than the real desktop profile).
+ *
+ * 2026-11-12 (tracker item 23): a micro-test copy that looked exactly like production got Gmail and Calendar connected
+ * by a click in its window while production was in use, and real mail reached test evidence. A test copy now says what
+ * it is in its title, and it cannot be connected to a Google account unless the person starting it opted in.
+ */
+export function isTestProfile(dataDir: string, realDesktopDataDir: string): boolean {
+  return !ownsLoginItem(dataDir, realDesktopDataDir);
+}
+
+export function windowTitleForProfile(dataDir: string, realDesktopDataDir: string): string {
+  return isTestProfile(dataDir, realDesktopDataDir) ? `Pandesh — TEST COPY (${path.basename(path.resolve(dataDir))}) — not your real Pandesh` : 'Pandesh';
+}
+
+export const TEST_PROFILE_GOOGLE_ENV = 'PANDESH_TEST_PROFILE_ALLOW_GOOGLE';
+
+/** Why Google may not be connected in this profile, or null when it may. */
+export function googleConnectRefusal(dataDir: string, realDesktopDataDir: string, env: NodeJS.ProcessEnv = process.env): string | null {
+  if (!isTestProfile(dataDir, realDesktopDataDir) || env[TEST_PROFILE_GOOGLE_ENV] === '1') return null;
+  return `This window is a test copy of Pandesh (profile ${path.resolve(dataDir)}), not your real Pandesh, so it cannot be connected to a Google account. Connect Google in your real Pandesh instead.`;
+}
+
 export function hostPreferencesPath(dataDir: string): string {
   return path.join(dataDir, 'host-preferences.json');
 }
