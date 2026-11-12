@@ -26,6 +26,14 @@ import { classifyFailureFingerprint } from '../platform/autoReroute';
 import { providerDeclaresNoChat } from '../domain/empiricalRouting';
 import { cloudProviderLabel } from './attemptModelBackend';
 import type { PreferredCloudModel } from './cloudCredentials';
+import { detectGpu } from './hardwareCapacity';
+import { estimateModelBytes, gpuBudgetBytes, showModel } from './ollamaModelInfo';
+
+/** The context size Pandesh runs local models at (piAgentEngine PI_CONTEXT_WINDOW). */
+const ESCALATION_NUM_CTX = 32_768;
+/** A request about what is on the screen or in a picture needs a model that can see. */
+const NEEDS_SIGHT = /\b(?:on|of)\s+(?:my|the)\s+screen\b|\bscreenshot\b|\bwhat(?:'s| is| do you see)\b[^.?!]{0,40}\b(?:screen|image|picture|photo)\b|\b(?:this|attached|the)\s+(?:image|picture|photo|screenshot)\b/i;
+export function needsSight(requestText: string): boolean { return NEEDS_SIGHT.test(String(requestText ?? '')); }
 
 export const MAX_ESCALATIONS = 2;
 const OLLAMA = 'ollama';
@@ -36,6 +44,8 @@ export interface InstalledModel {
   /** Parameter count in billions (Ollama `details.parameter_size`); undefined when Ollama does not say. */
   paramsB?: number;
   capabilities: string[];
+  /** GPU memory it needs at Pandesh's context size (weights + KV cache + buffers); undefined when unknown. */
+  estimatedBytes?: number;
 }
 
 export type EscalationPlan =
@@ -68,6 +78,8 @@ export function planEscalation(input: {
   needsVision: boolean;
   requestText: string;
   escalationsSoFar: number;
+  /** Usable GPU memory. A model that would not fit runs partly on the CPU: far slower, and it blocks the next turns. */
+  gpuBudgetBytes?: number;
 }): EscalationPlan {
   if (input.escalationsSoFar >= MAX_ESCALATIONS) {
     return { kind: 'exhausted', reason: `${input.escalationsSoFar} stronger model${input.escalationsSoFar === 1 ? '' : 's'} already tried (the limit is ${MAX_ESCALATIONS})` };
@@ -83,14 +95,19 @@ export function planEscalation(input: {
     && m.capabilities.includes('completion')
     && (!input.needsTools || m.capabilities.includes('tools'))
     && (!input.needsVision || m.capabilities.includes('vision'))
-    && m.paramsB !== undefined && m.paramsB >= floor);
+    && m.paramsB !== undefined && m.paramsB >= floor
+    && (input.gpuBudgetBytes === undefined || m.estimatedBytes === undefined || m.estimatedBytes <= input.gpuBudgetBytes));
   candidates.sort((a, b) => (b.paramsB! - a.paramsB!)
     // Equal size: a coding model for a coding request, a general model for anything else.
     || (Number(/coder/i.test(b.name) === coding) - Number(/coder/i.test(a.name) === coding))
     || a.name.localeCompare(b.name));
   const next = candidates[0];
-  if (!next) return { kind: 'exhausted', reason: 'no stronger model is installed on this PC' };
-  return { kind: 'escalate', model: next.name, reason: `${next.name} (${next.paramsB}B) is the strongest installed model that has not tried this yet` };
+  if (!next) {
+    const tooBig = input.gpuBudgetBytes !== undefined && input.installed.some((m) => !used.has(m.name) && m.paramsB !== undefined && m.paramsB >= floor
+      && m.estimatedBytes !== undefined && m.estimatedBytes > input.gpuBudgetBytes!);
+    return { kind: 'exhausted', reason: tooBig ? 'the stronger models installed on this PC do not fit in its graphics memory' : 'no stronger model is installed on this PC' };
+  }
+  return { kind: 'escalate', model: next.name, reason: `${next.name} (${next.paramsB}B) is the strongest installed model that fits this PC's graphics memory and has not tried this yet` };
 }
 
 /** What Ollama has installed right now, with parameter counts and capabilities. Undefined when Ollama is unreachable. */
@@ -98,15 +115,17 @@ export async function localInstalledModels(baseUrl = process.env.KARKEDIKHA_OLLA
   try {
     const tags = await fetch(`${baseUrl}/api/tags`, { signal: AbortSignal.timeout(5_000) });
     if (!tags.ok) return undefined;
-    const body = await tags.json() as { models?: Array<{ name: string; details?: { parameter_size?: string } }> };
+    const body = await tags.json() as { models?: Array<{ name: string; size?: number; details?: { parameter_size?: string } }> };
     const models = body.models ?? [];
     return await Promise.all(models.map(async (m) => {
-      let capabilities: string[] = [];
-      try {
-        const show = await fetch(`${baseUrl}/api/show`, { method: 'POST', body: JSON.stringify({ model: m.name }), headers: { 'content-type': 'application/json' }, signal: AbortSignal.timeout(5_000) });
-        if (show.ok) capabilities = ((await show.json()) as { capabilities?: string[] }).capabilities ?? [];
-      } catch { /* unknown capabilities: the model is simply not a candidate */ }
-      return { name: m.name, paramsB: parseParamsB(m.details?.parameter_size), capabilities };
+      const shown = await showModel(baseUrl, m.name);
+      return {
+        name: m.name,
+        paramsB: parseParamsB(m.details?.parameter_size),
+        // Unknown capabilities: the model is simply not a candidate.
+        capabilities: shown?.capabilities ?? [],
+        estimatedBytes: estimateModelBytes(m.size, shown?.modelInfo, ESCALATION_NUM_CTX),
+      };
     }));
   } catch {
     return undefined;
@@ -334,7 +353,9 @@ export async function maybeEscalate(deps: EscalationDeps, attemptId: string): Pr
       ? planEscalation({
         usedModels, installed, escalationsSoFar, requestText: request.currentMessage,
         needsTools: attempt.kind === 'saath_kar',
-        needsVision: Boolean(context.modelSelection?.requiredCapabilities?.vision),
+        // The routing estimate misses "what's on my screen" (owner test, 2026-11-12): a text-only model cannot answer it.
+        needsVision: Boolean(context.modelSelection?.requiredCapabilities?.vision) || needsSight(request.currentMessage),
+        gpuBudgetBytes: gpuBudgetBytes(detectGpu()?.totalVramMb),
       })
       : { kind: 'exhausted', reason: 'the local model server (Ollama) could not list its models' };
 

@@ -419,6 +419,14 @@ export class DesktopSession {
     this.workspaceActivity = new WorkspaceActivityLog(path.join(this.dataDir, 'workspace-activity', 'activities.json'));
     this.recentWorkspaces = readRecentWorkspaces(this.dataDir);
     this.operatorSelectedModel = readSelectedModel(this.dataDir);
+    // A free cloud model the user picked (and consented to at pick time) stays the chat model across a restart. Before
+    // this, the provider restarted as local while the stored pick remained, so the v2 menu showed the cloud model as
+    // selected, chats ran locally, and choosing a local model could not clear it (owner test, 2026-11-12).
+    try {
+      const cloud = loadCloudSettings(this.dataDir);
+      const at = cloud.selectedModel?.indexOf('::') ?? -1;
+      if (cloud.selectedModel && at > 0 && cloud.enabledProviders.includes(cloud.selectedModel.slice(0, at))) this.selectedInferenceProvider = 'cloud';
+    } catch { /* unreadable cloud settings: stay local */ }
     this.selectedConversationId = readSelectedConversation(this.dataDir);
     this.localSpeech = probeDesktopLocalSpeech(this.options.productRoot);
     this.localSpeechResponse = probeDesktopLocalSpeechResponse(this.options.productRoot, process.env, this.ttsPreference());
@@ -1702,9 +1710,11 @@ export class DesktopSession {
     if (!name) throw new Error('model name is required');
     // The one conversation dropdown carries local, Auto and free cloud models.
     if (name.includes('::')) return this.selectCloudModel(name);
-    if (this.selectedInferenceProvider === 'cloud') {
+    // Choosing Auto or a local model always ends a stored cloud pick, even one the provider state no longer reflects.
+    if (this.selectedInferenceProvider === 'cloud' || loadCloudSettings(this.dataDir).selectedModel) {
       saveCloudSettings(this.dataDir, { selectedModel: null });
-      this.selectedInferenceProvider = 'ollama';
+      if (this.selectedInferenceProvider === 'cloud') this.selectedInferenceProvider = 'ollama';
+      void this.pushPreferredCloudModel(loadCloudSettings(this.dataDir).enabledProviders);
     }
     if (name !== AUTO_MODEL) await this.refreshInstalledModels();
     if (name !== AUTO_MODEL && this.installedModels.length > 0 && !this.installedModels.includes(name)
