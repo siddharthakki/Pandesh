@@ -3497,7 +3497,7 @@ function renderModels(snapshot) {
     }
     if (cloudModels.length > 0) {
       const group = document.createElement('optgroup');
-      group.label = 'Free cloud — approved public text only';
+      group.label = 'Free cloud — the whole chat runs there';
       // Auto: Core's router picks the best provider you approved for automatic routing, per send.
       const auto = document.createElement('option');
       auto.value = 'auto::free';
@@ -3519,56 +3519,45 @@ function renderModels(snapshot) {
 }
 
 /**
- * The approval of one cloud send. It shows exactly what leaves this PC: the fixed neutral instruction and the
- * person's own text, the provider and the model. Nothing else is sent, and the person can cancel.
+ * The one consent for a cloud model: chosen here, it runs every chat started with it — so the person is told, before
+ * choosing, exactly what leaves this PC. Cancel keeps the current model.
  */
-function confirmCloudPublicText(preview) {
+function confirmCloudChoice(choice) {
   return new Promise((resolve) => {
     const dialog = document.createElement('dialog');
     dialog.className = 'cloud-approval-dialog';
     dialog.setAttribute('aria-labelledby', 'cloud-approval-title');
     const title = document.createElement('h3');
     title.id = 'cloud-approval-title';
-    title.textContent = `Send this to ${preview.providerName} (${preview.model})?`;
+    title.textContent = `Run your chats on ${choice.model} (${choice.providerName})?`;
     const lead = document.createElement('p');
     lead.className = 'cloud-approval-lead';
-    lead.textContent = 'These are the only two messages that leave this PC. No files, history, memory, Gmail, Calendar or tools are included, and a failure never falls back to a paid service.';
-    const block = (label, text) => {
-      const wrap = document.createElement('div');
-      const caption = document.createElement('div');
-      caption.className = 'cloud-approval-caption';
-      caption.textContent = label;
-      const body = document.createElement('pre');
-      body.className = 'cloud-approval-text';
-      body.textContent = text;
-      wrap.append(caption, body);
-      return wrap;
-    };
+    lead.textContent = `Chats you send while this model is selected run on ${choice.providerName}'s servers, not on this PC. ${choice.providerName} receives:`;
+    const list = document.createElement('ul');
+    for (const text of [
+      'the messages in that chat, including earlier ones;',
+      'documents you attach (as text extracted on this PC; images stay local);',
+      'what Pandesh\'s tools return while it works: files it reads in the selected folder, web pages, and — only if it uses those tools — your Gmail, Calendar or memory content.',
+    ]) {
+      const li = document.createElement('li');
+      li.textContent = text;
+      list.appendChild(li);
+    }
+    const note = document.createElement('p');
+    note.className = 'cloud-approval-lead';
+    note.textContent = 'Only verified-free models are used, and a failure never falls back to a paid service. Pick a local model again at any time to keep everything on this PC.';
     const actions = document.createElement('div');
     actions.className = 'cloud-approval-actions';
     const cancel = document.createElement('button');
     cancel.type = 'button';
     cancel.className = 'apex-chip';
-    cancel.textContent = 'Cancel';
+    cancel.textContent = 'Keep the current model';
     const send = document.createElement('button');
     send.type = 'button';
     send.className = 'dispatch';
-    send.textContent = 'Send to the cloud';
+    send.textContent = 'Use this cloud model';
     actions.append(cancel, send);
-    const extras = [];
-    if (preview.selectionReason) {
-      const why = document.createElement('p');
-      why.className = 'cloud-approval-lead';
-      why.textContent = `Why this model: ${preview.selectionReason}.`;
-      extras.push(why);
-    }
-    if (Array.isArray(preview.fallbacks) && preview.fallbacks.length > 0) {
-      const fb = document.createElement('p');
-      fb.className = 'cloud-approval-lead';
-      fb.textContent = `If it is rate-limited before answering, the same two messages may go to: ${preview.fallbacks.map((f) => `${f.providerName} (${f.model})`).join(', ')}. All are free providers you approved; nothing paid is ever used.`;
-      extras.push(fb);
-    }
-    dialog.append(title, lead, ...extras, block('Fixed instruction', preview.systemPrompt), block('Your text', preview.text), actions);
+    dialog.append(title, lead, list, note, actions);
     const finish = (approved) => { dialog.close(); dialog.remove(); resolve(approved); };
     cancel.addEventListener('click', () => finish(false));
     send.addEventListener('click', () => finish(true));
@@ -4024,8 +4013,13 @@ function updateCloudProviderCard(provider, cloud) {
       radio.addEventListener('change', async () => {
         showOperationError(null);
         try {
+          if (!(await confirmCloudChoice({ model: model.displayName || model.id, providerName: provider.displayName || provider.id }))) {
+            radio.checked = false;
+            await refresh();
+            return;
+          }
           renderSnapshot(await api.selectCloudModel(encoded));
-          entry.note.textContent = `${model.displayName || model.id} selected. Each send asks you to approve its exact text.`;
+          entry.note.textContent = `${model.displayName || model.id} selected. Chats you send now run on it.`;
           entry.note.dataset.tone = 'ok';
         } catch (error) {
           showOperationError(error);
@@ -4772,6 +4766,18 @@ modelSelect?.addEventListener('change', async () => {
   showOperationError(null);
   try {
     if (!modelSelect.value) return;
+    // Choosing a cloud model here is the same consent as in Settings → Cloud: say what leaves the PC first.
+    if (modelSelect.value.includes('::') && modelSelect.value !== lastSnapshot?.cloud?.selectedModel) {
+      const at = modelSelect.value.indexOf('::');
+      const providerId = modelSelect.value.slice(0, at);
+      const ok = providerId === 'auto'
+        ? await confirmCloudChoice({ model: 'Auto (best approved free model)', providerName: 'the free cloud provider Auto picks' })
+        : await confirmCloudChoice({ model: modelSelect.value.slice(at + 2), providerName: cloudProviderLabel(lastSnapshot?.cloud, providerId) });
+      if (!ok) {
+        await refresh();
+        return;
+      }
+    }
     const snap = await api.selectModel(modelSelect.value);
     renderSnapshot(snap);
     const convId = snap.activeConversationId || viewingConversationId || snap.selectedConversationId;
@@ -5661,22 +5667,9 @@ submit.addEventListener('click', async () => {
   const typedInput = (taskInput?.value || '').trim();
   if (!typedInput && stagedNow.length === 0) return;
   const rawInput = typedInput || (stagedNow.length > 1 ? 'Please look at the attached files.' : 'Please look at the attached file.');
-  // A free cloud model receives exactly one public text, and only after the person has seen and approved it here.
-  let cloudApproved = false;
-  if (selectedCloudModel() && typeof api.previewCloudPublicText === 'function') {
-    try {
-      const preview = await api.previewCloudPublicText(rawInput);
-      if (!preview?.eligible) {
-        showOperationError(preview?.reason || 'This text cannot be sent to a cloud model. Choose a local model to send it.');
-        return;
-      }
-      if (!(await confirmCloudPublicText(preview))) return;
-      cloudApproved = true;
-    } catch (err) {
-      showOperationError(err);
-      return;
-    }
-  }
+  // A free cloud model picked before the chat runs the whole chat (messages, tools and what they return); picking it
+  // was the choice, so there is no per-message approval any more. The host still refuses a model outside the free pool.
+  const cloudApproved = false;
   unsentDraftText = '';
   await startFreshIfRestoredConversationHidden();
   if (taskInput) taskInput.value = ''; // Cleanly clears composer immediately on submit

@@ -70,6 +70,7 @@ import { recordRuntimeEvent } from './domain/runtimeEvents';
 import { configureDailyBriefRoutine, getDailyBriefRoutine } from './domain/assistantRoutine';
 import type { ConnectorId } from './shared/wireTypes';
 import { localRerouteEnvironment } from './runtime/autoRerouteRuntime';
+import { localInstalledModels } from './runtime/escalation';
 import { hasConnectorPermission, setConnectorPermission } from './domain/connectors';
 import { createCapabilityInventoryAdapter } from './runtime/capabilityInventory';
 import { createPcOrganizerAdapter } from './runtime/pcOrganizer';
@@ -459,7 +460,7 @@ async function main(): Promise<void> {
     dataDir,
     // The packaged Saath Kar loop and direct capability API share one
     // registry and therefore one workspace-mutation approval boundary.
-    executorOptions: { dataDir, governedCapabilities: capabilityRegistry, connectorRegistry, rerouteEnvironment: localRerouteEnvironment },
+    executorOptions: { dataDir, governedCapabilities: capabilityRegistry, connectorRegistry, rerouteEnvironment: localRerouteEnvironment, escalationInventory: () => localInstalledModels() },
     capabilityRegistry,
     connectorRegistry,
     scout,

@@ -60,6 +60,8 @@ export function isCloudAttemptProvider(provider: string): boolean {
 export function isFreeCloudPublicTextAttempt(context: AttemptContextRecord, credentials: CloudCredentialStore = sharedCloudCredentials): boolean {
   const provider = context.selectedProvider;
   if (!isCloudAttemptProvider(provider)) return false;
+  // A cloud chat the user chose runs the full turn (piCloudTarget.ts), not the one-message path.
+  if (context.modelSelection?.cloudChatApproved === true) return false;
   if (context.modelSelection?.routingPolicy === 'explicit-cloud' || context.modelSelection?.cloudPublicTextApproved === true) return true;
   if (usesOpenRouterPool(context, credentials)) return true;
   return provider !== 'openrouter' && provider !== ORCAROUTER_PROVIDER;

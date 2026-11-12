@@ -1783,6 +1783,33 @@ export class DesktopSession {
         this.options.log?.(`cloud key push failed for ${providerId}: ${(error as Error).message}`);
       }
     }
+    await this.pushPreferredCloudModel(settings.enabledProviders);
+  }
+
+  /**
+   * Tells Core which free cloud model the user chose (no secret), so that after every local model failed a task Core
+   * can OFFER it — and use it only after the user says yes. `verifiedFree` comes from Core's own model discovery.
+   */
+  private async pushPreferredCloudModel(enabledProviders: readonly string[]): Promise<void> {
+    const client = this.client;
+    if (!client) return;
+    const selection = this.selectedCloudSelection();
+    try {
+      if (!selection || !enabledProviders.includes(selection.providerId)) {
+        await client.request('/v1/cloud/preferred-model', { method: 'POST', body: {} });
+        return;
+      }
+      if (!this.cloudListings.get(selection.providerId)) {
+        try {
+          const listing = await client.request<DesktopCloudModelListing>(`/v1/cloud/providers/${encodeURIComponent(selection.providerId)}/models`, { method: 'POST', body: {} });
+          this.cloudListings.set(selection.providerId, listing);
+        } catch { /* not verified: Core will not offer it */ }
+      }
+      const verifiedFree = (this.cloudListings.get(selection.providerId)?.pool ?? []).some((entry) => entry.id === selection.modelId);
+      await client.request('/v1/cloud/preferred-model', { method: 'POST', body: { provider: selection.providerId, model: selection.modelId, verifiedFree } });
+    } catch (error) {
+      this.options.log?.(`cloud model preference push failed: ${(error as Error).message}`);
+    }
   }
 
   /** Reads the catalog Core ships. Cached for the session; a failure leaves the last good copy. */
@@ -1923,6 +1950,7 @@ export class DesktopSession {
     if (encoded === null) {
       saveCloudSettings(this.dataDir, { selectedModel: null });
       if (this.selectedInferenceProvider === 'cloud') this.selectedInferenceProvider = 'ollama';
+      void this.pushPreferredCloudModel(loadCloudSettings(this.dataDir).enabledProviders);
       return this.snapshot();
     }
     const index = encoded.indexOf('::');
@@ -1936,7 +1964,7 @@ export class DesktopSession {
       if (settings.enabledProviders.length === 0) throw new Error('enable a provider first');
       saveCloudSettings(this.dataDir, { selectedModel: encoded });
       this.selectedInferenceProvider = 'cloud';
-      this.emit({ kind: 'status', at: nowIso(), summary: 'Cloud model: Auto (best approved free model, public text only)' });
+      this.emit({ kind: 'status', at: nowIso(), summary: 'Cloud model: Auto (best approved free model) — chats you start now run on it' });
       return this.snapshot();
     }
     if (!settings.enabledProviders.includes(providerId)) throw new Error('enable that provider first');
@@ -1946,7 +1974,8 @@ export class DesktopSession {
     }
     saveCloudSettings(this.dataDir, { selectedModel: encoded });
     this.selectedInferenceProvider = 'cloud';
-    this.emit({ kind: 'status', at: nowIso(), summary: `Cloud model selected: ${providerId} ${modelId} (public text only)` });
+    void this.pushPreferredCloudModel(settings.enabledProviders);
+    this.emit({ kind: 'status', at: nowIso(), summary: `Cloud model selected: ${providerId} ${modelId} — chats you start now run on it` });
     return this.snapshot();
   }
 
@@ -2110,98 +2139,6 @@ export class DesktopSession {
     return { ...result, state: await this.getFreeModels() };
   }
 
-  /**
-   * One approved public text to a verified-free cloud model. It carries no workspace, no
-   * attachments, no tools and no history; the renderer showed the exact two messages first.
-   */
-  private async submitCloudPublicText(text: string, clientOrigin: 'desktop' | 'mobile'): Promise<{ requestId: string; attemptId: string; model: string }> {
-    if (!this.selectedCloudSelection()) throw new Error('Choose a verified free cloud model first.');
-    const preview = await this.previewCloudPublicText(text);
-    if (!preview.eligible) throw new Error(preview.reason ?? 'This text cannot be sent to a cloud model.');
-    // What the approval card showed: the chosen model and the approved fallbacks, nothing else.
-    const selection = { providerId: preview.providerId, modelId: preview.model };
-    if (this.cloudApprovedText !== text.trim()) throw new Error('Cloud inference needs your explicit approval of this exact text.');
-    // Approval is single-use: it covers this send and nothing later in the conversation.
-    this.cloudApprovedText = null;
-    if (this.attachmentStaging.list().length > 0) {
-      throw new Error('Files cannot be sent to a cloud model. Remove the attachments or switch to a local model.');
-    }
-    await this.pushCloudCredentials();
-    const client = this.requireClient();
-    let conversationId = this.selectedConversationId ?? this.voiceConversationId;
-    if (!conversationId) {
-      const conversation = await client.createConversation({ mode: 'baat_kar', title: text.slice(0, 80) });
-      conversationId = conversation.id;
-      this.discardPendingPermission('this conversation was started outside the chat composer');
-    }
-    this.voiceConversationId = conversationId;
-    this.selectedConversationId = conversationId;
-    writeSelectedConversation(this.dataDir, conversationId);
-    const submission = await client.submit({
-      currentMessage: text,
-      ...(this.selectedAgentId ? { agentId: this.selectedAgentId } : {}),
-      requestedMode: 'baat_kar',
-      conversationId,
-      requestedProvider: selection.providerId,
-      requestedModel: selection.modelId,
-      workspaceRoot: null,
-      hasWorkspace: false,
-      gitCapable: false,
-      modelSelection: {
-        requiredCapabilities: {
-          readOnlyExplanation: true,
-          repositoryExploration: false,
-          toolCalling: false,
-          fileModification: false,
-          codingComplexity: 'low',
-          contextRequirement: 'small',
-          vision: false,
-          validationAndRepair: false,
-        },
-        selectedProvider: selection.providerId,
-        selectedModel: selection.modelId,
-        routingPolicy: 'explicit-cloud',
-        selectionReason: 'Operator selected a verified free cloud model for one approved public text',
-        suitabilitySummary: `Using ${preview.providerName} ${selection.modelId} (${preview.selectionReason ?? 'selected'}); free only, public text only, no tools, no history${preview.fallbacks?.length ? `; if rate-limited: ${preview.fallbacks.map((f) => `${f.providerName} ${f.model}`).join(', ')}` : '; no fallback'}.`,
-        userOverrode: true,
-        candidates: [{ provider: selection.providerId, model: selection.modelId, available: true, capable: true, costRank: 1, rejectionReasons: [] }],
-        escalationCandidates: [],
-        cloudSpend: { mode: 'FREE_ONLY', modelFreeness: 'free' },
-        cloudPublicTextApproved: true,
-        ...(preview.fallbacks?.length ? { cloudFallback: preview.fallbacks.map((f) => ({ provider: f.providerId, model: f.model })) } : {}),
-      },
-    });
-    this.active = {
-      attemptId: submission.attempt.id,
-      requestId: submission.request.id,
-      conversationId,
-      goal: text,
-      tokenBuffer: '',
-      terminal: false,
-      voiceTurnId: undefined,
-      firstTokenLogged: false,
-      clientOrigin,
-    };
-    this.cockpitEvents = [];
-    this.approvedApproval = null;
-    this.activeWorker = 'cloud';
-    this.activeProvider = 'cloud';
-    this.activeModel = selection.modelId;
-    this.activeContextEnvelope = null;
-    this.activeSpendCapUsd = null;
-    this.missionStartedAt = nowIso();
-    this.emit({
-      kind: 'status',
-      at: nowIso(),
-      attemptId: submission.attempt.id,
-      requestId: submission.request.id,
-      summary: `Sending approved public text to ${preview.providerName} ${selection.modelId} (no tools, no history)`,
-    });
-    // Without this the attempt stays "created" forever and nothing is ever sent.
-    await client.executeAttempt(submission.attempt.id, {});
-    return { requestId: submission.request.id, attemptId: submission.attempt.id, model: selection.modelId };
-  }
-
   // ── Composer attachments (staged here, uploaded to Core only when a message is sent) ──
   listStagedAttachments(): StagedAttachmentView[] {
     return this.attachmentStaging.list();
@@ -2314,16 +2251,41 @@ export class DesktopSession {
     const resolvedWorker = resolveWorkerProfile(worker);
     if (!resolvedWorker.ok) throw new Error(resolvedWorker.reason);
     this.selectedWorker = worker;
-    // A cloud model never runs a worker, opens a workspace or reads history: one approved public text.
-    if (this.selectedInferenceProvider === 'cloud') {
-      return this.submitCloudPublicText(text, clientOrigin);
+    // A free cloud model picked before the chat runs the whole chat — history, Pandesh's tools and what they return —
+    // on that model (owner, 2026-11-12: "I need cloud model to work if that is selected before starting a chat").
+    // Only Pandesh's own assistant runs there; Core still refuses it unless the key is delivered and the model is free.
+    const useCloud = this.selectedInferenceProvider === 'cloud';
+    let cloudSelection = useCloud ? this.selectedCloudSelection() : null;
+    // Auto: the registry router's current pick (approved, keyed, verified free, qualified) becomes this chat's model.
+    let cloudRoutedPick = false;
+    if (useCloud && cloudSelection && `${cloudSelection.providerId}::${cloudSelection.modelId}` === AUTO_FREE_CLOUD) {
+      await this.pushCloudCredentials();
+      const plan = await this.resolveCloudPlan();
+      if (plan.blocked) throw new Error(`Auto found no free cloud model to use: ${plan.blocked} Nothing was sent.`);
+      cloudSelection = { providerId: plan.providerId, modelId: plan.modelId };
+      cloudRoutedPick = true;
+    }
+    if (useCloud) {
+      if (!cloudSelection) throw new Error('Choose a free cloud model first (Settings → Cloud), or pick a local model.');
+      if (worker === 'hermes' || worker === 'opencode') {
+        throw new Error(`A cloud model runs Pandesh's own assistant only, not ${worker === 'hermes' ? 'Hermes' : 'OpenCode'}. Pick the Pandesh worker, or a local model for ${worker === 'hermes' ? 'Hermes' : 'OpenCode'}. Nothing was sent.`);
+      }
+      if (staged.some((item) => item.kind === 'image')) {
+        throw new Error('Images are only read by local models. Remove the image or pick a local model. Nothing was sent.');
+      }
+      await this.pushCloudCredentials();
+      const pool = this.cloudListings.get(cloudSelection.providerId)?.pool ?? [];
+      const picked = cloudSelection;
+      if (!cloudRoutedPick && !pool.some((entry) => entry.id === picked.modelId)) {
+        throw new Error(`${cloudSelection.modelId} is not in the verified free pool of ${cloudSelection.providerId}, so nothing was sent. Pick another free cloud model, or a local model.`);
+      }
     }
     const hasFolder = Boolean(this.folder);
     const client = this.requireClient();
-    const useOpenRouter = this.selectedInferenceProvider === 'openrouter';
-    const isAutoModel = !useOpenRouter && this.operatorSelectedModel === AUTO_MODEL;
+    const useOpenRouter = !useCloud && this.selectedInferenceProvider === 'openrouter';
+    const isAutoModel = !useOpenRouter && !useCloud && this.operatorSelectedModel === AUTO_MODEL;
     if (isAutoModel) this.refreshProviderSoft();
-    else this.refreshProvider();
+    else if (!useCloud) this.refreshProvider();
     if (useOpenRouter) {
       if (!OPENROUTER_SUBMISSION_READY) {
         throw new Error(OPENROUTER_NOT_READY_MESSAGE);
@@ -2340,6 +2302,8 @@ export class DesktopSession {
         productRoot: this.options.productRoot,
       });
       openRouterSelection = requireOpenRouterSelection(config, openRouterApiKeyPresent(this.dataDir));
+    } else if (useCloud) {
+      // Checked above: the key was pushed and the model is in Core's verified free pool.
     } else if (isAutoModel) {
       await this.refreshInstalledModels();
       if (this.installedModels.length === 0 && this.modelServerReachable === false) {
@@ -2407,8 +2371,8 @@ export class DesktopSession {
     this.voiceConversationId = conversationId;
     this.selectedConversationId = conversationId;
     writeSelectedConversation(this.dataDir, conversationId);
-    let model = useOpenRouter ? openRouterSelection!.model : isAutoModel ? AUTO_MODEL : this.provider!.model;
-    const selectedProvider = useOpenRouter ? 'openrouter' : 'ollama';
+    let model = useCloud ? cloudSelection!.modelId : useOpenRouter ? openRouterSelection!.model : isAutoModel ? AUTO_MODEL : this.provider!.model;
+    const selectedProvider = useCloud ? cloudSelection!.providerId : useOpenRouter ? 'openrouter' : 'ollama';
 
     // Attachments: pick a model that can see images when needed, then hand every file to Core's
     // upload pipeline (bounded streaming, byte-sniffed kind, frozen hash, local document extraction).
@@ -2490,14 +2454,19 @@ export class DesktopSession {
         },
         selectedProvider,
         selectedModel: model,
-        routingPolicy: useOpenRouter ? 'explicit-openrouter' : 'local-only',
+        routingPolicy: useCloud ? 'explicit-cloud' : useOpenRouter ? 'explicit-openrouter' : 'local-only',
         ...(useOpenRouter ? { spendCapUsd: openRouterSelection!.maxUsd } : {}),
-        selectionReason: useOpenRouter
-          ? 'Operator explicitly selected OpenRouter for this submit'
-          : `Operator explicitly selected local model ${model} (${this.provider!.source}); no substitution`,
-        suitabilitySummary: useOpenRouter
-          ? `Using OpenRouter ${model} with a $${openRouterSelection!.maxUsd} cap. No fallback.`
-          : `Using local ${model}. Cloud fallback is disabled.`,
+        ...(useCloud ? { cloudSpend: { mode: 'FREE_ONLY' as const, modelFreeness: 'free' as const }, cloudChatApproved: true, cloudChatSource: 'picked_before_chat' as const } : {}),
+        selectionReason: useCloud
+          ? `Operator picked the free cloud model ${selectedProvider} ${model} before the chat; the whole chat runs on it`
+          : useOpenRouter
+            ? 'Operator explicitly selected OpenRouter for this submit'
+            : `Operator explicitly selected local model ${model} (${this.provider!.source}); no substitution`,
+        suitabilitySummary: useCloud
+          ? `Using ${selectedProvider} ${model} (free, cloud): this chat's messages and its tool results go to ${selectedProvider}. No local fallback.`
+          : useOpenRouter
+            ? `Using OpenRouter ${model} with a $${openRouterSelection!.maxUsd} cap. No fallback.`
+            : `Using local ${model}. Cloud fallback is disabled.`,
         // Any explicit (non-Auto) selection is the operator's choice, local Ollama included: Core must never reroute or substitute it.
         userOverrode: true,
         candidates: [{
@@ -2527,7 +2496,7 @@ export class DesktopSession {
     this.cockpitEvents = [];
     this.approvedApproval = null;
     this.activeWorker = worker;
-    this.activeProvider = selectedProvider;
+    this.activeProvider = useCloud ? 'cloud' : useOpenRouter ? 'openrouter' : 'ollama';
     // The `model_selection_decided` runtime event is broadcast by Core before
     // the /v1/submit HTTP response is sent, so it can reach this session's
     // WebSocket listener before `this.active` above is assigned and be

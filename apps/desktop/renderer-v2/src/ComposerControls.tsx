@@ -110,7 +110,7 @@ export function useComposerControls(opts: { snapshot: Snapshot | null; refresh: 
         value={menu.selected} disabled={disabled || saving || !snapshot || Boolean(snapshot?.running)} onChange={(e) => chooseModel(e.target.value)}>
         {menu.options.filter((o) => o.group !== 'cloud').map((o) => <option key={o.value || 'none'} value={o.value} disabled={o.disabled}>{o.label}</option>)}
         {menu.options.some((o) => o.group === 'cloud') && (
-          <optgroup label="Cloud (chosen in the Classic UI)">
+          <optgroup label="Cloud — the whole chat runs there (chosen in the Classic UI)">
             {menu.options.filter((o) => o.group === 'cloud').map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
           </optgroup>
         )}
