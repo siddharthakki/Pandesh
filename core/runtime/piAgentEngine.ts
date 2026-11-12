@@ -109,6 +109,8 @@ import { OLLAMA_IMPLICIT_NUM_CTX_BUCKETS, resolveOllamaChatControls } from './ol
 import { createPiOllamaFetch, type OllamaCallMetrics } from './piOllamaNativeFetch';
 import { createPiCloudFetch, resolvePiCloudTarget } from './piCloudTarget';
 import { CLOUD_OFFER_DECLINED_REPLY, classifyOfferReply, cloudOfferAcceptedReply, pendingCloudOffer } from './escalation';
+import { asksToMakeSomething as asksToMakeOutsideChat } from './makeIntent';
+import { modelLacksTools } from './ollamaModelInfo';
 import type { CloudCredentialStore } from './cloudCredentials';
 import { TURN_STATE_PROMPT_RULE, attachTurnState, formatTurnState } from './turnState';
 import { formatProjectNotesSection, readProjectNotes } from './projectNotes';
@@ -5415,6 +5417,14 @@ When the user asks to continue, resume, or check progress/updates, resume this w
       addTurnFact(`READ-ONLY FOLDER: the user let Pandesh read ${selectedWorkspace ?? 'the selected folder'} but not change it. Read, list and search its files freely. Do not create, change or delete files and do not run programs (plain read commands such as dir or git status are fine); those tools are refused. If the user asks for a change, describe it and say they can allow changes with the folder menu next to the message box.`);
     }
 
+    // A local model Ollama says cannot use tools (qwen2.5vl:7b) is sent none: with 52 tool definitions Ollama refused
+    // the call ("does not support tools") and the turn failed before a word was written (owner test, 2026-11-12).
+    const modelWithoutTools = !cloudTarget && !simpleInteractive && await modelLacksTools(ollamaRoot, selectedModel);
+    if (modelWithoutTools) {
+      addTurnFact(`TOOLS UNAVAILABLE: ${selectedModel} cannot use tools, so this turn has none. Answer from the conversation and any picture the user attached. If the request needs an action (a screenshot, a file, a search, an email), say plainly that ${selectedModel} cannot do it and that the user can pick Auto or another model.`);
+      safeRecordRuntimeEvent(db, broadcaster, attemptId, 'model_without_tools', { model: selectedModel }, actor);
+    }
+
     // M10: an explicit single-choice request gets an explicit single-choice rule (see choiceConstraint.ts).
     if (asksForSingleChoice(requestText)) {
       addTurnFact(SINGLE_CHOICE_RULE);
@@ -5430,12 +5440,12 @@ When the user asks to continue, resume, or check progress/updates, resume this w
       initialState: {
         systemPrompt,
         model: models.getModel(piProviderId, selectedModel),
-        tools: simpleInteractive ? [] : tools,
+        tools: simpleInteractive || modelWithoutTools ? [] : tools,
         messages: priorMessages,
       },
       // Every tool stays executable (same approvals and receipts); the model is offered the active set only, which
       // request_tools (or a call to a hidden tool) grows during the turn. Pi declares tools on system messages.
-      streamFn: (model: any, context: any, streamOptions: any) => models.streamSimple(model, simpleInteractive ? context : offerActiveTools(context, activeToolNames), { ...streamOptions, fetch: piFetch }),
+      streamFn: (model: any, context: any, streamOptions: any) => models.streamSimple(model, simpleInteractive || modelWithoutTools ? context : offerActiveTools(context, activeToolNames), { ...streamOptions, fetch: piFetch }),
       getApiKey: () => piApiKey,
       // Runs before every model call of the loop: the cooperative yield point for the interactive lane.
       transformContext: async (messages: any[], ctxSignal?: AbortSignal) => {
@@ -6318,6 +6328,8 @@ When the user asks to continue, resume, or check progress/updates, resume this w
     // F13e: a request to MAKE something that did not get done had its honest reply replaced too. Only a question about
     // the project is answered from the project's files.
     const asksToMakeSomething = /\b(?:build|create|make|write|generate|draft|fix|add|delete|install|organi[sz]e|save|open)\b/i.test(requestText);
+    // Narrower: something that must exist outside the chat. "Write a haiku" is answered in the reply (makeIntent.ts).
+    const asksToBuildOutsideChat = asksToMakeOutsideChat(requestText);
     if (projectEvidence && !didRealWork && !asksToMakeSomething && !isReplyGroundedInProject(finalReply, projectEvidence)) {
       finalReply = composeEvidenceAnswer(projectEvidence, requestText);
       projectReplyReplaced = true;
@@ -6427,7 +6439,7 @@ When the user asks to continue, resume, or check progress/updates, resume this w
         activeWorker: hasActiveWorker(db, conversationId, attemptId),
         canNotify: capability.canNotify,
         notifyStatement: capability.statement,
-        nothingMade: asksToMakeSomething && !producedSomething,
+        nothingMade: asksToBuildOutsideChat && !producedSomething,
       });
       if (correction) finalReply += "\n\n" + correction;
       // The durable signal for escalation (executor → stronger model): a request to build something that ended with
@@ -6438,7 +6450,7 @@ When the user asks to continue, resume, or check progress/updates, resume this w
       const asksUser = /\?\s*\**\s*$/.test(finalReply.replace(/\n\nCorrection:[\s\S]*$/, '').trim());
       const unfinishedReason = signal?.aborted || asksUser || hasActiveWorker(db, conversationId, attemptId) ? null
         : isUnanswered ? 'no_reply'
-          : asksToMakeSomething && !isQuestion && !producedSomething ? 'nothing_built'
+          : asksToBuildOutsideChat && !isQuestion && !producedSomething ? 'nothing_built'
             : null;
       if (unfinishedReason) {
         const ran = toolCallsRecorded.filter((t) => t.status === 'completed' && !/^(?:update_task_outcome|request_tools)$/.test(t.tool)).map((t) => t.tool);
@@ -6674,6 +6686,8 @@ When the user asks to continue, resume, or check progress/updates, resume this w
       const reason = lastCall?.status === 'error'
         ? /^no output from Ollama/.test(lastCall.error ?? '')
           ? `The local model (Ollama) stopped responding before a reply was generated: ${lastCall.error}`
+          : /does not support tools/i.test(lastCall.error ?? '')
+            ? `${selectedModel} cannot use tools, so Ollama refused this turn (the connection was fine): ${lastCall.error}`
           : `Lost the connection to the local model server (Ollama) before a reply was generated: ${lastCall.error ?? 'unknown error'}`
         : 'The model completed the turn without generating a reply';
       turnOutcome = { verdict: 'unverified', reason, performed: [], refused: [], failed: ['reply_generation'] };
