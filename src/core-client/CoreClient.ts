@@ -251,7 +251,10 @@ export class CoreClient {
       body: init.body !== undefined ? JSON.stringify(init.body) : undefined,
     });
 
-    if (res.status === 401 || res.status === 403) {
+    // 401 = the token itself is missing or wrong, so the whole connection is unusable. 403 = a valid caller asked for
+    // a route it may not use (e.g. a host-only route without the host token): that one request fails, the connection
+    // stays up. Treating 403 as a credential failure took the whole app down from one card (Build 165).
+    if (res.status === 401) {
       this.setStatus({ state: 'authentication_failed', detail: `${path} rejected credentials` });
     }
 
