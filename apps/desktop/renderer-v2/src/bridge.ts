@@ -133,6 +133,35 @@ export interface MobilePairing {
   pairingPausedUntil: string | null;
 }
 
+
+/** Free-model registry as the host returns it (no key values anywhere). */
+export interface RegistryModelView { key: string; modelId: string; sources: string[]; status: string; statusReasons: string[]; limits: { contextTokens?: number; outputTokens?: number } }
+export interface RegistryProviderView {
+  id: string; displayName: string; hasAdapter: boolean; status: string; statusReasons: string[]; conflicts: string[];
+  sources: Array<{ source: string; key: string; lastVerified?: string }>; requiresKey: boolean; keyUrl?: string; docsUrl?: string;
+  training: string; freeKind: string; models: RegistryModelView[];
+  health: { checkedAt: string; ok: boolean; errorClass: string | null; latencyMs: number; freeModels: number } | null;
+}
+export interface QualificationView {
+  providerId: string; modelId: string; modelVersion?: string; suiteVersion: string; ranAt: string;
+  capabilities: Record<string, boolean>; results: Array<{ id: string; outcome: string; latencyMs: number; detail: string }>;
+}
+export interface FreeModelsState {
+  registry: {
+    generatedAt: string | null;
+    counts: { providers: number; models: number; modelsByStatus: Record<string, number> };
+    lastReport: { summary: string; errors: string[] } | null;
+    preferences: { autoProviders: string[]; disabledProviders: string[]; preferredOrder: string[]; fallbackOnRateLimit: boolean };
+    exhaustedProviders: string[];
+    providers: RegistryProviderView[];
+    qualifications: QualificationView[];
+    sources: Array<{ name: string; license: string; repository: string; fetch: { fetchedAt: string; carriedOver: boolean; error?: string } | null }>;
+    unimportedSources: Array<{ name: string; license: string; reason: string }>;
+    schedule: { enabled: boolean; dailyTime: string } | null;
+  };
+  credentials: { backend: string; status: Record<string, { configured: boolean; source: string | null; hint: string | null }>; legacyOnly: string[] };
+}
+
 export interface DesktopApi {
   getSnapshot(): Promise<Snapshot | null>;
   /** Phone pairing: the code and links, a new code, forget a phone, who may connect, resume paused pairing. */
@@ -205,6 +234,19 @@ export interface DesktopApi {
   /** A short-lived pandesh-preview: URL for a Design page (served from memory, sandboxed, no network). */
   designPreview(artifactId: string): Promise<{ url: string; nonce: string; expiresAt: string; warnings: string[] }>;
   onEvent(listener: (event: ActivityEvent) => void): () => void;
+  /** Free models and provider keys: keys go in, never come back out. */
+  getFreeModels(): Promise<FreeModelsState>;
+  refreshFreeModels(): Promise<FreeModelsState>;
+  setFreeModelPreferences(prefs: { autoProviders?: string[]; disabledProviders?: string[]; preferredOrder?: string[]; fallbackOnRateLimit?: boolean }): Promise<FreeModelsState>;
+  setFreeModelSchedule(enabled: boolean): Promise<FreeModelsState>;
+  testProviderKey(providerId: string): Promise<FreeModelsState>;
+  qualifyFreeModel(providerId: string, model: string): Promise<FreeModelsState>;
+  setCloudProviderKey(providerId: string, apiKey: string, baseUrl?: string): Promise<unknown>;
+  clearCloudProviderKey(providerId: string): Promise<unknown>;
+  migrateLegacyKeys(providerIds: string[]): Promise<{ results: Array<{ provider: string; migrated: boolean; reason?: string }>; state: FreeModelsState }>;
+  exportCredentialBackup(passphrase: string, providerIds: string[]): Promise<{ file: string; providers: string[] } | null>;
+  inspectCredentialBackup(file: string | null, passphrase: string): Promise<{ file: string; providers: string[] } | null>;
+  restoreCredentialBackup(file: string, passphrase: string, providerIds: string[]): Promise<{ restored: string[]; skipped: string[]; state: FreeModelsState }>;
   setWakeWordEnabled(enabled: boolean): Promise<Snapshot | null>;
   setWakeWordMuted(muted: boolean): Promise<Snapshot | null>;
   /** Tells the host whether this page's wake microphone is open (and why not, when it failed). */

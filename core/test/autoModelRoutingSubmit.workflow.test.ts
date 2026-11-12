@@ -23,6 +23,7 @@ import {
   AUTO_FALLBACK_MODEL,
   AUTO_MUTATION_MODEL,
   AUTO_QUESTION_MODEL,
+  AUTO_RECOVERY_MODEL,
 } from '../domain/modelRouting';
 
 const TOKEN = generateToken();
@@ -105,8 +106,8 @@ afterEach(async () => {
 });
 
 describe('Core-owned local model routing over the real /v1/submit HTTP path', () => {
-  it('routes an auto Local Core question to the measured question model (GSQ)', async () => {
-    ollamaModels = [AUTO_QUESTION_MODEL, AUTO_MUTATION_MODEL, 'laguna-xs-2.1:latest', 'qwen2.5-coder:1.5b'];
+  it('routes an auto Local Core question to the question model', async () => {
+    ollamaModels = [AUTO_QUESTION_MODEL, AUTO_MUTATION_MODEL, AUTO_RECOVERY_MODEL, AUTO_FALLBACK_MODEL];
     const res = await authed('/v1/submit', {
       method: 'POST',
       idempotencyKey: nextIdemp(),
@@ -126,7 +127,7 @@ describe('Core-owned local model routing over the real /v1/submit HTTP path', ()
   });
 
   it('routes an auto Autonomous Mission submission to the measured mutation model (Q4)', async () => {
-    ollamaModels = [AUTO_QUESTION_MODEL, AUTO_MUTATION_MODEL, 'laguna-xs-2.1:latest', 'qwen2.5-coder:1.5b'];
+    ollamaModels = [AUTO_QUESTION_MODEL, AUTO_MUTATION_MODEL, AUTO_RECOVERY_MODEL, AUTO_FALLBACK_MODEL];
     const res = await authed('/v1/submit', {
       method: 'POST',
       idempotencyKey: nextIdemp(),

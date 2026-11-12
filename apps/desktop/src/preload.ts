@@ -10,6 +10,7 @@ import {
   type DesktopPermissionMode,
   type DesktopGmailActionResult,
   type DesktopSnapshot,
+  type DesktopFreeModelsState,
   type DesktopSpeakResult,
   type DesktopSubmitResult,
   type DesktopTranscribeResult,
@@ -83,6 +84,21 @@ const desktopApi = {
     ipcRenderer.invoke(DESKTOP_CHANNELS.setCloudLocalFallback, enabled),
   previewCloudPublicText: (text: string): Promise<DesktopCloudPublicTextPreview> =>
     ipcRenderer.invoke(DESKTOP_CHANNELS.previewCloudPublicText, text),
+  getFreeModels: (): Promise<DesktopFreeModelsState> => ipcRenderer.invoke(DESKTOP_CHANNELS.getFreeModels),
+  refreshFreeModels: (): Promise<DesktopFreeModelsState> => ipcRenderer.invoke(DESKTOP_CHANNELS.refreshFreeModels),
+  setFreeModelPreferences: (prefs: { autoProviders?: string[]; disabledProviders?: string[]; preferredOrder?: string[]; fallbackOnRateLimit?: boolean }): Promise<DesktopFreeModelsState> =>
+    ipcRenderer.invoke(DESKTOP_CHANNELS.setFreeModelPreferences, prefs),
+  setFreeModelSchedule: (enabled: boolean): Promise<DesktopFreeModelsState> => ipcRenderer.invoke(DESKTOP_CHANNELS.setFreeModelSchedule, enabled),
+  testProviderKey: (providerId: string): Promise<DesktopFreeModelsState> => ipcRenderer.invoke(DESKTOP_CHANNELS.testProviderKey, providerId),
+  qualifyFreeModel: (providerId: string, model: string): Promise<DesktopFreeModelsState> => ipcRenderer.invoke(DESKTOP_CHANNELS.qualifyFreeModel, providerId, model),
+  migrateLegacyKeys: (providerIds: string[]): Promise<{ results: Array<{ provider: string; migrated: boolean; reason?: string }>; state: DesktopFreeModelsState }> =>
+    ipcRenderer.invoke(DESKTOP_CHANNELS.migrateLegacyKeys, providerIds),
+  exportCredentialBackup: (passphrase: string, providerIds: string[]): Promise<{ file: string; providers: string[] } | null> =>
+    ipcRenderer.invoke(DESKTOP_CHANNELS.exportCredentialBackup, passphrase, providerIds),
+  inspectCredentialBackup: (file: string | null, passphrase: string): Promise<{ file: string; providers: string[] } | null> =>
+    ipcRenderer.invoke(DESKTOP_CHANNELS.inspectCredentialBackup, file, passphrase),
+  restoreCredentialBackup: (file: string, passphrase: string, providerIds: string[]): Promise<{ restored: string[]; skipped: string[]; state: DesktopFreeModelsState }> =>
+    ipcRenderer.invoke(DESKTOP_CHANNELS.restoreCredentialBackup, file, passphrase, providerIds),
   listModels: (): Promise<string[]> => ipcRenderer.invoke(DESKTOP_CHANNELS.listModels),
   selectModel: (model: string): Promise<DesktopSnapshot | null> =>
     ipcRenderer.invoke(DESKTOP_CHANNELS.selectModel, model),

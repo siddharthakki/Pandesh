@@ -16,6 +16,12 @@ export interface CloudProviderCredential {
   apiKey: string;
 }
 
+export interface PreferredCloudModel {
+  provider: string;
+  model: string;
+  verifiedFree: boolean;
+}
+
 export interface CloudCredentialStatus {
   configured: boolean;
   baseUrl?: string;
@@ -44,6 +50,24 @@ export class CloudCredentialStore {
 
   clearAll(): void {
     this.entries.clear();
+    this.preferred = undefined;
+  }
+
+  private preferred: PreferredCloudModel | undefined;
+
+  /**
+   * The free cloud model the user chose in the desktop (not a secret). Pandesh offers this model — and only after
+   * asking — when every local model failed a task (escalation.ts). `verifiedFree` comes from the host's verified pool.
+   */
+  setPreferredModel(model: PreferredCloudModel | undefined): void {
+    if (model && (!/^[a-z0-9][a-z0-9-]{1,40}$/.test(model.provider) || !model.model.trim())) throw new Error('Invalid preferred cloud model');
+    this.preferred = model ? { provider: model.provider, model: model.model.trim(), verifiedFree: model.verifiedFree === true } : undefined;
+  }
+
+  /** The chosen model, only while its key is delivered and it is verified free. */
+  offerableModel(): PreferredCloudModel | undefined {
+    const p = this.preferred;
+    return p && p.verifiedFree && this.entries.has(p.provider) ? { ...p } : undefined;
   }
 
   clear(provider: string): void {

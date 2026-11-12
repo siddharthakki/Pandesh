@@ -2,6 +2,7 @@ import React, { useRef, useState } from 'react';
 import { api, errorText, type Snapshot } from './bridge';
 import { NOT_CONNECTED, SETUP_STEPS, STATE_LABEL, googleActions, googleState, serviceRows, type Busy, type Tone } from './googleModel';
 import { PhoneCard } from './Phone';
+import { FreeModelsCard } from './FreeModels';
 
 const TONE: Record<Tone, string> = { ok: 'var(--verified)', busy: 'var(--pulse)', warn: 'var(--attention)', neutral: 'var(--muted)' };
 
@@ -72,6 +73,7 @@ export function Connections({ snapshot, refresh }: { snapshot: Snapshot | null; 
       </div>
       <div className="board" style={{ display: 'flex', flexDirection: 'column', gap: 12, maxWidth: 760 }}>
         <PhoneCard />
+        <FreeModelsCard />
         <section className="card" aria-label="Google">
           <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
             <span className="title" style={{ fontSize: 16 }}>Google</span>

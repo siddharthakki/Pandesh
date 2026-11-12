@@ -24,6 +24,7 @@ import { getAttempt, transitionAttempt, failAttempt, confirmAttemptCancelled, se
 import { settleIdleCapabilityAnchorsForConversation } from '../domain/bootReconciliation';
 import { acquireFence, renewFenceLease } from '../domain/fence';
 import { getRequest } from '../domain/requests';
+import { maybeEscalate, startAcceptedCloudOffer, type InstalledModel } from './escalation';
 import { classifyAttemptLane, interactiveLane, DEFAULT_MAX_TOOL_YIELD_MS } from './interactiveLane';
 import { getAttemptContext } from '../domain/attemptContext';
 import { MAX_EXECUTION_EPOCHS, buildEpochCheckpoint } from './executionEpoch';
@@ -46,8 +47,10 @@ import { LocalAutonomySecurityKernel } from '../security/kernel';
 import type { ExecutionGrant } from '../security/types';
 import { ModelBackendError, OllamaModelBackend, describeInlineToolCallFailure, isAbortError, recoverInlineToolCalls } from './modelBackend';
 import { inlineToolCallCorrection, validateNativeToolCalls, type StructuralRepairRecord } from './inlineToolCalls';
-import { cloudProviderLabel, isCloudAttemptProvider, isFreeCloudPublicTextAttempt, isSupportedAttemptProvider, resolveAttemptModelBackend } from './attemptModelBackend';
+import { cloudProviderLabel, isCloudAttemptProvider, isFreeCloudPublicTextAttempt, isPoolProvider, isSupportedAttemptProvider, resolveAttemptModelBackend, usesOpenRouterPool } from './attemptModelBackend';
 import { decideCloudPublicText } from './cloudPublicText';
+import { activeFreeModelRegistry } from './freeModelRegistryService';
+import { isQuotaFailure } from '../platform/cloudRouting';
 import { createResearchEvidenceRunner } from './researchCapability';
 import { redactSecrets } from '../platform/credentialStore';
 import {
@@ -59,7 +62,7 @@ import {
   synthesizePublicResearchReport,
 } from './cloudPublicResearch';
 import type { ToolExecutionResult } from './toolRunner';
-import type { CloudCredentialStore } from './cloudCredentials';
+import { sharedCloudCredentials, type CloudCredentialStore } from './cloudCredentials';
 import { finalizeOpenRouterCall, prepareOpenRouterCall } from './openRouterExecution';
 import type { ToolRunner } from './toolRunner';
 import { CoreToolRunner } from './toolRunner';
@@ -429,6 +432,11 @@ export interface RuntimeExecutorOptions {
   rawModelEvidence?: boolean;
   /** Facts about what could take over after a model failure in Auto. Absent => Auto never reroutes. */
   rerouteEnvironment?: RerouteEnvironmentProvider;
+  /**
+   * The installed local models a stronger model is chosen from when a turn ends unfinished (see `escalation.ts`).
+   * Absent => no escalation (tests never reach the real Ollama unless they pass one).
+   */
+  escalationInventory?: () => Promise<InstalledModel[] | undefined>;
 }
 
 export class RuntimeExecutor {
@@ -444,6 +452,7 @@ export class RuntimeExecutor {
   private readonly rawModelEvidence: boolean;
   private readonly rerouteEnvironment?: RerouteEnvironmentProvider;
   private readonly rerouteCooldowns = new FailureCooldowns();
+  private readonly escalationInventory?: () => Promise<InstalledModel[] | undefined>;
   private readonly defaultModel: string;
   private readonly defaultWorkingDirectory: string;
   private readonly dataDir: string;
@@ -462,6 +471,7 @@ export class RuntimeExecutor {
     this.connectorRegistry = options.connectorRegistry ?? new Map();
     this.validationCommandRunner = options.validationCommandRunner;
     this.rerouteEnvironment = options.rerouteEnvironment;
+    this.escalationInventory = options.escalationInventory;
     this.rawModelEvidence = options.rawModelEvidence ?? process.env.KKD_GOLDEN_RAW_MODEL_EVIDENCE === '1';
     this.defaultModel = options.defaultModel ?? process.env.KARKEDIKHA_DEFAULT_MODEL ?? 'qwen2.5-coder:1.5b';
     this.defaultWorkingDirectory = options.defaultWorkingDirectory ?? process.cwd();
@@ -512,7 +522,8 @@ export class RuntimeExecutor {
     onToken: (delta: string) => void,
   ): Promise<ModelChatResult> {
     let budget: { reserveUsd: number } | null = null;
-    if (context.selectedProvider === 'openrouter') {
+    // Only the legacy spend-capped OpenRouter mode reserves a budget; the free pool (key delivered, no cap) cannot spend.
+    if (context.selectedProvider === 'openrouter' && !usesOpenRouterPool(context, this.cloudCredentials ?? sharedCloudCredentials)) {
       budget = this.mutate(() => prepareOpenRouterCall(this.db, context, request.messages));
     }
     const backend = this.modelBackendFor(context);
@@ -788,7 +799,28 @@ export class RuntimeExecutor {
       isMutatingTool: name => this.isMutatingCall(name),
     }, attemptId);
     for (const event of listRuntimeEventsAfter(this.db, sequenceBefore, 200)) this.broadcaster.publishRuntime(event);
-    if (successor) await this.execute(successor.id, options);
+    if (successor) {
+      await this.execute(successor.id, options);
+      return;
+    }
+    // Escalation: a turn that ended unfinished (nothing built, no reply) or failed on a model that Auto may not
+    // replace goes to a stronger installed local model, until the strongest has tried; then Core reports honestly.
+    if (this.escalationInventory) {
+      const escalationDeps = {
+        db: this.db, actor: CORE_ACTOR, installedModels: this.escalationInventory,
+        isMutatingTool: (name: string) => this.isMutatingCall(name),
+        mutate: <T,>(fn: () => T) => this.mutate(fn),
+        cloudOffer: () => (this.cloudCredentials ?? sharedCloudCredentials).offerableModel(),
+      };
+      // The user just said yes to the cloud offer: the offered task now runs on that cloud model.
+      const accepted = startAcceptedCloudOffer(escalationDeps, attemptId);
+      if (accepted) {
+        await this.execute(accepted.id, options);
+        return;
+      }
+      const escalated = await maybeEscalate(escalationDeps, attemptId);
+      if (escalated) await this.execute(escalated.id, options);
+    }
   }
 
   private async runChat(attemptId: string, fenceToken: string, signal: AbortSignal): Promise<void> {
@@ -891,29 +923,89 @@ export class RuntimeExecutor {
         actor: CORE_ACTOR,
       }),
     );
-    try {
-      const result = await this.streamModelChat(
-        context,
-        attemptId,
-        invocation.id,
-        { model: context.selectedModel, messages: messages as never, tools: [], signal },
-        (delta) => this.broadcaster.publishRuntimeToken({ attemptId, invocationId: invocation.id, delta }),
-      );
-      this.throwIfCancellationRequested(attemptId, signal);
-      if (!result.content || !result.content.trim()) {
-        throw new ModelBackendError('cloud model produced an empty response', 'model_empty_response');
+    let current = context;
+    let currentInvocationId = invocation.id;
+    const fallbacks = [...(context.modelSelection?.cloudFallback ?? [])];
+    // Bounded: the approved alternatives, at most three switches, only before any text was produced.
+    for (let switches = 0; ; switches++) {
+      let produced = false;
+      try {
+        const invocationId = currentInvocationId;
+        const result = await this.streamModelChat(
+          current,
+          attemptId,
+          invocationId,
+          { model: current.selectedModel, messages: messages as never, tools: [], signal },
+          (delta) => { produced = true; this.broadcaster.publishRuntimeToken({ attemptId, invocationId, delta }); },
+        );
+        this.throwIfCancellationRequested(attemptId, signal);
+        if (!result.content || !result.content.trim()) {
+          throw new ModelBackendError('cloud model produced an empty response', 'model_empty_response');
+        }
+        this.completeInvocationSucceeded(invocationId, result);
+        this.appendAssistant(request.conversationId, result.content.trim(), invocationId, attemptId);
+        this.recordQuality(attemptId, 'final_verification_recorded', {
+          kind: 'cloud_public_text_response',
+          model: result.model,
+          provider: current.selectedProvider,
+          ...(switches > 0 ? { switchedFrom: context.selectedProvider } : {}),
+        }, 'final-conversation');
+        this.mutate(() => transitionAttempt(this.db, attemptId, { toStatus: 'completed', fenceToken, actor: CORE_ACTOR }));
+        return;
+      } catch (err) {
+        const next = produced || switches >= 3 || isAbortError(err) || getAttempt(this.db, attemptId).cancelRequestedAt
+          ? undefined
+          : this.nextCloudFallback(current, fallbacks, err);
+        if (!next) {
+          this.recordChatFailure(attemptId, currentInvocationId, fenceToken, err);
+          return;
+        }
+        this.mutate(() => completeModelInvocation(this.db, currentInvocationId, { status: 'failed', actor: CORE_ACTOR }));
+        // Shown in the live activity view: which provider was rate-limited and which approved one took over.
+        const switched = this.mutate(() => recordRuntimeEvent(this.db, {
+          domain: 'attempt', entityId: attemptId, eventType: 'cloud_provider_switched', actor: CORE_ACTOR,
+          metadata: { attemptId, from: `${current.selectedProvider}::${current.selectedModel}`, to: `${next.provider}::${next.model}`, reason: next.reason },
+          resultingRevision: null,
+        }));
+        this.broadcaster.publishRuntime(switched);
+        current = { ...current, selectedProvider: next.provider, selectedModel: next.model };
+        currentInvocationId = this.mutate(() => startModelInvocation(this.db, {
+          attemptId,
+          requestedProvider: next.provider,
+          requestedModel: next.model,
+          policyProvider: next.provider,
+          policyModel: next.model,
+          actor: CORE_ACTOR,
+        })).id;
       }
-      this.completeInvocationSucceeded(invocation.id, result);
-      this.appendAssistant(request.conversationId, result.content.trim(), invocation.id, attemptId);
-      this.recordQuality(attemptId, 'final_verification_recorded', {
-        kind: 'cloud_public_text_response',
-        model: result.model,
-        provider: context.selectedProvider,
-      }, 'final-conversation');
-      this.mutate(() => transitionAttempt(this.db, attemptId, { toStatus: 'completed', fenceToken, actor: CORE_ACTOR }));
-    } catch (err) {
-      this.recordChatFailure(attemptId, invocation.id, fenceToken, err);
     }
+  }
+
+  /**
+   * The next approved free model after a rate-limit/quota failure, or undefined (then the failure stands). Only models
+   * frozen into this attempt's approval are considered, each re-checked now; the original privacy class (public text)
+   * and FREE_ONLY never change. Any other failure is not a reason to switch.
+   */
+  private nextCloudFallback(
+    current: AttemptContextRecord,
+    fallbacks: Array<{ provider: string; model: string }>,
+    err: unknown,
+  ): { provider: string; model: string; reason: string } | undefined {
+    const message = err instanceof Error ? err.message : String(err);
+    const status = typeof (err as { status?: unknown })?.status === 'number' ? (err as { status: number }).status : undefined;
+    if (!isQuotaFailure(status, message)) return undefined;
+    const registry = activeFreeModelRegistry();
+    registry?.noteFailure(current.selectedProvider, status ?? 429, message);
+    if (!registry || !registry.getPreferences().fallbackOnRateLimit) return undefined;
+    while (fallbacks.length > 0) {
+      const candidate = fallbacks.shift()!;
+      if (candidate.provider === current.selectedProvider && candidate.model === current.selectedModel) continue;
+      const verdict = registry.stillEligible(candidate.provider, candidate.model, 'chat');
+      if (!verdict.ok) continue;
+      if (!(this.cloudCredentials ?? sharedCloudCredentials).get(candidate.provider)) continue;
+      return { ...candidate, reason: `${current.selectedProvider} ${current.selectedModel} was rate-limited (${redactSecrets(message).slice(0, 120)}); switched to an approved free model` };
+    }
+    return undefined;
   }
 
   /**
@@ -5061,6 +5153,9 @@ export class RuntimeExecutor {
     // hash-checked bytes, locally extracted document/audio text, images only for a vision-selected model.
     let prompt = request.currentMessage;
     let images: Array<{ type: 'image'; data: string; mimeType: string }> | undefined;
+    // An escalated successor carries Core's account of the weaker model's turn (escalation.ts); the request itself
+    // (`currentMessage`) is unchanged, so routing and checks still judge the user's words.
+    if (context.retryGuidance && this.db.get("SELECT 1 FROM runtime_events WHERE entityId = ? AND eventType = 'attempt_escalated' LIMIT 1", [attemptId])) prompt = `${context.retryGuidance}\n\nThe request:\n${prompt}`;
     const frozen = context.attachments ?? [];
     if (frozen.length > 0 || this.continuationAttachmentsFor(context, frozen).length > 0) {
       const probe: ModelChatMessage[] = [{ role: 'user', content: prompt }];
@@ -5084,6 +5179,8 @@ export class RuntimeExecutor {
       dataDir: this.dataDir,
       images,
       model: context.selectedModel,
+      provider: context.selectedProvider,
+      ...(context.selectedProvider !== 'ollama' ? { cloud: { context, credentials: this.cloudCredentials, fetchFn: this.cloudFetch } } : {}),
       fenceToken,
       signal,
       connectors: this.buildPiConnectorBridge(request.conversationId || attemptId, request.clientId, workspaceRoot, signal, request.currentMessage, attemptId),
@@ -5235,8 +5332,13 @@ export class RuntimeExecutor {
       }
     }
 
-    // Pi runs its model on local Ollama only. A cloud provider chosen for this task is not sent to Ollama under a cloud
-    // model name; it fails here with the reason, and nothing leaves the machine.
+    // A free cloud chat the user chose (picked before the chat, or "yes" to Pandesh's offer) runs the whole Pi turn on
+    // that provider; piCloudTarget.ts still refuses it before sending anything without the key or a free spend policy.
+    if (context.selectedProvider && context.selectedProvider !== 'ollama' && context.modelSelection?.cloudChatApproved === true && isPoolProvider(context.selectedProvider)) {
+      return 'pi';
+    }
+    // Otherwise Pi runs its model on local Ollama only. A cloud provider chosen for this task is not sent to Ollama under
+    // a cloud model name; it fails here with the reason, and nothing leaves the machine.
     if (context.selectedProvider && context.selectedProvider !== 'ollama') {
       const label = context.selectedProvider === 'openrouter' ? 'OpenRouter' : cloudProviderLabel(context.selectedProvider);
       return { refused: `${label} was selected for this task, but Pandesh's assistant engine runs only on local Ollama models. Nothing was sent to ${label}, and no local model was substituted. Choose a local model to run this task.` };
