@@ -237,6 +237,18 @@ export function buildRouter(
     }
     return { status: 200, body: sharedCloudCredentials.status(match.params.provider) };
   });
+  // The free cloud model the user chose (no secret): what Pandesh may OFFER after every local model failed a task.
+  router.post('/v1/cloud/preferred-model', (ctx) => {
+    const body = asRecord(ctx.body);
+    const provider = typeof body.provider === 'string' ? body.provider : '';
+    const model = typeof body.model === 'string' ? body.model : '';
+    try {
+      sharedCloudCredentials.setPreferredModel(provider && model ? { provider, model, verifiedFree: body.verifiedFree === true } : undefined);
+    } catch (error) {
+      throw new CoreError('invalid_request', error instanceof Error ? error.message : 'invalid preferred model');
+    }
+    return { status: 200, body: { offerable: sharedCloudCredentials.offerableModel() ?? null } };
+  });
   router.delete('/v1/providers/:provider/credential', (_ctx, match) => {
     sharedCloudCredentials.clear(match.params.provider);
     return { status: 200, body: sharedCloudCredentials.status(match.params.provider) };

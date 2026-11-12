@@ -633,6 +633,15 @@ export interface RerouteAttemptInput {
   reason: string;
   /** 1-based index of this reroute in the objective's chain. */
   rerouteIndex: number;
+  /**
+   * Escalation: the predecessor ended `completed` but Core recorded the turn as unfinished (nothing built for a build
+   * request, no reply). Such a turn may be continued by a stronger model like a failed one.
+   */
+  continuesUnfinishedTurn?: boolean;
+  /** What the successor is told about the predecessor's turn (from Core's records, never from its own reply). */
+  guidance?: string;
+  /** The user said yes to running this task on the (free) cloud model: the whole turn may run there. */
+  cloudChatApproved?: boolean;
 }
 
 /**
@@ -649,7 +658,8 @@ export function rerouteAttempt(db: CoreDatabase, input: RerouteAttemptInput): At
       input.predecessorAttemptId,
     ]);
     if (existingSuccessor) return rowToAttempt(existingSuccessor);
-    if (predecessor.status !== 'failed') throw new CoreError('invalid_transition', 'only a failed attempt can be rerouted');
+    const continuable = predecessor.status === 'failed' || (input.continuesUnfinishedTurn === true && predecessor.status === 'completed');
+    if (!continuable) throw new CoreError('invalid_transition', 'only a failed or unfinished attempt can be rerouted');
 
     const id = newId('att');
     const now = nowIso();
@@ -669,6 +679,7 @@ export function rerouteAttempt(db: CoreDatabase, input: RerouteAttemptInput): At
           selectionReason: `Auto reroute ${input.rerouteIndex}: ${input.reason}`,
           userOverrode: false,
           ...(input.cloudSpend ? { cloudSpend: input.cloudSpend, routingPolicy: 'explicit-cloud' as const } : {}),
+          ...(input.cloudSpend && input.cloudChatApproved ? { cloudChatApproved: true, cloudChatSource: 'approved_offer' as const } : {}),
         } as ModelSelectionEvidence
       : undefined;
     db.run(
@@ -687,6 +698,7 @@ export function rerouteAttempt(db: CoreDatabase, input: RerouteAttemptInput): At
       gitCapable: predecessorContext.permittedCapabilities.gitCapable,
       allowedTools: predecessorContext.permittedCapabilities.allowedTools,
       approvalPolicy: predecessorContext.approvalPolicy,
+      ...(input.guidance ? { retryGuidance: input.guidance } : {}),
     });
     recordRuntimeEvent(db, {
       domain: 'attempt',

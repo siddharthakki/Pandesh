@@ -43,7 +43,7 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as crypto from 'node:crypto';
 import type { CoreDatabase } from '../db/connection';
-import type { CapabilityDispatchResult } from '../shared/wireTypes';
+import type { AttemptContextRecord, CapabilityDispatchResult } from '../shared/wireTypes';
 import type { PiMemoryBridge } from './piMemoryBridge';
 import type { PiCapabilityBridge } from './piCapabilityBridge';
 import type { EventBroadcaster } from '../ws/broadcaster';
@@ -88,7 +88,7 @@ import { destinationsFor, parseUiSurface, type UiSurface } from '../shared/uiDes
 import { recordExecutionQuality } from '../domain/executionQuality';
 import { AUTHORIZE_MISSION_TOOL, buildWorkspaceWriteEnvelope, createPendingMissionAuthorization, evaluateAuthorizedDispatch, evaluateMissionAction, getMissionAuthorization, markMissionAuthorized, markMissionRejected, protectedWriteReason, recordAuthorizedAction } from './missionAuthorization';
 import { NON_WORKSPACE_MARKERS } from '../domain/taskToolSurface';
-import { auditPromises, classifyStatusRequest, composeStatusAnswer, hasActiveWorker, hasRecentGmailWork } from './assistantStatus';
+import { announcesWorkStarting, asksAboutConversationTask, auditPromises, classifyStatusRequest, composeStatusAnswer, describeConversationTask, hasActiveWorker, hasRecentGmailWork, latestConversationTask, type StatusTopic } from './assistantStatus';
 import { notificationCapability } from '../domain/notificationOutbox';
 import { boundConversationContext, isExplicitResumeRequest, isSmallTalk, selectRelevantTask, LATEST_REQUEST_AUTHORITATIVE } from '../domain/conversationRelevance';
 import type { PowerShellRunner } from './windowsPrinting';
@@ -103,6 +103,9 @@ import { KandevClient } from './kandev/kandevClient';
 import { ensureModelResident } from './ollamaResidency';
 import { OLLAMA_IMPLICIT_NUM_CTX_BUCKETS, resolveOllamaChatControls } from './ollamaChatControls';
 import { createPiOllamaFetch, type OllamaCallMetrics } from './piOllamaNativeFetch';
+import { createPiCloudFetch, resolvePiCloudTarget } from './piCloudTarget';
+import { CLOUD_OFFER_DECLINED_REPLY, classifyOfferReply, cloudOfferAcceptedReply, pendingCloudOffer } from './escalation';
+import type { CloudCredentialStore } from './cloudCredentials';
 import { TURN_STATE_PROMPT_RULE, attachTurnState, formatTurnState } from './turnState';
 import { formatProjectNotesSection, readProjectNotes } from './projectNotes';
 import { interactiveLane, DEFAULT_MAX_TOOL_YIELD_MS } from './interactiveLane';
@@ -848,6 +851,14 @@ export interface PiRunContext {
   /** Verified image bytes for a vision-capable model (never a path). */
   images?: Array<{ type: 'image'; data: string; mimeType: string }>;
   model?: string;
+  /**
+   * The attempt's provider. `ollama` (default) runs on this PC. A free cloud pool provider runs the whole turn —
+   * history, tools, tool results — on that provider, which only happens when the user chose it (a cloud model picked
+   * before the chat, or "yes" to Pandesh's offer); see `piCloudTarget.ts`.
+   */
+  provider?: string;
+  /** The frozen model-selection facts the cloud target is checked against (spend policy, approval). */
+  cloud?: { context: AttemptContextRecord; credentials?: CloudCredentialStore; fetchFn?: typeof fetch };
   fenceToken: string;
   signal?: AbortSignal;
   /** Test seam: runs the fixed printing scripts. Production uses the real PowerShell runner. */
@@ -1082,13 +1093,23 @@ export class PiAgentEngine implements EngineAdapter {
     // than being mistaken for an interrupted task.
     // Pi's requests go to native /api/chat (see piOllamaNativeFetch) so the window and thinking are explicit:
     // /v1 inherits the machine-wide OLLAMA_CONTEXT_LENGTH, which spilled gemma4 out of VRAM at 64K.
+    // A cloud turn: refused before anything is sent unless the key is delivered and the frozen policy proves it free.
+    const cloudTarget = ctx.provider && ctx.provider !== 'ollama'
+      ? resolvePiCloudTarget({ provider: ctx.provider, context: ctx.cloud?.context, credentials: ctx.cloud?.credentials })
+      : null;
     const controls = resolveOllamaChatControls({ profile: 'pi', model: selectedModel });
     const baseNumCtx = controls.numCtx ?? PI_CONTEXT_WINDOW;
-    const residency = await ensureModelResident(selectedModel, { baseUrl: this.defaultUrl, signal, numCtx: baseNumCtx });
-    console.log(`[karkedikha-core ${new Date().toISOString()}] attemptId=${attemptId} stage=model_residency model=${selectedModel} ok=${residency.ok} durationMs=${residency.durationMs} numCtx=${baseNumCtx}${residency.error ? ' error=' + residency.error : ''}`);
+    if (!cloudTarget) {
+      const residency = await ensureModelResident(selectedModel, { baseUrl: this.defaultUrl, signal, numCtx: baseNumCtx });
+      console.log(`[karkedikha-core ${new Date().toISOString()}] attemptId=${attemptId} stage=model_residency model=${selectedModel} ok=${residency.ok} durationMs=${residency.durationMs} numCtx=${baseNumCtx}${residency.error ? ' error=' + residency.error : ''}`);
+    }
     const ollamaRoot = this.defaultUrl.replace(/\/v1\/?$/, '').replace(/\/$/, '');
     const modelCalls: OllamaCallMetrics[] = [];
-    const piFetch = createPiOllamaFetch({
+    const piFetch: typeof fetch = cloudTarget ? createPiCloudFetch({
+      fetchFn: ctx.cloud?.fetchFn,
+      provider: cloudTarget.provider,
+      onCall: (call) => safeRecordRuntimeEvent(db, broadcaster, attemptId, 'model_call', { model: selectedModel, ...call }, actor),
+    }) : createPiOllamaFetch({
       baseUrl: ollamaRoot,
       // Grow only when the prompt genuinely needs it: a different num_ctx makes Ollama reload the model.
       numCtx: (estimated) => {
@@ -1107,12 +1128,15 @@ export class PiAgentEngine implements EngineAdapter {
       },
     });
 
-    const baseUrl = this.defaultUrl.endsWith('/v1') ? this.defaultUrl : `${this.defaultUrl}/v1`;
+    const piProviderId = cloudTarget?.provider ?? 'ollama';
+    const piApiKey = cloudTarget?.apiKey ?? 'no-key';
+    const baseUrl = cloudTarget?.baseUrl ?? (this.defaultUrl.endsWith('/v1') ? this.defaultUrl : `${this.defaultUrl}/v1`);
+    if (cloudTarget) safeRecordRuntimeEvent(db, broadcaster, attemptId, 'cloud_turn_started', { provider: cloudTarget.provider, model: selectedModel, why: cloudTarget.why }, actor);
     const modelConfig: any = {
       id: selectedModel,
-      name: 'ollama-model',
+      name: cloudTarget ? `${cloudTarget.label} model` : 'ollama-model',
       api: 'openai-completions',
-      provider: 'ollama',
+      provider: piProviderId,
       baseUrl,
       reasoning: false,
       input: ctx.images?.length ? ['text', 'image'] : ['text'],
@@ -1125,10 +1149,10 @@ export class PiAgentEngine implements EngineAdapter {
     };
 
     const provider = createProvider({
-      id: 'ollama',
-      name: 'Ollama Gateway',
+      id: piProviderId,
+      name: cloudTarget ? cloudTarget.label : 'Ollama Gateway',
       baseUrl,
-      auth: { apiKey: { name: 'Ollama', resolve: async () => ({ auth: { apiKey: 'no-key' } }) } },
+      auth: { apiKey: { name: cloudTarget ? cloudTarget.label : 'Ollama', resolve: async () => ({ auth: { apiKey: piApiKey } }) } },
       models: [modelConfig],
       api: openAICompletionsApi(),
     });
@@ -4635,18 +4659,42 @@ Report this to the user, saying the ${name} agent did the work. Do not add facts
       safeRecordRuntimeEvent(db, broadcaster, attemptId, 'step_finish', { step: 1, engine: 'pi', durationMs: Date.now() - startTime, outcome: 'completed' }, actor);
       return { success: true, reply: taskStatusAnswer };
     }
+    // The answer to Pandesh's cloud offer (escalation.ts): a short yes/no right after it. Answered by Core, no model; on
+    // "yes" the executor starts the offered task on the cloud model once this turn ends. Nothing is sent before that.
+    const cloudOffer = conversationId ? pendingCloudOffer(db, conversationId, requestId) : null;
+    const offerAnswer = cloudOffer ? classifyOfferReply(requestText) : null;
+    if (cloudOffer && offerAnswer) {
+      const reply = offerAnswer === 'yes' ? cloudOfferAcceptedReply(cloudOffer) : CLOUD_OFFER_DECLINED_REPLY;
+      try {
+        mutateWithBroadcast(db, broadcaster, () => {
+          appendMessage(db, conversationId, { role: 'assistant', content: reply, actor });
+          ensureTaskOutcome(db, { attemptId, conversationId, requestId, objective: objectiveFromRequest(requestText) });
+          finalizeTaskOutcome(db, attemptId, { verdict: 'conversational', reason: offerAnswer === 'yes' ? 'The user approved the cloud offer' : 'The user declined the cloud offer; nothing was sent', performed: [], refused: [], failed: [] });
+        });
+      } catch {}
+      safeRecordRuntimeEvent(db, broadcaster, attemptId, offerAnswer === 'yes' ? 'cloud_offer_accepted' : 'cloud_offer_declined', { ...cloudOffer }, actor);
+      try { mutateWithBroadcast(db, broadcaster, () => { transitionAttempt(db, attemptId, { toStatus: 'completed', fenceToken, actor }); }); } catch {}
+      safeRecordRuntimeEvent(db, broadcaster, attemptId, 'step_finish', { step: 1, engine: 'pi', durationMs: Date.now() - startTime, outcome: 'completed' }, actor);
+      return { success: true, reply };
+    }
     // Questions about Pandesh itself (notifications, Gmail progress, running tasks, reminders) are answered from the
     // recorded state, with no model and no workspace: a model's prose is exactly where invented progress came from.
-    const statusTopics = classifyStatusRequest(requestText, hasRecentGmailWork(db, Date.now()));
+    // A follow-up about the task this chat was asked to do is answered from that task's record first: a bare "Status ?"
+    // after "build me a widget" was answered with the Gmail status of another chat (owner report 2026-11-12).
+    const chatTask = conversationId && !projectInspection ? latestConversationTask(db, conversationId, attemptId) : null;
+    const chatTaskReply = chatTask && asksAboutConversationTask(requestText, chatTask.objective)
+      ? describeConversationTask(chatTask, hasActiveWorker(db, conversationId, attemptId))
+      : null;
+    const statusTopics: StatusTopic[] | null = chatTaskReply ? ['tasks'] : classifyStatusRequest(requestText, hasRecentGmailWork(db, Date.now()));
     if (statusTopics && !projectInspection) {
-      const reply = composeStatusAnswer(db, statusTopics, Date.now(), requestText);
+      const reply = chatTaskReply ?? composeStatusAnswer(db, statusTopics, Date.now(), requestText);
       let replyRecord: any = null;
       try {
         mutateWithBroadcast(db, broadcaster, () => {
           replyRecord = appendMessage(db, conversationId, { role: 'assistant', content: reply, actor });
         });
       } catch {}
-      safeRecordRuntimeEvent(db, broadcaster, attemptId, 'assistant_status_answered', { topics: statusTopics, workspace: ctx.workspaceRoot ?? null }, actor);
+      safeRecordRuntimeEvent(db, broadcaster, attemptId, 'assistant_status_answered', { topics: chatTaskReply ? ['conversation_task'] : statusTopics, ...(chatTask && chatTaskReply ? { taskAttemptId: chatTask.attemptId, producingRuns: chatTask.producingRuns } : {}), workspace: ctx.workspaceRoot ?? null }, actor);
       try {
         mutateWithBroadcast(db, broadcaster, () => {
           ensureTaskOutcome(db, { attemptId, conversationId: conversationId || null, requestId, objective: objectiveFromRequest(requestText) });
@@ -5210,14 +5258,14 @@ When the user asks to continue, resume, or check progress/updates, resume this w
     const agent = new Agent({
       initialState: {
         systemPrompt,
-        model: models.getModel('ollama', selectedModel),
+        model: models.getModel(piProviderId, selectedModel),
         tools: simpleInteractive ? [] : tools,
         messages: priorMessages,
       },
       // Every tool stays executable (same approvals and receipts); the model is offered the active set only, which
       // request_tools (or a call to a hidden tool) grows during the turn. Pi declares tools on system messages.
       streamFn: (model: any, context: any, streamOptions: any) => models.streamSimple(model, simpleInteractive ? context : offerActiveTools(context, activeToolNames), { ...streamOptions, fetch: piFetch }),
-      getApiKey: () => 'no-key',
+      getApiKey: () => piApiKey,
       // Runs before every model call of the loop: the cooperative yield point for the interactive lane.
       transformContext: async (messages: any[], ctxSignal?: AbortSignal) => {
         const yielded = await interactiveLane.yieldToInteractive(attemptId, ctxSignal ?? signal);
@@ -5544,7 +5592,7 @@ When the user asks to continue, resume, or check progress/updates, resume this w
 
         try {
           const synthStream = models.streamSimple(
-            models.getModel('ollama', selectedModel),
+            models.getModel(piProviderId, selectedModel),
             {
               systemPrompt: 'You are Pandesh, a precise research assistant. Answer the user request using only the verified evidence provided. Never invent facts, vacancies, or salaries.',
               messages: [{ role: 'user', content: [{ type: 'text', text: synthPrompt }] }],
@@ -5995,7 +6043,7 @@ When the user asks to continue, resume, or check progress/updates, resume this w
         safeRecordRuntimeEvent(db, broadcaster, attemptId, 'tool_evidence_synthesis_started', { results: evidence.length }, actor);
         try {
           const synthStream = models.streamSimple(
-            models.getModel('ollama', selectedModel),
+            models.getModel(piProviderId, selectedModel),
             {
               systemPrompt: 'You are Pandesh, a precise local assistant. Answer the user request from the tool results provided. Never invent facts that are not in them.',
               messages: [{ role: 'user', content: [{ type: 'text', text: buildToolEvidenceSynthesisPrompt(requestText, evidence) }] }],
@@ -6075,13 +6123,6 @@ When the user asks to continue, resume, or check progress/updates, resume this w
       } catch {}
     }
 
-    // A reply may not promise background work or a notification that nothing is set up to deliver.
-    {
-      const capability = notificationCapability(db);
-      const correction = auditPromises(finalReply, { activeWorker: hasActiveWorker(db, conversationId, attemptId), canNotify: capability.canNotify, notifyStatement: capability.statement });
-      if (correction) finalReply += "\n\n" + correction;
-    }
-
     // A project question is answered only from the selected project's own files: a reply that asks which project, or that
     // describes Pandesh/KarkeDikha as the project, is replaced by the answer Core can prove from the evidence it read.
     let projectReplyReplaced = false;
@@ -6104,11 +6145,18 @@ When the user asks to continue, resume, or check progress/updates, resume this w
       const tail = finalReply.trim().split(/\n\s*\n/).pop() ?? '';
       const announcesNextStep = /\b(?:let me|i'll|i will|now i(?:'ll| will)|next,? i(?:'ll| will)|i am going to|i'm going to)\s+(?:now\s+|then\s+|go ahead and\s+)?(?:build|create|write|generate|make|run|verify|open|fix|update|save|put|assemble|render|draft|correct|change|replace|adjust|edit|rewrite|re-?write|apply|finish|complete|add)\b/i.test(tail)
         && !/\?\s*$/.test(tail);
-      if (announcesNextStep) {
-        safeRecordRuntimeEvent(db, broadcaster, attemptId, 'announced_step_continued', { tail: tail.slice(0, 200) }, actor);
+      // Owner report 2026-11-12 (widget chat): "Go ahead and build it" got a plan ending "I'm starting the Proof of
+      // Concept now … (Note: I will be working in C:\Projects\Widget)" after two web searches, and nothing was built.
+      // A request to make something whose reply says the work is starting, anywhere in it, with nothing produced yet,
+      // gets the same one continuation.
+      const startsWithoutWork = !didRealWork && asksToMakeSomething && announcesWorkStarting(finalReply);
+      if (announcesNextStep || startsWithoutWork) {
+        safeRecordRuntimeEvent(db, broadcaster, attemptId, 'announced_step_continued', { tail: tail.slice(0, 200), reason: announcesNextStep ? 'announced_next_step' : 'said_work_is_starting' }, actor);
         try {
           const floor = agent.state.messages.length;
-          await agent.prompt('Continue now: you said what you would do next but stopped before doing it. Carry out that step with your tools in this turn (write the file, run the check, open it), then give the final answer with what really happened.');
+          await agent.prompt(announcesNextStep
+            ? 'Continue now: you said what you would do next but stopped before doing it. Carry out that step with your tools in this turn (write the file, run the check, open it), then give the final answer with what really happened.'
+            : 'Continue now: you said the work is starting, but nothing has been built — no file was written in this turn, and nothing runs after your reply ends. Do the first real step with your tools in this turn (create the files with write_file, run them), then give the final answer with what really exists. If you cannot build it, say plainly that nothing has been built yet and why.');
           await agent.waitForIdle();
           const continued = lastAssistantTextFrom(floor);
           if (continued && !isTruncationArtifact(continued)) finalReply = continued;
@@ -6177,6 +6225,38 @@ When the user asks to continue, resume, or check progress/updates, resume this w
         } catch (err: any) {
           safeRecordRuntimeEvent(db, broadcaster, attemptId, 'claimed_file_missing_recovery_failed', { error: err?.message ?? String(err) }, actor);
         }
+      }
+    }
+
+    // A reply may not promise background work or a notification that nothing is set up to deliver. Judged after every
+    // continuation above: appended earlier, this correction became the reply's last paragraph, so the "do the step you
+    // announced" check read the correction instead of the model's promise and never fired (widget chat, 2026-11-12).
+    {
+      const capability = notificationCapability(db);
+      // Anything that acted counts (a file written, a reminder set, a draft made); looking things up does not. Owner
+      // report 2026-11-12: two web searches and a screen switch were the whole "build it" turn.
+      const LOOKUP_ONLY = /^(?:web_research|governed_research|navigate_to|read_file|list_directory|search_files|document_read|inspect_page|calculate|resolve_time|get_system_info|update_task_outcome|request_tools|memory_recall|browser_(?:read|open_site|goto|back|screenshot))$|_(?:search|list|read|get|status|recall)(?:_\w+)?$/;
+      const producedSomething = toolCallsRecorded.some((t) => t.status === 'completed' && !LOOKUP_ONLY.test(t.tool));
+      const correction = auditPromises(finalReply, {
+        activeWorker: hasActiveWorker(db, conversationId, attemptId),
+        canNotify: capability.canNotify,
+        notifyStatement: capability.statement,
+        nothingMade: asksToMakeSomething && !producedSomething,
+      });
+      if (correction) finalReply += "\n\n" + correction;
+      // The durable signal for escalation (executor → stronger model): a request to build something that ended with
+      // nothing built, or a turn with no reply. A question ("…, possible?"), a stopped turn or work still running in
+      // this chat is not an unfinished turn.
+      const isQuestion = /\?\s*$/.test(requestText.trim()) || /^\s*(?:can|could|would|is|are|do|does|how|what|why|which|should)\b/i.test(requestText);
+      // A reply that ends by asking the user something is waiting for them, not a failure.
+      const asksUser = /\?\s*\**\s*$/.test(finalReply.replace(/\n\nCorrection:[\s\S]*$/, '').trim());
+      const unfinishedReason = signal?.aborted || asksUser || hasActiveWorker(db, conversationId, attemptId) ? null
+        : isUnanswered ? 'no_reply'
+          : asksToMakeSomething && !isQuestion && !producedSomething ? 'nothing_built'
+            : null;
+      if (unfinishedReason) {
+        const ran = toolCallsRecorded.filter((t) => t.status === 'completed' && !/^(?:update_task_outcome|request_tools)$/.test(t.tool)).map((t) => t.tool);
+        safeRecordRuntimeEvent(db, broadcaster, attemptId, 'turn_unfinished', { reason: unfinishedReason, model: selectedModel, toolsRun: ran }, actor);
       }
     }
 
@@ -6271,7 +6351,7 @@ When the user asks to continue, resume, or check progress/updates, resume this w
           if (problemCount(problems) > 0) {
             safeRecordRuntimeEvent(db, broadcaster, attemptId, 'research_claims_unverified', { names: problems.names, urls: problems.urls, claims: problems.claims, sources: sources.length }, actor);
             const rewriteStream = models.streamSimple(
-              models.getModel('ollama', selectedModel),
+              models.getModel(piProviderId, selectedModel),
               {
                 systemPrompt: 'You are Pandesh, a precise local assistant. You correct an answer so that every company and link it names is supported by the retrieved sources.',
                 messages: [{ role: 'user', content: [{ type: 'text', text: buildGroundingRewritePrompt(requestText, finalReply, problems, sources.map((s) => ({ marker: s.marker, title: s.title, url: s.finalUrl, text: s.content ?? '' }))) }] }],

@@ -560,6 +560,14 @@ export interface ModelSelectionEvidence {
    * free. Only then may Core send the public text: no tools, history, files, memory or task context.
    */
   cloudPublicTextApproved?: boolean;
+  /**
+   * The user chose to run this whole chat turn on the cloud model — history, tools and tool results included — either
+   * by picking the cloud model before the chat or by answering "yes" to Pandesh's offer after every local model failed.
+   * Only then does a cloud provider run the full Pi turn (`piCloudTarget.ts`); the spend policy still has to prove it free.
+   */
+  cloudChatApproved?: boolean;
+  /** How `cloudChatApproved` was given. */
+  cloudChatSource?: 'picked_before_chat' | 'approved_offer';
   /** Frozen routing label for authorization envelopes. */
   routingPolicy?: 'local-only' | 'local-first-cloud-fallback' | 'explicit-openrouter' | 'explicit-orcarouter' | 'explicit-cloud';
   /**

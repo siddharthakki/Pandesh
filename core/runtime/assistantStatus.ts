@@ -154,13 +154,31 @@ const FUTURE_WORK = /\b(?:i(?:'ll|\s+will|'m\s+going\s+to|\s+am\s+going\s+to)|i(
 const NOTIFY_PROMISE = /\b(?:i(?:'ll|\s+will)|i(?:'m|\s+am)\s+going\s+to)\s+(?:\w+\s+){0,3}?(?:notify\s+you|let\s+you\s+know|update\s+you|message\s+you|send\s+you\s+(?:a\s+)?(?:notification|update)|tell\s+you\s+when|ping\s+you|alert\s+you)\b/i;
 
 /**
- * A reply may promise future work or a notification only if something real will do it. Returns the correction to
- * append when it promises more than the system can deliver, otherwise null.
+ * "I'm starting the Proof of Concept now", "I am beginning the construction of the script now", "I will start by
+ * creating the project structure": the reply says the work is under way. Owner report 2026-11-12 (widget chat): gemma
+ * wrote this twice after web searches only, no file was written, and the "do the step you announced" check never fired
+ * because it read only the last paragraph and knew no "starting/beginning" wording.
  */
-export function auditPromises(reply: string, facts: { activeWorker: boolean; canNotify: boolean; notifyStatement: string }): string | null {
+const START_NOW = /\bi(?:'m|\s+am)\s+(?:now\s+|currently\s+|already\s+)?(?:starting|beginning|kicking\s+off|getting\s+started|proceeding\s+(?:with|to))\b|\bi(?:'m|\s+am)\s+going\s+to\s+(?:start|begin)\b|\bi(?:'ll|\s+will)\s+(?:now\s+|immediately\s+)?(?:start|begin|get\s+started|kick\s+off)\b|\b(?:starting|beginning)\s+(?:the\s+|with\s+(?:the\s+)?)?[^.\n?]{0,60}?\bnow\b/i;
+
+/** True when the reply says, in the first person, that the work is starting now or is about to start. */
+export function announcesWorkStarting(reply: string): boolean {
+  return START_NOW.test(String(reply || ''));
+}
+
+/**
+ * A reply may promise future work or a notification only if something real will do it. Returns the correction to
+ * append when it promises more than the system can deliver, otherwise null. `nothingMade` is true when the user asked
+ * for something to be built and no tool built, wrote or ran anything this turn: then the correction says so first.
+ */
+export function auditPromises(reply: string, facts: { activeWorker: boolean; canNotify: boolean; notifyStatement: string; nothingMade?: boolean }): string | null {
   if (facts.activeWorker) return null;
   const parts: string[] = [];
-  if (FUTURE_WORK.test(reply)) {
+  const startsWork = START_NOW.test(reply);
+  if (facts.nothingMade && (startsWork || FUTURE_WORK.test(reply))) {
+    parts.push('nothing was built in this turn — no file was written or changed, so the work described above has not started');
+  }
+  if (FUTURE_WORK.test(reply) || startsWork) {
     parts.push('nothing is running in the background and Pandesh does not retry or continue on its own; work only moves when you ask for it and approve it');
   }
   if (NOTIFY_PROMISE.test(reply)) {
@@ -169,6 +187,106 @@ export function auditPromises(reply: string, facts: { activeWorker: boolean; can
       : 'no notification is scheduled. ' + facts.notifyStatement);
   }
   return parts.length ? 'Correction: ' + parts.join('. Also, ') + '.' : null;
+}
+
+// ---------------------------------------------------------------------------------------------------------------
+// This chat's own task. Owner report 2026-11-12: after "Build me a windows widget…" and "Go ahead and build it", a bare
+// "Status ?" was answered with the Gmail organization status, because Gmail plans made that morning in another chat
+// count as "recent Gmail work" everywhere. The widget task recorded in this very chat was never consulted.
+// ---------------------------------------------------------------------------------------------------------------
+
+const MAKE_REQUEST = /\b(?:build|create|make|write|generate|draft|develop|implement|code|program|set\s*up|install|fix|design)\b/i;
+/** Tools whose success means something was produced or changed (a search, a page switch or a task note is not). */
+const PRODUCING_TOOL = /^(?:write_file|edit_file|apply_patch|run_checks|open_local_file|create_project|delegate_to_\w+)$|^propose_|file_change/;
+const BOOKKEEPING_TOOL = /^(?:update_task_outcome|request_tools)$/;
+/** A message that starts by asking for work is a request, never a status question ("build it now", "update the widget…"). */
+const WORK_COMMAND = /^\s*(?:ok(?:ay)?[,.!]?\s+|yes[,.!]?\s+|please\s+)?(?:build|create|make|write|generate|draft|develop|implement|fix|add|change|update|go|do|start|continue|proceed|run|open|install|finish|try)\b/i;
+const OWN_TASK_STATUS_WORDS = /\b(?:status|progress|update|how\s+far|done\s+yet|finished|ready|where\s+are\s+we|any\s+news)\b/i;
+const STOP_WORDS = new Set(['that', 'this', 'with', 'from', 'what', 'have', 'your', 'status', 'please', 'will', 'show', 'showing', 'there', 'about', 'which', 'where', 'when', 'requested', 'request', 'asked', 'data', 'into', 'some', 'them', 'they', 'also', 'just', 'want']);
+
+function contentWords(text: string): Set<string> {
+  return new Set((text.toLowerCase().match(/[a-z][a-z0-9-]{3,}/g) ?? []).filter((w) => !STOP_WORDS.has(w)));
+}
+
+export interface ConversationTask {
+  attemptId: string;
+  objective: string;
+  status: string;
+  blocker: string | null;
+  createdAt: string;
+  /** Tools that completed in this chat since the task was recorded, task bookkeeping left out: name → count. */
+  toolsRun: Map<string, number>;
+  /** How many of those produced or changed something (a file written, a check run, a hand-off). */
+  producingRuns: number;
+}
+
+/**
+ * The most recent task the user asked this chat to carry out (a request to build or make something, or one the model
+ * recorded with success criteria), with what really ran for it since. Null when the chat has none.
+ */
+export function latestConversationTask(db: CoreDatabase, conversationId: string, excludeAttemptId = ''): ConversationTask | null {
+  if (!conversationId) return null;
+  let rows: Array<{ attemptId: string; objective: string; successCriteria: string; status: string; blocker: string | null; createdAt: string }>;
+  try {
+    rows = db.all(
+      `SELECT attemptId, objective, successCriteria, status, blocker, createdAt FROM task_outcomes
+        WHERE conversationId = ? AND attemptId <> ? ORDER BY createdAt DESC LIMIT 20`,
+      [conversationId, excludeAttemptId],
+    );
+  } catch { return null; }
+  const task = rows.find((r) => (r.successCriteria && r.successCriteria.trim() !== '[]') || MAKE_REQUEST.test(r.objective));
+  if (!task) return null;
+  const toolsRun = new Map<string, number>();
+  let producingRuns = 0;
+  try {
+    const since = db.get<{ createdAt: string }>('SELECT createdAt FROM attempts WHERE id = ?', [task.attemptId])?.createdAt ?? task.createdAt;
+    const calls = db.all<{ toolName: string }>(
+      `SELECT t.toolName AS toolName FROM tool_invocations t JOIN attempts a ON a.id = t.attemptId JOIN requests q ON q.id = a.requestId
+        WHERE q.conversationId = ? AND a.createdAt >= ? AND t.status IN ('succeeded','completed')`,
+      [conversationId, since],
+    );
+    for (const { toolName } of calls) {
+      if (BOOKKEEPING_TOOL.test(toolName)) continue;
+      toolsRun.set(toolName, (toolsRun.get(toolName) ?? 0) + 1);
+      if (PRODUCING_TOOL.test(toolName)) producingRuns += 1;
+    }
+  } catch { /* tool ledger absent in some test databases: report the task without it */ }
+  return { attemptId: task.attemptId, objective: task.objective, status: task.status, blocker: task.blocker, createdAt: task.createdAt, toolsRun, producingRuns };
+}
+
+/** True when a short message asks how this chat's own task is going ("Status ?", "No status of the widget I requested"). */
+export function asksAboutConversationTask(text: string, objective: string): boolean {
+  const t = String(text || '').trim();
+  if (!t || t.length > 200 || WORK_COMMAND.test(t)) return false;
+  if (BARE_FOLLOW_UP.test(t)) return true;
+  // A question that names one of Pandesh's own status topics ("status of my Gmail organization") keeps its answer.
+  if (!OWN_TASK_STATUS_WORDS.test(t) || classifyStatusRequest(t, false)) return false;
+  const wanted = contentWords(objective);
+  for (const word of contentWords(t)) if (wanted.has(word)) return true;
+  return false;
+}
+
+/** The record-based answer about this chat's task: what was asked, what really ran, and that nothing runs unattended. */
+export function describeConversationTask(task: ConversationTask, activeWorker: boolean): string {
+  const objective = task.objective.replace(/\s+/g, ' ').trim();
+  const shown = objective.length > 160 ? `${objective.slice(0, 160)}…` : objective;
+  const state = task.status === 'satisfied' ? 'recorded as done'
+    : task.status === 'partial' ? 'recorded as partly done'
+      : task.status === 'blocked' ? `blocked${task.blocker ? `: ${task.blocker}` : ''}`
+        : 'started but not finished';
+  const ran = [...task.toolsRun.entries()].map(([name, n]) => (n > 1 ? `${name} ×${n}` : name));
+  const lines = [`**Your request in this chat — "${shown}" — from the recorded state, not from memory:**`, ''];
+  lines.push(`- Recorded at ${task.createdAt}: ${state}.`);
+  if (task.producingRuns === 0) {
+    lines.push('- **Nothing has been built for it yet:** no file was written or changed and no check was run in this chat since then.');
+    lines.push(ran.length ? `- What did run: ${ran.join(', ')} — looking things up, not building.` : '- No tool ran for it.');
+  } else {
+    lines.push(`- Work recorded since then: ${ran.join(', ')}.`);
+  }
+  lines.push(activeWorker
+    ? '- Work for this chat is still running right now.'
+    : '- Nothing is running in the background: work only moves during a turn with me. Say "build it now" and I will do it in this turn.');
+  return lines.join('\n');
 }
 
 /** True while a persisted background worker task owns work for this conversation. */
