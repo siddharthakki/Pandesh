@@ -67,6 +67,15 @@ export function isFreeCloudPublicTextAttempt(context: AttemptContextRecord, cred
   return provider !== 'openrouter' && provider !== ORCAROUTER_PROVIDER;
 }
 
+/**
+ * True when the user chose this free cloud chat: picked before the chat, or "yes" to Pandesh's offer (frozen at
+ * submit as `cloudChatApproved`) on a free-pool provider. The legacy spend-capped `openrouter` path never counts.
+ */
+export function isChosenCloudChat(context: AttemptContextRecord, credentials: CloudCredentialStore = sharedCloudCredentials): boolean {
+  const provider = context.selectedProvider;
+  return Boolean(provider) && context.modelSelection?.cloudChatApproved === true && isPoolProvider(provider, credentials);
+}
+
 export function cloudProviderLabel(provider: string): string {
   return builtinPoolCatalog.get(provider)?.displayName ?? provider;
 }
