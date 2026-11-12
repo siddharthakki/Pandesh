@@ -32,7 +32,12 @@ export function FreeModelsCard() {
   const [pass2, setPass2] = useState('');
   const [restore, setRestore] = useState<{ file: string; providers: string[]; chosen: string[] } | null>(null);
 
-  const load = useCallback(() => { api.getFreeModels().then(setState).catch((err) => setNote({ text: errorText(err), error: true })); }, []);
+  // A host without this feature (an older preload, or a test bridge) simply has no card.
+  const supported = typeof (api as Partial<typeof api>).getFreeModels === 'function';
+  const load = useCallback(() => {
+    if (!supported) return;
+    api.getFreeModels().then(setState).catch((err) => setNote({ text: errorText(err), error: true }));
+  }, [supported]);
   useEffect(load, [load]);
 
   const run = async (label: string, work: () => Promise<FreeModelsState | void | null>, done?: string) => {
@@ -112,6 +117,7 @@ export function FreeModelsCard() {
   };
 
   const backupIds = withAdapter.filter((p) => configured(p.id)).map((p) => p.id);
+  if (!supported) return null;
   return (
     <section className="card" aria-label="Free cloud models">
       <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
