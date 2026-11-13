@@ -20,7 +20,9 @@ import * as path from 'node:path';
 const EXT = 'md|markdown|txt|csv|tsv|json|jsonl|xlsx?|docx?|pptx?|pdf|html?|xml|ya?ml|toml|ini|log|js|mjs|cjs|ts|tsx|jsx|py|ps1|bat|sh|sql|css|png|jpe?g|gif|webp|svg|zip';
 const FILE_TOKEN = new RegExp(`(?<![\\w/\\\\:.-])((?:[\\w.-]+[\\\\/])*[\\w][\\w.-]*\\.(?:${EXT}))(?![\\w/-])`, 'gi');
 const OUTPUT_VERB = /\b(create|creates|created|write|writes|save|saves|produce|produces|generate|generates|make|makes|export|exports|output|store|put|build|draft|compose)\b/i;
-const INPUT_CUTOFF = /\b(?:from|using|based on|by reading|reading|out of|given|taken from|in the file)\b/i;
+const INPUT_CUTOFF = /\b(?:from|using|based on|by reading|reading|reads?|out of|given|taken from|in the file|about|for|that|which|of)\b/i;
+const INPUT_WORDS = /\b(?:of|about|from|using|reading|reads?|based on|given|for|see)\b/gi;
+const NEGATED_SENTENCE = /\b(?:not|n't|never|without|no need|unchanged|leave|keep)\b/i;
 
 export interface LedgerInput {
   requestText: string;
@@ -45,18 +47,26 @@ export function namedOutputFiles(requestText: string): string[] {
   for (const sentence of requestText.split(/(?<=[.!?])\s+|\n+/)) {
     const verb = OUTPUT_VERB.exec(sentence);
     if (!verb) continue;
-    let tail = sentence.slice(verb.index + verb[0].length);
-    const cut = INPUT_CUTOFF.exec(tail);
-    if (cut) tail = tail.slice(0, cut.index);
-    for (const m of tail.matchAll(FILE_TOKEN)) {
-      const token = m[1].replace(/\\/g, '/');
-      if (/[<>*{}]/.test(token) || /^https?:/i.test(token)) continue;
-      // "a summary of report.pdf into summary.md": the nearest connector before a token says whether it is read or made.
-      const before = tail.slice(Math.max(0, (m.index ?? 0) - 40), m.index ?? 0);
-      const lastOf = (re: RegExp) => { let at = -1; for (const x of before.matchAll(re)) at = x.index ?? -1; return at; };
-      if (lastOf(/\b(?:of|about|from|using|reading|based on|given)\b/gi) > lastOf(/\b(?:into|to|as|named|called|in|at)\b/gi)) continue;
-      if (!found.includes(token)) found.push(token);
-    }
+    // "do not create x", "make sure y is not changed": a negated sentence names no deliverable (review finding).
+    if (NEGATED_SENTENCE.test(sentence)) continue;
+    const tail = sentence.slice(verb.index + verb[0].length);
+    // Clauses joined by "and"/comma: the first is the verb's own object; later ones count only when they have an output
+    // verb of their own ("a script that reads data.csv and writes totals.csv" -> totals.csv only).
+    const clauses = tail.split(/\s*(?:,|\band\b)\s*/i);
+    clauses.forEach((clause, i) => {
+      if (i > 0 && !new RegExp(`^\\s*(?:then\\s+|also\\s+)?${OUTPUT_VERB.source}`, 'i').test(clause)) return;
+      if (/^\s*(?:reads?|uses?|loads?|opens?|parses?|checks?|compares?)\b/i.test(clause)) return;
+      const cut = INPUT_CUTOFF.exec(clause);
+      const part = cut ? clause.slice(0, cut.index) : clause;
+      for (const m of part.matchAll(FILE_TOKEN)) {
+        const token = m[1].replace(/\\/g, '/');
+        if (/[<>*{}]/.test(token) || /^https?:/i.test(token)) continue;
+        const before = part.slice(Math.max(0, (m.index ?? 0) - 40), m.index ?? 0);
+        const lastOf = (re: RegExp) => { let at = -1; for (const x of before.matchAll(re)) at = x.index ?? -1; return at; };
+        if (lastOf(INPUT_WORDS) > lastOf(/\b(?:into|to|as|named|called)\b/gi)) continue;
+        if (!found.includes(token)) found.push(token);
+      }
+    });
   }
   return found.slice(0, 12);
 }
@@ -141,7 +151,7 @@ export function deliverableLedger(input: LedgerInput): LedgerResult {
  * unbacked. Returns what is missing ("a successful check ... (the check failed: ...)"), or null.
  */
 const CHECK_TOOLS = /^(?:run_checks|run_command)$/;
-const WORKS_CLAIM = /\b(?:works?|working|functional|operational|verified|passes|passed|all (?:good|green|set)|correctly (?:installed|configured|set up|working))\b/i;
+const WORKS_CLAIM = /\b(?:works?|is working|are working|working (?:correctly|fine|properly)|functional|operational|verified|passes|passed|all (?:good|green|set)|correctly (?:installed|configured|set up|working))\b/i;
 const NEGATION = /\b(?:not|n't|never|could ?not|unable|failed|fails|did not|didn't|no longer|unverified|cannot|can't)\b/i;
 export function unbackedWorkingClaim(reply: string, calls: ReadonlyArray<{ tool: string; status: string; result?: unknown }>): string | null {
   const checks = calls.filter((c) => CHECK_TOOLS.test(c.tool) && c.status !== 'running');
@@ -164,13 +174,29 @@ export function statedTaskDates(requestText: string): string[] {
   if (!/\b(?:task|todo|to-do|deadline|due|project)s?\b/i.test(requestText)) return [];
   return [...new Set([...requestText.matchAll(/\b(20\d{2}-\d{2}-\d{2})\b/g)].map((m) => m[1]))].slice(0, 12);
 }
-export function missingTaskDates(requestText: string, calls: ReadonlyArray<{ tool: string; args?: unknown; status: string; result?: unknown }>): string[] {
+type RecordedCall = { tool: string; args?: unknown; status: string; result?: unknown };
+interface StoredTask { title: string; dueAt: string; priority: string; blockedBy: string }
+/** Task fields this turn really stored: add_task / update_task calls, and the task objects inside create_project. */
+function storedTasks(calls: ReadonlyArray<RecordedCall>): { touched: boolean; tasks: StoredTask[] } {
+  const tasks: StoredTask[] = []; let touched = false;
+  for (const c of calls) {
+    if (!['add_task', 'update_task', 'create_project'].includes(c.tool)) continue;
+    touched = true;
+    if (c.status !== 'completed' || (c.result as { isError?: boolean } | undefined)?.isError) continue;
+    const a = (c.args ?? {}) as Record<string, unknown>;
+    const s = (v: unknown) => String(v ?? '').trim();
+    if (c.tool === 'create_project') {
+      for (const t of Array.isArray(a.tasks) ? a.tasks : []) if (t && typeof t === 'object') { const o = t as Record<string, unknown>; tasks.push({ title: s(o.title), dueAt: s(o.dueAt), priority: s(o.priority), blockedBy: s(o.blockedBy) }); }
+    } else tasks.push({ title: s(a.title ?? a.task), dueAt: s(a.dueAt), priority: s(a.priority), blockedBy: s(a.blockedBy) });
+  }
+  return { touched, tasks };
+}
+// Judged only when this turn actually wrote tasks: a question or a reminder that mentions dates is not a task request.
+export function missingTaskDates(requestText: string, calls: ReadonlyArray<RecordedCall>): string[] {
   const dates = statedTaskDates(requestText);
-  if (!dates.length) return [];
-  const stored = calls
-    .filter((c) => (c.tool === 'add_task' || c.tool === 'update_task') && c.status === 'completed' && !(c.result as { isError?: boolean } | undefined)?.isError)
-    .map((c) => String((c.args as { dueAt?: string } | undefined)?.dueAt ?? ''));
-  return dates.filter((d) => !stored.some((s) => s.startsWith(d))).map((d) => `a task due ${d} stored (the date you gave)`);
+  const { touched, tasks } = storedTasks(calls);
+  if (!dates.length || !touched) return [];
+  return dates.filter((d) => !tasks.some((t) => t.dueAt.startsWith(d))).map((d) => `a task due ${d} stored (the date you gave)`);
 }
 
 /**
@@ -179,31 +205,30 @@ export function missingTaskDates(requestText: string, calls: ReadonlyArray<{ too
  * says after / depends on / blocked by, in a request that also creates tasks. Judged by whether any task call stored a blocker.
  */
 export function statedTaskDependency(requestText: string): string | null {
-  if (!/\b(?:task|todo|to-do)s?\b|"[^"]{2,60}"/i.test(requestText)) return null;
+  // Needs several tasks in the request (two quoted titles, or "tasks"), and a real dependency phrase. "after lunch", "once I
+  // am home" are times, not dependencies (review finding).
+  const quoted = (requestText.match(/"[^"]{2,60}"/g) ?? []).length;
+  if (quoted < 2 && !/\btasks\b/i.test(requestText)) return null;
   for (const clause of requestText.split(/[;.\n]/)) {
-    if (/"[^"]{2,60}"|\btask\b/i.test(clause) && /\b(?:after|depends? on|blocked by|waits? for|once)\b/i.test(clause)) return clause.trim().slice(0, 100);
+    if (!/"[^"]{2,60}"|\btask\b/i.test(clause)) continue;
+    if (/\b(?:depends? on|blocked by|waits? for)\b/i.test(clause)) return clause.trim().slice(0, 100);
+    if (/\bafter\s+(?:buying|getting|finishing|completing|doing|the\s+\w+ing|\w+ing)\b|\bafter\s+(?!lunch|dinner|breakfast|work|school|midnight|noon|today|tomorrow|that|this|the meeting|i\b|we\b)\w+ing\b/i.test(clause)) return clause.trim().slice(0, 100);
   }
   return null;
 }
-export function missingTaskDependency(requestText: string, calls: ReadonlyArray<{ tool: string; args?: unknown; status: string; result?: unknown }>): string[] {
+export function missingTaskDependency(requestText: string, calls: ReadonlyArray<RecordedCall>): string[] {
   const clause = statedTaskDependency(requestText);
-  if (!clause) return [];
-  const touchedTasks = calls.some((c) => (c.tool === 'add_task' || c.tool === 'update_task' || c.tool === 'create_project') && c.status === 'completed');
-  if (!touchedTasks) return [];
-  const stored = calls.some((c) => (c.tool === 'add_task' || c.tool === 'update_task') && c.status === 'completed' && !(c.result as { isError?: boolean } | undefined)?.isError && String((c.args as { blockedBy?: string } | undefined)?.blockedBy ?? '').trim());
-  return stored ? [] : [`the dependency you stated stored as a blocker ("${clause}")`];
+  const { touched, tasks } = storedTasks(calls);
+  if (!clause || !touched) return [];
+  return tasks.some((t) => t.blockedBy) ? [] : [`the dependency you stated stored as a blocker ("${clause}")`];
 }
 
 /** Priorities the owner stated ("priority high") must be stored: as many stored priorities as stated ones (audit S20). */
-export function missingTaskPriorities(requestText: string, calls: ReadonlyArray<{ tool: string; args?: unknown; status: string; result?: unknown }>): string[] {
+export function missingTaskPriorities(requestText: string, calls: ReadonlyArray<RecordedCall>): string[] {
   if (!/\b(?:task|todo|to-do|project)s?\b/i.test(requestText)) return [];
   const stated = [...requestText.matchAll(/\bpriority\s*(?:is|:|=)?\s*(high|medium|normal|low)\b/gi)].length;
-  if (!stated) return [];
-  const stored = new Set<string>();
-  for (const c of calls) {
-    if ((c.tool !== 'add_task' && c.tool !== 'update_task') || c.status !== 'completed' || (c.result as { isError?: boolean } | undefined)?.isError) continue;
-    const a = c.args as { priority?: string; title?: string; task?: string } | undefined;
-    if (a?.priority) stored.add(String(a.title ?? a.task ?? stored.size).toLowerCase());
-  }
+  const { touched, tasks } = storedTasks(calls);
+  if (!stated || !touched) return [];
+  const stored = new Set(tasks.filter((t) => t.priority).map((t, i) => (t.title || String(i)).toLowerCase()));
   return stored.size >= stated ? [] : [`${stated - stored.size} of ${stated} priorities you stated stored (priority high / normal / low)`];
 }

@@ -13,6 +13,7 @@
  * keys in another order is still caught. Read-only tools are never guarded: repeating a read changes nothing.
  */
 import type { CoreDatabase } from '../db/connection';
+import { REFUSED_PATTERN } from './turnOutcome';
 
 export interface PriorTwin {
   kind: 'done' | 'unknown';
@@ -55,6 +56,8 @@ export function findPriorTwin(db: CoreDatabase, attemptId: string, toolName: str
   for (const r of rows) {
     let theirs: unknown; try { theirs = JSON.parse(r.argsSummary); } catch { continue; }
     if (canonical(theirs) !== wanted) continue;
+    // A call Core or the owner REFUSED is stored 'succeeded' (no error result) but nothing happened: it is not 'done' (review finding).
+    if (r.status === 'succeeded' && REFUSED_PATTERN.test(String(r.result ?? '').split('\n')[0])) continue;
     if (r.status === 'succeeded') return { kind: 'done', invocationId: r.id, attemptId: r.attemptId, at: r.endedAt ?? r.startedAt, resultExcerpt: String(r.result ?? '').slice(0, 300) };
     unknown ??= { kind: 'unknown', invocationId: r.id, attemptId: r.attemptId, at: r.startedAt, resultExcerpt: '' };
   }

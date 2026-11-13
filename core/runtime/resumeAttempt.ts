@@ -57,7 +57,7 @@ export function resumeGuidance(summary: ResumeSummary): string {
 export function resumeInterruptedAttempt(db: CoreDatabase, attemptId: string, actor: string) {
   const attempt = getAttempt(db, attemptId);
   const result = deriveResultStatus(db, attemptId);
-  if (result.status === 'cancelled') throw new CoreError('invalid_transition', 'a task the user stopped is not resumed');
+  if (attempt.cancelRequestedAt || result.status === 'cancelled') throw new CoreError('invalid_transition', 'a task the user stopped is not resumed');
   if (!['interrupted', 'failed', 'partial'].includes(result.status)) throw new CoreError('invalid_transition', `a ${result.status} task cannot be resumed`);
   if (db.get("SELECT 1 FROM approvals WHERE attemptId = ? AND status = 'rejected' LIMIT 1", [attemptId])) throw new CoreError('invalid_transition', 'a task whose approval was declined is not resumed');
   const context = getAttemptContext(db, attemptId);

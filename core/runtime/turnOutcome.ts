@@ -122,7 +122,7 @@ export function isConsequentialTool(toolName: string): boolean {
  * Every governed tool reports refusal in these terms, so the check needs no
  * per-tool special case.
  */
-const REFUSED_PATTERN =
+export const REFUSED_PATTERN =
   /\b(NOT DONE|NOT AVAILABLE|declined|denied|rejected|refused|not granted|has not been granted|not connected|is not connected|nothing was done|nothing was written|no action was taken|was not sent|did not happen|did not approve|approval is still|awaiting approval)\b|^Not run:/im;
 
 interface ToolResultShape {

@@ -174,7 +174,8 @@ export function addTask(db: CoreDatabase, input: AddTaskInput): TaskView {
     // Adding a task that is already there (same title, still open) is not a second task: it completes the existing one with
     // whatever the repeat adds. M0 P01: create_project(tasks=[...]) followed by add_task for the same titles left every task twice
     // (and the copy without dates was the one shown first).
-    const twin = tasks.find((t) => t.status !== 'done' && t.status !== 'cancelled' && norm(t.title) === norm(title));
+    // A repeat with a DIFFERENT due date is a different task, not the same one added again.
+    const twin = tasks.find((t) => t.status !== 'done' && t.status !== 'cancelled' && norm(t.title) === norm(title) && !(task.dueAt && t.dueAt && task.dueAt.slice(0, 10) !== t.dueAt.slice(0, 10)));
     if (twin) {
       const filled: string[] = [];
       if (task.dueAt && !twin.dueAt) { twin.dueAt = task.dueAt; filled.push('due date'); }

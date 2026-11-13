@@ -136,7 +136,7 @@ export function startScheduledTaskLoop(
         const scope = task.scope as { workspaceRoot?: string; workspaceAccess?: 'read' | 'read_write' } | null;
         const workspaceRoot = scope?.workspaceRoot && typeof scope.workspaceRoot === 'string' ? scope.workspaceRoot : null;
         if (workspaceRoot && !fs.existsSync(workspaceRoot)) {
-          enqueueNotification(db, { kind: 'task_failed', sourceId: `sched-missing:${task.id}:${Date.now()}`, title: `Routine "${task.title}" did not run`, body: `Its folder ${workspaceRoot} no longer exists, so it was not run. Nothing was changed.` });
+          enqueueNotification(db, { kind: 'task_failed', sourceId: `sched-missing:${task.id}:${new Date().toISOString().slice(0, 10)}`, title: `Routine "${task.title}" did not run`, body: `Its folder ${workspaceRoot} no longer exists, so it was not run. Nothing was changed.` });
           console.error(`[karkedikha-core ${new Date().toISOString()}] scheduled task ${task.id} not run: its folder ${workspaceRoot} is gone`);
           continue;
         }
@@ -151,7 +151,7 @@ export function startScheduledTaskLoop(
           selectedModel: model,
           workspaceRoot,
           effectiveAllowedTools: [],
-          toolPermissionPolicy: workspaceRoot ? { profile: 'local-core-question', worker: 'local-core', workspaceAccess: scope?.workspaceAccess === 'read' ? 'read' : 'read_write' } : {},
+          toolPermissionPolicy: workspaceRoot ? { profile: 'local-core-question', worker: 'local-core', workspaceAccess: scope?.workspaceAccess === 'read_write' ? 'read_write' : 'read' } : {},
           capability: { hasWorkspace: Boolean(workspaceRoot), gitCapable: false },
           correlationId: key,
           idempotencyKey: key,

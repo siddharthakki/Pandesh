@@ -141,3 +141,11 @@ describe('adding the same task twice (M0 P01)', () => {
     expect(addTask(db, { project: 'Shed', title: 'Buy wood', source: 'test' }).id).not.toBe(first.id);
   });
 });
+
+describe('review finding: a different due date is a different task', () => {
+  it('does not merge same-title tasks with different dates', () => {
+    const a = addTask(db, { project: 'Calls', title: 'Call Sam', dueAt: '2026-12-01', createProjectIfMissing: true, source: 'test' });
+    const b = addTask(db, { project: 'Calls', title: 'Call Sam', dueAt: '2026-12-15', source: 'test' });
+    expect(b.id).not.toBe(a.id);
+  });
+});

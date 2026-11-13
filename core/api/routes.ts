@@ -940,7 +940,8 @@ export function buildRouter(
     if (modelInvocationId !== null) {
       const owned = role === 'assistant' && ctx.db.get<{ id: string }>(
         `SELECT mi.id FROM model_invocations mi JOIN attempts a ON a.id = mi.attemptId JOIN requests r ON r.id = a.requestId
-         WHERE mi.id = ? AND r.conversationId = ?`, [modelInvocationId, match.params.id]);
+         WHERE mi.id = ? AND r.conversationId = ?
+           AND NOT EXISTS (SELECT 1 FROM conversation_messages m WHERE m.modelInvocationId = mi.id)`, [modelInvocationId, match.params.id]);
       if (!owned) throw new CoreError('invalid_request', 'modelInvocationId is accepted only on an assistant message whose model call ran in this conversation');
     }
     return withRuntimeBroadcast(ctx, broadcaster, () => ({

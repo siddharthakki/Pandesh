@@ -99,3 +99,11 @@ describe('a task blocked by a failed tool (M0 E01)', () => {
     expect(deriveResultStatus(db, a)).toEqual({ status: 'blocked', reason: 'image_list_checkpoints failed: connection refused' });
   });
 });
+
+import { resumeInterruptedAttempt } from '../runtime/resumeAttempt';
+describe('review finding: a stopped task is not resumable even if it ended failed', () => {
+  it('refuses when a cancel was requested', () => {
+    const a = attempt('failed', 'Partly done: x'); db.run("UPDATE attempts SET cancelRequestedAt = ? WHERE id = ?", [new Date().toISOString(), a]);
+    expect(() => resumeInterruptedAttempt(db, a, 'test')).toThrow(/stopped/);
+  });
+});

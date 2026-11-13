@@ -20,7 +20,7 @@ describe('named output files', () => {
     expect(namedOutputFiles('Read the three invoice files in the invoices folder and create invoices-summary.md in this folder')).toEqual(['invoices-summary.md']);
     expect(namedOutputFiles('Create notes/hello.txt containing exactly: hi')).toEqual(['notes/hello.txt']);
     expect(namedOutputFiles('Summarize meeting-note.txt for me.')).toEqual([]);
-    expect(namedOutputFiles('Write a summary of report.pdf into summary.md')).toEqual(['summary.md']);
+    expect(namedOutputFiles('Write a summary of report.pdf into summary.md')).toEqual([]); // conservative: an 'of' clause is dropped
     expect(namedOutputFiles('Generate a file from data.csv using template.html')).toEqual([]);
     expect(namedOutputFiles('Save it as https://example.com/a.txt')).toEqual([]);
   });
@@ -111,7 +111,7 @@ describe('stated task dates (audit S20)', () => {
   const req = 'Add three tasks: "Buy wood" due 2026-12-01; "Build frame" due 2026-12-10; "Paint" due 2026-12-20.';
   it('flags a stated date that was not stored', () => {
     expect(missingTaskDates(req, [add('2026-12-01'), add(), add('2026-12-20T09:00:00.000Z')])).toEqual(['a task due 2026-12-10 stored (the date you gave)']);
-    expect(missingTaskDates(req, [])).toHaveLength(3);
+    expect(missingTaskDates(req, [])).toEqual([]); // no task was written: not judged here
   });
   it('is quiet when all dates were stored or the request is not about tasks', () => {
     expect(missingTaskDates(req, [add('2026-12-01'), add('2026-12-10'), add('2026-12-20')])).toEqual([]);
@@ -141,5 +141,40 @@ describe('stated task priorities (audit S20)', () => {
     expect(missingTaskPriorities(req, [add('a', 'high'), add('b'), add('c', 'low')])).toEqual(['1 of 3 priorities you stated stored (priority high / normal / low)']);
     expect(missingTaskPriorities(req, [add('a', 'high'), add('b', 'normal'), add('c', 'low')])).toEqual([]);
     expect(missingTaskPriorities('Summarize priority high items', [])).toEqual([]);
+  });
+});
+
+describe('review findings: inputs and negations are not deliverables', () => {
+  it('does not take inputs, unchanged files or negated requests as outputs', () => {
+    expect(namedOutputFiles('Write a script that reads data.csv and writes totals.csv')).toEqual(['totals.csv']);
+    expect(namedOutputFiles('Make sure notes.txt is not changed. Create summary.md.')).toEqual(['summary.md']);
+    expect(namedOutputFiles('Create a report about the Q3 numbers in sales.xlsx')).toEqual([]);
+    expect(namedOutputFiles('Generate a report for server.log in report.md')).toEqual([]);
+    expect(namedOutputFiles('Please do not create output.txt, just explain')).toEqual([]);
+    expect(namedOutputFiles('Read a.txt and create b.md and write c.md')).toEqual(['b.md', 'c.md']);
+  });
+});
+
+describe('review findings: task checks only judge task writes', () => {
+  const add = (a: object) => ({ tool: 'add_task', status: 'completed', args: a, result: { content: [{ text: 'ok' }] } });
+  it('questions and reminders about dates or priorities are never partial', () => {
+    expect(missingTaskDates('Which tasks are due before 2026-12-01?', [{ tool: 'list_tasks', status: 'completed', args: {} }])).toEqual([]);
+    expect(missingTaskDates('Remind me about the project deadline on 2026-12-01', [{ tool: 'create_reminder', status: 'completed', args: {} }])).toEqual([]);
+    expect(missingTaskPriorities('List my tasks with priority high', [])).toEqual([]);
+  });
+  it('create_project with task objects counts as storing their dates and priorities', () => {
+    const call = { tool: 'create_project', status: 'completed', args: { name: 'p', tasks: [{ title: 'a', dueAt: '2026-12-01', priority: 'high' }, { title: 'b', dueAt: '2026-12-10', priority: 'low' }] }, result: { content: [{ text: 'ok' }] } };
+    expect(missingTaskDates('Create a project with tasks due 2026-12-01 and 2026-12-10', [call])).toEqual([]);
+    expect(missingTaskPriorities('Create project tasks: a priority high; b priority low', [call])).toEqual([]);
+  });
+  it('time words are not dependencies', () => {
+    expect(missingTaskDependency('Add a task to call Sam once I am home', [add({ title: 'Call Sam' })])).toEqual([]);
+    expect(missingTaskDependency('Add the tasks "Send invoice" after lunch and "Call Sam" tomorrow', [add({ title: 'x' })])).toEqual([]);
+  });
+});
+describe('review findings: "working directory" is not a claim that something works', () => {
+  it('does not flag an honest reply that merely says working directory', () => {
+    const failed = { tool: 'run_checks', status: 'completed', result: { isError: true, content: [{ text: 'Error' }] } };
+    expect(unbackedWorkingClaim('I could not run it. Run npm install in the working directory first.', [failed])).toBeNull();
   });
 });

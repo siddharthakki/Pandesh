@@ -79,7 +79,7 @@ import {
 import { finalizeTaskOutcome, ensureTaskOutcome, listTaskOutcomes, objectiveFromRequest, updateTaskOutcome } from '../domain/taskOutcomes';
 import { isInspectionOrAdvisoryOnly } from '../domain/actionIntent';
 import { evaluateTurnOutcome, isConsequentialTool } from './turnOutcome';
-import { findPriorTwin, replayRefusal } from './replayGuard';
+import { findPriorTwin, predecessorChain, replayRefusal } from './replayGuard';
 import { deliverableLedger, missingTaskDates, missingTaskDependency, missingTaskPriorities, unbackedWorkingClaim, type LedgerResult } from './deliverableLedger';
 import { resolveActiveProject, isProjectInspectionRequest, gatherProjectEvidence, formatProjectEvidenceForModel, composeEvidenceAnswer, isReplyGroundedInProject, isLocalModelEndpoint } from './projectContext';
 import { resolveTimeExpression, localWallTimeToIso as zonedWallToIso, utcOffsetLabel as zoneOffsetLabel, upcomingDaysTable, isValidTimeZone } from '../domain/timeResolution';
@@ -1248,6 +1248,7 @@ export class PiAgentEngine implements EngineAdapter {
     const pendingInvocations: string[] = [];
     /** Calls that failed this turn, by tool+arguments, with why: an identical retry learns nothing new. */
     const failedCalls = new Map<string, string>();
+    const replayWarned = new Set<string>();
     let refusedRepeats = 0;
     const callSignature = (name: string, args: unknown) => `${name}:${JSON.stringify(args ?? {}, (_k, v) => (v && typeof v === 'object' && !Array.isArray(v) ? Object.fromEntries(Object.entries(v).sort()) : v))}`;
 
@@ -5556,9 +5557,15 @@ When the user asks to continue, resume, or check progress/updates, resume this w
         }
 
         // M2 replay guard: a resumed attempt never repeats a consequential call the interrupted attempt already made.
-        if (isConsequentialTool(toolName)) {
+        // run_checks is verification: after a fix it must run again, never echo an old result (review finding).
+        if (isConsequentialTool(toolName) && toolName !== 'run_checks') {
           const twin = findPriorTwin(db, attemptId, toolName, args);
-          if (twin) {
+          // An 'unknown' twin is refused ONCE with the instruction to check the real state; if the model repeats the identical
+          // call after that, it has been told, and the call proceeds (otherwise the task could never finish).
+          const warnKey = `${toolName}:${JSON.stringify(args)}`;
+          const letThrough = twin?.kind === 'unknown' && replayWarned.has(warnKey);
+          if (twin?.kind === 'unknown') replayWarned.add(warnKey);
+          if (twin && !letThrough) {
             safeRecordRuntimeEvent(db, broadcaster, attemptId, 'replay_prevented', { toolName, kind: twin.kind, earlierAttemptId: twin.attemptId, earlierInvocationId: twin.invocationId }, actor);
             // A call that already succeeded earlier counts as performed for this task's outcome; an unknown one does not.
             if (twin.kind === 'done') toolCallsRecorded.push({ tool: toolName, args, status: 'completed', result: { content: [{ type: 'text', text: replayRefusal(twin, toolName) }], details: { success: true, replayedFrom: twin.invocationId } } });
@@ -6535,7 +6542,19 @@ When the user asks to continue, resume, or check progress/updates, resume this w
         .filter((t) => t.status === 'completed' && t.tool === 'write_file' && !(t.result as { isError?: boolean } | undefined)?.isError)
         .map((t) => String((t.args as { filePath?: string } | undefined)?.filePath ?? ''))
         .filter(Boolean).map((p) => path.resolve(selectedWorkspace, p));
-      const judge = () => deliverableLedger({ requestText, workspace: selectedWorkspace, writtenFiles: writtenFilesNow(), turnStartMs: startTime });
+      // A resumed or escalated attempt continues the SAME request: files its predecessors wrote count, and "fresh" is measured
+      // from the first attempt of the chain (review finding: the replay guard refuses re-writes the ledger would demand).
+      const chain = predecessorChain(db, attemptId);
+      let chainStartMs = startTime; let priorWrites: string[] = [];
+      if (chain.length) {
+        const ids = chain.map(() => '?').join(',');
+        const first = db.get<{ createdAt: string }>(`SELECT MIN(createdAt) AS createdAt FROM attempts WHERE id IN (${ids})`, chain)?.createdAt;
+        if (first && Number.isFinite(Date.parse(first))) chainStartMs = Math.min(startTime, Date.parse(first));
+        priorWrites = db.all<{ argsSummary: string }>(`SELECT argsSummary FROM tool_invocations WHERE attemptId IN (${ids}) AND toolName = 'write_file' AND status = 'succeeded'`, chain)
+          .map((r) => { try { return String((JSON.parse(r.argsSummary) as { filePath?: string }).filePath ?? ''); } catch { return ''; } })
+          .filter(Boolean).map((p) => path.resolve(selectedWorkspace, p));
+      }
+      const judge = () => deliverableLedger({ requestText, workspace: selectedWorkspace, writtenFiles: [...priorWrites, ...writtenFilesNow()], turnStartMs: chainStartMs });
       try {
         deliverables = judge();
         if (deliverables.missing.length > 0 && tools.some((t) => t.name === 'write_file')) {
