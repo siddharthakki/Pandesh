@@ -118,3 +118,17 @@ describe('stated task dates (audit S20)', () => {
     expect(missingTaskDates('The meeting on 2026-12-01 was long.', [])).toEqual([]);
   });
 });
+
+import { missingTaskDependency } from '../runtime/deliverableLedger';
+describe('stated task dependency (audit S20)', () => {
+  const req = 'Create a project. Add tasks: "Buy wood" due 2026-12-01; "Build frame" due 2026-12-10, after buying wood; "Paint shed" due 2026-12-20.';
+  const call = (blockedBy?: string) => ({ tool: 'add_task', status: 'completed', args: { title: 'x', ...(blockedBy ? { blockedBy } : {}) }, result: { content: [{ text: 'ok' }] } });
+  it('flags a dependency that was not stored and accepts one that was', () => {
+    expect(missingTaskDependency(req, [call(), call(), call()])).toEqual([expect.stringContaining('after buying wood')]);
+    expect(missingTaskDependency(req, [call(), call('Buy wood'), call()])).toEqual([]);
+  });
+  it('says nothing without a stated dependency or without task calls', () => {
+    expect(missingTaskDependency('Add tasks: "Buy wood" due 2026-12-01.', [call()])).toEqual([]);
+    expect(missingTaskDependency(req, [])).toEqual([]);
+  });
+});

@@ -80,7 +80,7 @@ import { finalizeTaskOutcome, ensureTaskOutcome, listTaskOutcomes, objectiveFrom
 import { isInspectionOrAdvisoryOnly } from '../domain/actionIntent';
 import { evaluateTurnOutcome, isConsequentialTool } from './turnOutcome';
 import { findPriorTwin, replayRefusal } from './replayGuard';
-import { deliverableLedger, missingTaskDates, unbackedWorkingClaim, type LedgerResult } from './deliverableLedger';
+import { deliverableLedger, missingTaskDates, missingTaskDependency, unbackedWorkingClaim, type LedgerResult } from './deliverableLedger';
 import { resolveActiveProject, isProjectInspectionRequest, gatherProjectEvidence, formatProjectEvidenceForModel, composeEvidenceAnswer, isReplyGroundedInProject, isLocalModelEndpoint } from './projectContext';
 import { resolveTimeExpression, localWallTimeToIso as zonedWallToIso, utcOffsetLabel as zoneOffsetLabel, upcomingDaysTable, isValidTimeZone } from '../domain/timeResolution';
 import { cancelScheduledTask, createScheduledTask, listScheduledTasks } from '../domain/scheduledTasks';
@@ -6555,18 +6555,19 @@ When the user asks to continue, resume, or check progress/updates, resume this w
     }
     // Dates the owner stated for tasks must be the dates stored (audit S20). One nudge to fix them with update_task, then judged.
     if (!signal?.aborted && finalReply && !cloudTarget) {
-      let lost = missingTaskDates(requestText, toolCallsRecorded);
+      const taskFacts = () => [...missingTaskDates(requestText, toolCallsRecorded), ...missingTaskDependency(requestText, toolCallsRecorded)];
+      let lost = taskFacts();
       if (lost.length > 0 && tools.some((t) => t.name === 'update_task') && toolCallsRecorded.some((t) => t.tool === 'add_task' || t.tool === 'create_project')) {
         safeRecordRuntimeEvent(db, broadcaster, attemptId, 'task_dates_missing', { missing: lost }, actor);
         try {
           const floor = agent.state.messages.length;
           activeToolNames.add('update_task');
-          await agent.prompt(`Task check by Pandesh: the dates you were given are not stored — ${lost.join('; ')}. Call update_task now for each task so its dueAt is the date the user stated (ISO), then give your final answer saying exactly what is stored.`);
+          await agent.prompt(`Task check by Pandesh: what you were given is not stored — ${lost.join('; ')}. Call update_task now for each affected task (dueAt = the date the user stated, ISO; blockedBy = the task or thing it waits for), then give your final answer saying exactly what is stored.`);
           await agent.waitForIdle();
           const retried = lastAssistantTextFrom(floor);
           if (retried && !isTruncationArtifact(retried)) finalReply = retried;
         } catch (err: any) { safeRecordRuntimeEvent(db, broadcaster, attemptId, 'task_dates_nudge_failed', { error: err?.message ?? String(err) }, actor); }
-        lost = missingTaskDates(requestText, toolCallsRecorded);
+        lost = taskFacts();
       }
       if (lost.length) {
         deliverables = deliverables ?? { expected: [], missing: [], present: [] };

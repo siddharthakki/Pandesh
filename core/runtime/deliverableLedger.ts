@@ -172,3 +172,24 @@ export function missingTaskDates(requestText: string, calls: ReadonlyArray<{ too
     .map((c) => String((c.args as { dueAt?: string } | undefined)?.dueAt ?? ''));
   return dates.filter((d) => !stored.some((s) => s.startsWith(d))).map((d) => `a task due ${d} stored (the date you gave)`);
 }
+
+/**
+ * A dependency the owner stated between tasks ("Build frame ..., after buying wood") must be stored as the task's blocker
+ * (audit S20: silently dropped). Heuristic and conservative: a clause that names a task (quoted title or the word task) and
+ * says after / depends on / blocked by, in a request that also creates tasks. Judged by whether any task call stored a blocker.
+ */
+export function statedTaskDependency(requestText: string): string | null {
+  if (!/\b(?:task|todo|to-do)s?\b|"[^"]{2,60}"/i.test(requestText)) return null;
+  for (const clause of requestText.split(/[;.\n]/)) {
+    if (/"[^"]{2,60}"|\btask\b/i.test(clause) && /\b(?:after|depends? on|blocked by|waits? for|once)\b/i.test(clause)) return clause.trim().slice(0, 100);
+  }
+  return null;
+}
+export function missingTaskDependency(requestText: string, calls: ReadonlyArray<{ tool: string; args?: unknown; status: string; result?: unknown }>): string[] {
+  const clause = statedTaskDependency(requestText);
+  if (!clause) return [];
+  const touchedTasks = calls.some((c) => (c.tool === 'add_task' || c.tool === 'update_task' || c.tool === 'create_project') && c.status === 'completed');
+  if (!touchedTasks) return [];
+  const stored = calls.some((c) => (c.tool === 'add_task' || c.tool === 'update_task') && c.status === 'completed' && !(c.result as { isError?: boolean } | undefined)?.isError && String((c.args as { blockedBy?: string } | undefined)?.blockedBy ?? '').trim());
+  return stored ? [] : [`the dependency you stated stored as a blocker ("${clause}")`];
+}
