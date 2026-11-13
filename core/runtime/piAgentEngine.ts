@@ -79,7 +79,7 @@ import {
 import { finalizeTaskOutcome, ensureTaskOutcome, listTaskOutcomes, objectiveFromRequest, updateTaskOutcome } from '../domain/taskOutcomes';
 import { isInspectionOrAdvisoryOnly } from '../domain/actionIntent';
 import { evaluateTurnOutcome, isConsequentialTool } from './turnOutcome';
-import { findPriorTwin, predecessorChain, replayRefusal } from './replayGuard';
+import { findPriorTwin, predecessorChain, reconcileFileWrite, RECONCILABLE_TOOLS, replayRefusal } from './replayGuard';
 import { deliverableLedger, missingTaskDates, missingTaskDependency, missingTaskPriorities, unbackedWorkingClaim, type LedgerResult } from './deliverableLedger';
 import { resolveActiveProject, isProjectInspectionRequest, gatherProjectEvidence, formatProjectEvidenceForModel, composeEvidenceAnswer, isReplyGroundedInProject, isLocalModelEndpoint } from './projectContext';
 import { resolveTimeExpression, localWallTimeToIso as zonedWallToIso, utcOffsetLabel as zoneOffsetLabel, upcomingDaysTable, isValidTimeZone } from '../domain/timeResolution';
@@ -1248,7 +1248,6 @@ export class PiAgentEngine implements EngineAdapter {
     const pendingInvocations: string[] = [];
     /** Calls that failed this turn, by tool+arguments, with why: an identical retry learns nothing new. */
     const failedCalls = new Map<string, string>();
-    const replayWarned = new Map<string, number>(); // call signature -> tool calls recorded when it was refused
     let refusedRepeats = 0;
     const callSignature = (name: string, args: unknown) => `${name}:${JSON.stringify(args ?? {}, (_k, v) => (v && typeof v === 'object' && !Array.isArray(v) ? Object.fromEntries(Object.entries(v).sort()) : v))}`;
 
@@ -5559,20 +5558,26 @@ When the user asks to continue, resume, or check progress/updates, resume this w
         // M2 replay guard: a resumed attempt never repeats a consequential call the interrupted attempt already made.
         // run_checks is verification: after a fix it must run again, never echo an old result (review finding).
         if (isConsequentialTool(toolName) && toolName !== 'run_checks') {
-          const twin = findPriorTwin(db, attemptId, toolName, args);
-          // An 'unknown' twin is refused ONCE with the instruction to check the real state; if the model repeats the identical
-          // call after that, it has been told, and the call proceeds (otherwise the task could never finish).
-          const warnKey = `${toolName}:${JSON.stringify(args)}`;
-          // ...and only after the model really looked: a read-only call between the refusal and the repeat. A bare repeat stays refused.
-          const warnedAt = replayWarned.get(warnKey);
-          const checked = warnedAt !== undefined && toolCallsRecorded.slice(warnedAt).some((t) => t.status === 'completed' && !isConsequentialTool(t.tool));
-          const letThrough = twin?.kind === 'unknown' && checked;
-          if (twin?.kind === 'unknown' && warnedAt === undefined) replayWarned.set(warnKey, toolCallsRecorded.length);
-          if (twin && !letThrough) {
-            safeRecordRuntimeEvent(db, broadcaster, attemptId, 'replay_prevented', { toolName, kind: twin.kind, earlierAttemptId: twin.attemptId, earlierInvocationId: twin.invocationId }, actor);
+          const resumed = predecessorChain(db, attemptId).length > 0;
+          let twin = findPriorTwin(db, attemptId, toolName, args, selectedWorkspace ?? null);
+          let inPlace = false;
+          if (resumed && RECONCILABLE_TOOLS.has(toolName)) {
+            // The real file decides (a crash can fall between the write and the journal commit): identical content already on
+            // disk = done, whatever the journal says or however the path was spelled; missing or different = not done.
+            const state = reconcileFileWrite(args, selectedWorkspace ?? null);
+            if (state === 'in_place') { inPlace = true; twin = twin ?? { kind: 'done', invocationId: '', attemptId: '', at: '', resultExcerpt: '' }; }
+            else if (state === 'differs' && twin?.kind === 'unknown') twin = null; // started, never confirmed, and the file is not there: it did not happen
+            // A recorded success whose file has changed since stays blocked: rewriting could destroy a later edit.
+          }
+          // Everything else that cannot be checked by Core fails closed: an 'unknown' call is never repeated automatically.
+          if (twin) {
+            safeRecordRuntimeEvent(db, broadcaster, attemptId, 'replay_prevented', { toolName, kind: twin.kind, inPlace, earlierAttemptId: twin.attemptId, earlierInvocationId: twin.invocationId }, actor);
+            const reason = inPlace
+              ? `Already in place: ${String(args.filePath ?? args.path ?? 'the file')} already holds exactly this content, so it was NOT written again. Continue with what is still missing.`
+              : replayRefusal(twin, toolName);
             // A call that already succeeded earlier counts as performed for this task's outcome; an unknown one does not.
-            if (twin.kind === 'done') toolCallsRecorded.push({ tool: toolName, args, status: 'completed', result: { content: [{ type: 'text', text: replayRefusal(twin, toolName) }], details: { success: true, replayedFrom: twin.invocationId } } });
-            return { block: true, reason: replayRefusal(twin, toolName) };
+            if (twin.kind === 'done') toolCallsRecorded.push({ tool: toolName, args, status: 'completed', result: { content: [{ type: 'text', text: reason }], details: { success: true, replayedFrom: twin.invocationId || 'in_place' } } });
+            return { block: true, reason };
           }
         }
 

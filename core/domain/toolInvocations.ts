@@ -1,3 +1,4 @@
+import * as crypto from 'node:crypto';
 import type { CoreDatabase } from '../db/connection';
 import type { ToolInvocationRecord, ToolInvocationStatus } from '../shared/wireTypes';
 import { CoreError } from './errors';
@@ -23,10 +24,15 @@ const MAX_BOUNDED_JSON_BYTES = 65_536;
  */
 const MAX_EVENT_EVIDENCE_BYTES = 4096;
 
+function argsHashOf(value: Record<string, unknown>): string {
+  const canon = (v: unknown): string => Array.isArray(v) ? `[${v.map(canon).join(',')}]` : v && typeof v === 'object' ? `{${Object.keys(v as object).sort().map((k) => `${JSON.stringify(k)}:${canon((v as Record<string, unknown>)[k])}`).join(',')}}` : JSON.stringify(v);
+  return crypto.createHash('sha256').update(canon(value)).digest('hex');
+}
+
 function bounded(value: Record<string, unknown> | undefined): string {
   const json = JSON.stringify(value ?? {});
   if (Buffer.byteLength(json, 'utf8') > MAX_BOUNDED_JSON_BYTES) {
-    return JSON.stringify({ truncated: true, originalBytes: Buffer.byteLength(json, 'utf8') });
+    return JSON.stringify({ truncated: true, originalBytes: Buffer.byteLength(json, 'utf8'), argsHash: argsHashOf(value ?? {}) });
   }
   return json;
 }

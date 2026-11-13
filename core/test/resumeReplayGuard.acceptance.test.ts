@@ -127,9 +127,9 @@ ${PROMPT}`) as { reply: string };
 
     expect(calls[0].messages.map((m) => textOf(m.content)).join('\n')).toMatch(/INTERRUPTED[\s\S]*ALREADY DONE[\s\S]*write_file/);
     const prevented = events(successor.id, 'replay_prevented');
-    expect(prevented.map((p) => p.kind).sort()).toEqual(['done', 'unknown']);
+    expect(prevented.map((p) => p.kind)).toEqual(['done']);   // a.txt: journal says done (and the file was edited since: never clobbered)
     expect(fs.readFileSync(path.join(ws, 'a.txt'), 'utf8')).toBe('a-before-resume-marker'); // not rewritten
-    expect(fs.existsSync(path.join(ws, 'b.txt'))).toBe(false);                                // not blindly repeated
+    expect(fs.readFileSync(path.join(ws, 'b.txt'), 'utf8')).toBe('b');                        // started, never confirmed, NOT on disk: Core reconciled against the file and let it run once
     expect(fs.readFileSync(path.join(ws, 'c.txt'), 'utf8')).toBe('c');                        // new work ran
     expect(typeof reply).toBe('string');
     expect(getAttempt(db, successor.id).status).not.toBe('running');
