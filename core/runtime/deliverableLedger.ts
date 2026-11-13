@@ -161,7 +161,7 @@ export function deliverableLedger(input: LedgerInput): LedgerResult {
  */
 const CHECK_TOOLS = /^(?:run_checks|run_command)$/;
 const WORKS_CLAIM = /\b(?:works?|is working|are working|working (?:correctly|fine|properly)|functional|operational|verified|passes|passed|all (?:good|green|set)|correctly (?:installed|configured|set up|working))\b/i;
-const NEGATION = /\b(?:not|n't|never|could ?not|unable|failed|fails|did not|didn't|no longer|unverified|cannot|can't)\b/i;
+const NEGATION = /\b(?:not|never|could ?not|unable|failed|fails|did not|no longer|unverified|cannot|should|probably|likely|might|may|presumably|appears?|seems?)\b|n't/i; // negated or hedged: not a claim
 export function unbackedWorkingClaim(reply: string, calls: ReadonlyArray<{ tool: string; status: string; result?: unknown }>): string | null {
   const checks = calls.filter((c) => CHECK_TOOLS.test(c.tool) && c.status !== 'running');
   if (!checks.length) return null;

@@ -28,7 +28,7 @@ function seedSix(ws) {
 const SIX_PROMPT = 'Analyze each of the six files in the inbox folder. For every source file write analysis/<source name>.analysis.md (3 to 5 lines: what it is and its key facts), and also write analysis/index.md that lists and links all six analyses. Tell me when all seven files exist.';
 const sixCheck = (ws) => {
   const names = ['meeting-note', 'invoice-alpenmilch', 'invoice-donau', 'invoice-ulmer', 'plan', 'readme'];
-  const missing = names.filter((n) => !(read(path.join(ws, 'analysis', `${n}.analysis.md`)) ?? '').trim());
+  const missing = names.filter((n) => !((read(path.join(ws, 'analysis', `${n}.analysis.md`)) ?? read(path.join(ws, 'analysis', `${n}.txt.analysis.md`)) ?? '').trim()));
   const index = (read(path.join(ws, 'analysis', 'index.md')) ?? '').trim();
   if (!index) missing.push('index'); else for (const n of names) if (!index.includes(n)) missing.push(`index-link:${n}`); // an index that links nothing is not an index
   return missing;
