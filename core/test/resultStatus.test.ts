@@ -88,3 +88,14 @@ describe('an unfinished turn is never left satisfied (M0 C01/F03 contradiction)'
     expect(getTaskOutcome(db, a)?.status).toBe('satisfied');
   });
 });
+
+describe('a task blocked by a failed tool (M0 E01)', () => {
+  it('is blocked, not completed, and its record says why', () => {
+    const a = attempt('completed');
+    updateTaskOutcome(db, { attemptId: a, objective: 'make an image', status: 'in_progress' });
+    event(a, 'turn_blocked', { tool: 'image_list_checkpoints', reason: 'connection refused' });
+    finalizeTaskOutcome(db, a, { verdict: 'conversational', reason: 'answered', performed: [], refused: [], failed: [] });
+    expect(getTaskOutcome(db, a)).toMatchObject({ status: 'blocked' });
+    expect(deriveResultStatus(db, a)).toEqual({ status: 'blocked', reason: 'image_list_checkpoints failed: connection refused' });
+  });
+});

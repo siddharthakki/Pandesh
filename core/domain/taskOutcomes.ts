@@ -344,6 +344,16 @@ export function finalizeTaskOutcome(
       summary: existing.summary ?? outcome.reason,
     });
   }
+  // The work was blocked by a tool that failed and the reply asked the user how to go on: the task is blocked, with the
+  // tool's own error as the blocker (M0 E01).
+  if (outcome.verdict === 'conversational' || outcome.verdict === 'verified') {
+    const blocked = db.get<{ metadata: string }>("SELECT metadata FROM runtime_events WHERE entityId = ? AND eventType = 'turn_blocked' ORDER BY sequence DESC LIMIT 1", [attemptId]);
+    if (blocked) {
+      let blocker = 'a tool this task needs failed';
+      try { const m = JSON.parse(blocked.metadata) as { tool?: string; reason?: string }; blocker = `${m.tool ?? 'a tool'} failed: ${m.reason ?? ''}`.trim(); } catch { /* generic */ }
+      return updateTaskOutcome(db, { attemptId, status: 'blocked', evidence: existing.evidence, blocker, nextAction: existing.nextAction ?? 'Fix or start the tool that failed, then ask again.', summary: existing.summary ?? outcome.reason });
+    }
+  }
   if (outcome.verdict === 'conversational') {
     // The request was answered rather than acted on. The answer itself is the
     // evidence: it is a durable message in the conversation, with an id that

@@ -6615,6 +6615,15 @@ When the user asks to continue, resume, or check progress/updates, resume this w
       if (unfinishedReason) {
         const ran = toolCallsRecorded.filter((t) => t.status === 'completed' && !/^(?:update_task_outcome|request_tools)$/.test(t.tool)).map((t) => t.tool);
         safeRecordRuntimeEvent(db, broadcaster, attemptId, 'turn_unfinished', { reason: unfinishedReason, model: selectedModel, toolsRun: ran }, actor);
+      } else if (!signal?.aborted && asksUser && asksToBuildOutsideChat && !isQuestion && !producedSomething) {
+        // The reply asks the user something ("try again?") but the work the request named was not done because a tool it needed
+        // failed (M0 E01: Image Studio down, status 'completed'). Not a model failure, so no escalation (a stronger model would
+        // not help), but the task is BLOCKED, not complete. The reason is the tool's own error, from the ledger.
+        const failedTool = toolCallsRecorded.find((t) => t.status === 'failed' || (t.result as { isError?: boolean } | undefined)?.isError);
+        if (failedTool) {
+          const why = extractToolResultText(failedTool.result).replace(/\s+/g, ' ').slice(0, 160) || 'the tool failed';
+          safeRecordRuntimeEvent(db, broadcaster, attemptId, 'turn_blocked', { tool: failedTool.tool, reason: why }, actor);
+        }
       }
     }
 

@@ -45,5 +45,12 @@ export function deriveResultStatus(db: CoreDatabase, attemptId: string): Attempt
     try { const meta = JSON.parse(unfinished.metadata) as { reason?: string }; reason = meta.reason === 'no_reply' ? 'the model produced no reply' : 'nothing was built — no file was written or changed'; } catch { /* generic reason */ }
     return { status: 'failed', reason };
   }
+  // The work was blocked by a tool that failed and the reply asked the user how to go on (M0 E01).
+  const blocked = db.get<{ metadata: string }>("SELECT metadata FROM runtime_events WHERE entityId = ? AND eventType = 'turn_blocked' ORDER BY sequence DESC LIMIT 1", [attemptId]);
+  if (blocked) {
+    let reason = 'a tool this task needs failed';
+    try { const meta = JSON.parse(blocked.metadata) as { tool?: string; reason?: string }; reason = `${meta.tool ?? 'a tool'} failed: ${meta.reason ?? ''}`.trim(); } catch { /* generic reason */ }
+    return { status: 'blocked', reason };
+  }
   return { status: 'completed', reason: null };
 }
