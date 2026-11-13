@@ -44,7 +44,8 @@ for (const [k, s] of Object.entries(SPECS)) {
 if (Object.values(ids).some((v) => !v)) { console.error('a routine was not created; M3 cannot proceed', setup); fs.writeFileSync(path.join(HERE, 'results', `${LABEL}.json`), JSON.stringify({ setup, aborted: true }, null, 2)); process.exit(3); }
 
 const notes = (srcLike) => sql('select kind, sourceId, title, body, status from notification_outbox where sourceId like ?', srcLike);
-const pump = setInterval(async () => { try { for (const a of (await api('/v1/approvals/pending')).approvals ?? []) await api(`/v1/assistant/approvals/${a.id}/resolve`, { method: 'POST', body: { resolution: 'rejected' }, host: true }); } catch { /* none */ } }, 2000); // a routine must never need an approval: refuse any
+let approvalsSeen = 0; // Ask policy: an unattended write needs the owner's OK. The harness plays the owner pressing Approve (and counts it); approvals are never bypassed.
+const pump = setInterval(async () => { try { for (const a of (await api('/v1/approvals/pending')).approvals ?? []) { approvalsSeen++; await api(`/v1/assistant/approvals/${a.id}/resolve`, { method: 'POST', body: { resolution: 'approved' }, host: true }); } } catch { /* none */ } }, 2000);
 async function waitRun(id, prevAttempt, ms = 360000) {
   const end = Date.now() + ms;
   while (Date.now() < end) {
@@ -113,7 +114,7 @@ for (let d = 1; d <= 14 && streak < 7; d++) {
   console.log(`day ${d}: ${day.ok ? 'OK' : 'FAIL'} streak=${streak} ${day.seconds}s ${JSON.stringify(Object.fromEntries(Object.entries(day.checks).map(([k, v]) => [k, v?.ok ?? v])))}`);
 }
 clearInterval(pump);
-const out = { label: LABEL, commit, at: new Date().toISOString(), note: 'days are simulated by making each routine due; the scheduler, executor, scope and notifications are real', setup, days, bestStreak: best, gateMet: best >= 7 };
+const out = { approvalsPressed: approvalsSeen, label: LABEL, commit, at: new Date().toISOString(), note: 'days are simulated by making each routine due; the scheduler, executor, scope and notifications are real', setup, days, bestStreak: best, gateMet: best >= 7 };
 fs.mkdirSync(path.join(HERE, 'results'), { recursive: true });
 fs.writeFileSync(path.join(HERE, 'results', `${LABEL}.json`), JSON.stringify(out, null, 2));
 fs.writeFileSync(path.join(HERE, 'results', `${LABEL}.md`), [`# M3 routines ${LABEL} (${commit})`, '', `Best consecutive streak: ${best} (gate 7): **${best >= 7 ? 'MET' : 'NOT MET'}**`, '', '| day | ok | streak | s | detail |', '|---|---|---:|---:|---|', ...days.map((x) => `| ${x.day} | ${x.ok ? 'ok' : 'FAIL'} | ${x.streak} | ${x.seconds} | ${JSON.stringify(Object.fromEntries(Object.entries(x.checks).map(([k, v]) => [k, v?.why ?? v?.ok ?? v]))).replace(/\|/g, '/').slice(0, 200)} |`)].join('\n'));

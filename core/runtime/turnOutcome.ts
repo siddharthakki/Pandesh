@@ -174,7 +174,7 @@ export function evaluateTurnOutcome(calls: readonly TurnToolCall[]): TurnOutcome
     // own success is performed.
     const declaredSuccess = !errored && (call.result as { details?: { success?: unknown } } | undefined)?.details?.success === true;
     const text = tool === 'delegate_to_agent' || !errored ? full.split('\n')[0] : full;
-    if (!declaredSuccess && REFUSED_PATTERN.test(text)) {
+    if (!declaredSuccess && !/^UNCHANGED:/i.test(text.trim()) && REFUSED_PATTERN.test(text)) {
       if (!refused.includes(tool)) refused.push(tool);
     } else if (errored) {
       if (!failed.includes(tool)) failed.push(tool);

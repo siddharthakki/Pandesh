@@ -31,6 +31,8 @@ export interface LedgerInput {
   writtenFiles: readonly string[];
   /** Epoch ms when the turn started; a deliverable must have been written or changed at or after it. */
   turnStartMs: number;
+  /** Files this turn confirmed already hold exactly the requested text (write_file said UNCHANGED): current, though not rewritten. */
+  unchangedFiles?: readonly string[];
 }
 export interface LedgerResult {
   /** Human-readable list of what was expected. */
@@ -90,7 +92,7 @@ function isInside(child: string, parent: string): boolean {
   return rel === '' || (!rel.startsWith('..') && !path.isAbsolute(rel));
 }
 
-function freshAndNonEmpty(file: string, turnStartMs: number): boolean {
+function freshAndNonEmptyFile(file: string, turnStartMs: number): boolean {
   try {
     const st = fs.statSync(file);
     return st.isFile() && st.size > 0 && st.mtimeMs >= turnStartMs - 2000;
@@ -110,6 +112,8 @@ export function localLinkTargets(text: string): string[] {
 
 export function deliverableLedger(input: LedgerInput): LedgerResult {
   const { workspace, turnStartMs } = input;
+  const unchanged = new Set((input.unchangedFiles ?? []).map((f) => path.resolve(f)));
+  const freshAndNonEmpty = (file: string, since: number) => (unchanged.has(path.resolve(file)) ? (() => { try { return fs.statSync(file).size > 0; } catch { return false; } })() : freshAndNonEmptyFile(file, since));
   const expected: string[] = []; const missing: string[] = []; const present: string[] = [];
   const mark = (label: string, ok: boolean) => { expected.push(label); (ok ? present : missing).push(label); };
 

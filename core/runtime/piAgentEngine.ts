@@ -6562,7 +6562,8 @@ When the user asks to continue, resume, or check progress/updates, resume this w
           .map((r) => { try { return String((JSON.parse(r.argsSummary) as { filePath?: string }).filePath ?? ''); } catch { return ''; } })
           .filter(Boolean).map((p) => path.resolve(selectedWorkspace, p));
       }
-      const judge = () => deliverableLedger({ requestText, workspace: selectedWorkspace, writtenFiles: [...priorWrites, ...writtenFilesNow()], turnStartMs: chainStartMs });
+      const unchangedFilesNow = () => toolCallsRecorded.filter((t) => t.status === 'completed' && t.tool === 'write_file' && /^UNCHANGED:/i.test(extractToolResultText(t.result).trim())).map((t) => path.resolve(selectedWorkspace, String((t.args as { filePath?: string } | undefined)?.filePath ?? ''))).filter(Boolean);
+      const judge = () => deliverableLedger({ requestText, workspace: selectedWorkspace, writtenFiles: [...priorWrites, ...writtenFilesNow(), ...unchangedFilesNow()], unchangedFiles: unchangedFilesNow(), turnStartMs: chainStartMs });
       try {
         deliverables = judge();
         if (deliverables.missing.length > 0 && tools.some((t) => t.name === 'write_file')) {
