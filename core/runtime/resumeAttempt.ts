@@ -41,11 +41,12 @@ export function summarizeForResume(db: CoreDatabase, attemptId: string): ResumeS
   return { done: done.slice(-25), unknown: unknown.slice(-10), read };
 }
 
-export function resumeGuidance(summary: ResumeSummary): string {
+export function resumeGuidance(summary: ResumeSummary, workspace: string | null = null): string {
   const lines = ['This task was INTERRUPTED (the app or Core restarted while it ran) and is being resumed. Pandesh Core\'s record of the earlier attempt:'];
   lines.push(summary.done.length ? `ALREADY DONE (do not repeat; Core refuses an identical repeat):\n- ${summary.done.join('\n- ')}` : 'Nothing consequential was completed before the interruption.');
   if (summary.unknown.length) lines.push(`STARTED BUT OUTCOME UNKNOWN (check the real state with a read tool before deciding whether to do it):\n- ${summary.unknown.join('\n- ')}`);
   if (summary.read.length) lines.push(`Already read (no need to read again unless it may have changed):\n- ${summary.read.join('\n- ')}`);
+  if (workspace) lines.push(`The task's working folder is ${workspace}. Folder names in the request (inbox, reports, ...) mean folders inside it: use the file tools (list_directory, read_file, write_file) there, exactly as the first attempt did, not mail or other connectors.`);
   lines.push('Continue the SAME request from where it stopped. Do only what is still missing, then say exactly what now exists. Ignore any earlier reply that says the work is under way.');
   return lines.join('\n\n');
 }
@@ -62,7 +63,7 @@ export function resumeInterruptedAttempt(db: CoreDatabase, attemptId: string, ac
   if (db.get("SELECT 1 FROM approvals WHERE attemptId = ? AND status = 'rejected' LIMIT 1", [attemptId])) throw new CoreError('invalid_transition', 'a task whose approval was declined is not resumed');
   const context = getAttemptContext(db, attemptId);
   const chainLength = predecessorChain(db, attemptId).length + 1;
-  const guidance = resumeGuidance(summarizeForResume(db, attemptId));
+  const guidance = resumeGuidance(summarizeForResume(db, attemptId), (context as { workspaceRoot?: string | null }).workspaceRoot ?? null);
   const successor = db.transaction(() => {
     const created = rerouteAttempt(db, {
       predecessorAttemptId: attemptId, actor, provider: context.selectedProvider, model: context.selectedModel,
