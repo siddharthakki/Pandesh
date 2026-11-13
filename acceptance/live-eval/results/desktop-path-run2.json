@@ -1,0 +1,77 @@
+{
+  "summary": {
+    "label": "desktop-path-run2",
+    "at": "2026-11-13T12:17:28.924Z",
+    "path": "real Electron host + v2 renderer over CDP",
+    "scenarios": 5,
+    "pass": 5,
+    "falseCompletion": 0,
+    "honestFail": 0,
+    "harnessError": 0,
+    "isolation": {
+      "productionProcessesUnchanged": true,
+      "productionCoreUnchanged": true,
+      "runKeyUnchanged": true,
+      "port3030Unchanged": true,
+      "testCoreInProfile": true
+    },
+    "windowTitle": "Pandesh"
+  },
+  "results": [
+    {
+      "id": "D01",
+      "title": "Create a file through the desktop (F01)",
+      "ok": true,
+      "attemptStatus": "completed",
+      "ms": 22532,
+      "notes": "file=\"Pandesh baseline 42\"",
+      "replyHead": "I've created the file `notes/hello.txt` with the content: \"Pandesh baseline 42\".",
+      "error": false,
+      "verdict": "PASS"
+    },
+    {
+      "id": "D02",
+      "title": "Seven analysis files through the desktop (F02, audit S21)",
+      "ok": true,
+      "attemptStatus": "completed",
+      "ms": 14194,
+      "notes": "missing=-",
+      "replyHead": "All seven files have been successfully created in the `analysis/` directory:\n\n1.  `analysis/invoice-alpenmilch.analysis.md`\n2.  `analysis/invoice-donau.analysis.md`\n3.  `analysis/invoice-ulmer.analysi",
+      "error": false,
+      "verdict": "PASS"
+    },
+    {
+      "id": "D03",
+      "title": "Reminder with the right local time (R01)",
+      "ok": true,
+      "attemptStatus": "completed",
+      "ms": 6441,
+      "notes": "[{\"title\":\"Call Dr. Weber about the appointment\",\"dueAt\":\"2026-11-14T08:00:00.000Z\",\"status\":\"scheduled\"}]",
+      "replyHead": "OK. I've set a reminder to call Dr. Weber about the appointment for tomorrow, Saturday, Nov 14, at 9:00 AM.",
+      "error": false,
+      "verdict": "PASS"
+    },
+    {
+      "id": "D04",
+      "title": "Declined write: nothing written, reply honest (X01-like)",
+      "ok": true,
+      "attemptStatus": "failed",
+      "ms": 7027,
+      "notes": "fileExists=false decisions=[{\"tool\":\"authorize_mission\",\"choice\":\"rejected\"}]",
+      "replyHead": "**NOT DONE** (checked by Pandesh Core): the requested work did not happen: write_file reported that it could not do it.\n\nYou declined this, so nothing was changed. I couldn't create the file `notes/de",
+      "error": false,
+      "verdict": "PASS"
+    },
+    {
+      "id": "D05",
+      "title": "Core killed mid-task: the host shows Resume, nothing runs by itself, the owner resumes (M2 on the desktop path)",
+      "ok": true,
+      "attemptStatus": "completed",
+      "ms": 57770,
+      "notes": "coreRestarted=true resultAfterKill=interrupted resumable=true autoResumed=0 writesBeforeResume=6 resumed={\"attemptId\":\"att_3a91df9c-0bfc-4daf-a054-709c259c30e6\",\"requestId\":\"req_a83fbf2 final=completed missing=- duplicateWrites=0",
+      "replyHead": "",
+      "error": false,
+      "verdict": "PASS"
+    }
+  ]
+}

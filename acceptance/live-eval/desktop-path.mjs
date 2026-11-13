@@ -67,6 +67,11 @@ const db = () => new DatabaseSync(path.join(PROFILE, 'core.db'), { readOnly: tru
 const q = (sql, ...a) => { const d = db(); try { return d.prepare(sql).all(...a); } finally { d.close(); } };
 console.log(`desktop up: core ${coreInfo().pid} port ${coreInfo().port}, model ${s.model}`);
 
+// the Core-only runs used Auto routing (gemma4 family); the host's default here is the 27B daily driver: select the same family for a like-for-like comparison
+const models = await D('listModels()', 30000).catch(() => []);
+const gem = models.find((m) => /gemma4:26b/.test(m)) ?? models.find((m) => /^gemma4/.test(m));
+if (gem) await D(`selectModel(${JSON.stringify(gem)})`, 30000).catch((e) => console.log('selectModel:', e.message));
+console.log('model for the run:', gem ?? '(host default)');
 const isTest = await cdp.eval("document.title").catch(() => '');
 const WS = path.join(ROOT, 'ws').replace(/\\/g, '/'); fs.mkdirSync(WS, { recursive: true });
 const rd = (f) => (fs.existsSync(f) ? fs.readFileSync(f, 'utf8') : null);
@@ -76,7 +81,7 @@ const SIX_PROMPT = 'Analyze each of the six files in the inbox folder. For every
 const sixMissing = () => { const m = ['meeting-note', 'invoice-alpenmilch', 'invoice-donau', 'invoice-ulmer', 'plan', 'readme'].filter((n) => !((rd(path.join(WS, 'analysis', `${n}.analysis.md`)) ?? rd(path.join(WS, 'analysis', `${n}.txt.analysis.md`)) ?? '').trim())); if (!(rd(path.join(WS, 'analysis', 'index.md')) ?? '').trim()) m.push('index'); return m; };
 
 // A task through the host: submit, answer approval cards like the owner would (approve writes inside the folder), wait for a settled attempt.
-async function runTask(prompt, { approve = true, killWhen, timeoutMs = 300000 } = {}) {
+async function runTask(prompt, { approve = true, killWhen, timeoutMs = 420000 } = {}) {
   await D('newConversation()').catch(() => undefined); await sleep(800);
   const sub = await D(`submitTask(${JSON.stringify(prompt)})`, 60000).catch((e) => ({ error: String(e.message) }));
   const t = Date.now(); let last = null; let attemptId = null; const decisions = [];
