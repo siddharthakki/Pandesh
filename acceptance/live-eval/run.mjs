@@ -54,7 +54,7 @@ for (const s0 of picked.flatMap((x) => Array.from({ length: reps }, (_, k) => ({
   const interventions = res.turns.reduce((n, t) => n + (t.decisions?.filter((d) => d.choice === 'approved').length ?? 0), 0);
   const rejected = res.turns.reduce((n, t) => n + (t.decisions?.filter((d) => d.choice === 'rejected').length ?? 0), 0);
   const outcome = primary.taskOutcome?.status ?? null;
-  const row = { id: s.id, cat: s.cat, title: s.title, verdict, ok: !!res.ok, attemptStatus: status, taskOutcomeStatus: outcome, ms: Date.now() - t0, toolCalls, approvalsGranted: interventions, approvalsRefused: rejected, models: [...new Set(res.turns.flatMap((t) => (t.models ?? []).map((m) => m.model)))].filter(Boolean), notes: res.notes, replyHead: reply.slice(0, 240), reply: reply.slice(0, 2500), replyAdmits: honest, resultReason: primary.resultReason ?? null, toolNames: [...new Set(res.turns.flatMap((t) => (t.tools ?? []).map((x) => x.tool)))] };
+  const row = { id: s.id, cat: s.cat, title: s.title, verdict, ok: !!res.ok, attemptStatus: status, taskOutcomeStatus: outcome, ms: Date.now() - t0, toolCalls, approvalsGranted: interventions, approvalsRefused: rejected, models: [...new Set(res.turns.flatMap((t) => (t.models ?? []).map((m) => m.model)))].filter(Boolean), notes: res.notes, replyHead: reply.slice(0, 240), reply: reply.slice(0, 2500), replyAdmits: honest, resultReason: primary.resultReason ?? null, journal: res.turns.flatMap((t) => t.journal ?? []), toolNames: [...new Set(res.turns.flatMap((t) => (t.tools ?? []).map((x) => x.tool)))] };
   results.push(row); console.log(`${s.id.padEnd(5)} ${verdict.padEnd(20)} status=${status} outcome=${outcome} ${Math.round(row.ms / 1000)}s  ${res.notes ?? ''}`.slice(0, 220));
 }
 

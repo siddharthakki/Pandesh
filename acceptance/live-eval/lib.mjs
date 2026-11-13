@@ -110,8 +110,9 @@ export async function evidence(conversationId, attemptId) {
   try { const r = await api(`/v1/attempts/${attemptId}/tool-invocations`); tools = r.toolInvocations ?? r.invocations ?? r; } catch {}
   try { const r = await api(`/v1/attempts/${attemptId}/model-invocations`); models = r.modelInvocations ?? r.invocations ?? r; } catch {}
   const outcome = sql('select status, blocker, summary from task_outcomes where attemptId = ?', attemptId)[0] ?? null;
+  let journal = []; try { journal = sql('select toolName, status, effect, substr(resultText,1,240) r from tool_execution_journal where attemptId = ? order by seq', attemptId); } catch {}
   return {
-    reply: reply?.content ?? null, taskOutcome: outcome,
+    journal, reply: reply?.content ?? null, taskOutcome: outcome,
     tools: Array.isArray(tools) ? tools.map((t) => ({ tool: t.toolName, status: t.status, args: String(typeof t.argsSummary === 'string' ? t.argsSummary : JSON.stringify(t.argsSummary ?? '')).slice(0, 140) })) : [],
     models: Array.isArray(models) ? models.map((m) => ({ model: m.actualModel ?? m.requestedModel, provider: m.actualProvider, status: m.status, ms: m.latencyMs })) : [],
   };
