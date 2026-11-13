@@ -58,7 +58,7 @@ async function waitRun(id, prevAttempt, ms = 360000) {
   }
   return null;
 }
-const days = []; let streak = 0; let best = 0; const expectedNotices = new Set(); // the one interruption notice day 6 must produce
+const seenNotices = new Set(); const days = []; let streak = 0; let best = 0; const expectedNotices = new Set(); // the one interruption notice day 6 must produce
 for (let d = 1; d <= 14 && streak < 7; d++) {
   const day = { day: d, checks: {}, ok: true, notes: [] };
   const prev = Object.fromEntries(Object.entries(ids).map(([k, id]) => [k, task(id).lastAttemptId]));
@@ -70,22 +70,23 @@ for (let d = 1; d <= 14 && streak < 7; d++) {
   const active = Object.keys(ids).filter((k) => !(folderGone && k === 'C'));
   let interruptedAttempt = null;
   if (killDay) {
-    // wait for B to start, kill Core while it runs, restart, and check it is reported and not replayed
-    const end = Date.now() + 240000; while (Date.now() < end && task(ids.B).lastAttemptId === prev.B) await sleep(500);
-    interruptedAttempt = task(ids.B).lastAttemptId; expectedNotices.add(`sched-run:${interruptedAttempt}`); await sleep(1500);
-    const st = interruptedAttempt ? (await api(`/v1/attempts/${interruptedAttempt}`)).status : null;
+    // wait until every due routine has started, kill Core while they run, restart: each one still running must end 'interrupted', be reported once, and NOT be replayed
+    const end = Date.now() + 240000; while (Date.now() < end && Object.keys(ids).some((k) => task(ids[k]).lastAttemptId === prev[k])) await sleep(300);
+    await sleep(700);
+    const inflight = [];
+    for (const k of Object.keys(ids)) { const id = task(ids[k]).lastAttemptId; if (id && id !== prev[k]) { const st = (await api(`/v1/attempts/${id}`)).status; inflight.push({ k, id, wasRunning: !['completed', 'failed', 'cancelled'].includes(st) }); } }
     killCore(); await sleep(1500); startCore(); const up = await waitCore(90000); await sleep(8000);
-    const after = await api(`/v1/attempts/${interruptedAttempt}`); const note = notes(`sched-run:${interruptedAttempt}`);
-    const successors = sql('select count(*) n from attempts where predecessorAttemptId = ?', interruptedAttempt)[0].n;
-    const wasRunning = ['running', 'validating', 'created', 'queued'].includes(st);
-    day.checks.restart = { coreUp: up, wasRunningAtKill: wasRunning, resultAfter: after.resultStatus, notified: note.length === 1, autoSuccessors: successors };
-    // B finished before the kill? then it is an ordinary completed day; otherwise it must be reported as interrupted and not replayed.
-    if (wasRunning) { day.checks.restart.ok = up && after.resultStatus === 'interrupted' && note.length === 1 && successors === 0; }
-    else { day.checks.restart.ok = up; day.notes.push('B had already finished when the kill came; restart check is weak this day'); }
+    const per = [];
+    for (const f of inflight) {
+      const after = await api(`/v1/attempts/${f.id}`); const note = notes(`sched-run:${f.id}`); const successors = sql('select count(*) n from attempts where predecessorAttemptId = ?', f.id)[0].n;
+      if (f.wasRunning) expectedNotices.add(`sched-run:${f.id}`);
+      per.push({ routine: f.k, wasRunningAtKill: f.wasRunning, resultAfter: after.resultStatus, notified: note.length === 1, autoSuccessors: successors, ok: f.wasRunning ? (after.resultStatus === 'interrupted' && note.length === 1 && successors === 0) : successors === 0 });
+    }
+    day.checks.restart = { coreUp: up, inflight: per, ok: up && per.length > 0 && per.some((x) => x.wasRunningAtKill) && per.every((x) => x.ok) };
     if (!day.checks.restart.ok) day.ok = false;
   }
   for (const k of active) {
-    if (killDay && k === 'B') continue;
+    if (killDay) continue;
     const r = await waitRun(ids[k], prev[k]);
     day.checks[k] = { run: r };
     if (!r) { day.ok = false; day.checks[k].problem = 'did not run in time'; continue; }
@@ -104,7 +105,8 @@ for (let d = 1; d <= 14 && streak < 7; d++) {
   }
   // no stray files outside the frozen folders, no unexpected failure notices on healthy days
   const stray = ['daily', 'reports', 'logs'].filter((n) => fs.existsSync(path.join(RC, n)));
-  const unexpectedNotices = notes('sched-run:%').filter((n) => !expectedNotices.has(n.sourceId));
+  const unexpectedNotices = notes('sched-run:%').filter((n) => !expectedNotices.has(n.sourceId) && !seenNotices.has(n.sourceId));
+  for (const n of notes('sched-run:%')) seenNotices.add(n.sourceId);
   day.checks.noStrayFiles = stray.length === 0; day.checks.unexpectedNotices = unexpectedNotices.length;
   if (stray.length || unexpectedNotices.length) day.ok = false;
   const nextOk = Object.values(ids).every((id) => Date.parse(task(id).nextRunAt) > Date.now() + 3600_000);

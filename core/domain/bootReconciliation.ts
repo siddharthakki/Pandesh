@@ -102,9 +102,9 @@ export function failDeadExecutorAttemptsOnBoot(
       settled.push({ attemptId: attempt.id, status: attempt.status, outcome: 'failed' });
       // A scheduled routine that the restart cut short must reach the owner (its finish-hook died with the process).
       try {
-        const origin = db.get<{ clientId: string; title: string }>('SELECT r.clientId AS clientId, substr(r.currentMessage, 1, 100) AS title FROM attempts a JOIN requests r ON r.id = a.requestId WHERE a.id = ?', [attempt.id]);
+        const origin = db.get<{ clientId: string; title: string }>('SELECT r.clientId AS clientId, substr(r.currentMessage, 1, 160) AS title FROM attempts a JOIN requests r ON r.id = a.requestId WHERE a.id = ?', [attempt.id]);
         if (origin?.clientId === SCHEDULER_CLIENT_ID) {
-          enqueueNotification(db, { kind: 'task_failed', sourceId: `sched-run:${attempt.id}`, title: 'A scheduled routine was interrupted', body: `${origin.title.replace(/^\[Scheduled task "?/, '').slice(0, 80)} was cut short by a restart. It was not repeated; open Tasks to resume it.` });
+          enqueueNotification(db, { kind: 'task_failed', sourceId: `sched-run:${attempt.id}`, title: 'A scheduled routine was interrupted', body: `${(/^\[Scheduled task "([^"]+)"/.exec(origin.title)?.[1] ?? origin.title).slice(0, 80)} was cut short by a restart. It was not repeated; open Tasks to resume it.` });
         }
       } catch { /* best effort: the attempt record stays */ }
     }
