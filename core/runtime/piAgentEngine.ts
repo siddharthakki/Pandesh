@@ -78,7 +78,8 @@ import {
 } from '../domain/commitments';
 import { finalizeTaskOutcome, ensureTaskOutcome, listTaskOutcomes, objectiveFromRequest, updateTaskOutcome } from '../domain/taskOutcomes';
 import { isInspectionOrAdvisoryOnly } from '../domain/actionIntent';
-import { evaluateTurnOutcome } from './turnOutcome';
+import { evaluateTurnOutcome, isConsequentialTool } from './turnOutcome';
+import { findPriorTwin, replayRefusal } from './replayGuard';
 import { deliverableLedger, unbackedWorkingClaim, type LedgerResult } from './deliverableLedger';
 import { resolveActiveProject, isProjectInspectionRequest, gatherProjectEvidence, formatProjectEvidenceForModel, composeEvidenceAnswer, isReplyGroundedInProject, isLocalModelEndpoint } from './projectContext';
 import { resolveTimeExpression, localWallTimeToIso as zonedWallToIso, utcOffsetLabel as zoneOffsetLabel, upcomingDaysTable, isValidTimeZone } from '../domain/timeResolution';
@@ -5549,6 +5550,17 @@ When the user asks to continue, resume, or check progress/updates, resume this w
           const joined = toolsInGroups(tools.map((t) => t.name), [groupOfTool(toolName, capabilityMarks.get(toolName)) ?? ''], capabilityMarks);
           for (const n of [toolName, ...joined]) activeToolNames.add(n);
           safeRecordRuntimeEvent(db, broadcaster, attemptId, 'hidden_tool_called', { toolName, added: joined }, actor);
+        }
+
+        // M2 replay guard: a resumed attempt never repeats a consequential call the interrupted attempt already made.
+        if (isConsequentialTool(toolName)) {
+          const twin = findPriorTwin(db, attemptId, toolName, args);
+          if (twin) {
+            safeRecordRuntimeEvent(db, broadcaster, attemptId, 'replay_prevented', { toolName, kind: twin.kind, earlierAttemptId: twin.attemptId, earlierInvocationId: twin.invocationId }, actor);
+            // A call that already succeeded earlier counts as performed for this task's outcome; an unknown one does not.
+            if (twin.kind === 'done') toolCallsRecorded.push({ tool: toolName, args, status: 'completed', result: { content: [{ type: 'text', text: replayRefusal(twin, toolName) }], details: { success: true, replayedFrom: twin.invocationId } } });
+            return { block: true, reason: replayRefusal(twin, toolName) };
+          }
         }
 
         const earlierFailure = failedCalls.get(callSignature(toolName, args));

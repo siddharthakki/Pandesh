@@ -59,6 +59,7 @@ import * as artifacts from '../domain/artifacts';
 import * as requests from '../domain/requests';
 import * as attempts from '../domain/attempts';
 import { deriveResultStatus } from '../domain/resultStatus';
+import { resumeInterruptedAttempt } from '../runtime/resumeAttempt';
 import { listTaskOverview } from '../domain/taskOverview';
 import * as modelInvocations from '../domain/modelInvocations';
 import * as toolInvocations from '../domain/toolInvocations';
@@ -1526,6 +1527,20 @@ export function buildRouter(
     status: 200,
     body: attemptRetryEligibility(ctx.db, match.params.id),
   }));
+
+  // M2: resume an interrupted (or failed, not cancelled) task as a successor of the same request. The successor is told what
+  // the journal says was already done, and the replay guard refuses an identical repeat of a consequential call.
+  router.post('/v1/attempts/:id/resume', (ctx, match) => {
+    const key = requireIdempotencyKey(ctx);
+    return withIdempotency(ctx.db, { key, clientId: ctx.clientId, routeId: `attempts.resume:${match.params.id}` }, ctx.body, () =>
+      withRuntimeBroadcast(ctx, broadcaster, () => {
+        const successor = resumeInterruptedAttempt(ctx.db, match.params.id, ctx.actor);
+        if (!executor) throw new CoreError('internal_error', 'no runtime executor is configured on this Core');
+        void executor.execute(successor.id).catch(() => { /* terminal failure is durably recorded */ });
+        return { status: 202, body: { attempt: successor, resumedFrom: match.params.id } };
+      }),
+    );
+  });
 
   router.post('/v1/attempts/:id/claim', (ctx, match) => {
     const key = requireIdempotencyKey(ctx);
