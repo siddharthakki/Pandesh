@@ -6553,7 +6553,7 @@ When the user asks to continue, resume, or check progress/updates, resume this w
     // Dates the owner stated for tasks must be the dates stored (audit S20). One nudge to fix them with update_task, then judged.
     if (!signal?.aborted && finalReply && !cloudTarget) {
       let lost = missingTaskDates(requestText, toolCallsRecorded);
-      if (lost.length > 0 && tools.some((t) => t.name === 'update_task') && toolCallsRecorded.some((t) => t.tool === 'add_task')) {
+      if (lost.length > 0 && tools.some((t) => t.name === 'update_task') && toolCallsRecorded.some((t) => t.tool === 'add_task' || t.tool === 'create_project')) {
         safeRecordRuntimeEvent(db, broadcaster, attemptId, 'task_dates_missing', { missing: lost }, actor);
         try {
           const floor = agent.state.messages.length;

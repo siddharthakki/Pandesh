@@ -72,7 +72,7 @@ export async function newConversation(title) { return api('/v1/conversations', {
 
 const TERMINAL = ['completed', 'failed', 'cancelled'];
 /** Submit one user message through the same endpoints the host uses and wait for a settled attempt. */
-export async function turn(conversationId, message, { policy = () => 'rejected', workspace, model, timeoutMs = 420000, onAttempt, killAfterMs } = {}) {
+export async function turn(conversationId, message, { policy = () => 'rejected', workspace, model, timeoutMs = 420000, onAttempt, killAfterMs, killWhen } = {}) {
   const body = {
     currentMessage: message, requestedMode: 'saath_kar', conversationId,
     workspaceRoot: workspace ?? undefined, hasWorkspace: Boolean(workspace), gitCapable: false,
@@ -87,7 +87,7 @@ export async function turn(conversationId, message, { policy = () => 'rejected',
   if (onAttempt) onAttempt(attemptId);
   const decisions = []; let att; let killed = false;
   while (Date.now() - t0 < timeoutMs) {
-    if (killAfterMs && !killed && Date.now() - t0 > killAfterMs) { killCore(); killed = true; return { attemptId, killed: true, ms: Date.now() - t0, decisions }; }
+    if (!killed && ((killAfterMs && Date.now() - t0 > killAfterMs) || (killWhen && killWhen(attemptId)))) { killCore(); killed = true; return { attemptId, killed: true, ms: Date.now() - t0, decisions }; }
     try {
       const pend = (await api('/v1/approvals/pending')).approvals ?? [];
       for (const a of pend) {

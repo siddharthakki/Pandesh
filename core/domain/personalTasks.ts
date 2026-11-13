@@ -171,6 +171,20 @@ export function addTask(db: CoreDatabase, input: AddTaskInput): TaskView {
     };
     pushHistory(task, 'created', input.source, now);
     const tasks = tasksOf(project);
+    // Adding a task that is already there (same title, still open) is not a second task: it completes the existing one with
+    // whatever the repeat adds. M0 P01: create_project(tasks=[...]) followed by add_task for the same titles left every task twice
+    // (and the copy without dates was the one shown first).
+    const twin = tasks.find((t) => t.status !== 'done' && t.status !== 'cancelled' && norm(t.title) === norm(title));
+    if (twin) {
+      const filled: string[] = [];
+      if (task.dueAt && !twin.dueAt) { twin.dueAt = task.dueAt; filled.push('due date'); }
+      if (task.priority && !twin.priority) { twin.priority = task.priority; filled.push('priority'); }
+      if (task.goal && !twin.goal) { twin.goal = task.goal; filled.push('goal'); }
+      if (task.blockedBy && !twin.blockedBy) { twin.blockedBy = task.blockedBy; twin.status = 'blocked'; filled.push('blocked-by'); }
+      if (task.notes?.length) twin.notes = [...(twin.notes ?? []), ...task.notes];
+      pushHistory(twin, `added again; ${filled.length ? `filled in ${filled.join(', ')}` : 'nothing new'}`, input.source, now);
+      return view(writeTasks(db, project, tasks), twin);
+    }
     const updated = writeTasks(db, project, [...tasks, task]);
     return view(updated, task);
   });

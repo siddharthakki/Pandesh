@@ -70,3 +70,21 @@ describe('unfinished tasks in the personal overview (audit S14)', () => {
     expect(personalOverview(db, { focus: 'unfinished' })).toMatch(/Tasks that did NOT finish[\s\S]*interrupted "x"/);
   });
 });
+
+import { finalizeTaskOutcome, getTaskOutcome } from '../domain/taskOutcomes';
+describe('an unfinished turn is never left satisfied (M0 C01/F03 contradiction)', () => {
+  it('finalizing a conversational/verified verdict on an unfinished turn makes the task record partial', () => {
+    const a = attempt('completed');
+    updateTaskOutcome(db, { attemptId: a, objective: 'fix the bug', status: 'satisfied', evidence: [{ kind: 'tool', reference: 'list_directory' }] });
+    event(a, 'turn_unfinished', { reason: 'nothing_built' });
+    finalizeTaskOutcome(db, a, { verdict: 'conversational', reason: 'answered', performed: [], refused: [], failed: [] });
+    expect(getTaskOutcome(db, a)?.status).toBe('partial');
+    expect(deriveResultStatus(db, a).status).toBe('partial');
+  });
+  it('a finished turn keeps its satisfied record', () => {
+    const a = attempt('completed');
+    updateTaskOutcome(db, { attemptId: a, objective: 'x', status: 'satisfied', evidence: [{ kind: 'tool', reference: 'write_file' }] });
+    finalizeTaskOutcome(db, a, { verdict: 'verified', reason: 'ok', performed: ['write_file'], refused: [], failed: [] });
+    expect(getTaskOutcome(db, a)?.status).toBe('satisfied');
+  });
+});

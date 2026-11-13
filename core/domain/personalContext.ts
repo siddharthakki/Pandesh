@@ -405,7 +405,7 @@ export function unfinishedAttempts(db: CoreDatabase, sinceIso: string, limit = 8
             EXISTS (SELECT 1 FROM attempts s WHERE s.predecessorAttemptId = a.id) AS hasSuccessor
        FROM attempts a JOIN requests r ON r.id = a.requestId
       WHERE a.updatedAt >= ? AND a.kind != 'baat_kar_internal' AND (a.status = 'failed' OR a.status = 'recovery_required')
-        AND r.routeReason = 'user_prompt'
+        AND r.routeReason NOT IN ('m38_capability_dispatch','background_task_resumption','mission','delegation','live','test')
       ORDER BY a.updatedAt DESC LIMIT 60`, [sinceIso]);
   const out: UnfinishedTask[] = [];
   for (const r of rows) {

@@ -110,6 +110,24 @@ export const SCENARIOS = [
     const sched = sql('select enabled, scopeJson, lastRunAt from scheduled_tasks order by createdAt desc limit 1')[0];
     return { turns: [t], ok: fs.existsSync(f) && (read(f) ?? '').trim().length > 0, notes: `file=${fs.existsSync(f)} schedule=${JSON.stringify(sched)}` };
   } },
+  { id: 'I03', cat: 'recovery', title: 'Core killed after the first write, restarted, task resumed: finishes with no duplicate writes (M2)', async setup(ws) { seedSix(ws); }, async run(c) {
+    const conv = await newConversation('I03');
+    const firstWrite = (attemptId) => sql("select count(*) n from tool_invocations where attemptId = ? and toolName = 'write_file' and status = 'succeeded'", attemptId)[0]?.n >= 1;
+    const k = await c.turn(conv.id, SIX_PROMPT, { killWhen: firstWrite, timeoutMs: 180000 });
+    if (!k.killed) return { turns: [k], ok: false, notes: 'the task finished before the kill (no interruption happened)', negative: true };
+    await sleep(1500); startCore(); const up = await waitCore(90000); await sleep(6000);
+    const before = await api(`/v1/attempts/${k.attemptId}`);
+    let resumed = null; let finalAtt = null;
+    try { resumed = await api(`/v1/attempts/${k.attemptId}/resume`, { method: 'POST', body: {} }); } catch (e) { return { turns: [{ attemptId: k.attemptId, status: before.status, resultStatus: before.resultStatus, reply: String(e.message), tools: [], models: [], decisions: [] }], ok: false, notes: `resume refused: ${String(e.message).slice(0, 200)}` }; }
+    const sid = resumed.attempt.id; const deadline = Date.now() + 5 * 60000;
+    const pump = setInterval(async () => { try { for (const a of (await api('/v1/approvals/pending')).approvals ?? []) await api(`/v1/assistant/approvals/${a.id}/resolve`, { method: 'POST', body: { resolution: 'approved' }, host: true }); } catch {} }, 1500);
+    try { while (Date.now() < deadline) { finalAtt = await api(`/v1/attempts/${sid}`); if (['completed', 'failed', 'cancelled'].includes(finalAtt.status)) break; await sleep(2000); } } finally { clearInterval(pump); }
+    const missing = sixCheck(c.ws);
+    const dupes = sql("select toolName, argsSummary, count(*) n from tool_invocations where status = 'succeeded' and toolName = 'write_file' and attemptId in (select id from attempts where requestId = (select requestId from attempts where id = ?)) group by toolName, argsSummary having n > 1", k.attemptId);
+    const ev = await evidence(conv.id, sid);
+    return { turns: [{ attemptId: sid, ms: 0, status: finalAtt?.status, resultStatus: finalAtt?.resultStatus, resultReason: finalAtt?.resultReason, failureReason: finalAtt?.failureReason ?? null, decisions: [], ...ev }], ok: missing.length === 0 && dupes.length === 0 && up,
+      notes: `coreUp=${up} interrupted=${before.resultStatus} resumedResult=${finalAtt?.resultStatus} missing=${missing.join(',') || '-'} duplicateWrites=${dupes.length}` };
+  } },
   { id: 'I01', cat: 'recovery', title: 'Core killed mid-task, then restarted (audit S06)', async setup(ws) { seedSix(ws); }, async run(c) {
     const conv = await newConversation('I01'); c.shared.interruptedConv = conv.id;
     const k = await c.turn(conv.id, SIX_PROMPT, { killAfterMs: 9000 });
