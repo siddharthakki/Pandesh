@@ -6555,8 +6555,10 @@ When the user asks to continue, resume, or check progress/updates, resume this w
       const capability = notificationCapability(db);
       // Anything that acted counts (a file written, a reminder set, a draft made); looking things up does not. Owner
       // report 2026-11-12: two web searches and a screen switch were the whole "build it" turn.
-      const LOOKUP_ONLY = /^(?:web_research|governed_research|navigate_to|read_file|list_directory|search_files|document_read|inspect_page|calculate|resolve_time|get_system_info|update_task_outcome|request_tools|memory_recall|browser_(?:read|open_site|goto|back|screenshot))$|_(?:search|list|read|get|status|recall)(?:_\w+)?$/;
-      const producedSomething = toolCallsRecorded.some((t) => t.status === 'completed' && !LOOKUP_ONLY.test(t.tool));
+      const LOOKUP_ONLY = /^(?:web_research|governed_research|navigate_to|read_file|list_directory|search_files|document_read|inspect_page|calculate|resolve_time|get_system_info|update_task_outcome|request_tools|memory_recall|browser_(?:read|open_site|goto|back|screenshot))$|_(?:search|list|read|get|status|recall|scan|analy[sz]e|inspect|preview|describe|inventory)(?:_\w+)?$/;
+      // A call that returned an error result produced nothing (M0 F03: pc_organize_scan failed twice, the turn ended with
+      // "completed" and an attempt that never moved a file).
+      const producedSomething = toolCallsRecorded.some((t) => t.status === 'completed' && !LOOKUP_ONLY.test(t.tool) && !(t.result as { isError?: boolean } | undefined)?.isError);
       const correction = auditPromises(finalReply, {
         activeWorker: hasActiveWorker(db, conversationId, attemptId),
         canNotify: capability.canNotify,
