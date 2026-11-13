@@ -104,3 +104,17 @@ describe('verification claims (audit S16)', () => {
     expect(unbackedWorkingClaim('Git works.', [ok])).toBeNull();
   });
 });
+
+import { missingTaskDates } from '../runtime/deliverableLedger';
+describe('stated task dates (audit S20)', () => {
+  const add = (dueAt?: string) => ({ tool: 'add_task', status: 'completed', args: { title: 't', ...(dueAt ? { dueAt } : {}) }, result: { content: [{ text: 'Added' }] } });
+  const req = 'Add three tasks: "Buy wood" due 2026-12-01; "Build frame" due 2026-12-10; "Paint" due 2026-12-20.';
+  it('flags a stated date that was not stored', () => {
+    expect(missingTaskDates(req, [add('2026-12-01'), add(), add('2026-12-20T09:00:00.000Z')])).toEqual(['a task due 2026-12-10 stored (the date you gave)']);
+    expect(missingTaskDates(req, [])).toHaveLength(3);
+  });
+  it('is quiet when all dates were stored or the request is not about tasks', () => {
+    expect(missingTaskDates(req, [add('2026-12-01'), add('2026-12-10'), add('2026-12-20')])).toEqual([]);
+    expect(missingTaskDates('The meeting on 2026-12-01 was long.', [])).toEqual([]);
+  });
+});

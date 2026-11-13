@@ -154,3 +154,21 @@ export function unbackedWorkingClaim(reply: string, calls: ReadonlyArray<{ tool:
   const text = ((last.result as { content?: Array<{ text?: string }> } | undefined)?.content ?? []).map((p) => p.text ?? '').join(' ').replace(/\s+/g, ' ').trim().slice(0, 120);
   return `a successful check behind "${claim.trim().slice(0, 80)}" (the check failed: ${text || 'no output'})`;
 }
+
+/**
+ * Dates the owner stated explicitly (ISO, "2026-12-01") for tasks must be the dates that were stored (audit S20: a due date
+ * and a priority silently lost, reply "done"). Judged only on requests about tasks/deadlines; relative dates ("next
+ * Friday") are resolved by the model and are not judged here.
+ */
+export function statedTaskDates(requestText: string): string[] {
+  if (!/\b(?:task|todo|to-do|deadline|due|project)s?\b/i.test(requestText)) return [];
+  return [...new Set([...requestText.matchAll(/\b(20\d{2}-\d{2}-\d{2})\b/g)].map((m) => m[1]))].slice(0, 12);
+}
+export function missingTaskDates(requestText: string, calls: ReadonlyArray<{ tool: string; args?: unknown; status: string; result?: unknown }>): string[] {
+  const dates = statedTaskDates(requestText);
+  if (!dates.length) return [];
+  const stored = calls
+    .filter((c) => (c.tool === 'add_task' || c.tool === 'update_task') && c.status === 'completed' && !(c.result as { isError?: boolean } | undefined)?.isError)
+    .map((c) => String((c.args as { dueAt?: string } | undefined)?.dueAt ?? ''));
+  return dates.filter((d) => !stored.some((s) => s.startsWith(d))).map((d) => `a task due ${d} stored (the date you gave)`);
+}
