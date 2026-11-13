@@ -121,6 +121,8 @@ describe('resume after an interruption, with a replay guard', () => {
 
     // the resumed model re-emits a.txt and b.txt (same args, other key order), then writes c.txt
     fs.writeFileSync(path.join(ws, 'a.txt'), 'a-before-resume-marker');
+    // crash between the side effect and the journal commit: b.txt IS on disk although its invocation never completed
+    fs.writeFileSync(path.join(ws, 'b.txt'), 'b');
     calls = [];
     script = (_c, n) => n === 0 ? { tool: { name: 'write_file', args: { content: 'a', filePath: 'a.txt' } } }
       : n === 1 ? { tool: { name: 'write_file', args: { content: 'b', filePath: 'b.txt' } } }
@@ -135,9 +137,11 @@ ${PROMPT}`) as { reply: string };
 
     expect(calls[0].messages.map((m) => textOf(m.content)).join('\n')).toMatch(/INTERRUPTED[\s\S]*ALREADY DONE[\s\S]*write_file/);
     const prevented = events(successor.id, 'replay_prevented');
-    expect(prevented.map((p) => p.kind)).toEqual(['done']);   // a.txt: journal says done (and the file was edited since: never clobbered)
+    expect(prevented.map((p) => p.kind).sort()).toEqual(['done', 'unknown']);
+    expect(prevented.find((p) => p.kind === 'unknown')?.inPlace).toBe(true); // reconciled against the real file   // a.txt: journal says done (and the file was edited since: never clobbered)
     expect(fs.readFileSync(path.join(ws, 'a.txt'), 'utf8')).toBe('a-before-resume-marker'); // not rewritten
-    expect(fs.readFileSync(path.join(ws, 'b.txt'), 'utf8')).toBe('b');                        // started, never confirmed, NOT on disk: Core reconciled against the file and let it run once
+    expect(fs.readFileSync(path.join(ws, 'b.txt'), 'utf8')).toBe('b');                        // already in place: not written again
+    expect(db.all("SELECT 1 FROM tool_invocations WHERE attemptId = ? AND toolName = 'write_file' AND argsSummary LIKE '%b.txt%'", [successor.id])).toHaveLength(0);
     expect(fs.readFileSync(path.join(ws, 'c.txt'), 'utf8')).toBe('c');                        // new work ran
     expect(typeof reply).toBe('string');
     expect(getAttempt(db, successor.id).status).not.toBe('running');

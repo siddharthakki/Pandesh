@@ -1237,6 +1237,7 @@ export class PiAgentEngine implements EngineAdapter {
       }
       if (!missing.length) return null;
       safeRecordRuntimeEvent(db, broadcaster, attemptId, 'write_held_for_source_evidence', { tool: toolName, unread: missing.map((f) => path.basename(f)) }, actor);
+      writeHeldAt = toolCallsRecorded.length;
       const reads = await coreReadDocuments(missing);
       const gathered = reads.filter((r) => r.ok).map((r) => r.text).join('\n\n');
       const failedReads = reads.filter((r) => !r.ok).map((r) => `${path.basename(r.file)}: ${r.text.slice(0, 160)}`);
@@ -1247,6 +1248,7 @@ export class PiAgentEngine implements EngineAdapter {
     const phoneShares: string[] = [];
     const pendingInvocations: string[] = [];
     /** Calls that failed this turn, by tool+arguments, with why: an identical retry learns nothing new. */
+    let writeHeldAt = -1; // index in toolCallsRecorded when a write was last held back for source evidence (see the nudge before the deliverable ledger)
     let scheduledOriginCache: boolean | null = null;
 
     const scheduledRunOrigin = (): boolean => { if (scheduledOriginCache === null) { try { scheduledOriginCache = db.get<{ clientId: string }>('SELECT r.clientId AS clientId FROM attempts a JOIN requests r ON r.id = a.requestId WHERE a.id = ?', [attemptId])?.clientId === 'core:scheduler'; } catch { scheduledOriginCache = false; } } return scheduledOriginCache; };
@@ -6553,6 +6555,18 @@ When the user asks to continue, resume, or check progress/updates, resume this w
       }
     }
 
+    // A write held back for source evidence is repeated by the model, or the turn has done nothing (M3 live run: after the held write the
+    // model reported "updated" without writing; Core withheld the claim and the routine ended partial). One nudge, from the source of the failure.
+    if (writeHeldAt >= 0 && !signal?.aborted && !cloudTarget && selectedWorkspace && tools.some((t) => t.name === 'write_file')
+        && !toolCallsRecorded.slice(writeHeldAt).some((t) => t.tool === 'write_file' && t.status === 'completed')) {
+      safeRecordRuntimeEvent(db, broadcaster, attemptId, 'held_write_not_repeated', { at: writeHeldAt }, actor);
+      const floor = agent.state.messages.length;
+      activeToolNames.add('write_file');
+      await agent.prompt('Pandesh: your earlier write_file call was held back until the source files were read, and Core has now read them (their contents were in that result). The file has NOT been written. Call write_file again now with the corrected content, then say what it now contains.');
+      await agent.waitForIdle();
+      const again = lastAssistantTextFrom(floor);
+      if (again && !isTruncationArtifact(again)) finalReply = again;
+    }
     // M1 deliverable ledger: what the request asked to exist, checked against the file system (audit S21: six files asked,
     // four written, "verified"). One "still missing" nudge, then whatever is still absent makes the turn PARTIAL.
     let deliverables: LedgerResult | null = null;

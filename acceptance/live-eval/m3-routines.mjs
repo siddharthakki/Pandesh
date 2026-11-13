@@ -59,7 +59,7 @@ async function waitRun(id, prevAttempt, ms = 360000) {
   return null;
 }
 const seenNotices = new Set(); const days = []; let streak = 0; let best = 0; const expectedNotices = new Set(); // the one interruption notice day 6 must produce
-for (let d = 1; d <= 14 && streak < 7; d++) {
+for (let d = 1; d <= Number(process.env.M3_DAYS ?? 14) && streak < 7; d++) {
   const day = { day: d, checks: {}, ok: true, notes: [] };
   const prev = Object.fromEntries(Object.entries(ids).map(([k, id]) => [k, task(id).lastAttemptId]));
   wr(path.join(WS.B, 'inbox', `f${d}.txt`), String(d));                      // B's expected count grows each day
