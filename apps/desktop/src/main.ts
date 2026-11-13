@@ -22,7 +22,7 @@ import {
   resolveBuildIdentity,
   type DesktopBuildIdentity,
 } from './host/desktopBuildIdentity';
-import { googleConnectRefusal, isTestProfile, ownsLoginItem, readHostPreferences, resolveUiVariant, TEST_PROFILE_GOOGLE_ENV, windowTitleForProfile, writeHostPreferences } from './host/desktopHostPreferences';
+import { googleConnectRefusal, isTestProfile, ownsLoginItem, realDesktopDataDirFromOs, readHostPreferences, resolveUiVariant, TEST_PROFILE_GOOGLE_ENV, windowTitleForProfile, writeHostPreferences } from './host/desktopHostPreferences';
 import { DESKTOP_CHANNELS, type DesktopAppMetadata, type DesktopUpdateStartResult, type DesktopUpdateStatus, type MobilePairingView } from './ipc';
 import {
   acknowledgeUpdateResult, inspectPackage, launchUpdater, quiesceCore, readCoreReadiness, readUpdateResult,
@@ -368,7 +368,7 @@ async function mobilePairingView(): Promise<MobilePairingView> {
 function applyOpenAtLogin(enabled: boolean): void {
   prefs = writeHostPreferences(dataDir, { openAtLogin: enabled });
   // A test or scratch profile keeps its own preference but never writes or deletes the shared Windows entry.
-  if (!ownsLoginItem(dataDir, defaultDesktopDataDir())) {
+  if (!ownsLoginItem(dataDir, realDesktopDataDirFromOs())) {
     hostLog(`login item left alone: profile ${dataDir} is not the real desktop profile (preference saved: ${enabled ? 'on' : 'off'})`);
     syncTrayFromSession();
     return;
@@ -688,7 +688,7 @@ function deliverOutboxNotification(input: { id: string; title: string; body: str
 
 async function ensureMainWindow(): Promise<BrowserWindow> {
   if (window && !window.isDestroyed()) return window;
-  const windowTitle = windowTitleForProfile(dataDir, defaultDesktopDataDir());
+  const windowTitle = windowTitleForProfile(dataDir, realDesktopDataDirFromOs());
   window = new BrowserWindow({
     width: 1100,
     height: 820,
@@ -1155,12 +1155,12 @@ function registerIpc(): void {
   ipcMain.handle(DESKTOP_CHANNELS.connectGmail, async () => {
     if (!session) throw new Error('desktop session is not started');
     // Every Google connection leaves a line in the host log, and a test copy refuses (tracker item 23).
-    const refusal = googleConnectRefusal(dataDir, defaultDesktopDataDir());
+    const refusal = googleConnectRefusal(dataDir, realDesktopDataDirFromOs());
     if (refusal) {
       hostLog(`Google connect refused: ${refusal}`);
       throw new Error(refusal);
     }
-    hostLog(`Google connect started from the Pandesh window (profile ${dataDir}${isTestProfile(dataDir, defaultDesktopDataDir()) ? `, TEST COPY allowed by ${TEST_PROFILE_GOOGLE_ENV}=1` : ''})`);
+    hostLog(`Google connect started from the Pandesh window (profile ${dataDir}${isTestProfile(dataDir, realDesktopDataDirFromOs()) ? `, TEST COPY allowed by ${TEST_PROFILE_GOOGLE_ENV}=1` : ''})`);
     const result = await session.connectGmail();
     hostLog(`Google connect finished: ${result.connected ? `connected (calendar ${result.calendarAccess})` : `not connected${result.lastError ? ` (${String(result.lastError).slice(0, 200)})` : ''}`}`);
     sendSnapshot();
@@ -1217,7 +1217,7 @@ function registerIpc(): void {
   ipcMain.handle(DESKTOP_CHANNELS.allowInboxOrganization, async () => {
     if (!session) throw new Error('desktop session is not started');
     // A new Google consent (gmail.modify): the same test-copy rule and log line as Connect (tracker item 23).
-    const refusal = googleConnectRefusal(dataDir, defaultDesktopDataDir());
+    const refusal = googleConnectRefusal(dataDir, realDesktopDataDirFromOs());
     if (refusal) {
       hostLog(`Google inbox organization refused: ${refusal}`);
       throw new Error(refusal);
