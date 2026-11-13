@@ -204,6 +204,8 @@ export function listScheduledTasks(db: CoreDatabase, includeDisabled = false): S
 export function cancelScheduledTask(db: CoreDatabase, id: string): ScheduledTaskRecord {
   getScheduledTask(db, id);
   db.run('UPDATE scheduled_tasks SET enabled = 0, updatedAt = ? WHERE id = ?', [nowIso(), id]);
+  // A cancelled routine keeps no standing write permission.
+  db.run("UPDATE routine_write_grants SET status = 'revoked', revokedBy = 'core', revokedAt = ?, revokeReason = 'the routine was cancelled' WHERE taskId = ? AND status = 'active'", [nowIso(), id]);
   return getScheduledTask(db, id);
 }
 

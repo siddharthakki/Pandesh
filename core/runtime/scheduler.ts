@@ -1,6 +1,7 @@
 import type { CoreDatabase } from '../db/connection';
 import { createConversation } from '../domain/conversations';
-import { latestRuntimeSequence, listRuntimeEventsAfter } from '../domain/runtimeEvents';
+import { latestRuntimeSequence, listRuntimeEventsAfter, recordRuntimeEvent } from '../domain/runtimeEvents';
+import { verifyGrantRun } from '../domain/routineWriteGrants';
 import { claimDueScheduledTasks, recordScheduledRun } from '../domain/scheduledTasks';
 import { submitRequest } from '../domain/submission';
 import { enqueueNotification } from '../domain/notificationOutbox';
@@ -163,6 +164,14 @@ export function startScheduledTaskLoop(
           .catch(() => { /* terminal failure is durably recorded */ })
           .finally(() => {
             // A scheduled run that did not finish its work must reach the owner: a notification, not a silent record.
+            try {
+              // A run that wrote under a standing permission is checked against the disk, not against what the model said.
+              const audit = verifyGrantRun(db, attemptId);
+              if (audit.uses > 0) {
+                recordRuntimeEvent(db, { domain: 'authorization', entityId: attemptId, eventType: audit.problems.length ? 'routine_run_verification_failed' : 'routine_run_verified', actor: ACTOR, metadata: { taskId: task.id, writes: audit.uses, matched: audit.matched, problems: audit.problems.slice(0, 5) } });
+                if (audit.problems.length) enqueueNotification(db, { kind: 'task_failed', sourceId: `sched-verify:${attemptId}`, title: `Routine "${task.title}": a file does not match what was written`, body: audit.problems.join('; ') });
+              }
+            } catch { /* the audit record is best effort; the grant-use rows stay */ }
             try {
               const outcome = deriveResultStatus(db, attemptId);
               if (outcome.status !== 'completed' && outcome.status !== 'running' && outcome.status !== 'cancelled') {

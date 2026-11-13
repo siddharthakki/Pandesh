@@ -1897,6 +1897,41 @@ CREATE TABLE IF NOT EXISTS social_drafts (
 CREATE INDEX IF NOT EXISTS idx_social_drafts_status ON social_drafts(status, updatedAt);
 `;
 
+/**
+ * Standing write grants for unattended routines: one owner-approved, revocable grant per scheduled task, bound by a
+ * fingerprint of the task's instruction, folder, model, allowed operations and limits. Each use is audited and verified.
+ */
+const MIGRATION_52_ROUTINE_WRITE_GRANTS = `
+CREATE TABLE IF NOT EXISTS routine_write_grants (
+  id TEXT PRIMARY KEY,
+  taskId TEXT NOT NULL,
+  fingerprint TEXT NOT NULL,
+  frozenJson TEXT NOT NULL,
+  status TEXT NOT NULL,
+  grantedBy TEXT NOT NULL,
+  grantedAt TEXT NOT NULL,
+  revokedBy TEXT,
+  revokedAt TEXT,
+  revokeReason TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_routine_write_grants_task ON routine_write_grants(taskId, status);
+CREATE TABLE IF NOT EXISTS routine_write_grant_uses (
+  id TEXT PRIMARY KEY,
+  grantId TEXT NOT NULL,
+  taskId TEXT NOT NULL,
+  attemptId TEXT NOT NULL,
+  path TEXT NOT NULL,
+  contentDigest TEXT NOT NULL,
+  contentBytes INTEGER NOT NULL,
+  readbackMatched INTEGER NOT NULL,
+  finalCheck TEXT,
+  finalCheckedAt TEXT,
+  createdAt TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_routine_write_grant_uses_attempt ON routine_write_grant_uses(attemptId);
+CREATE INDEX IF NOT EXISTS idx_routine_write_grant_uses_grant ON routine_write_grant_uses(grantId);
+`;
+
 export const MIGRATIONS: Migration[] = [
   { version: 1, description: 'bootstrap core_metadata and schema_migrations', sql: MIGRATION_1_BOOTSTRAP },
   { version: 2, description: 'M31 domain schema (projects/repositories/stories/events/etc.)', sql: MIGRATION_2_DOMAIN },
@@ -1949,6 +1984,7 @@ export const MIGRATIONS: Migration[] = [
   { version: 49, description: 'Second Brain: knowledge sources, rebuildable chunks, structural links and a full-text index', sql: MIGRATION_49_SECOND_BRAIN },
   { version: 50, description: 'Social Studio drafts and the user decisions on them (no publishing)', sql: MIGRATION_50_SOCIAL_DRAFTS },
   { version: 51, description: 'Tool execution journal: structured, conversation- and agent-scoped record of every completed tool call (ids, paths, artifacts, status, bounded result)', sql: MIGRATION_51_TOOL_EXECUTION_JOURNAL },
+  { version: 52, description: 'Standing write grants for unattended routines (per task, frozen folder and operations, revocable) and their audited uses', sql: MIGRATION_52_ROUTINE_WRITE_GRANTS },
 ];
 
 

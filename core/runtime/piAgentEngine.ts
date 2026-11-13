@@ -93,7 +93,8 @@ import { GOOGLE_SETUP_WHERE, navigationPromptLines } from '../domain/productNavi
 import { navigateTo } from '../domain/uiNavigation';
 import { destinationsFor, parseUiSurface, type UiSurface } from '../shared/uiDestinations';
 import { recordExecutionQuality } from '../domain/executionQuality';
-import { AUTHORIZE_MISSION_TOOL, buildWorkspaceWriteEnvelope, createPendingMissionAuthorization, evaluateAuthorizedDispatch, evaluateMissionAction, getMissionAuthorization, markMissionAuthorized, markMissionRejected, protectedWriteReason, recordAuthorizedAction } from './missionAuthorization';
+import { checkGrantForWrite, grantContentDigest, recordGrantUse, scheduledTaskOfAttempt } from '../domain/routineWriteGrants';
+import { AUTHORIZE_MISSION_TOOL,buildWorkspaceWriteEnvelope, createPendingMissionAuthorization, evaluateAuthorizedDispatch, evaluateMissionAction, getMissionAuthorization, markMissionAuthorized, markMissionRejected, protectedWriteReason, recordAuthorizedAction } from './missionAuthorization';
 import { NON_WORKSPACE_MARKERS } from '../domain/taskToolSurface';
 import { announcesWorkStarting, asksAboutConversationTask, auditPromises, classifyStatusRequest, composeStatusAnswer, describeConversationTask, hasActiveWorker, hasRecentGmailWork, latestConversationTask, type StatusTopic } from './assistantStatus';
 import { notificationCapability } from '../domain/notificationOutbox';
@@ -1674,7 +1675,7 @@ export class PiAgentEngine implements EngineAdapter {
     }
 
     type WriteGrant =
-      | { ok: true; source: 'mission_envelope' | 'human_approval'; reason: string; approvalId?: string; mission?: { id: string; digest: string; normalizedPath?: string; contentDigest?: string; contentBytes?: number } }
+      | { ok: true; source: 'mission_envelope' | 'human_approval' | 'standing_grant'; reason: string; approvalId?: string; standingGrantId?: string; mission?:{ id: string; digest: string; normalizedPath?: string; contentDigest?: string; contentBytes?: number } }
       | { ok: false; reason: string; text: string };
 
     /** What a file is right now ("absent", or its size and SHA-256): compared before and after an approval card. */
@@ -1719,6 +1720,30 @@ export class PiAgentEngine implements EngineAdapter {
         if (mission?.status === 'rejected') {
           return notDone('the user declined file changes for this task', 'Not written: the user declined file changes in this workspace for this task. Nothing was changed. Ask the user how to proceed.');
         }
+        // An unattended routine the owner gave a standing write permission to (Core checks it afresh every run: the
+        // routine's instruction, folder, model and limits must still be exactly what was approved). Only write_file, only
+        // inside the frozen folder; every path, link and credential check below still applies.
+        if (!mission && scheduledRunOrigin()) {
+          const taskId = scheduledTaskOfAttempt(db, attemptId);
+          if (taskId) {
+            const check = checkGrantForWrite(db, taskId, selectedWorkspace);
+            if (check.ok) {
+              const g = check.grant;
+              const standingEnvelope = {
+                ...envelope,
+                objective: `Standing permission ${g.id} for the routine ${taskId}`,
+                allowedMutationScope: [`create or modify text files inside ${g.frozen.folder}, for this routine only (standing permission)`],
+                fileChangeLimits: { ...g.frozen.limits },
+              };
+              try {
+                mutateWithBroadcast(db, broadcaster, () => { createPendingMissionAuthorization(db, attemptId, standingEnvelope); markMissionAuthorized(db, attemptId, `standing_grant:${g.id}`); });
+                mission = getMissionAuthorization(db, attemptId);
+              } catch { mission = null; }
+            } else if (check.grantId) {
+              safeRecordRuntimeEvent(db, broadcaster, attemptId, 'standing_grant_not_applied', { taskId, grantId: check.grantId, reason: check.reason }, actor);
+            }
+          }
+        }
         if (!mission || mission.status !== 'authorized') {
           try {
             mission = mutateWithBroadcast(db, broadcaster, () => createPendingMissionAuthorization(db, attemptId, envelope));
@@ -1756,8 +1781,9 @@ export class PiAgentEngine implements EngineAdapter {
         }
         const verdict = evaluateAuthorizedDispatch(db, { attemptId, toolName: 'write_file', arguments: writeArgs });
         if (verdict.decision === 'auto_authorize' && verdict.authorization) {
+          const standingGrantId = verdict.authorization.authorizedBy?.startsWith('standing_grant:') ? verdict.authorization.authorizedBy.slice('standing_grant:'.length) : undefined;
           return {
-            ok: true, source: 'mission_envelope', reason: verdict.reason,
+            ok: true, source: standingGrantId ? 'standing_grant' : 'mission_envelope', reason: verdict.reason, standingGrantId,
             mission: { id: verdict.authorization.id, digest: verdict.authorization.digest, normalizedPath: verdict.normalizedPath, contentDigest: verdict.contentDigest, contentBytes: verdict.contentBytes },
           };
         }
@@ -3358,6 +3384,14 @@ export class PiAgentEngine implements EngineAdapter {
             fs.mkdirSync(path.dirname(full), { recursive: true });
             fs.writeFileSync(full, args.content, 'utf8');
             folderLedger.noteWritten(full);
+            // A write made under a standing permission is read back and checked by Core itself, and recorded per use.
+            if (grant.standingGrantId) {
+              const taskId = scheduledTaskOfAttempt(db, attemptId) ?? '';
+              let readbackMatched = false;
+              try { readbackMatched = grantContentDigest(fs.readFileSync(full, 'utf8')) === grantContentDigest(String(args.content)); } catch { readbackMatched = false; }
+              try { mutateWithBroadcast(db, broadcaster, () => recordGrantUse(db, { grantId: grant.standingGrantId!, taskId, attemptId, path: full, contentDigest: grantContentDigest(String(args.content)), contentBytes: Buffer.byteLength(String(args.content), 'utf8'), readbackMatched })); } catch (err) { console.error('[piAgentEngine] Failed to audit a standing-grant write:', err); }
+              if (!readbackMatched) return refuse(`NOT VERIFIED: ${path.basename(full)} was written but reading it back did not return the same text. Do not report it as done.`, 'readback mismatch');
+            }
             const changeView = fileActivity(full, { diff: redactCredentialShapes(unifiedDiff(before, String(args.content ?? ''), workspaceRelative(full) ?? path.basename(full))) });
             try {
               mutateWithBroadcast(db, broadcaster, () => {
@@ -3382,6 +3416,7 @@ export class PiAgentEngine implements EngineAdapter {
                     reason: grant.reason,
                     mode: frozenPermissionFor(db, [attemptId]).mode,
                     approvalId: grant.approvalId ?? null,
+                    standingGrantId: grant.standingGrantId ?? null,
                     missionAuthorizationId: grant.mission?.id ?? null,
                     envelopeDigest: grant.mission?.digest ?? null,
                     contentBytes: Buffer.byteLength(args.content, 'utf8'),
