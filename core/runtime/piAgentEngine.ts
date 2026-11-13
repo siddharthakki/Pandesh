@@ -79,6 +79,7 @@ import {
 import { finalizeTaskOutcome, ensureTaskOutcome, listTaskOutcomes, objectiveFromRequest, updateTaskOutcome } from '../domain/taskOutcomes';
 import { isInspectionOrAdvisoryOnly } from '../domain/actionIntent';
 import { evaluateTurnOutcome } from './turnOutcome';
+import { deliverableLedger, unbackedWorkingClaim, type LedgerResult } from './deliverableLedger';
 import { resolveActiveProject, isProjectInspectionRequest, gatherProjectEvidence, formatProjectEvidenceForModel, composeEvidenceAnswer, isReplyGroundedInProject, isLocalModelEndpoint } from './projectContext';
 import { resolveTimeExpression, localWallTimeToIso as zonedWallToIso, utcOffsetLabel as zoneOffsetLabel, upcomingDaysTable, isValidTimeZone } from '../domain/timeResolution';
 import { cancelScheduledTask, createScheduledTask, listScheduledTasks } from '../domain/scheduledTasks';
@@ -3654,8 +3655,19 @@ export class PiAgentEngine implements EngineAdapter {
           required: ['command'],
         },
         execute: async (_id: string, args: any) => {
-          const targetDir = args.workspacePath ? path.resolve(args.workspacePath) : (selectedWorkspace || inspectedPath);
-          if (!targetDir || !isPathAuthorized(targetDir)) {
+          // A relative workspacePath ("." or "bugfix") means relative to the selected folder, never to the Core process's own
+          // working directory (audit G10: 51 of 138 run_checks calls failed in production, partly from this).
+          const baseDir = selectedWorkspace || inspectedPath;
+          const targetDir = args.workspacePath
+            ? (path.isAbsolute(String(args.workspacePath)) || !baseDir ? path.resolve(args.workspacePath) : path.resolve(baseDir, String(args.workspacePath)))
+            : baseDir;
+          if (!targetDir) {
+            return {
+              content: [{ type: 'text', text: 'Error: No folder is selected, so nothing can be run. The check did NOT run. Ask the user to pick a folder, or answer without claiming the command was verified.' }],
+              isError: true,
+            };
+          }
+          if (!isPathAuthorized(targetDir)) {
             return {
               content: [{ type: 'text', text: `Error: Working directory "${targetDir}" is outside the authorized scope.` }],
               isError: true,
@@ -6500,6 +6512,42 @@ When the user asks to continue, resume, or check progress/updates, resume this w
       }
     }
 
+    // M1 deliverable ledger: what the request asked to exist, checked against the file system (audit S21: six files asked,
+    // four written, "verified"). One "still missing" nudge, then whatever is still absent makes the turn PARTIAL.
+    let deliverables: LedgerResult | null = null;
+    if (!cloudTarget && !signal?.aborted && finalReply && selectedWorkspace) {
+      const writtenFilesNow = () => toolCallsRecorded
+        .filter((t) => t.status === 'completed' && t.tool === 'write_file' && !(t.result as { isError?: boolean } | undefined)?.isError)
+        .map((t) => String((t.args as { filePath?: string } | undefined)?.filePath ?? ''))
+        .filter(Boolean).map((p) => path.resolve(selectedWorkspace, p));
+      const judge = () => deliverableLedger({ requestText, workspace: selectedWorkspace, writtenFiles: writtenFilesNow(), turnStartMs: startTime });
+      try {
+        deliverables = judge();
+        if (deliverables.missing.length > 0 && tools.some((t) => t.name === 'write_file')) {
+          safeRecordRuntimeEvent(db, broadcaster, attemptId, 'deliverables_missing', { missing: deliverables.missing, present: deliverables.present }, actor);
+          const floor = agent.state.messages.length;
+          activeToolNames.add('write_file');
+          await agent.prompt(`Deliverable check by Pandesh: the request is not finished — still missing: ${deliverables.missing.join('; ')}. Create exactly these now with write_file (the folder is the selected one), then give your final answer stating what exists. If something cannot be created, say which and why; do not say it exists.`);
+          await agent.waitForIdle();
+          const retried = lastAssistantTextFrom(floor);
+          if (retried && !isTruncationArtifact(retried)) finalReply = retried;
+          deliverables = judge();
+        }
+        if (deliverables.expected.length > 0) safeRecordRuntimeEvent(db, broadcaster, attemptId, 'deliverable_ledger', { expected: deliverables.expected, missing: deliverables.missing, present: deliverables.present }, actor);
+      } catch (err: any) {
+        safeRecordRuntimeEvent(db, broadcaster, attemptId, 'deliverable_ledger_failed', { error: err?.message ?? String(err) }, actor);
+      }
+    }
+    // Verification is a deliverable too (audit S16): a reply that says "works" after this turn's own check failed.
+    if (!signal?.aborted && finalReply) {
+      const unbacked = unbackedWorkingClaim(finalReply, toolCallsRecorded);
+      if (unbacked) {
+        deliverables = deliverables ?? { expected: [], missing: [], present: [] };
+        deliverables.expected.push(unbacked); deliverables.missing.push(unbacked);
+        safeRecordRuntimeEvent(db, broadcaster, attemptId, 'unbacked_working_claim', { detail: unbacked }, actor);
+      }
+    }
+
     // A reply may not promise background work or a notification that nothing is set up to deliver. Judged after every
     // continuation above: appended earlier, this correction became the reply's last paragraph, so the "do the step you
     // announced" check read the correction instead of the model's promise and never fired (widget chat, 2026-11-12).
@@ -6784,6 +6832,13 @@ When the user asks to continue, resume, or check progress/updates, resume this w
       turnOutcome = { verdict: 'verified', reason: `answered from ${projectEvidence.filesRead.length} file(s) read in ${projectEvidence.root}${projectReplyReplaced ? ' (reply replaced by evidence-only answer)' : ''}`, performed: ['project_inspection'], refused: [], failed: [] };
       try { mutateWithBroadcast(db, broadcaster, () => { ensureTaskOutcome(db, { attemptId, conversationId: conversationId || null, requestId, objective: objectiveFromRequest(requestText) }); }); } catch {}
     }
+    // M1: a deliverable the request named (or its own output links to) is not there. Whatever else succeeded, the task is
+    // PARTIAL, never 'verified' (audit S21). A refused action stays 'unverified' (nothing happened at all).
+    if (deliverables && deliverables.missing.length > 0 && (turnOutcome.verdict === 'verified' || turnOutcome.verdict === 'conversational' || turnOutcome.verdict === 'attempted_failed')) {
+      const have = deliverables.present.length ? `These exist: ${deliverables.present.join(', ')}. ` : '';
+      turnOutcome = { verdict: 'partial', reason: `Partly done: still missing ${deliverables.missing.join('; ')}`, performed: turnOutcome.performed, refused: turnOutcome.refused, failed: turnOutcome.failed };
+      finalReply += `\n\n**Checked by Pandesh — deliverables:** ${have}Missing: ${deliverables.missing.join('; ')}. The task is partly done, not complete.`;
+    }
     if (turnOutcome.verdict === 'unverified' && !/not (done|available|created|sent|made|run|granted)|declined|could not|was not|wasn't|untouched|nothing (?:was )?changed|denied/i.test(finalReply)) {
       // The reply must not leave the impression that the work happened.
       finalReply += `\n\nCorrection: ${turnOutcome.reason}.`;
@@ -6877,7 +6932,7 @@ When the user asks to continue, resume, or check progress/updates, resume this w
           actor,
           metadata: {
             // The truth: a turn whose requested work was refused or unanswered did not pass.
-            passed: turnOutcome.verdict !== 'unverified' && !isUnanswered,
+            passed: turnOutcome.verdict !== 'unverified' && turnOutcome.verdict !== 'partial' && !isUnanswered,
             verdict: turnOutcome.verdict,
             reason: turnOutcome.reason,
             performed: turnOutcome.performed,
@@ -6930,7 +6985,7 @@ When the user asks to continue, resume, or check progress/updates, resume this w
     // reported as a completed task. A turn whose action ran and failed
     // (a build that does not compile) DID do its job of finding that out, so
     // it completes; the failure lives in the task record and the evidence.
-    if (turnOutcome.verdict === 'unverified') {
+    if (turnOutcome.verdict === 'unverified' || turnOutcome.verdict === 'partial') {
       try {
         mutateWithBroadcast(db, broadcaster, () => {
           failAttempt(db, attemptId, {
@@ -6945,7 +7000,7 @@ When the user asks to continue, resume, or check progress/updates, resume this w
           durationMs: Date.now() - startTime,
           modelCalls: modelCalls.length,
           modelMs: modelCalls.reduce((sum, call) => sum + call.totalMs, 0),
-          outcome: 'unverified',
+          outcome: turnOutcome.verdict,
           reason: turnOutcome.reason,
         }, actor);
         return { success: false, reply: finalReply };

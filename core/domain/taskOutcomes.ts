@@ -326,7 +326,7 @@ export function ensureTaskOutcome(
 export function finalizeTaskOutcome(
   db: CoreDatabase,
   attemptId: string,
-  outcome: { verdict: 'verified' | 'unverified' | 'attempted_failed' | 'conversational'; reason: string; performed: string[]; refused: string[]; failed: string[] },
+  outcome: { verdict: 'verified' | 'unverified' | 'attempted_failed' | 'conversational' | 'partial'; reason: string; performed: string[]; refused: string[]; failed: string[] },
   context: { answerMessageId?: string | null } = {},
 ): TaskOutcomeRecord | undefined {
   const existing = getTaskOutcome(db, attemptId);

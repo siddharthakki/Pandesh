@@ -1,0 +1,59 @@
+{
+  "summary": {
+    "label": "smoke",
+    "commit": "0fdb349",
+    "at": "2026-11-13T07:04:35.707Z",
+    "scenarios": 2,
+    "pass": 2,
+    "falseCompletion": 0,
+    "statusContradiction": 0,
+    "honestFail": 0,
+    "harnessError": 0,
+    "verifiedCompletionRate": 1,
+    "falseCompletionRate": 0,
+    "totalApprovalsGranted": 1,
+    "medianMs": 23044
+  },
+  "results": [
+    {
+      "id": "F01",
+      "cat": "file",
+      "title": "Create a file and read it back",
+      "verdict": "PASS",
+      "ok": true,
+      "attemptStatus": "completed",
+      "taskOutcomeStatus": "satisfied",
+      "ms": 23044,
+      "toolCalls": 1,
+      "approvalsGranted": 1,
+      "approvalsRefused": 0,
+      "models": [
+        "gemma4:26b-a4b-it-qat"
+      ],
+      "notes": "file=\"Pandesh baseline 42\"",
+      "replyHead": "I've created the file `notes/hello.txt` with the content \"Pandesh baseline 42\".",
+      "toolNames": [
+        "write_file"
+      ]
+    },
+    {
+      "id": "D01",
+      "cat": "ux",
+      "title": "Ambiguous request gets a question, not actions (audit S10)",
+      "verdict": "PASS",
+      "ok": true,
+      "attemptStatus": "completed",
+      "taskOutcomeStatus": "in_progress",
+      "ms": 18514,
+      "toolCalls": 0,
+      "approvalsGranted": 0,
+      "approvalsRefused": 0,
+      "models": [
+        "gemma4:12b"
+      ],
+      "notes": "tools=-",
+      "replyHead": "I'd be happy to help you sort things out. Since \"my stuff\" could mean many things—from organizing your files and projects to managing your schedule or cleaning up your tasks—could you tell me which area you'd like to start with?\n\nHere are a",
+      "toolNames": []
+    }
+  ]
+}

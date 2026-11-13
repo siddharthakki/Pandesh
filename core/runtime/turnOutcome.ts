@@ -35,6 +35,8 @@ export type TurnOutcomeVerdict =
   | 'unverified'
   /** A consequential action ran and returned a failure result. */
   | 'attempted_failed'
+  /** Some of what the request asked for exists and some does not (deliverable ledger, M1). */
+  | 'partial'
   /** The turn only read, or only talked. Nothing to verify. */
   | 'conversational';
 

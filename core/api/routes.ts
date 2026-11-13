@@ -58,6 +58,7 @@ import * as attachments from '../domain/attachments';
 import * as artifacts from '../domain/artifacts';
 import * as requests from '../domain/requests';
 import * as attempts from '../domain/attempts';
+import { deriveResultStatus } from '../domain/resultStatus';
 import { listTaskOverview } from '../domain/taskOverview';
 import * as modelInvocations from '../domain/modelInvocations';
 import * as toolInvocations from '../domain/toolInvocations';
@@ -1323,7 +1324,13 @@ export function buildRouter(
     return { status: 200, body: { attempts: attempts.listAttempts(ctx.db, { requestId, status, activeOnly, limit, offset }) } };
   });
 
-  router.get('/v1/attempts/:id', (ctx, match) => ({ status: 200, body: attempts.getAttempt(ctx.db, match.params.id) }));
+  // `resultStatus` is the work's result (completed | partial | blocked | failed | cancelled | interrupted | running), derived from
+  // what Core recorded; `status` stays the attempt's lifecycle state. Consumers that show "did it work" read resultStatus.
+  router.get('/v1/attempts/:id', (ctx, match) => {
+    const attempt = attempts.getAttempt(ctx.db, match.params.id);
+    const result = deriveResultStatus(ctx.db, match.params.id);
+    return { status: 200, body: { ...attempt, resultStatus: result.status, resultReason: result.reason } };
+  });
   router.get('/v1/attempts/:id/context', (ctx, match) => ({ status: 200, body: getAttemptContext(ctx.db, match.params.id) }));
 
   // --- M32 Priority 1: Core-owned execution ---
