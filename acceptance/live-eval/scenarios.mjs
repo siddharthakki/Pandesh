@@ -84,7 +84,9 @@ export const SCENARIOS = [
     let tasks = []; try { tasks = JSON.parse(proj[0]?.productContext ?? '{}').tasks ?? []; } catch {}
     const by = (re) => tasks.find((x) => re.test(x.title));
     const wood = by(/wood/i), frame = by(/frame/i), paint = by(/paint/i);
-    const dates = wood?.dueAt?.startsWith('2026-12-01') && frame?.dueAt?.startsWith('2026-12-10') && paint?.dueAt?.startsWith('2026-12-20');
+    // Stored as UTC instants; the owner's date is the LOCAL day of that instant (Dec 1 00:00 Berlin = Nov 30 23:00Z).
+    const localDay = (iso) => { const d = new Date(iso); return Number.isNaN(d.getTime()) ? '' : `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; };
+    const dates = localDay(wood?.dueAt) === '2026-12-01' && localDay(frame?.dueAt) === '2026-12-10' && localDay(paint?.dueAt) === '2026-12-20';
     const prio = wood?.priority === 'high' && frame?.priority === 'normal' && paint?.priority === 'low';
     const dep = Boolean(frame?.blockedBy) || /wood/i.test(JSON.stringify(frame?.notes ?? ''));
     return { turns: [t], ok: proj.length === 1 && tasks.length === 3 && !!dates && !!prio && dep, notes: `projects=${proj.length} tasks=${tasks.length} dates=${!!dates} priorities=${!!prio} dependencyKept=${dep}` };

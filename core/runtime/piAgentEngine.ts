@@ -1248,7 +1248,7 @@ export class PiAgentEngine implements EngineAdapter {
     const pendingInvocations: string[] = [];
     /** Calls that failed this turn, by tool+arguments, with why: an identical retry learns nothing new. */
     const failedCalls = new Map<string, string>();
-    const replayWarned = new Set<string>();
+    const replayWarned = new Map<string, number>(); // call signature -> tool calls recorded when it was refused
     let refusedRepeats = 0;
     const callSignature = (name: string, args: unknown) => `${name}:${JSON.stringify(args ?? {}, (_k, v) => (v && typeof v === 'object' && !Array.isArray(v) ? Object.fromEntries(Object.entries(v).sort()) : v))}`;
 
@@ -5563,8 +5563,11 @@ When the user asks to continue, resume, or check progress/updates, resume this w
           // An 'unknown' twin is refused ONCE with the instruction to check the real state; if the model repeats the identical
           // call after that, it has been told, and the call proceeds (otherwise the task could never finish).
           const warnKey = `${toolName}:${JSON.stringify(args)}`;
-          const letThrough = twin?.kind === 'unknown' && replayWarned.has(warnKey);
-          if (twin?.kind === 'unknown') replayWarned.add(warnKey);
+          // ...and only after the model really looked: a read-only call between the refusal and the repeat. A bare repeat stays refused.
+          const warnedAt = replayWarned.get(warnKey);
+          const checked = warnedAt !== undefined && toolCallsRecorded.slice(warnedAt).some((t) => t.status === 'completed' && !isConsequentialTool(t.tool));
+          const letThrough = twin?.kind === 'unknown' && checked;
+          if (twin?.kind === 'unknown' && warnedAt === undefined) replayWarned.set(warnKey, toolCallsRecorded.length);
           if (twin && !letThrough) {
             safeRecordRuntimeEvent(db, broadcaster, attemptId, 'replay_prevented', { toolName, kind: twin.kind, earlierAttemptId: twin.attemptId, earlierInvocationId: twin.invocationId }, actor);
             // A call that already succeeded earlier counts as performed for this task's outcome; an unknown one does not.
