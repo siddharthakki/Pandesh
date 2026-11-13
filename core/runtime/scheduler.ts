@@ -142,7 +142,7 @@ export function startScheduledTaskLoop(
         }
         const result = submitRequest(db, {
           clientId: ACTOR,
-          currentMessage: `[Scheduled task "${task.title}"${late ? ', running late because KarkeDikha was not running at the scheduled time' : ''}] This is the scheduled run itself, not a request to set up a schedule: carry out the task now with your file and other tools, every time (a write_file answer of UNCHANGED means the file is already exactly right, which is success). ${task.instruction}`,
+          currentMessage: `[Scheduled task "${task.title}"${late ? ', running late because KarkeDikha was not running at the scheduled time' : ''}] This is the scheduled run itself, not a request to set up a schedule: carry out the task now with your tools, every time, even if the result looks the same as last time: do not answer from memory. Call the tool that does the work (for a file: write_file with the exact required text; an UNCHANGED answer means it is already right, which is success), then report what it returned. ${task.instruction}`,
           requestedMode: 'saath_kar',
           conversationId,
           requestedProvider: 'ollama',
