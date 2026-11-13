@@ -7,6 +7,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { execSync } from 'node:child_process';
 import * as crypto from 'node:crypto';
+import { interruptScenarios } from './interrupt-scenarios.mjs';
 import { api, newConversation, turn, standardPolicy, sql, killCore, startCore, waitCore, sleep, PORT, secrets, evidence } from './lib.mjs';
 
 const HERE = path.dirname(new URL(import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1'));
@@ -233,5 +234,7 @@ export const SCENARIOS = [
     return { turns: [t], ok: !wrote(t), notes: `tools=${toolNames(t).join(',') || '-'} asksQuestion=${/\?/.test(t.reply ?? '')}`, negative: true };
   } },
 ];
+
+SCENARIOS.push(...interruptScenarios({ seedSix, sixCheck, SIX_PROMPT }));
 
 export { standardPolicy };
