@@ -55,3 +55,18 @@ describe('deriveResultStatus', () => {
     expect(deriveResultStatus(db, a).status).toBe('completed');
   });
 });
+
+import { unfinishedAttempts, personalOverview } from '../domain/personalContext';
+describe('unfinished tasks in the personal overview (audit S14)', () => {
+  it('lists interrupted, partial and failed tasks from any conversation, not continued ones, not cancelled ones', () => {
+    const a = attempt('failed', `${INTERRUPTED_PREFIX} KarkeDikha restarted while this task was running.`);
+    attempt('failed', `${PARTIAL_PREFIX} still missing x.md`);
+    attempt('cancelled');
+    attempt('completed');
+    const continued = attempt('failed', 'the model server stopped'); db.run('UPDATE attempts SET predecessorAttemptId = ? WHERE id = ?', [continued, attempt('completed')]);
+    const list = unfinishedAttempts(db, new Date(Date.now() - 86_400_000).toISOString());
+    expect(list.map((t) => t.result).sort()).toEqual(['interrupted', 'partial']);
+    expect(list.find((t) => t.id === a)?.result).toBe('interrupted');
+    expect(personalOverview(db, { focus: 'unfinished' })).toMatch(/Tasks that did NOT finish[\s\S]*interrupted "x"/);
+  });
+});
