@@ -3,7 +3,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { api, newConversation, sql, killCore, startCore, waitCore, sleep, evidence } from './lib.mjs';
 
-const chainOf = (attemptId) => `(select id from attempts where requestId = (select requestId from attempts where id = '${String(attemptId).replace(/[^a-z0-9_]/gi, '')}'))`;
+const chainOf = (attemptId) => `(select id from attempts where requestId = (select requestId from attempts where id = '${String(attemptId).replace(/[^a-z0-9_-]/gi, '')}'))`;
 const chainWrites = (attemptId) => sql(`select count(*) n from tool_invocations where toolName = 'write_file' and status = 'succeeded' and attemptId in ${chainOf(attemptId)}`)[0]?.n ?? 0;
 const dupWritesOf = (attemptId) => sql(`select argsSummary, count(*) n from tool_invocations where toolName = 'write_file' and status = 'succeeded' and attemptId in ${chainOf(attemptId)} group by argsSummary having n > 1`);
 const attemptsOfRequest = (attemptId) => sql('select count(*) n from attempts where requestId = (select requestId from attempts where id = ?)', attemptId)[0]?.n ?? 0;
@@ -31,16 +31,16 @@ export function interruptScenarios({ seedSix, sixCheck, SIX_PROMPT }) {
     if (resumeTwice) { const again = await api(`/v1/attempts/${k.attemptId}/resume`, { method: 'POST', body: {} }); if (again.attempt.id !== last.id) return { turns: [k], ok: false, notes: 'second Resume created a second successor' }; }
     if (second) {
       const t0 = Date.now();
-      while (Date.now() - t0 < 240000 && !second(k.attemptId)) { await sleep(500); const a = await api(`/v1/attempts/${last.id}`); if (['completed', 'failed', 'cancelled'].includes(a.status)) break; }
-      const state = await api(`/v1/attempts/${last.id}`);
-      if (second(k.attemptId) && state.status !== 'completed') {
-        killCore(); kills = 2; if (!(await restartCore())) return { turns: [k], ok: false, notes: 'core did not return after the second kill' };
-        res = await api(`/v1/attempts/${last.id}/resume`, { method: 'POST', body: {} }); last = res.attempt;
+      for (let i = 0; Date.now() - t0 < 240000 && !second(k.attemptId); i++) { await sleep(20); if (i % 25 === 0) { const a = await api(`/v1/attempts/${last.id}`); if (['completed', 'failed', 'cancelled'].includes(a.status)) break; } }
+      if (second(k.attemptId)) {
+        killCore(); if (!(await restartCore())) return { turns: [k], ok: false, notes: 'core did not return after the second kill' };
+        const state = await api(`/v1/attempts/${last.id}`);
+        if (state.status === 'completed') { /* it finished before the kill landed: no second interruption this run */ } else { kills = 2; res = await api(`/v1/attempts/${last.id}/resume`, { method: 'POST', body: {} }); last = res.attempt; }
       }
     }
     const fin = await waitAttempt(last.id);
     const missing = sixCheck(c.ws); const dupes = dupWritesOf(k.attemptId);
-    return { turns: [await turnFor(conv.id, fin)], ok: up && missing.length === 0 && dupes.length === 0 && autoSuccessors === 0 && before.resultStatus === 'interrupted' && listed?.resumable === true,
+    return { turns: [await turnFor(conv.id, fin)], error: !!second && kills < 2, ok: up && missing.length === 0 && dupes.length === 0 && autoSuccessors === 0 && before.resultStatus === 'interrupted' && listed?.resumable === true,
       notes: `coreUp=${up} kills=${kills} interrupted=${before.resultStatus} listedResumable=${listed?.resumable} autoResumed=${autoSuccessors} attemptsInChain=${attemptsOfRequest(k.attemptId)} final=${fin?.resultStatus} missing=${missing.join(',') || '-'} duplicateWrites=${dupes.length} writes=${chainWrites(k.attemptId)}` };
   }
   const six = async (ws) => seedSix(ws);
@@ -58,14 +58,14 @@ export function interruptScenarios({ seedSix, sixCheck, SIX_PROMPT }) {
       return { turns: [t], ok: refused && attemptsOfRequest(attemptId) === 1 && listed?.resumable !== true, notes: `status=${t.status} refused=${refused} (${msg}) listedResumable=${listed?.resumable}`, negative: true };
     } },
     { id: 'I11', cat: 'interrupt', title: 'Kill after the reminder was created: resume creates no second reminder (M2, non-file action)', async run(c) {
-      const conv = await newConversation('I11');
-      const made = (a) => sql("select count(*) n from tool_invocations where attemptId = ? and toolName = 'create_reminder'", a)[0]?.n >= 1 && sql("select count(*) n from everyday_reminders where title like '%Keller%' or body like '%Keller%'")[0]?.n >= 1;
-      const k = await c.turn(conv.id, 'Remind me tomorrow at 9:00 to call Dr. Keller about the invoice.', { workspace: null, killWhen: made, timeoutMs: 180000 });
+      const conv = await newConversation('I11'); const who = `Keller${Math.random().toString(36).slice(2, 7)}`; // unique per run: repeats share one profile
+      const made = (a) => sql("select count(*) n from tool_invocations where attemptId = ? and toolName = 'create_reminder'", a)[0]?.n >= 1 && sql(`select count(*) n from everyday_reminders where title like '%${who}%' or body like '%${who}%'`)[0]?.n >= 1;
+      const k = await c.turn(conv.id, `Remind me tomorrow at 9:00 to call Dr. ${who} about the invoice.`, { workspace: null, killWhen: made, timeoutMs: 180000 });
       if (!k.killed) return { turns: [k], ok: false, error: true, notes: 'HARNESS: finished before the kill' };
       const up = await restartCore(); const before = await api(`/v1/attempts/${k.attemptId}`);
       let fin = null; let note = '';
       try { const r = await api(`/v1/attempts/${k.attemptId}/resume`, { method: 'POST', body: {} }); fin = await waitAttempt(r.attempt.id, 180000); } catch (e) { note = ` resume: ${String(e.message).slice(0, 100)}`; }
-      const n = sql("select count(*) n from everyday_reminders where (title like '%Keller%' or body like '%Keller%') and status != 'cancelled'")[0]?.n;
+      const n = sql(`select count(*) n from everyday_reminders where (title like '%${who}%' or body like '%${who}%') and status != 'cancelled'`)[0]?.n;
       return { turns: [fin ? await turnFor(conv.id, fin) : bare(k.attemptId, before)], ok: up && n === 1, notes: `coreUp=${up} interrupted=${before.resultStatus} reminders=${n} final=${fin?.resultStatus}${note}` };
     } },
     { id: 'I13', cat: 'interrupt', title: 'Restart with an approval pending: nothing runs by itself; Resume asks again (M2, owner policy)', setup: six, async run(c) {

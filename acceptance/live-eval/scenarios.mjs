@@ -29,7 +29,8 @@ const SIX_PROMPT = 'Analyze each of the six files in the inbox folder. For every
 const sixCheck = (ws) => {
   const names = ['meeting-note', 'invoice-alpenmilch', 'invoice-donau', 'invoice-ulmer', 'plan', 'readme'];
   const missing = names.filter((n) => !(read(path.join(ws, 'analysis', `${n}.analysis.md`)) ?? '').trim());
-  if (!(read(path.join(ws, 'analysis', 'index.md')) ?? '').trim()) missing.push('index');
+  const index = (read(path.join(ws, 'analysis', 'index.md')) ?? '').trim();
+  if (!index) missing.push('index'); else for (const n of names) if (!index.includes(n)) missing.push(`index-link:${n}`); // an index that links nothing is not an index
   return missing;
 };
 const hasRealDate = (d, hh) => { const x = new Date(d); return !Number.isNaN(x.getTime()) && x.getHours() === hh; };
