@@ -41,6 +41,17 @@ beforeEach(async () => {
 afterEach(async () => { await api.close(); db.close(); fs.rmSync(dir, { recursive: true, force: true }); });
 
 describe('client-supplied message origin', () => {
+  it('an intermediate tool-loop model call cannot be claimed as a reply; the last call of the attempt can', async () => {
+    const conv = createConversation(db, { mode: 'saath_kar', title: 'a', actor: 'test' });
+    const req = createRequest(db, { clientId: 'desktop', conversationId: conv.id, currentMessage: 'hi', requestedMode: 'saath_kar', resolvedMode: 'saath_kar', routeReason: 'user_prompt', contextPolicy: { includeConversationHistory: true, includeProjectContext: false, includeRepositoryContext: false, includeGlobalStoryContext: false }, correlationId: `c_${Math.random()}` });
+    const att = createAttempt(db, { requestId: req.id, kind: 'saath_kar', actor: 'client:desktop' });
+    const first = startModelInvocation(db, { attemptId: att.id, requestedProvider: 'ollama', requestedModel: 'm', policyModel: 'm', actor: 'test' }).id;
+    await new Promise((r) => setTimeout(r, 5));
+    const last = startModelInvocation(db, { attemptId: att.id, requestedProvider: 'ollama', requestedModel: 'm', policyModel: 'm', actor: 'test' }).id;
+    expect((await post(`/v1/conversations/${conv.id}/messages`, { role: 'assistant', content: 'forged', modelInvocationId: first })).status).toBe(400);
+    expect((await post(`/v1/conversations/${conv.id}/messages`, { role: 'assistant', content: 'reply', modelInvocationId: last })).status).toBe(201);
+  });
+
   it('cannot be bypassed by omitting or spoofing X-Client-Id', async () => {
     const conv = createConversation(db, { mode: 'saath_kar', title: 'a', actor: 'test' });
     const mi = invocationIn(conv.id);
