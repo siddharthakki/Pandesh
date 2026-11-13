@@ -111,7 +111,8 @@ describe('model descriptors', () => {
     expect(classifyFreeness(provider('gemini'), 'gemini-3.5-pro', undefined).freeness).toBe('unknown');
     expect(classifyFreeness(provider('cerebras'), 'gpt-oss-120b', undefined).freeness).toBe('promotional');
     expect(classifyFreeness(provider('cohere'), 'command-a', undefined).freeness).toBe('trial');
-    expect(classifyFreeness(provider('nvidia'), 'meta/llama', undefined).freeness).toBe('unknown');
+    // Owner, 2026-11-13: NVIDIA's API Catalog counts as free (it was "never" before).
+    expect(classifyFreeness(provider('nvidia'), 'meta/llama', undefined).freeness).toBe('free');
   });
 
   it('rejects malformed provider payloads', () => {

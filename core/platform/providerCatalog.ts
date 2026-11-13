@@ -279,12 +279,33 @@ export function compareCatalogVersions(a: string, b: string): number {
   return 0;
 }
 
+/**
+ * Providers derived at runtime from the free-model registry (owner, 2026-11-13: "i want all enabled"): every
+ * OpenAI-compatible https provider the registry lists that the shipped catalog has no entry for gets the generic
+ * OpenAI-compatible adapter. Shared by every ProviderCatalog instance in this process; a shipped entry always wins.
+ */
+let derivedProviders: readonly ProviderDescriptor[] = [];
+
+export function setDerivedProviders(providers: readonly ProviderDescriptor[]): void {
+  derivedProviders = providers;
+}
+
+export function getDerivedProviders(): readonly ProviderDescriptor[] {
+  return derivedProviders;
+}
+
 export class ProviderCatalog {
   private doc: ProviderCatalogDocument;
   constructor(doc: ProviderCatalogDocument = loadBuiltinCatalog()) { this.doc = doc; }
   get version(): string { return this.doc.catalogVersion; }
-  list(): readonly ProviderDescriptor[] { return this.doc.providers; }
-  get(id: string): ProviderDescriptor | undefined { return this.doc.providers.find(provider => provider.id === id); }
+  list(): readonly ProviderDescriptor[] {
+    if (derivedProviders.length === 0) return this.doc.providers;
+    const shipped = new Set(this.doc.providers.map(provider => provider.id));
+    return [...this.doc.providers, ...derivedProviders.filter(provider => !shipped.has(provider.id))];
+  }
+  get(id: string): ProviderDescriptor | undefined {
+    return this.doc.providers.find(provider => provider.id === id) ?? derivedProviders.find(provider => provider.id === id);
+  }
   has(id: string): boolean { return this.get(id) !== undefined; }
   replace(doc: ProviderCatalogDocument): void { this.doc = doc; }
   async refresh(options?: Parameters<typeof refreshProviderCatalog>[1]): Promise<CatalogRefreshResult> {
