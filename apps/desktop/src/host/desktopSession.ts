@@ -2261,9 +2261,10 @@ export class DesktopSession {
     const resolvedWorker = resolveWorkerProfile(worker);
     if (!resolvedWorker.ok) throw new Error(resolvedWorker.reason);
     this.selectedWorker = worker;
-    // A free cloud model picked before the chat runs the whole chat — history, Pandesh's tools and what they return —
-    // on that model (owner, 2026-11-12: "I need cloud model to work if that is selected before starting a chat").
-    // Only Pandesh's own assistant runs there; Core still refuses it unless the key is delivered and the model is free.
+    // A free cloud model picked before the chat runs the whole chat on that model (owner, 2026-11-12: "I need cloud model
+    // to work if that is selected before starting a chat"). Only Pandesh's own assistant runs there; Core still refuses it
+    // unless the key is delivered and the model is free, and Core's private-data boundary (core/runtime/cloudDataBoundary.ts)
+    // keeps tools that read files, email, calendar or memory, and earlier local turns, away from it.
     const useCloud = this.selectedInferenceProvider === 'cloud';
     let cloudSelection = useCloud ? this.selectedCloudSelection() : null;
     // Auto: the registry router's current pick (approved, keyed, verified free, qualified) becomes this chat's model.
@@ -2473,7 +2474,7 @@ export class DesktopSession {
             ? 'Operator explicitly selected OpenRouter for this submit'
             : `Operator explicitly selected local model ${model} (${this.provider!.source}); no substitution`,
         suitabilitySummary: useCloud
-          ? `Using ${selectedProvider} ${model} (free, cloud): this chat's messages and its tool results go to ${selectedProvider}. No local fallback.`
+          ? `Using ${selectedProvider} ${model} (free, cloud): this chat's messages, and files you attach to them, go to ${selectedProvider}. Your other files, email, calendar and memory stay on this PC; tools that read them are off in this chat. No local fallback.`
           : useOpenRouter
             ? `Using OpenRouter ${model} with a $${openRouterSelection!.maxUsd} cap. No fallback.`
             : `Using local ${model}. Cloud fallback is disabled.`,

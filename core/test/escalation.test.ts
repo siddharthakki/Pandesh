@@ -156,8 +156,9 @@ describe('maybeEscalate', () => {
 
     const report = chat().at(-1)!;
     expect(report).toMatch(/Want me to hand this to the cloud model z-ai\/glm-5\.3-flash-free/);
-    expect(report).toMatch(/the messages in this chat/);
-    expect(report).toMatch(/Gmail, Calendar or memory content/);
+    // The offer states the private-data boundary truthfully (audit 2026-11-12, SEC-2).
+    expect(report).toMatch(/this request, and which local models tried it/);
+    expect(report).toMatch(/does not receive your files, folders, attachments, email, calendar, memory or the earlier messages of this chat/);
     expect(report).toMatch(/Nothing has been sent yet\. Reply \*\*yes\*\*/);
 
     // The user's "yes" is the next message in the chat.

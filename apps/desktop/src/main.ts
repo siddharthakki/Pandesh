@@ -22,7 +22,7 @@ import {
   resolveBuildIdentity,
   type DesktopBuildIdentity,
 } from './host/desktopBuildIdentity';
-import { ownsLoginItem, readHostPreferences, resolveUiVariant, writeHostPreferences } from './host/desktopHostPreferences';
+import { googleConnectRefusal, isTestProfile, ownsLoginItem, readHostPreferences, resolveUiVariant, TEST_PROFILE_GOOGLE_ENV, windowTitleForProfile, writeHostPreferences } from './host/desktopHostPreferences';
 import { DESKTOP_CHANNELS, type DesktopAppMetadata, type DesktopUpdateStartResult, type DesktopUpdateStatus, type MobilePairingView } from './ipc';
 import {
   acknowledgeUpdateResult, inspectPackage, launchUpdater, quiesceCore, readCoreReadiness, readUpdateResult,
@@ -688,10 +688,11 @@ function deliverOutboxNotification(input: { id: string; title: string; body: str
 
 async function ensureMainWindow(): Promise<BrowserWindow> {
   if (window && !window.isDestroyed()) return window;
+  const windowTitle = windowTitleForProfile(dataDir, defaultDesktopDataDir());
   window = new BrowserWindow({
     width: 1100,
     height: 820,
-    title: 'Pandesh',
+    title: windowTitle,
     backgroundColor: '#090d15',
     icon: createAppIcon(),
     show: true,
@@ -705,6 +706,8 @@ async function ensureMainWindow(): Promise<BrowserWindow> {
     },
   });
   window.webContents.setBackgroundThrottling(false);
+  // A test copy keeps saying so: the page's own <title> must not replace "TEST COPY" (tracker item 23).
+  if (windowTitle !== 'Pandesh') window.on('page-title-updated', (event) => event.preventDefault());
   // A link in a conversation opens in the system browser, never in a second
   // Electron window. The URL is validated first: only credential-free http and
   // https targets are ever handed to the OS.
@@ -1151,13 +1154,22 @@ function registerIpc(): void {
   });
   ipcMain.handle(DESKTOP_CHANNELS.connectGmail, async () => {
     if (!session) throw new Error('desktop session is not started');
+    // Every Google connection leaves a line in the host log, and a test copy refuses (tracker item 23).
+    const refusal = googleConnectRefusal(dataDir, defaultDesktopDataDir());
+    if (refusal) {
+      hostLog(`Google connect refused: ${refusal}`);
+      throw new Error(refusal);
+    }
+    hostLog(`Google connect started from the Pandesh window (profile ${dataDir}${isTestProfile(dataDir, defaultDesktopDataDir()) ? `, TEST COPY allowed by ${TEST_PROFILE_GOOGLE_ENV}=1` : ''})`);
     const result = await session.connectGmail();
+    hostLog(`Google connect finished: ${result.connected ? `connected (calendar ${result.calendarAccess})` : `not connected${result.lastError ? ` (${String(result.lastError).slice(0, 200)})` : ''}`}`);
     sendSnapshot();
     return result;
   });
   ipcMain.handle(DESKTOP_CHANNELS.disconnectGmail, async () => {
     if (!session) throw new Error('desktop session is not started');
     const result = await session.disconnectGmail();
+    hostLog('Google disconnected from the Pandesh window; Gmail and Calendar permissions revoked in Core');
     sendSnapshot();
     return result;
   });
@@ -1204,7 +1216,15 @@ function registerIpc(): void {
   });
   ipcMain.handle(DESKTOP_CHANNELS.allowInboxOrganization, async () => {
     if (!session) throw new Error('desktop session is not started');
+    // A new Google consent (gmail.modify): the same test-copy rule and log line as Connect (tracker item 23).
+    const refusal = googleConnectRefusal(dataDir, defaultDesktopDataDir());
+    if (refusal) {
+      hostLog(`Google inbox organization refused: ${refusal}`);
+      throw new Error(refusal);
+    }
+    hostLog(`Google inbox organization (gmail.modify) consent started from the Pandesh window (profile ${dataDir})`);
     const result = await session.allowInboxOrganization();
+    hostLog(`Google inbox organization finished: ${result.inboxOrganization}`);
     sendSnapshot();
     return result;
   });
@@ -1276,6 +1296,7 @@ function registerIpc(): void {
   ipcMain.handle(DESKTOP_CHANNELS.clearGoogleOAuthClient, async () => {
     if (!session) throw new Error('desktop session is not started');
     const result = await session.clearGoogleOAuthClient();
+    hostLog('Google OAuth client removed and Google disconnected from the Pandesh window; Gmail and Calendar permissions revoked in Core');
     sendSnapshot();
     return result;
   });
