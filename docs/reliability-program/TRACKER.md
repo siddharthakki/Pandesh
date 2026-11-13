@@ -120,6 +120,14 @@ PR: draft https://github.com/siddharthakki/Pandesh/pull/82 (branch program/relia
 - Routines need the owner's approval for writes (design decision, see below).
 - Not covered: exactly-once for external connectors (email/calendar) beyond fail-closed; args/path variants of run_command; the UI card for resume exists only as the Tasks Resume button.
 
+## Update 2 (strategy revised: fix at source, targeted reruns, no long M3 reruns)
+
+Root causes found this round: (1) the M3 "first write" failure had two sources: a write held back for source evidence that the model never repeated (now one Core nudge, test heldWriteNudge.acceptance) and, in the later smoke, the word "inbox" in "the inbox folder" selecting the Gmail tool group (fixed in chatToolSelection; the same drift caused the I04 resumed-attempt failures). (2) Independent verifier (subagent, read-only) findings: only the attempt's LAST model call can be claimed as a reply (conversations.appendMessage); the UNCHANGED exemption is limited to write_file.
+
+Targeted evidence after the fixes: M1 full baseline m1-final-run3 33 scenarios 31 pass, 0 false completions, 0 contradictions, 2 honest fails (F03, C01); repeats m1-final-repeat4 (F02,F03,C01,P01,T01 x3) 12/15, only F03 fails (honest). M2 recheck 2 (m2-recheck, m2-recheck2: I03,I04,I06,I07,I13): no duplicate writes, no automatic resume; two runs were harness preconditions (task finished/partial before the kill, from the inbox drift). M3 smoke m3-smoke2: 3 simulated days all three routines OK (m3-smoke before the inbox fix: routine B failed 3/3). Desktop smoke desktop-smoke: 5/5.
+
+Open (verifier, not fixed): replay guard matches identical arguments only (a reworded reminder/mail/calendar call is not caught; run6 I06#2 rewrote files with different content before the guard changes); a pending-approval non-file call is treated as "unknown" on resume (I13 only exercises write_file); F03 turn awaiting approval ends completed/satisfied; M3 clean 7-day evidence is run8 only (routines A and C wrote UNCHANGED text each day, so only B proves writes; the harness presses Approve; notifications stay pending, no channel delivery tested).
+
 ## Not started
 Desktop request path measurement (needs a built app copy and the microtests CDP harness); M4 routing; M5 attachments/vision in v2; M6 memory proposals; M7 pilots;
 harness benchmark; cleanup. Real-Google tests stay blocked until the test-copy grant question above is closed.
