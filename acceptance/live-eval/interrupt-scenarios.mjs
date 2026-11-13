@@ -21,7 +21,7 @@ export function interruptScenarios({ seedSix, sixCheck, SIX_PROMPT }) {
   async function killResume(c, id, { kill, second, resumeTwice }) {
     const conv = await newConversation(id);
     const k = await c.turn(conv.id, SIX_PROMPT, { killWhen: kill, timeoutMs: 240000 });
-    if (!k.killed) return { turns: [k], ok: false, notes: 'the task finished before the kill (no interruption happened)', negative: true };
+    if (!k.killed) return { turns: [k], ok: false, error: true, notes: 'HARNESS: the task finished before the kill (no interruption happened)' };
     const up = await restartCore();
     const before = await api(`/v1/attempts/${k.attemptId}`);
     const listed = await overviewRow(k.attemptId);
@@ -61,7 +61,7 @@ export function interruptScenarios({ seedSix, sixCheck, SIX_PROMPT }) {
       const conv = await newConversation('I11');
       const made = (a) => sql("select count(*) n from tool_invocations where attemptId = ? and toolName = 'create_reminder'", a)[0]?.n >= 1 && sql("select count(*) n from everyday_reminders where title like '%Keller%' or body like '%Keller%'")[0]?.n >= 1;
       const k = await c.turn(conv.id, 'Remind me tomorrow at 9:00 to call Dr. Keller about the invoice.', { workspace: null, killWhen: made, timeoutMs: 180000 });
-      if (!k.killed) return { turns: [k], ok: false, notes: 'finished before the kill', negative: true };
+      if (!k.killed) return { turns: [k], ok: false, error: true, notes: 'HARNESS: finished before the kill' };
       const up = await restartCore(); const before = await api(`/v1/attempts/${k.attemptId}`);
       let fin = null; let note = '';
       try { const r = await api(`/v1/attempts/${k.attemptId}/resume`, { method: 'POST', body: {} }); fin = await waitAttempt(r.attempt.id, 180000); } catch (e) { note = ` resume: ${String(e.message).slice(0, 100)}`; }
@@ -71,7 +71,7 @@ export function interruptScenarios({ seedSix, sixCheck, SIX_PROMPT }) {
     { id: 'I13', cat: 'interrupt', title: 'Restart with an approval pending: nothing runs by itself; Resume asks again (M2, owner policy)', setup: six, async run(c) {
       const conv = await newConversation('I13');
       const k = await c.turn(conv.id, SIX_PROMPT, { killWhen: (a) => sql("select count(*) n from approvals where attemptId = ? and status = 'pending'", a)[0]?.n >= 1, policy: () => 'pending', timeoutMs: 180000 });
-      if (!k.killed) return { turns: [k], ok: false, notes: 'no approval was requested before the end', negative: true };
+      if (!k.killed) return { turns: [k], ok: false, error: true, notes: 'HARNESS: no approval was requested before the end' };
       const up = await restartCore(); await sleep(15000); // time for any automatic recovery to misbehave
       const wroteByItself = fs.existsSync(path.join(c.ws, 'analysis'));
       const auto = attemptsOfRequest(k.attemptId) - 1;

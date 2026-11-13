@@ -98,7 +98,7 @@ export async function turn(conversationId, message, { policy = () => 'rejected',
     } catch { /* ignore */ }
     att = await api(`/v1/attempts/${attemptId}`);
     if (TERMINAL.includes(att.status ?? att.attempt?.status)) break;
-    await sleep(1500);
+    for (let i = 0; i < 10; i++) { await sleep(150); if (killWhen && killWhen(attemptId)) break; } // fine-grained so a kill lands at the chosen point
   }
   return { attemptId, ms: Date.now() - t0, status: att?.status, resultStatus: att?.resultStatus ?? null, resultReason: att?.resultReason ?? null, failureReason: att?.failureReason ?? null, decisions, ...(await evidence(conversationId, attemptId)) };
 }
