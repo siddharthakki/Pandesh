@@ -20,6 +20,8 @@ import { REFUSED_PATTERN } from './turnOutcome';
 
 export interface PriorTwin {
   kind: 'done' | 'unknown';
+  /** True when the earlier call differed in wording and was matched by meaning (same reminder time, event, recipients). */
+  semantic?: boolean;
   invocationId: string;
   attemptId: string;
   at: string;
@@ -71,6 +73,94 @@ export function predecessorChain(db: CoreDatabase, attemptId: string, max = 16):
   return chain;
 }
 
+// ---------------------------------------------------------------- semantic twins (M2: reworded repeats)
+
+const tokens = (s: unknown): string[] => String(s ?? '').toLowerCase().normalize('NFKD').replace(/[^\p{L}\p{N}]+/gu, ' ').trim().split(' ').filter(Boolean);
+/** Word overlap of two texts (Jaccard over distinct words); two empty texts are the same. */
+function similarity(a: unknown, b: unknown): number {
+  const x = new Set(tokens(a)); const y = new Set(tokens(b));
+  if (!x.size && !y.size) return 1;
+  let both = 0; for (const t of x) if (y.has(t)) both += 1;
+  return both / (x.size + y.size - both);
+}
+const stripReplyPrefix = (s: unknown): string => String(s ?? '').replace(/^(\s*(re|aw|fwd?|wg)\s*:\s*)+/i, '');
+const emails = (a: unknown): string[] => (Array.isArray(a) ? a : []).map((x) => String(x).trim().toLowerCase()).filter(Boolean).sort();
+const REMINDER_TOLERANCE_MS = 5 * 60_000;
+
+/** The instant a reminder call means, from its own arguments and when it was made (inMinutes is relative to that moment). */
+function reminderDueMs(args: Record<string, unknown>, at: string): number | null {
+  try {
+    if (args.date && args.time) { const t = new Date(`${String(args.date)}T${String(args.time)}`).getTime(); return Number.isNaN(t) ? null : t; }
+    if (args.inMinutes !== undefined) { const base = new Date(at).getTime(); return Number.isNaN(base) ? null : base + Number(args.inMinutes) * 60_000; }
+    if (args.dueAt) { const t = new Date(String(args.dueAt)).getTime(); return Number.isNaN(t) ? null : t; }
+  } catch { /* unparseable: not comparable */ }
+  return null;
+}
+function eventStartMs(v: unknown): number | null { const t = new Date(String(v ?? '')).getTime(); return Number.isNaN(t) ? null : t; }
+
+/**
+ * Whether two calls of the same consequential tool ask for the same real-world thing in different words: a reminder
+ * with the same subject at the same time, an event with the same title and start, a draft to the same people with the same
+ * subject, a note, promise or routine with the same wording. Conservative on purpose (a clear overlap, not a hunch), because
+ * a false match only asks the person once, while a false miss repeats an email or event.
+ */
+export function semanticallySame(tool: string, a: Record<string, unknown>, aAt: string, b: Record<string, unknown>, bAt: string): boolean {
+  switch (tool) {
+    case 'create_reminder': {
+      const x = reminderDueMs(a, aAt); const y = reminderDueMs(b, bAt);
+      return x !== null && y !== null && Math.abs(x - y) <= REMINDER_TOLERANCE_MS && similarity(a.title, b.title) >= 0.75;
+    }
+    case 'calendar_create_event': case 'calendar_update_event': case 'calendar_delete_event': {
+      if (tool !== 'calendar_create_event') return String(a.eventId ?? '') !== '' && a.eventId === b.eventId && JSON.stringify(a) === JSON.stringify(b);
+      const x = eventStartMs(a.start); const y = eventStartMs(b.start);
+      const sameStart = x !== null && y !== null ? Math.abs(x - y) <= 60_000 : String(a.start ?? '').trim() === String(b.start ?? '').trim();
+      return sameStart && similarity(a.title, b.title) >= 0.75;
+    }
+    case 'gmail_create_draft': {
+      const ra = [...emails(a.to), ...emails(a.cc)].join(','); const rb = [...emails(b.to), ...emails(b.cc)].join(',');
+      return ra !== '' && ra === rb && similarity(stripReplyPrefix(a.subject), stripReplyPrefix(b.subject)) >= 0.8 && String(a.threadId ?? '') === String(b.threadId ?? '');
+    }
+    case 'create_note': return similarity(a.title, b.title) >= 0.75 && similarity(a.body, b.body) >= 0.85;
+    case 'create_commitment': return similarity(a.title, b.title) >= 0.75 && String(a.relatedId ?? '') === String(b.relatedId ?? '');
+    case 'schedule_task': return similarity(a.title, b.title) >= 0.75 && String(a.dailyTime ?? '') === String(b.dailyTime ?? '') && String(a.date ?? '') === String(b.date ?? '') && String(a.time ?? '') === String(b.time ?? '');
+    default: return false;
+  }
+}
+
+/**
+ * What Core's own records say about an action whose outcome the journal could not settle (it started, the process died).
+ *   'happened'      a matching record exists, created at or after the earlier call began
+ *   'not_happened'  Core owns this store and holds no such record
+ *   'unverifiable'  the effect lives outside Core (email, calendar): fail closed, the person decides
+ */
+export function reconcileOwnAction(db: CoreDatabase, tool: string, args: Record<string, unknown>, since: string): { state: 'happened' | 'not_happened' | 'unverifiable'; id?: string } {
+  const from = new Date(new Date(since).getTime() - 60_000).toISOString();
+  try {
+    if (tool === 'create_reminder') {
+      const due = reminderDueMs(args, new Date().toISOString());
+      const rows = db.all<{ id: string; title: string; dueAt: string }>("SELECT id, title, dueAt FROM everyday_reminders WHERE status != 'cancelled' AND createdAt >= ?", [from]);
+      const hit = rows.find((r) => similarity(r.title, args.title) >= 0.75 && (due === null || Math.abs(new Date(r.dueAt).getTime() - due) <= REMINDER_TOLERANCE_MS + 60_000 * 60));
+      return hit ? { state: 'happened', id: hit.id } : { state: 'not_happened' };
+    }
+    if (tool === 'create_note') {
+      const rows = db.all<{ id: string; title: string; body: string }>('SELECT id, title, body FROM everyday_notes WHERE deletedAt IS NULL AND createdAt >= ?', [from]);
+      const hit = rows.find((r) => similarity(r.body, args.body) >= 0.85);
+      return hit ? { state: 'happened', id: hit.id } : { state: 'not_happened' };
+    }
+    if (tool === 'create_commitment') {
+      const rows = db.all<{ id: string; title: string }>('SELECT id, title FROM commitments WHERE createdAt >= ?', [from]);
+      const hit = rows.find((r) => similarity(r.title, args.title) >= 0.75);
+      return hit ? { state: 'happened', id: hit.id } : { state: 'not_happened' };
+    }
+    if (tool === 'schedule_task') {
+      const rows = db.all<{ id: string; title: string }>('SELECT id, title FROM scheduled_tasks WHERE enabled = 1 AND createdAt >= ?', [from]);
+      const hit = rows.find((r) => similarity(r.title, args.title) >= 0.75);
+      return hit ? { state: 'happened', id: hit.id } : { state: 'not_happened' };
+    }
+  } catch { return { state: 'unverifiable' }; }
+  return { state: 'unverifiable' };
+}
+
 export function findPriorTwin(db: CoreDatabase, attemptId: string, toolName: string, args: Record<string, unknown>, workspaceRoot: string | null = null): PriorTwin | null {
   const chain = predecessorChain(db, attemptId);
   if (!chain.length) return null;
@@ -96,13 +186,24 @@ export function findPriorTwin(db: CoreDatabase, attemptId: string, toolName: str
     if (r.status === 'succeeded') return { kind: 'done', invocationId: r.id, attemptId: r.attemptId, at: r.endedAt ?? r.startedAt, resultExcerpt: String(r.result ?? '').slice(0, 300) };
     unknown ??= { kind: 'unknown', invocationId: r.id, attemptId: r.attemptId, at: r.startedAt, resultExcerpt: '' };
   }
-  return unknown;
+  if (unknown) return unknown;
+  // No identical call. The same request reworded (another title wording, another time spelling, reordered recipients) is
+  // still the same action: match it by meaning for the tools where that is well defined.
+  for (const r of rows) {
+    let theirs: Record<string, unknown>; try { theirs = JSON.parse(r.argsSummary); } catch { continue; }
+    if (!theirs || (theirs as { truncated?: boolean }).truncated) continue;
+    if (!semanticallySame(toolName, args, new Date().toISOString(), theirs, r.startedAt)) continue;
+    if (r.status === 'succeeded' && REFUSED_PATTERN.test(String(r.result ?? '').split('\n')[0])) continue;
+    if (r.status === 'succeeded') return { kind: 'done', semantic: true, invocationId: r.id, attemptId: r.attemptId, at: r.endedAt ?? r.startedAt, resultExcerpt: String(r.result ?? '').slice(0, 300) };
+    return { kind: 'unknown', semantic: true, invocationId: r.id, attemptId: r.attemptId, at: r.startedAt, resultExcerpt: '' };
+  }
+  return null;
 }
 
 export function replayRefusal(twin: PriorTwin, toolName: string): string {
   return twin.kind === 'done'
-    ? `Already done: this exact ${toolName} call succeeded in the interrupted attempt ${twin.attemptId} at ${twin.at}${twin.resultExcerpt ? ` (it returned: ${twin.resultExcerpt.replace(/\s+/g, ' ')})` : ''}. It was NOT repeated. Continue with what is still missing, and do not report it as done again by doing it twice.`
-    : `Not repeated: this exact ${toolName} call was STARTED in the interrupted attempt ${twin.attemptId} at ${twin.at} but its outcome was never recorded, so Pandesh cannot tell whether it happened and will not repeat it on its own. Do NOT call it again. If a read tool can show the real state, check it and report what you find; otherwise tell the user plainly that this step may or may not have been done and ask them whether to repeat it.`
+    ? `Already done: this ${twin.semantic ? 'same ' + toolName + ' request (in other words)' : 'exact ' + toolName + ' call'} succeeded in the interrupted attempt ${twin.attemptId} at ${twin.at}${twin.resultExcerpt ? ` (it returned: ${twin.resultExcerpt.replace(/\s+/g, ' ')})` : ''}. It was NOT repeated. Continue with what is still missing, and do not report it as done again by doing it twice.`
+    : `Not repeated: this ${twin.semantic ? 'same ' + toolName + ' request (in other words)' : 'exact ' + toolName + ' call'} was STARTED in the interrupted attempt ${twin.attemptId} at ${twin.at} but its outcome was never recorded, so Pandesh cannot tell whether it happened and will not repeat it on its own. Do NOT call it again. If a read tool can show the real state, check it and report what you find; otherwise tell the user plainly that this step may or may not have been done and ask them whether to repeat it.`
 }
 
 /**

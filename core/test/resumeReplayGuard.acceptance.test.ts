@@ -147,6 +147,28 @@ ${PROMPT}`) as { reply: string };
     expect(getAttempt(db, successor.id).status).not.toBe('running');
   }, 90_000);
 
+  it("a reworded repeat of a consequential action is caught by meaning; an unknown outcome is settled by Core's own records", async () => {
+    const { conv, req, att } = startTask();
+    script = (_c, n) => (n === 0 ? { tool: { name: 'create_reminder', args: { title: 'Call Dr. Keller about the invoice', date: '2026-11-20', time: '09:00' } } } : { text: 'Reminder created.' });
+    await runAttempt(att.id, req.id, conv.id);
+    expect(db.all('SELECT 1 FROM everyday_reminders')).toHaveLength(1);
+    // two calls were started and never finished: a note that DID land in Core's store, and a promise that did not
+    startToolInvocation(db, { attemptId: att.id, toolName: 'create_note', argsSummary: { title: 'Parking', body: 'Ask the city office about parking permits before Friday' }, actor: 'test' });
+    db.run("INSERT INTO everyday_notes (id, title, body, createdAt, updatedAt) VALUES ('n1', 'Parking', 'Ask the city office about parking permits before Friday', ?, ?)", [new Date().toISOString(), new Date().toISOString()]);
+    startToolInvocation(db, { attemptId: att.id, toolName: 'create_commitment', argsSummary: { title: 'Send the signed contract to Priya' }, actor: 'test' });
+    db.run("UPDATE attempts SET status = 'failed', failureReason = 'Interrupted: KarkeDikha restarted while this task was running. It was not replayed automatically.' WHERE id = ?", [att.id]);
+    const successor = resumeInterruptedAttempt(db, att.id, 'test');
+    script = (_c, n) => n === 0 ? { tool: { name: 'create_reminder', args: { title: 'call dr keller about invoice', dueAt: new Date('2026-11-20T09:01').toISOString() } } }
+      : n === 1 ? { tool: { name: 'create_note', args: { title: 'parking', body: 'Ask the city office about the parking permits before Friday.' } } }
+      : n === 2 ? { tool: { name: 'create_commitment', args: { title: 'Send signed contract to Priya' } } } : { text: 'Done as far as possible.' };
+    await runAttempt(successor.id, req.id, conv.id);
+    const prevented = events(successor.id, 'replay_prevented');
+    expect(prevented.map((p) => `${p.toolName}:${p.kind}`).sort()).toEqual(['create_note:done', 'create_reminder:done']);
+    expect(db.all('SELECT 1 FROM everyday_reminders')).toHaveLength(1); // not created twice
+    expect(db.all('SELECT 1 FROM everyday_notes')).toHaveLength(1);     // the note that landed was recognised, not duplicated
+    expect(db.all('SELECT 1 FROM commitments')).toHaveLength(1);        // the promise that never landed ran once
+  }, 90_000);
+
   it('does not resume a cancelled or a completed task', () => {
     const a = startTask().att; db.run("UPDATE attempts SET status = 'cancelled' WHERE id = ?", [a.id]);
     expect(() => resumeInterruptedAttempt(db, a.id, 'test')).toThrow(/stopped/);

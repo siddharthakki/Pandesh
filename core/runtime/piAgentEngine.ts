@@ -79,7 +79,7 @@ import {
 import { finalizeTaskOutcome, ensureTaskOutcome, listTaskOutcomes, objectiveFromRequest, updateTaskOutcome } from '../domain/taskOutcomes';
 import { isInspectionOrAdvisoryOnly } from '../domain/actionIntent';
 import { evaluateTurnOutcome, isConsequentialTool } from './turnOutcome';
-import { findPriorTwin, predecessorChain, reconcileFileWrite, RECONCILABLE_TOOLS, replayRefusal } from './replayGuard';
+import { findPriorTwin, predecessorChain, reconcileFileWrite, reconcileOwnAction, RECONCILABLE_TOOLS, replayRefusal } from './replayGuard';
 import { deliverableLedger, missingTaskDates, missingTaskDependency, missingTaskPriorities, unbackedWorkingClaim, type LedgerResult } from './deliverableLedger';
 import { resolveActiveProject, isProjectInspectionRequest, gatherProjectEvidence, formatProjectEvidenceForModel, composeEvidenceAnswer, isReplyGroundedInProject, isLocalModelEndpoint } from './projectContext';
 import { resolveTimeExpression, localWallTimeToIso as zonedWallToIso, utcOffsetLabel as zoneOffsetLabel, upcomingDaysTable, isValidTimeZone } from '../domain/timeResolution';
@@ -5616,6 +5616,13 @@ When the user asks to continue, resume, or check progress/updates, resume this w
             if (state === 'in_place') { inPlace = true; twin = twin ?? { kind: 'done', invocationId: '', attemptId: '', at: '', resultExcerpt: '' }; }
             else if (state === 'differs' && twin?.kind === 'unknown') twin = null; // started, never confirmed, and the file is not there: it did not happen
             // A recorded success whose file has changed since stays blocked: rewriting could destroy a later edit.
+          }
+          // Core's own stores (reminders, notes, promises, routines) settle an unknown outcome by looking: the record is there (done) or it
+          // is not (the call never completed, so it may run). Email and calendar live outside Core and stay fail-closed.
+          if (resumed && twin?.kind === 'unknown') {
+            const own = reconcileOwnAction(db, toolName, args, twin.at);
+            if (own.state === 'happened') twin = { ...twin, kind: 'done', resultExcerpt: `a matching record already exists (id ${own.id})` };
+            else if (own.state === 'not_happened') twin = null;
           }
           // Everything else that cannot be checked by Core fails closed: an 'unknown' call is never repeated automatically.
           if (twin) {
