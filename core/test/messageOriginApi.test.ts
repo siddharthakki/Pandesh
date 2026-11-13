@@ -41,6 +41,20 @@ beforeEach(async () => {
 afterEach(async () => { await api.close(); db.close(); fs.rmSync(dir, { recursive: true, force: true }); });
 
 describe('client-supplied message origin', () => {
+  it('cannot be bypassed by omitting or spoofing X-Client-Id', async () => {
+    const conv = createConversation(db, { mode: 'saath_kar', title: 'a', actor: 'test' });
+    const mi = invocationIn(conv.id);
+    const raw = (headers: Record<string, string>) => fetch(`http://127.0.0.1:${api.port}/v1/conversations/${conv.id}/messages`, {
+      method: 'POST', body: JSON.stringify({ role: 'user', content: 'private', modelInvocationId: mi }),
+      headers: { Authorization: `Bearer ${TOKEN}`, 'Content-Type': 'application/json', 'Idempotency-Key': `k-${Math.random()}`, ...headers },
+    });
+    expect((await raw({})).status).toBe(400);
+    expect((await raw({ 'X-Client-Id': '' })).status).toBe(400);
+    expect((await raw({ 'X-Client-Id': 'model-pi' })).status).toBe(400);
+    expect((await raw({ 'X-Client-Id': 'tool-x' })).status).toBe(400);
+    expect(listMessages(db, conv.id)).toHaveLength(0);
+  });
+
   it('rejects a user message that claims a model call', async () => {
     const conv = createConversation(db, { mode: 'saath_kar', title: 'a', actor: 'test' });
     const mi = invocationIn(conv.id);

@@ -273,7 +273,7 @@ export function startApiServer(options: StartApiServerOptions): Promise<RunningA
         }
       }
 
-      const clientId = (req.headers['x-client-id'] as string | undefined) ?? 'unknown-client';
+      const clientId = ((req.headers['x-client-id'] as string | undefined) ?? '').trim() || 'unknown-client';
 
       // M36: bounded authenticated binary upload. Bypasses the JSON router and
       // the 1 MiB JSON body cap entirely — the raw request stream is piped
