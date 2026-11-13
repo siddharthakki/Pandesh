@@ -933,17 +933,7 @@ export function buildRouter(
     const role = requireString(body, 'role') as MessageRole;
     const content = requireString(body, 'content');
     const modelInvocationId = typeof body.modelInvocationId === 'string' ? body.modelInvocationId : null;
-    // A message's origin decides what a cloud model may later see (cloudVisibleHistory keeps only assistant messages
-    // linked to a cloud model call). A client may therefore not label text as model output: the link is accepted only
-    // for an assistant message whose model call ran in THIS conversation. Anything else would let a caller mark private
-    // local text as cloud output so it travels to a cloud provider (audit 2026-11-12, step 0).
-    if (modelInvocationId !== null) {
-      const owned = role === 'assistant' && ctx.db.get<{ id: string }>(
-        `SELECT mi.id FROM model_invocations mi JOIN attempts a ON a.id = mi.attemptId JOIN requests r ON r.id = a.requestId
-         WHERE mi.id = ? AND r.conversationId = ?
-           AND NOT EXISTS (SELECT 1 FROM conversation_messages m WHERE m.modelInvocationId = mi.id)`, [modelInvocationId, match.params.id]);
-      if (!owned) throw new CoreError('invalid_request', 'modelInvocationId is accepted only on an assistant message whose model call ran in this conversation');
-    }
+    // The origin check for modelInvocationId is in conversations.appendMessage (client-originated calls carry clientId).
     return withRuntimeBroadcast(ctx, broadcaster, () => ({
       status: 201,
       body: conversations.appendMessage(ctx.db, match.params.id, {
@@ -1113,22 +1103,8 @@ export function buildRouter(
     }));
   });
 
-  router.post('/v1/conversations/:id/messages', (ctx, match) => {
-    const key = requireIdempotencyKey(ctx);
-    const body = asRecord(ctx.body);
-    return withIdempotency(ctx.db, { key, clientId: ctx.clientId, routeId: `conversations.message:${match.params.id}` }, ctx.body, () =>
-      withRuntimeBroadcast(ctx, broadcaster, () => ({
-        status: 201,
-        body: conversations.appendMessage(ctx.db, match.params.id, {
-          role: requireString(body, 'role') as MessageRole,
-          content: requireString(body, 'content'),
-          modelInvocationId: (body.modelInvocationId as string) ?? null,
-          actor: ctx.actor,
-          clientId: ctx.clientId,
-        }),
-      })),
-    );
-  });
+  // (A second, unreachable registration of POST /v1/conversations/:id/messages used to sit here and passed modelInvocationId
+  // through unchecked; removed. The ownership check now lives in conversations.appendMessage, so no route can skip it.)
 
   // --- M32: Auto-mode routing (server-owned, deterministic, current-request-only) ---
   router.post('/v1/routing/classify', (ctx) => {

@@ -65,3 +65,15 @@ describe('client-supplied message origin', () => {
     expect(listMessages(db, conv.id)).toHaveLength(2);
   });
 });
+
+import { appendMessage } from '../domain/conversations';
+describe('the check lives in appendMessage, not in a route', () => {
+  it('a client-originated call cannot link a foreign or already-linked invocation; an internal call (no clientId) can', () => {
+    const a = createConversation(db, { mode: 'saath_kar', title: 'a', actor: 'test' }); const b = createConversation(db, { mode: 'saath_kar', title: 'b', actor: 'test' });
+    const foreign = invocationIn(b.id); const own = invocationIn(a.id);
+    expect(() => appendMessage(db, a.id, { role: 'assistant', content: 'x', modelInvocationId: foreign, actor: 'c', clientId: 'desktop' })).toThrow(/modelInvocationId/);
+    appendMessage(db, a.id, { role: 'assistant', content: 'x', modelInvocationId: own, actor: 'c', clientId: 'desktop' });
+    expect(() => appendMessage(db, a.id, { role: 'assistant', content: 'again', modelInvocationId: own, actor: 'c', clientId: 'desktop' })).toThrow(/modelInvocationId/);
+    expect(appendMessage(db, b.id, { role: 'assistant', content: 'engine reply', modelInvocationId: foreign, actor: 'core' }).modelInvocationId).toBe(foreign);
+  });
+});

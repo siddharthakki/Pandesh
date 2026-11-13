@@ -238,6 +238,16 @@ export function appendMessage(db: CoreDatabase, conversationId: string, rawInput
   return db.transaction(() => {
     const conversation = db.get<{ id: string; revision: number }>('SELECT id, revision FROM conversations WHERE id = ?', [conversationId]);
     if (!conversation) throw new CoreError('not_found', `conversation '${conversationId}' not found`);
+    // A message's origin decides what a cloud model may later see (cloudVisibleHistory keeps only assistant messages linked to a
+    // cloud model call). A CLIENT (a caller that passes clientId; the engine does not) may not label text as model output: the
+    // link is accepted only for an assistant message whose model call ran in THIS conversation and is not linked yet.
+    if (input.modelInvocationId && input.clientId) {
+      const owned = input.role === 'assistant' && db.get<{ id: string }>(
+        `SELECT mi.id FROM model_invocations mi JOIN attempts a ON a.id = mi.attemptId JOIN requests r ON r.id = a.requestId
+         WHERE mi.id = ? AND r.conversationId = ?
+           AND NOT EXISTS (SELECT 1 FROM conversation_messages m WHERE m.modelInvocationId = mi.id)`, [input.modelInvocationId, conversationId]);
+      if (!owned) throw new CoreError('invalid_request', 'modelInvocationId is accepted only on an assistant message whose model call ran in this conversation');
+    }
     const id = newId('msg');
     const now = nowIso();
     const result = db.run(
