@@ -58,7 +58,7 @@ async function waitRun(id, prevAttempt, ms = 360000) {
   }
   return null;
 }
-const days = []; let streak = 0; let best = 0;
+const days = []; let streak = 0; let best = 0; const expectedNotices = new Set(); // the one interruption notice day 6 must produce
 for (let d = 1; d <= 14 && streak < 7; d++) {
   const day = { day: d, checks: {}, ok: true, notes: [] };
   const prev = Object.fromEntries(Object.entries(ids).map(([k, id]) => [k, task(id).lastAttemptId]));
@@ -72,7 +72,7 @@ for (let d = 1; d <= 14 && streak < 7; d++) {
   if (killDay) {
     // wait for B to start, kill Core while it runs, restart, and check it is reported and not replayed
     const end = Date.now() + 240000; while (Date.now() < end && task(ids.B).lastAttemptId === prev.B) await sleep(500);
-    interruptedAttempt = task(ids.B).lastAttemptId; await sleep(1500);
+    interruptedAttempt = task(ids.B).lastAttemptId; expectedNotices.add(`sched-run:${interruptedAttempt}`); await sleep(1500);
     const st = interruptedAttempt ? (await api(`/v1/attempts/${interruptedAttempt}`)).status : null;
     killCore(); await sleep(1500); startCore(); const up = await waitCore(90000); await sleep(8000);
     const after = await api(`/v1/attempts/${interruptedAttempt}`); const note = notes(`sched-run:${interruptedAttempt}`);
@@ -104,7 +104,7 @@ for (let d = 1; d <= 14 && streak < 7; d++) {
   }
   // no stray files outside the frozen folders, no unexpected failure notices on healthy days
   const stray = ['daily', 'reports', 'logs'].filter((n) => fs.existsSync(path.join(RC, n)));
-  const unexpectedNotices = notes('sched-run:%').filter((n) => !(killDay && n.sourceId === `sched-run:${interruptedAttempt}`));
+  const unexpectedNotices = notes('sched-run:%').filter((n) => !expectedNotices.has(n.sourceId));
   day.checks.noStrayFiles = stray.length === 0; day.checks.unexpectedNotices = unexpectedNotices.length;
   if (stray.length || unexpectedNotices.length) day.ok = false;
   const nextOk = Object.values(ids).every((id) => Date.parse(task(id).nextRunAt) > Date.now() + 3600_000);

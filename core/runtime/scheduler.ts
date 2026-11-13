@@ -142,7 +142,7 @@ export function startScheduledTaskLoop(
         }
         const result = submitRequest(db, {
           clientId: ACTOR,
-          currentMessage: `[Scheduled task "${task.title}"${late ? ', running late because KarkeDikha was not running at the scheduled time' : ''}] ${task.instruction}`,
+          currentMessage: `[Scheduled task "${task.title}"${late ? ', running late because KarkeDikha was not running at the scheduled time' : ''}] This is the scheduled run itself: do the work now with your tools. Do not create, change or cancel any schedule. ${task.instruction}`,
           requestedMode: 'saath_kar',
           conversationId,
           requestedProvider: 'ollama',

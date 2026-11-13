@@ -1247,6 +1247,10 @@ export class PiAgentEngine implements EngineAdapter {
     const phoneShares: string[] = [];
     const pendingInvocations: string[] = [];
     /** Calls that failed this turn, by tool+arguments, with why: an identical retry learns nothing new. */
+    let scheduledOriginCache: boolean | null = null;
+
+    const scheduledRunOrigin = (): boolean => { if (scheduledOriginCache === null) { try { scheduledOriginCache = db.get<{ clientId: string }>('SELECT r.clientId AS clientId FROM attempts a JOIN requests r ON r.id = a.requestId WHERE a.id = ?', [attemptId])?.clientId === 'core:scheduler'; } catch { scheduledOriginCache = false; } } return scheduledOriginCache; };
+
     const failedCalls = new Map<string, string>();
     let refusedRepeats = 0;
     const callSignature = (name: string, args: unknown) => `${name}:${JSON.stringify(args ?? {}, (_k, v) => (v && typeof v === 'object' && !Array.isArray(v) ? Object.fromEntries(Object.entries(v).sort()) : v))}`;
@@ -5553,6 +5557,13 @@ When the user asks to continue, resume, or check progress/updates, resume this w
           const joined = toolsInGroups(tools.map((t) => t.name), [groupOfTool(toolName, capabilityMarks.get(toolName)) ?? ''], capabilityMarks);
           for (const n of [toolName, ...joined]) activeToolNames.add(n);
           safeRecordRuntimeEvent(db, broadcaster, attemptId, 'hidden_tool_called', { toolName, added: joined }, actor);
+        }
+
+        // M3: a scheduled run IS the routine; it must do the work, never create or change schedules (live run: the stored instruction
+        // still said "set that up as a scheduled routine" and the run created a duplicate schedule instead of writing the file).
+        if (toolName === 'schedule_task' && scheduledRunOrigin()) {
+          safeRecordRuntimeEvent(db, broadcaster, attemptId, 'schedule_from_scheduled_run_refused', { toolName }, actor);
+          return { block: true, reason: 'NOT DONE (refused by Pandesh Core): this is a scheduled run. Do the task itself now with the file and other tools; creating or changing schedules is not part of a scheduled run, and the schedule already exists.' };
         }
 
         // M2 replay guard: a resumed attempt never repeats a consequential call the interrupted attempt already made.
