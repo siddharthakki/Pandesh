@@ -3,6 +3,9 @@ import { createConversation } from '../domain/conversations';
 import { latestRuntimeSequence, listRuntimeEventsAfter } from '../domain/runtimeEvents';
 import { claimDueScheduledTasks, recordScheduledRun } from '../domain/scheduledTasks';
 import { submitRequest } from '../domain/submission';
+import { enqueueNotification } from '../domain/notificationOutbox';
+import { deriveResultStatus } from '../domain/resultStatus';
+import * as fs from 'node:fs';
 import type { EventBroadcaster } from '../ws/broadcaster';
 import type { RuntimeExecutor } from './executor';
 import { runDailyBriefRoutine } from './assistantRoutine';
@@ -128,6 +131,15 @@ export function startScheduledTaskLoop(
           ?? createConversation(db, { mode: 'saath_kar', title: task.title, actor: ACTOR }).id;
         const model = task.model ?? executor.contextDefaults().selectedModel;
         const key = `sched:${task.id}:${Date.now()}`;
+        // M3: the folder and access the routine was created with (frozen by schedule_task). A routine whose folder is gone does
+        // not run blind: the owner is told.
+        const scope = task.scope as { workspaceRoot?: string; workspaceAccess?: 'read' | 'read_write' } | null;
+        const workspaceRoot = scope?.workspaceRoot && typeof scope.workspaceRoot === 'string' ? scope.workspaceRoot : null;
+        if (workspaceRoot && !fs.existsSync(workspaceRoot)) {
+          enqueueNotification(db, { kind: 'task_failed', sourceId: `sched-missing:${task.id}:${Date.now()}`, title: `Routine "${task.title}" did not run`, body: `Its folder ${workspaceRoot} no longer exists, so it was not run. Nothing was changed.` });
+          console.error(`[karkedikha-core ${new Date().toISOString()}] scheduled task ${task.id} not run: its folder ${workspaceRoot} is gone`);
+          continue;
+        }
         const result = submitRequest(db, {
           clientId: ACTOR,
           currentMessage: `[Scheduled task "${task.title}"${late ? ', running late because KarkeDikha was not running at the scheduled time' : ''}] ${task.instruction}`,
@@ -137,15 +149,27 @@ export function startScheduledTaskLoop(
           requestedModel: model,
           selectedProvider: 'ollama',
           selectedModel: model,
+          workspaceRoot,
           effectiveAllowedTools: [],
-          toolPermissionPolicy: {},
-          capability: { hasWorkspace: false, gitCapable: false },
+          toolPermissionPolicy: workspaceRoot ? { profile: 'local-core-question', worker: 'local-core', workspaceAccess: scope?.workspaceAccess === 'read' ? 'read' : 'read_write' } : {},
+          capability: { hasWorkspace: Boolean(workspaceRoot), gitCapable: false },
           correlationId: key,
           idempotencyKey: key,
         });
         recordScheduledRun(db, task.id, { attemptId: result.attempt.id, conversationId });
         console.log(`[karkedikha-core ${new Date().toISOString()}] scheduled task ${task.id} fired attempt=${result.attempt.id}`);
-        void executor.execute(result.attempt.id).catch(() => { /* terminal failure is durably recorded */ });
+        const attemptId = result.attempt.id;
+        void executor.execute(attemptId, workspaceRoot ? { workingDirectory: workspaceRoot } : undefined)
+          .catch(() => { /* terminal failure is durably recorded */ })
+          .finally(() => {
+            // A scheduled run that did not finish its work must reach the owner: a notification, not a silent record.
+            try {
+              const outcome = deriveResultStatus(db, attemptId);
+              if (outcome.status !== 'completed' && outcome.status !== 'running' && outcome.status !== 'cancelled') {
+                enqueueNotification(db, { kind: outcome.status === 'blocked' ? 'task_blocked' : 'task_failed', sourceId: `sched-run:${attemptId}`, title: `Routine "${task.title}" ${outcome.status === 'partial' ? 'did part of its work' : outcome.status === 'blocked' ? 'is waiting' : outcome.status === 'interrupted' ? 'was interrupted' : 'failed'}`, body: outcome.reason ?? 'It did not finish; open the conversation for details.' });
+              }
+            } catch { /* the notification is best effort; the attempt record stays */ }
+          });
       } catch (err) {
         console.error(`[karkedikha-core ${new Date().toISOString()}] scheduled task ${task.id} failed to submit:`, err instanceof Error ? err.message : err);
       } finally {

@@ -2833,7 +2833,10 @@ export class PiAgentEngine implements EngineAdapter {
         execute: async (_id: string, args: any) => {
           try {
             const runAt = args.date && args.time ? localWallTimeToIso(String(args.date), String(args.time)) : (args.inMinutes !== undefined ? new Date(Date.now() + Number(args.inMinutes) * 60_000).toISOString() : undefined);
-            const t = createScheduledTask(db, { title: String(args.title), instruction: String(args.instruction), dailyTime: args.dailyTime ? String(args.dailyTime) : undefined, runAt, timezone: localTimeZone, model: selectedModel });
+            // M3 (audit S07): the routine freezes the folder and the write access it was created with, so a scheduled run
+            // works in that folder instead of running with no folder at all and failing silently.
+            const scope = selectedWorkspace ? { workspaceRoot: selectedWorkspace, workspaceAccess: frozenWorkspaceAccess(db, [attemptId]), createdFromAttempt: attemptId } : null;
+            const t = createScheduledTask(db, { title: String(args.title), instruction: String(args.instruction), dailyTime: args.dailyTime ? String(args.dailyTime) : undefined, runAt, timezone: localTimeZone, model: selectedModel, scope });
             return { content: [{ type: 'text', text: `Scheduled (id ${t.id}): "${t.title}" — ${t.repeat === 'daily' ? `every day at ${t.dailyTime} ${t.timezone}` : 'once'}; next run ${formatLocal(t.nextRunAt)}. Stored durably in Core.` }] };
           } catch (err: any) { return { content: [{ type: 'text', text: `Could not schedule: ${err.message}` }], isError: true }; }
         },
