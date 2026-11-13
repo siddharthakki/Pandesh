@@ -132,3 +132,14 @@ describe('stated task dependency (audit S20)', () => {
     expect(missingTaskDependency(req, [])).toEqual([]);
   });
 });
+
+import { missingTaskPriorities } from '../runtime/deliverableLedger';
+describe('stated task priorities (audit S20)', () => {
+  const add = (title: string, priority?: string) => ({ tool: 'add_task', status: 'completed', args: { title, ...(priority ? { priority } : {}) }, result: { content: [{ text: 'ok' }] } });
+  const req = 'Add tasks: "Buy wood" priority high; "Build frame" priority medium; "Paint shed" priority low.';
+  it('flags missing priorities and accepts all of them (medium is stored as normal)', () => {
+    expect(missingTaskPriorities(req, [add('a', 'high'), add('b'), add('c', 'low')])).toEqual(['1 of 3 priorities you stated stored (priority high / normal / low)']);
+    expect(missingTaskPriorities(req, [add('a', 'high'), add('b', 'normal'), add('c', 'low')])).toEqual([]);
+    expect(missingTaskPriorities('Summarize priority high items', [])).toEqual([]);
+  });
+});

@@ -80,7 +80,7 @@ import { finalizeTaskOutcome, ensureTaskOutcome, listTaskOutcomes, objectiveFrom
 import { isInspectionOrAdvisoryOnly } from '../domain/actionIntent';
 import { evaluateTurnOutcome, isConsequentialTool } from './turnOutcome';
 import { findPriorTwin, replayRefusal } from './replayGuard';
-import { deliverableLedger, missingTaskDates, missingTaskDependency, unbackedWorkingClaim, type LedgerResult } from './deliverableLedger';
+import { deliverableLedger, missingTaskDates, missingTaskDependency, missingTaskPriorities, unbackedWorkingClaim, type LedgerResult } from './deliverableLedger';
 import { resolveActiveProject, isProjectInspectionRequest, gatherProjectEvidence, formatProjectEvidenceForModel, composeEvidenceAnswer, isReplyGroundedInProject, isLocalModelEndpoint } from './projectContext';
 import { resolveTimeExpression, localWallTimeToIso as zonedWallToIso, utcOffsetLabel as zoneOffsetLabel, upcomingDaysTable, isValidTimeZone } from '../domain/timeResolution';
 import { cancelScheduledTask, createScheduledTask, listScheduledTasks } from '../domain/scheduledTasks';
@@ -6555,7 +6555,7 @@ When the user asks to continue, resume, or check progress/updates, resume this w
     }
     // Dates the owner stated for tasks must be the dates stored (audit S20). One nudge to fix them with update_task, then judged.
     if (!signal?.aborted && finalReply && !cloudTarget) {
-      const taskFacts = () => [...missingTaskDates(requestText, toolCallsRecorded), ...missingTaskDependency(requestText, toolCallsRecorded)];
+      const taskFacts = () => [...missingTaskDates(requestText, toolCallsRecorded), ...missingTaskDependency(requestText, toolCallsRecorded), ...missingTaskPriorities(requestText, toolCallsRecorded)];
       let lost = taskFacts();
       if (lost.length > 0 && tools.some((t) => t.name === 'update_task') && toolCallsRecorded.some((t) => t.tool === 'add_task' || t.tool === 'create_project')) {
         safeRecordRuntimeEvent(db, broadcaster, attemptId, 'task_dates_missing', { missing: lost }, actor);

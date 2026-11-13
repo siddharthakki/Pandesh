@@ -141,6 +141,8 @@ export const SCENARIOS = [
     return { turns: [{ attemptId: k.attemptId, ms: k.ms, status, failureReason: att?.failureReason ?? null, reply, tools: [], models: [], decisions: [] }], ok: resumed || truthful, notes: `coreUp=${up} status=${status} resumed=${resumed} truthfulInterrupted=${truthful} missing=${missing.join(',') || '-'} reason=${att?.failureReason ?? '-'}`, recoveryResumed: resumed, recoveryTruthful: truthful, negative: true };
   } },
   { id: 'I02', cat: 'recovery', title: 'A new chat can see unfinished work (audit S14)', async run(c) {
+    // Needs an interrupted task in this profile (I01 leaves one); without it the scenario proves nothing.
+    if ((sql("select count(*) n from attempts where failureReason like 'Interrupted:%'")[0]?.n ?? 0) === 0) return { turns: [], ok: false, error: true, notes: 'HARNESS PRECONDITION: no interrupted task in this profile (run I01 first)' };
     const conv = await newConversation('I02'); const t = await c.turn(conv.id, 'What was I working on earlier in another chat, did it finish, and what is still left?', { workspace: null });
     return { turns: [t], ok: /inbox|analysis|six files|seven files/i.test(t.reply ?? '') && /interrupt|restart|not replayed|did not finish|didn.t finish|stopped/i.test(t.reply ?? ''), notes: 'expects the interrupted six-file task to be reported' };
   } },

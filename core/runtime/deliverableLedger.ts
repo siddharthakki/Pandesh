@@ -193,3 +193,17 @@ export function missingTaskDependency(requestText: string, calls: ReadonlyArray<
   const stored = calls.some((c) => (c.tool === 'add_task' || c.tool === 'update_task') && c.status === 'completed' && !(c.result as { isError?: boolean } | undefined)?.isError && String((c.args as { blockedBy?: string } | undefined)?.blockedBy ?? '').trim());
   return stored ? [] : [`the dependency you stated stored as a blocker ("${clause}")`];
 }
+
+/** Priorities the owner stated ("priority high") must be stored: as many stored priorities as stated ones (audit S20). */
+export function missingTaskPriorities(requestText: string, calls: ReadonlyArray<{ tool: string; args?: unknown; status: string; result?: unknown }>): string[] {
+  if (!/\b(?:task|todo|to-do|project)s?\b/i.test(requestText)) return [];
+  const stated = [...requestText.matchAll(/\bpriority\s*(?:is|:|=)?\s*(high|medium|normal|low)\b/gi)].length;
+  if (!stated) return [];
+  const stored = new Set<string>();
+  for (const c of calls) {
+    if ((c.tool !== 'add_task' && c.tool !== 'update_task') || c.status !== 'completed' || (c.result as { isError?: boolean } | undefined)?.isError) continue;
+    const a = c.args as { priority?: string; title?: string; task?: string } | undefined;
+    if (a?.priority) stored.add(String(a.title ?? a.task ?? stored.size).toLowerCase());
+  }
+  return stored.size >= stated ? [] : [`${stated - stored.size} of ${stated} priorities you stated stored (priority high / normal / low)`];
+}
