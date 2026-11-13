@@ -1,0 +1,33 @@
+{
+  "summary": {
+    "label": "gate4-desktop-notify",
+    "at": "2026-11-13T15:22:51.403Z",
+    "path": "real Electron host + v2 renderer over CDP",
+    "scenarios": 1,
+    "pass": 1,
+    "falseCompletion": 0,
+    "honestFail": 0,
+    "harnessError": 0,
+    "isolation": {
+      "productionProcessesUnchanged": true,
+      "productionCoreUnchanged": true,
+      "runKeyUnchanged": true,
+      "port3030Unchanged": true,
+      "testCoreInProfile": true
+    },
+    "windowTitle": "Pandesh"
+  },
+  "results": [
+    {
+      "id": "D06",
+      "title": "Notification delivery: the real scheduler queues a notice, the real host shows a Windows toast, Core records it delivered",
+      "ok": true,
+      "attemptStatus": "delivered",
+      "ms": 6057,
+      "notes": "outbox={\"id\":\"notif_a9a7b5ff-5ab6-4511-a44b-79c76043a6e5\",\"status\":\"delivered\",\"attempts\":1,\"deliveredVia\":\"windows_toast\",\"deliveredAt\":\"2026-11-13T15:22:46.841Z\",\"lastError\":null,\"title\":\"Routine \\\"D06 desktop notice\\\" did not run\"} channel={\"channel\":\"desktop\",\"supported\":1,\"detail\":\"Windows desktop notifications (toast)\",\"lastSeenAt\":\"2026-11-13T15:22:46.822Z\"} events=notification_enqueued,notification_delivered hostLog=notification notif_a9a7b5ff-5ab6-4511-a44b-79c76043a6e5 (task_failed) delivered via",
+      "replyHead": "",
+      "error": false,
+      "verdict": "PASS"
+    }
+  ]
+}

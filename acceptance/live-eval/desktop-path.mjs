@@ -99,7 +99,9 @@ async function runTask(prompt, { approve = true, killWhen, timeoutMs = 420000 } 
 }
 
 const results = [];
+const ONLY = process.env.DESK_ONLY?.split(',');
 async function scenario(id, title, fn) {
+  if (ONLY && !ONLY.includes(id)) return;
   const t = Date.now(); let r;
   try { r = await fn(); } catch (e) { r = { ok: false, notes: `HARNESS ERROR ${String(e.message).slice(0, 300)}`, error: true }; }
   const row = { id, title, ok: !!r.ok, attemptStatus: r.status ?? null, ms: Date.now() - t, notes: r.notes, replyHead: (r.reply ?? '').slice(0, 200), error: !!r.error };
@@ -143,6 +145,19 @@ await scenario('D05', 'Core killed mid-task: the host shows Resume, nothing runs
   const m = sixMissing();
   return { attemptId: resumed?.attemptId, status: st, reply: null, ok: up && !!row?.resumable && row?.resultStatus === 'interrupted' && autoSucc === 0 && !resumed?.error && m.length === 0 && dupes.length === 0,
     notes: `coreRestarted=${up} resultAfterKill=${row?.resultStatus} resumable=${row?.resumable} autoResumed=${autoSucc} writesBeforeResume=${writesBefore} resumed=${JSON.stringify(resumed).slice(0, 80)} final=${st} missing=${m.join(',') || '-'} duplicateWrites=${dupes.length}` };
+});
+
+await scenario('D06', 'Notification delivery: the real scheduler queues a notice, the real host shows a Windows toast, Core records it delivered', async () => {
+  const id = `sched_d06_${Date.now()}`; const gone = path.join(ROOT, 'folder-that-was-removed'); const now = new Date().toISOString();
+  const wdb = new DatabaseSync(path.join(PROFILE, 'core.db'));
+  try { wdb.prepare('INSERT INTO scheduled_tasks (id,title,instruction,dailyTime,repeat,timezone,conversationId,enabled,nextRunAt,lastRunAt,lastAttemptId,createdAt,updatedAt,model,routine,recurrenceJson,purpose,scopeJson) VALUES (?,?,?,?,?,?,NULL,1,?,NULL,NULL,?,?,?,NULL,NULL,NULL,?)').run(id, 'D06 desktop notice', 'Write x', '03:30', 'daily', 'UTC', now, now, now, 'gemma4:26b-a4b-it-qat', JSON.stringify({ workspaceRoot: gone, workspaceAccess: 'read_write' })); } finally { wdb.close(); }
+  const end = Date.now() + 180000; let row = null;
+  while (Date.now() < end) { row = q('select id, status, attempts, deliveredVia, deliveredAt, lastError, title from notification_outbox where sourceId like ?', `sched-missing:${id}:%`)[0]; if (row && (row.status === 'delivered' || (row.status === 'failed' && row.attempts >= 3))) break; await sleep(3000); }
+  const channel = q("select channel, supported, detail, lastSeenAt from notification_channels where channel = 'desktop'")[0];
+  const events = row ? q("select eventType from runtime_events where domain = 'notification' and entityId = ?", row.id).map((e) => e.eventType) : [];
+  const hostLog = rd(path.join(PROFILE, 'desktop-host.log')) ?? ''; const logged = new RegExp(`notification ${row?.id ?? 'none'} .* (delivered|failed) via`).exec(hostLog)?.[0] ?? null;
+  return { ok: !!row && row.status === 'delivered' && row.deliveredVia === 'windows_toast' && !!channel?.supported && events.includes('notification_delivered'), status: row?.status ?? null, reply: null,
+    notes: `outbox=${JSON.stringify(row)} channel=${JSON.stringify(channel)} events=${events.join(',')} hostLog=${logged}` };
 });
 
 const after = prodSnapshot();
