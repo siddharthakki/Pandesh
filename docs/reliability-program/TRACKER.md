@@ -95,6 +95,31 @@ task writes, chain freshness vs the replay guard, run_checks, refused calls, res
 64 KB and path spellings can bypass the guard; a bare identical call in the SAME attempt is not guarded (pre-existing); unfinished-task list shows 90 characters of
 other chats' requests in every chat's overview.
 
+## Update 2026-11-13 (owner decisions: draft PR, user-authorized resume, close M0-M3 before features)
+
+PR: draft https://github.com/siddharthakki/Pandesh/pull/82 (branch program/reliability-recovery, merged with origin/main Build 169). Nothing deployed or installed; production untouched (snapshotted before/after the desktop run).
+
+### Fixes made in this round (each found by a live run, not by unit tests)
+- Security: an EMPTY X-Client-Id header skipped the message-origin check (header '' is falsy) -> normalised in server.ts; test covers omitted, empty and spoofed (model-*, tool-*) ids.
+- Replay guard v2: canonical resource paths (separators, case, ..), hashed arguments when over the 64 KB storage bound (stored as argsHash), file writes reconciled against the real file (in place = done; started-never-confirmed + file absent = may run), every other unconfirmable call fails closed (never repeated automatically).
+- Resume is the owner's choice: GET /v1/tasks/overview gives resultStatus + resumable; the host Resume button calls POST /v1/attempts/:id/resume; nothing resumes on boot. Boot reason text points at Resume.
+- Resume guidance names the working folder (without it the successor drifted to Gmail tools in 2 of 3 runs), and a resumed attempt counts what its predecessors wrote (finished work was reported as "nothing built").
+- Ledger: an index that must list the outputs has to mention each; hedged/negated sentences are not working-claims; write_file UNCHANGED (already current) counts as done (a daily routine repeats the same output).
+- Scheduler: a scheduled run cannot call schedule_task (live run created a duplicate schedule), is told to carry out the task every time, an interrupted routine notifies the owner (boot reconciliation).
+
+### Gate results (Core on an isolated profile unless stated; real local models)
+- M2 interruption suite m2-gate-run1 (9 scenarios x3): 24/27 pass, 0 duplicate writes; the 3 non-passes were a stricter index check in the harness that the ledger did not yet enforce (fixed afterwards: ledger index rule). Later targeted runs: I04 5/5, I06 5/5 (after the resume-guidance fix), I07 and I08 pass, I11 3/3 exactly one reminder, I13 (restart with an approval pending: nothing runs by itself, Resume asks again) 3/3 in run5.
+- M1 full baseline m1-final-run2 (33 scenarios): 30 pass, 0 false completions, 1 contradiction (I06: the ledger says the index links are broken relative to analysis/, which is true; the harness did not check link resolution), 2 honest fails (F03 folder organising, E01 image studio down). Repeat of 8 variable scenarios x3 (m1-final-repeat3, 24): 21 pass, 1 false completion (F03#3: status completed while the reply says nothing was moved and asks for approval), 2 honest fails (F03). Baseline for comparison: 20/24 pass, 1 false completion, 3 contradictions.
+- M3 m3-routines-run8: 7 consecutive simulated days of 3 routines (days simulated by making each routine due; scheduler, executor, scope and notifications are real): all expectations met, including day 4 (folder removed: routine did not run, owner notified) and day 6 (Core killed while all three ran: each ended interrupted, reported once, none replayed). Runs 3-7 before the last fixes failed (idempotent output reported as failure, duplicate schedule created by a scheduled run, model answered without calling the tool): history in results/.
+  Policy observed: an unattended routine write needs the owner's approval (Ask); the harness plays the owner.
+- M0 desktop path desktop-path-run2 (real Electron host + v2 renderer over CDP, throwaway profile): 5/5 (create file, seven files, reminder, declined write, Core killed mid-task -> task listed resumable -> host resumeTask -> finished, no duplicates). Core-only and desktop results agree.
+
+### Remaining failures / limits
+- F03 (pc_organize_scan/apply): 0 of 4 correct moves; honest failures, one run with status completed over an honest "nothing moved" reply.
+- M3 evidence is one clean 7-day run after four failing ones; a second clean run is not yet recorded.
+- Routines need the owner's approval for writes (design decision, see below).
+- Not covered: exactly-once for external connectors (email/calendar) beyond fail-closed; args/path variants of run_command; the UI card for resume exists only as the Tasks Resume button.
+
 ## Not started
 Desktop request path measurement (needs a built app copy and the microtests CDP harness); M4 routing; M5 attachments/vision in v2; M6 memory proposals; M7 pilots;
 harness benchmark; cleanup. Real-Google tests stay blocked until the test-copy grant question above is closed.
