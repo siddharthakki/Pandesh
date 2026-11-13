@@ -62,7 +62,8 @@ describe('ledger on the S21 shape', () => {
     for (const n of ['a', 'b', 'c', 'd', 'e', 'f']) put(`inbox/${n}.txt`);
     const w = ['a', 'b', 'c'].map((n) => put(`analysis/${n}.analysis.md`)); w.push(put('analysis/index.md', 'no links'));
     const r = deliverableLedger({ requestText: S21, workspace: ws, writtenFiles: w, turnStartMs: start });
-    expect(r.missing).toEqual(['6 output files, one for each file in inbox']);
+    expect(r.missing[0]).toBe('6 output files, one for each file in inbox'); // and the index that names none of the three is flagged too
+    expect(r.missing.length).toBe(4);
   });
   it('is satisfied when everything exists', () => {
     const written = setup(['a', 'b', 'c', 'd', 'e', 'f']);
@@ -176,5 +177,20 @@ describe('review findings: "working directory" is not a claim that something wor
   it('does not flag an honest reply that merely says working directory', () => {
     const failed = { tool: 'run_checks', status: 'completed', result: { isError: true, content: [{ text: 'Error' }] } };
     expect(unbackedWorkingClaim('I could not run it. Run npm install in the working directory first.', [failed])).toBeNull();
+  });
+});
+
+describe('index that must list the outputs (M2 gate)', () => {
+  it('an index.md that mentions no sibling is missing them; one that names them is complete', () => {
+    const ws = fs.mkdtempSync(path.join(os.tmpdir(), 'ledger-index-'));
+    fs.mkdirSync(path.join(ws, 'analysis'));
+    const f = (n: string, t: string) => { fs.writeFileSync(path.join(ws, 'analysis', n), t); return path.join(ws, 'analysis', n); };
+    const a = f('a.analysis.md', 'a'); const b = f('b.analysis.md', 'b');
+    const req = 'Write analysis/<name>.analysis.md for each file and also analysis/index.md that lists and links all of them.';
+    const bad = f('index.md', '# Index\nnothing here');
+    expect(deliverableLedger({ requestText: req, workspace: ws, writtenFiles: [a, b, bad], turnStartMs: Date.now() - 60_000 }).missing.join('|')).toMatch(/mentions a\.analysis\.md[\s\S]*mentions b\.analysis\.md|mentions a\.analysis\.md/);
+    const good = f('index.md', '- [a](a.analysis.md)\n- [b](b.analysis.md)');
+    expect(deliverableLedger({ requestText: req, workspace: ws, writtenFiles: [a, b, good], turnStartMs: Date.now() - 60_000 }).missing).toEqual([]);
+    fs.rmSync(ws, { recursive: true, force: true });
   });
 });

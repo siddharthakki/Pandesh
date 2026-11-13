@@ -142,6 +142,15 @@ export function deliverableLedger(input: LedgerInput): LedgerResult {
       mark(`${path.relative(workspace, file).replace(/\\/g, '/')} links to ${target}`, fs.existsSync(resolved));
     }
   }
+  // 4. An index the request says should list or link the outputs must mention each sibling output (M2 gate run: an index.md that
+  //    linked nothing passed every other check).
+  if (/\b(lists?|links?|linking|listing|references?)\b[^.]{0,60}\b(all|each|every|the)\b/i.test(input.requestText)) {
+    for (const idx of written.filter((f) => /(^|[/\\])(index|toc|table-of-contents|overview)\.(md|markdown|html?)$/i.test(f) && isInside(f, workspace) && freshAndNonEmpty(f, turnStartMs))) {
+      let text = ''; try { text = fs.readFileSync(idx, 'utf8').toLowerCase(); } catch { continue; }
+      const siblings = [...new Set(written.filter((f) => f !== idx && path.dirname(f) === path.dirname(idx) && /\.(md|markdown|html?|txt)$/i.test(f) && isInside(f, workspace)))];
+      for (const sib of siblings) mark(`${path.relative(workspace, idx).split(path.sep).join('/')} mentions ${path.basename(sib)}`, text.includes(path.basename(sib).toLowerCase()) || text.includes(path.basename(sib).replace(/\.[^.]+$/, '').toLowerCase()));
+    }
+  }
   return { expected, missing, present };
 }
 
