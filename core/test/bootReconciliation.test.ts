@@ -171,3 +171,23 @@ describe('failDeadExecutorAttemptsOnBoot: a Saath loop parked on an approval', (
     expect(loadLoopContinuation(db, waiting)?.pendingApprovalId).toBeTruthy();
   });
 });
+
+describe('failDeadExecutorAttemptsOnBoot: a scheduled routine cut short by a restart', () => {
+  function runningAs(clientId: string, owner: string) {
+    const r = submitRequest(db, { clientId, currentMessage: `[Scheduled task "Daily report"] write it ${owner}`, requestedMode: 'saath_kar', workspaceRoot: workspace, requestedProvider: 'ollama', requestedModel: 'test-model', capability: { hasWorkspace: true, gitCapable: false }, correlationId: `corr-${owner}` });
+    const fence = acquireFence(db, r.attempt.id, { owner, actor: 'test', leaseMs: 120_000 });
+    transitionAttempt(db, r.attempt.id, { toStatus: 'running', fenceToken: fence.token, actor: 'test' });
+    return r.attempt.id;
+  }
+  it('tells the owner once (the routine\'s finish-hook died with the process); an ordinary task does not notify', () => {
+    const routine = runningAs('core:scheduler', 'core:executor:5001');
+    const ordinary = runningAs('desktop', 'core:executor:5002');
+    failDeadExecutorAttemptsOnBoot(db, { selfPid: 1, isProcessAlive: () => false });
+    failDeadExecutorAttemptsOnBoot(db, { selfPid: 1, isProcessAlive: () => false }); // idempotent
+    const rows = db.all<{ sourceId: string; kind: string; body: string }>('SELECT sourceId, kind, body FROM notification_outbox');
+    expect(rows.map((r) => r.sourceId)).toEqual([`sched-run:${routine}`]);
+    expect(rows[0].kind).toBe('task_failed');
+    expect(rows[0].body).toMatch(/Daily report/);
+    expect(rows.some((r) => r.sourceId.includes(ordinary))).toBe(false);
+  });
+});
