@@ -53,33 +53,53 @@ task, nothing resumes), S14 (I02: a new chat did not know the interrupted task),
 2 of 3 runs ended `completed`). Not reproduced: S16 in run 1 (T01 took another route; it did reproduce later, see M1). Permission
 violations: 0 (X01, A01, A02, C02 pass). Latency: median 12 s per scenario on gemma4.
 
-## M1 — completion truth (first slice built; gate NOT met)
+## Results over the program (Core, isolated, real local models; fast set unless stated)
 
-- `core/runtime/deliverableLedger.ts`: expected deliverables from the request (named output files, one output per input file, links
-  in files the turn wrote), a "works" claim after the turn's own check failed (S16), task dates the owner stated but that were not
-  stored (S20). One "still missing" nudge, then the turn is `partial`.
-- `partial` verdict: attempt failed with `Partly done:`, PARTLY DONE lead line, final verification `passed:false`.
-- `core/domain/resultStatus.ts` and `resultStatus` / `resultReason` on `GET /v1/attempts/:id`: completed | partial | blocked | failed |
-  cancelled | interrupted | running, derived from recorded facts (a completed attempt that ended unfinished is `failed`).
-- `run_checks`: a relative `workspacePath` resolves against the selected folder (G10).
-- Tests: `deliverableLedger` (14), `deliverableLedgerPi.acceptance` (3, real Pi engine, scripted model), `resultStatus` (7).
+| run | scenarios | pass | false completion | status contradiction | honest fail |
+|---|---:|---:|---:|---:|---:|
+| baseline (main + step 0), run 2 | 24 | 20 | 1 | 3 | 0 |
+| baseline, 3 repeats of 5 variable scenarios | 15 | 8 | 3 | 3 | 1 |
+| after5 (all slices + review fixes), run 1 | 25 | 23 | **0** | 1 (P01: harness timezone bug, fixed afterwards) | 1 |
+| after5, 3 repeats of F02, P01, I03, C01, T01 | 15 | 11 | **0** | 1 (I03#1: duplicate write, guard refined afterwards) | 3 |
 
-Open for the gate: T01 (S16) still shows a contradiction in some runs; P01 loses dependencies; the UI and phone still show the attempt
-`status`, not `resultStatus`; the one nudge does not make a weak model finish (F02 now ends `partial`, honestly).
+Slow scenarios (after4 run): S01 routine PASS (the scheduled run wrote its file in the creating folder; audit S07 closed on Core),
+R02 reminder due on time: Core side only (delivery is the desktop host's job, not measured here).
 
-## M2 — durable execution (first slice built; gate NOT met)
+## M1 — completion truth (built; gate NOT yet declared met)
 
-- `core/runtime/replayGuard.ts`: before a consequential call in a successor attempt, an identical call in the predecessor chain is
-  not executed again (succeeded → "Already done"; started with no recorded outcome → "check the real state first").
-- `core/runtime/resumeAttempt.ts` and `POST /v1/attempts/:id/resume`: a successor attempt of the same request, same model, folder
-  and permission policy, prompted with Core's account of what the journal says was done / started / read.
-- The personal overview lists tasks that did not finish from any conversation (S14, G14).
-- Test: `resumeReplayGuard.acceptance` (2, real Pi engine).
-- Not yet: automatic resume on boot, a chat tool / UI card to resume, the 10-scenario controlled interruption suite, budgets, backoff.
+Zero false completions in the last full run and in the last repeats; one status/outcome contradiction per run, each traced to a harness bug
+or a guard gap that was fixed after the run and has NOT been re-measured. S21 (F02): reproduced on the baseline, `partial`/honest afterwards.
+S16 (T01): one run where the reply said it works after a failed check; the guard now demotes it; later runs clean.
+Built: `deliverableLedger.ts` (named output files, one output per input file, link closure, 'works' after a failed check, stated task
+dates / priorities / dependencies stored), `partial` verdict, `resultStatus` (completed | partial | blocked | failed | cancelled |
+interrupted | running) on `GET /v1/attempts/:id`, `turn_blocked`, task record never 'satisfied' on an unfinished turn, addTask dedupe, run_checks path.
+Known limits: weak local models still fail some tasks (F02 now ends `partial`, honestly); the UI and phone still show the attempt `status`
+instead of `resultStatus`; the ledger counts only write_file as written.
+
+## M2 — durable execution (built; gate NOT met)
+
+`replayGuard.ts`, `resumeAttempt.ts`, `POST /v1/attempts/:id/resume`. End to end through the real HTTP API: I03 (kill after the first write, restart,
+resume) finished with all files and no duplicate write in 5 of 6 runs; the sixth showed one identical duplicate write (unknown-twin rule, now stricter).
+Not yet: automatic resume on boot, a chat tool or UI card to resume, the 10-scenario interruption suite, budgets, backoff, exactly-once for
+non-file operations (email, calendar) on a live connector.
+
+## M3 — routines (first slice built; gate NOT met)
+
+`schedule_task` freezes folder + access (fail-closed to read); the scheduler runs the routine there; a missing folder or an unfinished run enqueues a
+notification. Live: S01 passed once. Not yet: 7 consecutive runs of 3 routines, weekly/monthly recurrence, restart/cancel checks, host delivery of the notices.
+
+## Independent review
+
+A fresh subagent reviewed the diff (12 findings, 3 high). All high and most medium findings were fixed with tests (ledger inputs/negations, task checks only on
+task writes, chain freshness vs the replay guard, run_checks, refused calls, resume after Stop, dedupe by date, scheduler fail-closed). Not fixed: args over
+64 KB and path spellings can bypass the guard; a bare identical call in the SAME attempt is not guarded (pre-existing); unfinished-task list shows 90 characters of
+other chats' requests in every chat's overview.
+
+## Not started
+Desktop request path measurement (needs a built app copy and the microtests CDP harness); M4 routing; M5 attachments/vision in v2; M6 memory proposals; M7 pilots;
+harness benchmark; cleanup. Real-Google tests stay blocked until the test-copy grant question above is closed.
 
 ## Next exact step
-
-1. Rebuild the bundle, run the fast set and the repeats (`m1-core-after2`), analyse T01/I02/P01, record the verdict here.
-2. Decide the resume trigger (owner): a chat tool `resume_task` with an approval card, or automatic on boot for attempts with no
-   unknown consequential call.
-3. M3: freeze the scope for user-created routines, failure notices to the outbox, weekly/monthly recurrence.
+1. Re-run after the last fixes (P01 timezone check, unknown-twin rule): `node esbuild.core.js`, then the fast set and `--ids I03,P01 --repeat 5`.
+2. Owner decision: resume trigger (chat tool with approval card vs automatic on boot); and whether to push `program/reliability-recovery` and open a PR.
+3. Build the app copy from this tree and measure the desktop path (same scenarios through the v2 UI over CDP).
