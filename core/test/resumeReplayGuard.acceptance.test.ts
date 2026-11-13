@@ -27,6 +27,7 @@ import { listPendingApprovals, resolveApproval } from '../domain/approvals';
 import { getAttemptContext } from '../domain/attemptContext';
 import { startToolInvocation } from '../domain/toolInvocations';
 import { deriveResultStatus } from '../domain/resultStatus';
+import { listTaskOverview } from '../domain/taskOverview';
 import { resumeInterruptedAttempt, resumeGuidance, summarizeForResume } from '../runtime/resumeAttempt';
 
 interface ModelCall { messages: Array<{ role: string; content: unknown }>; system: string }
@@ -102,6 +103,12 @@ describe('resume after an interruption, with a replay guard', () => {
     db.run("UPDATE attempts SET status = 'failed', failureReason = 'Interrupted: KarkeDikha restarted while this task was running. It was not replayed automatically.' WHERE id = ?", [att.id]);
     expect(deriveResultStatus(db, att.id).status).toBe('interrupted');
 
+    // Nothing resumes by itself: the task is listed as resumable (the Resume button), and stays untouched until the owner presses it.
+    const listed = () => listTaskOverview(db, 50).find((r) => r.attemptId === att.id);
+    expect(listed()?.resultStatus).toBe('interrupted');
+    expect(listed()?.resumable).toBe(true);
+    expect(db.get('SELECT 1 FROM attempts WHERE predecessorAttemptId = ?', [att.id])).toBeFalsy();
+
     const summary = summarizeForResume(db, att.id);
     expect(summary.done.join('\n')).toMatch(/write_file/);
     expect(summary.unknown.join('\n')).toMatch(/b\.txt/);
@@ -110,6 +117,7 @@ describe('resume after an interruption, with a replay guard', () => {
     const successor = resumeInterruptedAttempt(db, att.id, 'test');
     expect(successor.predecessorAttemptId).toBe(att.id);
     expect(resumeInterruptedAttempt(db, att.id, 'test').id).toBe(successor.id); // idempotent
+    expect(listed()?.resumable).toBe(false); // already continued
 
     // the resumed model re-emits a.txt and b.txt (same args, other key order), then writes c.txt
     fs.writeFileSync(path.join(ws, 'a.txt'), 'a-before-resume-marker');

@@ -3024,11 +3024,10 @@ export class DesktopSession {
    * refusal is shown verbatim.
    */
   async resumeTask(attemptId: string): Promise<{ attemptId: string; requestId: string }> {
-    const result = await this.continueFailedTask(
-      attemptId,
-      'Continue from where this task stopped and finish the work it was asked for.',
-    );
-    return { attemptId: result.attemptId, requestId: result.requestId };
+    // The owner pressed Resume (nothing resumes on its own). Core builds the successor from its own record of what the
+    // interrupted attempt did and refuses to repeat a finished action; every approval applies again.
+    const { attempt } = await this.requireClient().resumeAttempt(attemptId.trim());
+    return { attemptId: attempt.id, requestId: attempt.requestId };
   }
 
   private async probeOllamaResidency(): Promise<Array<{ name: string; size: number; sizeVram: number; contextLength: number | null; expiresAt: string | null }> | null> {

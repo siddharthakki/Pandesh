@@ -867,6 +867,11 @@ export class CoreClient {
     return this.request<AttemptRecord>(`/v1/attempts/${attemptId}/retry`, { method: 'POST', body: input });
   }
 
+  /** M2: resume an interrupted or partly done task as a successor attempt of the same request (the owner pressed Resume). */
+  async resumeAttempt(attemptId: string): Promise<{ attempt: AttemptRecord; resumedFrom: string }> {
+    return this.request<{ attempt: AttemptRecord; resumedFrom: string }>(`/v1/attempts/${attemptId}/resume`, { method: 'POST', body: {} });
+  }
+
   async getAttemptRetryEligibility(attemptId: string): Promise<AttemptRetryEligibility> {
     return this.request<AttemptRetryEligibility>(`/v1/attempts/${attemptId}/retry-eligibility`);
   }
