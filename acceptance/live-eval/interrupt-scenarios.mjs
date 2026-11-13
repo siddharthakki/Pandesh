@@ -31,7 +31,9 @@ export function interruptScenarios({ seedSix, sixCheck, SIX_PROMPT }) {
     if (resumeTwice) { const again = await api(`/v1/attempts/${k.attemptId}/resume`, { method: 'POST', body: {} }); if (again.attempt.id !== last.id) return { turns: [k], ok: false, notes: 'second Resume created a second successor' }; }
     if (second) {
       const t0 = Date.now();
+      const pump2 = setInterval(async () => { try { for (const a of (await api('/v1/approvals/pending')).approvals ?? []) await api(`/v1/assistant/approvals/${a.id}/resolve`, { method: 'POST', body: { resolution: 'approved' }, host: true }); } catch { /* decided */ } }, 300);
       for (let i = 0; Date.now() - t0 < 240000 && !second(k.attemptId); i++) { await sleep(20); if (i % 25 === 0) { const a = await api(`/v1/attempts/${last.id}`); if (['completed', 'failed', 'cancelled'].includes(a.status)) break; } }
+      clearInterval(pump2);
       if (second(k.attemptId)) {
         killCore(); if (!(await restartCore())) return { turns: [k], ok: false, notes: 'core did not return after the second kill' };
         const state = await api(`/v1/attempts/${last.id}`);

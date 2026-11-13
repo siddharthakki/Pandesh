@@ -6621,7 +6621,7 @@ When the user asks to continue, resume, or check progress/updates, resume this w
       const LOOKUP_ONLY = /^(?:web_research|governed_research|navigate_to|read_file|list_directory|search_files|document_read|inspect_page|calculate|resolve_time|get_system_info|update_task_outcome|request_tools|memory_recall|browser_(?:read|open_site|goto|back|screenshot))$|_(?:search|list|read|get|status|recall|scan|analy[sz]e|inspect|preview|describe|inventory)(?:_\w+)?$/;
       // A call that returned an error result produced nothing (M0 F03: pc_organize_scan failed twice, the turn ended with
       // "completed" and an attempt that never moved a file).
-      const producedSomething = toolCallsRecorded.some((t) => t.status === 'completed' && !LOOKUP_ONLY.test(t.tool) && !(t.result as { isError?: boolean } | undefined)?.isError);
+      const producedSomething = (predecessorChain(db, attemptId).length > 0 && Number(db.get<{ n: number }>(`SELECT COUNT(*) AS n FROM tool_invocations WHERE toolName = 'write_file' AND status = 'succeeded' AND attemptId IN (${predecessorChain(db, attemptId).map(() => '?').join(',')})`, predecessorChain(db, attemptId))?.n ?? 0) > 0) /* a resumed task: what the interrupted attempts already wrote counts */ || toolCallsRecorded.some((t) => t.status === 'completed' && !LOOKUP_ONLY.test(t.tool) && !(t.result as { isError?: boolean } | undefined)?.isError);
       const correction = auditPromises(finalReply, {
         activeWorker: hasActiveWorker(db, conversationId, attemptId),
         canNotify: capability.canNotify,
