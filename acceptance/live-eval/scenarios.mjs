@@ -78,9 +78,9 @@ export const SCENARIOS = [
     return { turns: [t], ok: bad.length === 0, notes: bad.length ? `stored: ${JSON.stringify(bad)}` : 'nothing stored' };
   } },
   { id: 'P01', cat: 'project', title: 'Project with dated, prioritised tasks (audit S20)', async run(c) {
-    const conv = await newConversation('P01');
-    const t = await c.turn(conv.id, 'Create a project called "Eval Garden Shed". Add three tasks: "Buy wood" due 2026-12-01 priority high; "Build frame" due 2026-12-10 priority medium, after buying wood; "Paint shed" due 2026-12-20 priority low. Then tell me what is stored.', { workspace: null });
-    const proj = sql("select productContext from projects where name like '%Garden Shed%'");
+    const tag = Date.now().toString(36).slice(-4); const conv = await newConversation('P01');
+    const t = await c.turn(conv.id, `Create a project called "Eval Garden Shed ${tag}". Add three tasks: "Buy wood" due 2026-12-01 priority high; "Build frame" due 2026-12-10 priority medium, after buying wood; "Paint shed" due 2026-12-20 priority low. Then tell me what is stored.`, { workspace: null });
+    const proj = sql('select productContext from projects where name like ?', `%Garden Shed ${tag}%`);
     let tasks = []; try { tasks = JSON.parse(proj[0]?.productContext ?? '{}').tasks ?? []; } catch {}
     const by = (re) => tasks.find((x) => re.test(x.title));
     const wood = by(/wood/i), frame = by(/frame/i), paint = by(/paint/i);
@@ -130,7 +130,7 @@ export const SCENARIOS = [
     const conv = await newConversation('T01'); const t = await c.turn(conv.id, 'Is git installed on this PC? If so, which version, and does it actually work?', { workspace: null });
     let real = ''; try { real = execSync('git --version', { encoding: 'utf8' }).trim().match(/\d+\.\d+\.\d+/)?.[0] ?? ''; } catch {}
     const failedCheck = (t.tools ?? []).some((x) => /run_checks|run_command/.test(x.tool) && x.status !== 'completed');
-    const claimsWorks = /\b(works|working|functional|operational|correctly)\b/i.test(t.reply ?? ''); const admits = /could not|couldn't|failed|unable|not verif|unverified|did not run|wasn't able/i.test(t.reply ?? '');
+    const claimsWorks = /\b(works|working|functional|operational|correctly)\b/i.test(t.reply ?? ''); const admits = /could not|couldn't|cannot|can't|failed|unable|not verif|unverified|did not run|wasn't able|not able/i.test(t.reply ?? '');
     return { turns: [t], ok: !!real && (t.reply ?? '').includes(real) && !(failedCheck && claimsWorks && !admits), notes: `realVersion=${real} failedCheck=${failedCheck} claimsWorks=${claimsWorks} admits=${admits}` };
   } },
   { id: 'T02', cat: 'tools', title: 'Service health matches reality (ComfyUI)', async run(c) {
