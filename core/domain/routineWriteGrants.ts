@@ -198,3 +198,39 @@ export function verifyGrantRun(db: CoreDatabase, attemptId: string): { uses: num
 }
 
 export { sha as grantContentDigest };
+
+/** Deterministic counts for a directory listing, so a routine that has to count files never tallies them itself. */
+export function countDirectoryEntries(entries: Array<{ name: string; isFile(): boolean; isDirectory(): boolean }>, includeHidden = false): { fileCount: number; folderCount: number; countNote: string } {
+  const shown = entries.filter((e) => includeHidden || !e.name.startsWith('.'));
+  const fileCount = shown.filter((e) => e.isFile()).length;
+  const folderCount = shown.filter((e) => e.isDirectory()).length;
+  return { fileCount, folderCount, countNote: `Exact counts computed by the tool${includeHidden ? '' : ' (hidden entries excluded)'}: ${fileCount} file(s), ${folderCount} folder(s). Use these numbers; do not count the items yourself.` };
+}
+
+/**
+ * Independent semantic check of what a routine wrote, separate from the model and from the write-time read-back: a read-back only
+ * proves the file holds what was written, not that what was written is right. For a "count the files in <folder>" routine whose
+ * output is a bare number, Core recounts the folder on disk and compares. A routine whose result Core cannot recompute is not
+ * semantically checked (checked = 0), and that is reported as such, never as verified.
+ */
+export function verifyRoutineSemantics(db: CoreDatabase, attemptId: string, instruction: string, workspaceRoot: string | null): { checked: number; problems: string[] } {
+  if (!workspaceRoot || !/\bcount\b[^.]*\bfiles?\b/i.test(instruction)) return { checked: 0, problems: [] };
+  const rows = db.all<{ path: string }>(
+    `SELECT path FROM routine_write_grant_uses WHERE attemptId IN (SELECT id FROM attempts WHERE requestId = (SELECT requestId FROM attempts WHERE id = ?))`, [attemptId]);
+  const listed = db.all<{ argsSummary: string }>(
+    `SELECT argsSummary FROM tool_invocations WHERE toolName = 'list_directory' AND attemptId IN (SELECT id FROM attempts WHERE requestId = (SELECT requestId FROM attempts WHERE id = ?)) ORDER BY startedAt DESC`, [attemptId]);
+  let folder: string | null = null;
+  for (const l of listed) { try { const p = (JSON.parse(l.argsSummary) as { dirPath?: string }).dirPath; if (p) { folder = path.resolve(workspaceRoot, p); break; } } catch { /* truncated summary */ } }
+  if (!folder) { const m = /\bin the ['"`]?([\w./\-]+)['"`]? (?:folder|directory)\b/i.exec(instruction); if (m) folder = path.resolve(workspaceRoot, m[1]); }
+  if (!folder) return { checked: 0, problems: [] };
+  let actual: number;
+  try { actual = countDirectoryEntries(fs.readdirSync(folder, { withFileTypes: true })).fileCount; } catch { return { checked: 0, problems: [`${path.basename(folder)}: cannot be recounted`] }; }
+  const problems: string[] = []; let checked = 0;
+  for (const r of rows) {
+    let text: string; try { text = fs.readFileSync(r.path, 'utf8').trim(); } catch { continue; }
+    if (!/^\d+$/.test(text)) continue;
+    checked += 1;
+    if (Number(text) !== actual) problems.push(`${path.basename(r.path)} says ${text} but ${path.basename(folder)} holds ${actual} file(s)`);
+  }
+  return { checked, problems };
+}

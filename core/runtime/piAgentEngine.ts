@@ -93,7 +93,7 @@ import { GOOGLE_SETUP_WHERE, navigationPromptLines } from '../domain/productNavi
 import { navigateTo } from '../domain/uiNavigation';
 import { destinationsFor, parseUiSurface, type UiSurface } from '../shared/uiDestinations';
 import { recordExecutionQuality } from '../domain/executionQuality';
-import { checkGrantForWrite, grantContentDigest, recordGrantUse, scheduledTaskOfAttempt } from '../domain/routineWriteGrants';
+import { checkGrantForWrite, countDirectoryEntries, grantContentDigest, recordGrantUse, scheduledTaskOfAttempt } from '../domain/routineWriteGrants';
 import { AUTHORIZE_MISSION_TOOL,buildWorkspaceWriteEnvelope, createPendingMissionAuthorization, evaluateAuthorizedDispatch, evaluateMissionAction, getMissionAuthorization, markMissionAuthorized, markMissionRejected, protectedWriteReason, recordAuthorizedAction } from './missionAuthorization';
 import { NON_WORKSPACE_MARKERS } from '../domain/taskToolSurface';
 import { announcesWorkStarting, asksAboutConversationTask, auditPromises, classifyStatusRequest, composeStatusAnswer, describeConversationTask, hasActiveWorker, hasRecentGmailWork, latestConversationTask, type StatusTopic } from './assistantStatus';
@@ -3101,7 +3101,7 @@ export class PiAgentEngine implements EngineAdapter {
             folderLedger.noteListed(targetDir, items);
 
             return {
-              content: [{ type: 'text', text: JSON.stringify({ directory: targetDir, totalCount: entries.length, returnedCount: items.length, items }, null, 2) }],
+              content: [{ type: 'text', text: JSON.stringify({ directory: targetDir, ...countDirectoryEntries(entries, includeHidden), totalCount: entries.length, returnedCount: items.length, items }, null, 2) }],
               details: items,
             };
           } catch (err: any) {

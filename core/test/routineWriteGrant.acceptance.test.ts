@@ -18,7 +18,7 @@ import { createAttempt } from '../domain/attempts';
 import { acquireFence } from '../domain/fence';
 import { listPendingApprovals, resolveApproval } from '../domain/approvals';
 import { createScheduledTask, cancelScheduledTask } from '../domain/scheduledTasks';
-import { createGrant, revokeGrant, verifyGrantRun } from '../domain/routineWriteGrants';
+import { countDirectoryEntries, createGrant, revokeGrant, verifyGrantRun, verifyRoutineSemantics } from '../domain/routineWriteGrants';
 import { startApiServer, type RunningApiServer } from '../api/server';
 import { generateToken } from '../auth/token';
 
@@ -185,6 +185,30 @@ describe('standing write permission for a scheduled routine', () => {
     expect(() => createGrant(db, { taskId: ro, grantedBy: 'host:test' })).toThrow(/write access/);
     const none = createScheduledTask(db, { title: 'nofolder', instruction: 'x', dailyTime: '09:00', timezone: 'UTC', model: 'm' }).id;
     expect(() => createGrant(db, { taskId: none, grantedBy: 'host:test' })).toThrow(/no folder/);
+  });
+  describe('semantic verification (read-back is not proof the content is right)', () => {
+    const COUNT = 'Every day count the files in the inbox folder and write only that number into reports/inbox-count.txt.';
+    const seedInbox = () => { fs.mkdirSync(path.join(ws, 'inbox'), { recursive: true }); for (const n of ['a', 'b', 'c']) fs.writeFileSync(path.join(ws, 'inbox', `${n}.txt`), n); fs.writeFileSync(path.join(ws, 'inbox', '.hidden'), 'h'); fs.mkdirSync(path.join(ws, 'inbox', 'sub')); };
+    it('directory listings carry exact counts (hidden and folders excluded from the file count)', () => {
+      seedInbox();
+      const c = countDirectoryEntries(fs.readdirSync(path.join(ws, 'inbox'), { withFileTypes: true }));
+      expect(c).toMatchObject({ fileCount: 3, folderCount: 1 });
+      expect(c.countNote).toContain('3 file(s)');
+    });
+    it('a wrong count that was written, authorized and read back correctly is still caught', async () => {
+      seedInbox(); createGrant(db, { taskId, grantedBy: 'host:test' });
+      const att = await routineRun([{ file: 'reports/inbox-count.txt', content: '0' }]);
+      expect(verifyGrantRun(db, att.id)).toMatchObject({ uses: 1, matched: 1, problems: [] });
+      const sem = verifyRoutineSemantics(db, att.id, COUNT, ws);
+      expect(sem.checked).toBe(1);
+      expect(sem.problems[0]).toMatch(/says 0 but inbox holds 3/);
+    });
+    it('the right count passes, and an instruction Core cannot recompute is reported as unchecked, not verified', async () => {
+      seedInbox(); createGrant(db, { taskId, grantedBy: 'host:test' });
+      const att = await routineRun([{ file: 'reports/inbox-count.txt', content: '3' }]);
+      expect(verifyRoutineSemantics(db, att.id, COUNT, ws)).toEqual({ checked: 1, problems: [] });
+      expect(verifyRoutineSemantics(db, att.id, 'Write a status note into reports/x.txt.', ws)).toEqual({ checked: 0, problems: [] });
+    });
   });
 });
 

@@ -1,7 +1,7 @@
 import type { CoreDatabase } from '../db/connection';
 import { createConversation } from '../domain/conversations';
 import { latestRuntimeSequence, listRuntimeEventsAfter, recordRuntimeEvent } from '../domain/runtimeEvents';
-import { verifyGrantRun } from '../domain/routineWriteGrants';
+import { verifyGrantRun, verifyRoutineSemantics } from '../domain/routineWriteGrants';
 import { claimDueScheduledTasks, recordScheduledRun } from '../domain/scheduledTasks';
 import { submitRequest } from '../domain/submission';
 import { enqueueNotification } from '../domain/notificationOutbox';
@@ -170,8 +170,11 @@ export function startScheduledTaskLoop(
               // A run that wrote under a standing permission is checked against the disk, not against what the model said.
               const audit = verifyGrantRun(db, attemptId);
               if (audit.uses > 0) {
-                recordRuntimeEvent(db, { domain: 'authorization', entityId: attemptId, eventType: audit.problems.length ? 'routine_run_verification_failed' : 'routine_run_verified', actor: ACTOR, metadata: { taskId: task.id, writes: audit.uses, matched: audit.matched, problems: audit.problems.slice(0, 5) } });
-                if (audit.problems.length) enqueueNotification(db, { kind: 'task_failed', sourceId: `sched-verify:${attemptId}`, title: `Routine "${task.title}": a file does not match what was written`, body: audit.problems.join('; ') });
+                // Read-back proves the file holds what was written; the semantic check proves what was written is right.
+                const semantic = verifyRoutineSemantics(db, attemptId, task.instruction, workspaceRoot);
+                const problems = [...audit.problems, ...semantic.problems];
+                recordRuntimeEvent(db, { domain: 'authorization', entityId: attemptId, eventType: problems.length ? 'routine_run_verification_failed' : 'routine_run_verified', actor: ACTOR, metadata: { taskId: task.id, writes: audit.uses, matched: audit.matched, semanticChecked: semantic.checked, problems: problems.slice(0, 5) } });
+                if (problems.length) enqueueNotification(db, { kind: 'task_failed', sourceId: `sched-verify:${attemptId}`, title: `Routine "${task.title}": the result is not correct`, body: problems.join('; ') });
               }
             } catch { /* the audit record is best effort; the grant-use rows stay */ }
             try {
