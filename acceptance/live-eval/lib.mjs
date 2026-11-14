@@ -12,7 +12,7 @@ export const HERE = path.dirname(fileURLToPath(import.meta.url));
 export const RC = path.resolve(process.env.EVAL_RC ?? path.join(HERE, '..', '..')); // tree holding out-core/core.js
 export const LABEL = process.env.EVAL_LABEL ?? 'local';
 export const ROOT = process.env.EVAL_ROOT ?? `D:/PandeshRecoveryEval/${LABEL}`; // outside the repo
-export const DATA = path.join(ROOT, 'profile');
+export const DATA = process.env.EVAL_DATA ?? path.join(ROOT, 'profile'); // EVAL_DATA: read a real profile's DB (read-only)
 export const PORT = Number(process.env.EVAL_PORT ?? 58941);
 export const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
