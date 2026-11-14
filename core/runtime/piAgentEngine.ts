@@ -116,6 +116,7 @@ import { CLOUD_OFFER_DECLINED_REPLY, classifyOfferReply, cloudOfferAcceptedReply
 import { asksToMakeSomething as asksToMakeOutsideChat } from './makeIntent';
 import { modelLacksTools } from './ollamaModelInfo';
 import { unbackedScreenClaims } from './screenClaims';
+import { noteActiveModel, renderModelSummary, snapshotModels } from './modelAwareness';
 import type { CloudCredentialStore } from './cloudCredentials';
 import { TURN_STATE_PROMPT_RULE, attachTurnState, formatTurnState } from './turnState';
 import { formatProjectNotesSection, readProjectNotes } from './projectNotes';
@@ -1116,6 +1117,7 @@ export class PiAgentEngine implements EngineAdapter {
     const cloudTarget = ctx.provider && ctx.provider !== 'ollama'
       ? resolvePiCloudTarget({ provider: ctx.provider, context: ctx.cloud?.context, credentials: ctx.cloud?.credentials })
       : null;
+    noteActiveModel(selectedModel, cloudTarget ? cloudTarget.provider : 'ollama');
     const controls = resolveOllamaChatControls({ profile: 'pi', model: selectedModel });
     const baseNumCtx = controls.numCtx ?? PI_CONTEXT_WINDOW;
     if (!cloudTarget) {
@@ -5105,7 +5107,8 @@ ${availableToolNames.has('desktop_screenshot') ? `- 'desktop_screenshot' only CA
 ` : '';
 
     const pcOrgPromptSection = ['pc_capability_inventory', 'pc_organize_scan', 'routine_create', 'household_scan_obligations'].some((t) => availableToolNames.has(t)) ? `PC ORGANIZATION, ROUTINES, HOUSEHOLD & JUGAAD (STRICT RULES):
-${availableToolNames.has('pc_capability_inventory') ? `- "What tools/software/models does this PC have?" → 'pc_capability_inventory'. If a task needs something missing, name the utility it recommends and offer 'pc_install_utility' (the user approves the exact package); never refuse just because a tool is missing.\n` : ''}${availableToolNames.has('pc_organize_scan') ? `- "Analyze/organize my PC, Downloads, Documents, tax files…" → 'pc_organize_scan' with the folders the user named (never a whole drive). Present its plan as it is: hierarchy, exact moves, what stays, project/model folders kept whole, duplicates, temporary files, space and risks. Nothing moves until the user approves 'pc_organize_apply'; offer saveRules when they want it kept organized. 'pc_organize_undo' reverses a plan. Pandesh never deletes files.\n` : ''}${availableToolNames.has('routine_create') ? `- "Every week…/every morning…/monitor…" → 'routine_create' (folder_cleanup, obligations_check or expiry_watch) with the time, weekdays and folders the user asked for; 'routine_list' shows schedule, authority and history; 'routine_control' pauses, resumes, edits, runs now or cancels.\n` : ''}${availableToolNames.has('household_scan_obligations') ? `- Bills, invoices, subscriptions, renewals, contracts, warranties → 'household_scan_obligations' (sources ["gmail"] and/or folders), then 'household_obligations' to list (withinDays 31 for "next month"). An invoice email does NOT prove a bill is unpaid: report payment status exactly as the tool gives it (requested, due soon, possibly overdue, confirmed, unknown). Only the user confirms a record ('household_obligation_update'); a confirmed record becomes a JUGAAD Important Date.\n` : ''}` : '';
+${availableToolNames.has('capability_explain') ? `- "What can you do / can you see images / which model would you use / why can't you X?" → 'capability_explain' (live: installed, loaded, active models, what fits, why). Answer from it; never from memory, and never confuse what a model CAN do with what the user has permitted.
+` : ''}${availableToolNames.has('pc_capability_inventory') ? `- "What tools/software/models does this PC have?" → 'pc_capability_inventory'. If a task needs something missing, name the utility it recommends and offer 'pc_install_utility' (the user approves the exact package); never refuse just because a tool is missing.\n` : ''}${availableToolNames.has('pc_organize_scan') ? `- "Analyze/organize my PC, Downloads, Documents, tax files…" → 'pc_organize_scan' with the folders the user named (never a whole drive). Present its plan as it is: hierarchy, exact moves, what stays, project/model folders kept whole, duplicates, temporary files, space and risks. Nothing moves until the user approves 'pc_organize_apply'; offer saveRules when they want it kept organized. 'pc_organize_undo' reverses a plan. Pandesh never deletes files.\n` : ''}${availableToolNames.has('routine_create') ? `- "Every week…/every morning…/monitor…" → 'routine_create' (folder_cleanup, obligations_check or expiry_watch) with the time, weekdays and folders the user asked for; 'routine_list' shows schedule, authority and history; 'routine_control' pauses, resumes, edits, runs now or cancels.\n` : ''}${availableToolNames.has('household_scan_obligations') ? `- Bills, invoices, subscriptions, renewals, contracts, warranties → 'household_scan_obligations' (sources ["gmail"] and/or folders), then 'household_obligations' to list (withinDays 31 for "next month"). An invoice email does NOT prove a bill is unpaid: report payment status exactly as the tool gives it (requested, due soon, possibly overdue, confirmed, unknown). Only the user confirms a record ('household_obligation_update'); a confirmed record becomes a JUGAAD Important Date.\n` : ''}` : '';
 
     const filesPromptSection = availableToolNames.has('read_file') || availableToolNames.has('search_files') ? `6a. FILES & DOCUMENTS (invoices, receipts, statements, contracts, PDFs, photos):
 - These are files on this computer unless the user says email, mail or inbox. Look in the User-Selected Workspace first with 'search_files' or 'list_directory' and use 'lastModified' (or the date inside the document) for "newest" or "latest". If nothing is there, ask with 'request_search_permission' to look in Downloads or Documents. Use gmail_* tools only when the user mentions email.
@@ -5542,6 +5545,14 @@ When the user asks to continue, resume, or check progress/updates, resume this w
     // A local model Ollama says cannot use tools (qwen2.5vl:7b) is sent none: with 52 tool definitions Ollama refused
     // the call ("does not support tools") and the turn failed before a word was written (owner test, 2026-11-12).
     const modelWithoutTools = !cloudTarget && !simpleInteractive && await modelLacksTools(ollamaRoot, selectedModel);
+    // What the models on this PC can do right now, in a few lines, from live facts (never for a cloud turn: the cloud model
+    // is told nothing about this PC). Detail is on demand through capability_explain. Abilities are not permissions.
+    if (!cloudTarget && !simpleInteractive) {
+      try {
+        const snap = await Promise.race([snapshotModels({ selectedModel, provider: 'ollama' }), new Promise<never>((_, rej) => setTimeout(() => rej(new Error('model snapshot timed out')), 4_000))]);
+        addTurnFact(renderModelSummary(snap));
+      } catch { /* no summary this turn: the model is simply not told */ }
+    }
     if (modelWithoutTools) {
       addTurnFact(`TOOLS UNAVAILABLE: ${selectedModel} cannot use tools, so this turn has none. Answer from the conversation and any picture the user attached. If the request needs an action (a screenshot, a file, a search, an email), say plainly that ${selectedModel} cannot do it and that the user can pick Auto or another model.`);
       safeRecordRuntimeEvent(db, broadcaster, attemptId, 'model_without_tools', { model: selectedModel }, actor);
