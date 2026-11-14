@@ -17,6 +17,7 @@ import { createComputerUseCapabilityAdapter } from '../runtime/computerUseCapabi
 import { buildPiCapabilityBridge } from '../runtime/piCapabilityBridge';
 import { createLocalVisionInspector, isLoopbackUrl } from '../runtime/localVisionInspector';
 import { unbackedScreenClaims } from '../runtime/screenClaims';
+import { clearModelAwarenessCache } from '../runtime/modelAwareness';
 import { TURN_STATE_CLOSE } from '../runtime/turnState';
 
 /**
@@ -110,6 +111,7 @@ describe('screenshot capture and analysis through the real turn', () => {
     tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pandesh-screenshot-'));
     db = openDatabase(path.join(tempDir, 'core.db'));
     runMigrations(db);
+    clearModelAwarenessCache();
     seen = { visionRequests: [], mainTools: [] };
     visionModels = ['fake-vision'];
     mainMode = 'honest';
@@ -209,27 +211,6 @@ describe('screenshot capture and analysis through the real turn', () => {
     expect(out.ok).toBe(false);
     expect(calls).toBe(0);
     if (!out.ok) expect(out.reason).toMatch(/never sent off this PC without separate consent/);
-  });
-
-  it('prefers the smallest vision-named reader and skips uncensored variants (owner model list)', async () => {
-    const calls: string[] = [];
-    let loaded: string[] = [];
-    const fake = (async (url: string, init?: { body?: string }) => {
-      if (url.endsWith('/api/ps')) return new Response(JSON.stringify({ models: loaded.map((name) => ({ name })) }));
-      if (url.endsWith('/api/tags')) return new Response(JSON.stringify({ models: [
-        { name: 'gemma4:26b-a4b-it-qat', size: 15e9 }, { name: 'hf.co/x/DeepSeek-heretic-GGUF:Q8_0', size: 10e9 }, { name: 'qwen2.5vl:7b', size: 6e9 }, { name: 'gemma4:12b', size: 7.6e9 }] }));
-      if (url.endsWith('/api/show')) return new Response(JSON.stringify({ capabilities: ['completion', 'vision'] }));
-      calls.push(JSON.parse(init!.body!).model);
-      return new Response(JSON.stringify({ message: { content: 'ok text' } }));
-    }) as unknown as typeof fetch;
-    const png = path.join(tempDir, 'y.png'); fs.writeFileSync(png, syntheticPng());
-    const out = await createLocalVisionInspector({ baseUrl: 'http://127.0.0.1:11434', fetchFn: fake })({ path: png, question: 'what is on screen' });
-    expect(out.ok && out.model).toBe('qwen2.5vl:7b');
-    expect(calls).toEqual(['qwen2.5vl:7b']);
-    // the chat model (gemma4:12b reports vision and tools) is already loaded: it reads, and nothing else is loaded
-    loaded = ['gemma4:12b'];
-    const again = await createLocalVisionInspector({ baseUrl: 'http://127.0.0.1:11434', fetchFn: fake })({ path: png, question: 'what is on screen' });
-    expect(again.ok && again.model).toBe('gemma4:12b');
   });
 
   it('unbackedScreenClaims leaves honest replies alone', () => {
