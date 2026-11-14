@@ -5414,6 +5414,7 @@ export class DesktopSession {
         requestId: this.active.requestId,
         eventType: event.eventType,
         domain: event.domain,
+        detail: liveActivityDetail(event.metadata),
         summary: `${event.domain}:${event.eventType}`,
       });
       this.recordEvidence({ type: 'runtime-event', event });
@@ -5427,6 +5428,7 @@ export class DesktopSession {
       requestId: this.active.requestId,
       eventType: event.eventType,
       domain: event.domain,
+      detail: liveActivityDetail(event.metadata),
       summary: `attempt ${event.eventType}${event.metadata?.['to'] ? ` → ${String(event.metadata['to'])}` : ''}`,
     });
     this.recordEvidence({ type: 'runtime-event', event });
@@ -5883,6 +5885,26 @@ function toolOutput(metadata: Record<string, unknown> | undefined): string {
 
 /** The bounded preview the tool published: relayed on a governed call's
  * completion, or inside a direct call's evidence. */
+/** The content-free facts of a live-activity event: numbers, a phase name, a clipped Core reason. Nothing else is copied. */
+export function liveActivityDetail(metadata: Record<string, unknown> | undefined): DesktopActivityEvent['detail'] {
+  if (!metadata) return undefined;
+  const out: NonNullable<DesktopActivityEvent['detail']> = {};
+  const num = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) ? v : undefined);
+  const word = (v: unknown) => (typeof v === 'string' && /^[a-z_]{1,40}$/.test(v) ? v : undefined);
+  if (num(metadata['pass']) !== undefined) out.pass = num(metadata['pass']);
+  if (word(metadata['phase'])) out.phase = word(metadata['phase']);
+  if (num(metadata['toolCalls']) !== undefined) out.toolCalls = num(metadata['toolCalls']);
+  if (num(metadata['textChars']) !== undefined) out.textChars = num(metadata['textChars']);
+  if (typeof metadata['reasoned'] === 'boolean') out.reasoned = metadata['reasoned'];
+  if (typeof metadata['ok'] === 'boolean') out.ok = metadata['ok'];
+  if (num(metadata['durationMs']) !== undefined) out.durationMs = num(metadata['durationMs']);
+  if (word(metadata['kind'])) out.kind = word(metadata['kind']);
+  if (word(metadata['to'])) out.to = word(metadata['to']);
+  const reason = metadata['failureReason'] ?? metadata['reason'];
+  if (typeof reason === 'string' && reason.trim()) out.reason = reason.replace(/\s+/g, ' ').trim().slice(0, 240);
+  return Object.keys(out).length > 0 ? out : undefined;
+}
+
 function toolActivity(metadata: Record<string, unknown> | undefined): DesktopActivityEvent['activity'] {
   const evidence = metadata?.['evidence'];
   const raw = metadata?.['activity']
