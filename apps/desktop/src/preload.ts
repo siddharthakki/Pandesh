@@ -234,6 +234,9 @@ const desktopApi = {
   /** The Household panel: one allowlisted action (see DesktopSession.household). */
   household: (action: string, args?: Record<string, unknown>): Promise<unknown> =>
     ipcRenderer.invoke(DESKTOP_CHANNELS.household, action, args ?? {}),
+  listRoutineWriteGrants: (): Promise<unknown> => ipcRenderer.invoke(DESKTOP_CHANNELS.listRoutineWriteGrants),
+  grantRoutineWrite: (taskId: string, limits?: Record<string, number>): Promise<unknown> => ipcRenderer.invoke(DESKTOP_CHANNELS.grantRoutineWrite, taskId, limits),
+  revokeRoutineWrite: (taskId: string): Promise<unknown> => ipcRenderer.invoke(DESKTOP_CHANNELS.revokeRoutineWrite, taskId),
   getDailyBriefRoutine: (): Promise<DesktopDailyBriefRoutine | null> =>
     ipcRenderer.invoke(DESKTOP_CHANNELS.getDailyBriefRoutine),
   configureDailyBriefRoutine: (input: { dailyTime: string; timezone?: string; enabled?: boolean }): Promise<DesktopDailyBriefRoutine | null> =>

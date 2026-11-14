@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { api, errorText, type ArtifactView } from './bridge';
+import { RoutineGrants } from './RoutineGrants';
 
 export type SpaceId = 'projects' | 'wish' | 'social' | 'media' | 'automations';
 const TITLES: Record<SpaceId, string> = { projects: 'Projects', wish: 'Wish to Reality', social: 'Social Studio', media: 'Media Studio', automations: 'Automations' };
@@ -183,6 +184,7 @@ function AutomationsView({ data, call, reload, setNote }: { data: Rec; call: <T>
         <RecordCard key={str(r.id)} r={r} extra={<span className="meta">{r.nextRunAt ? `Next ${when(r.nextRunAt)}` : ''}{r.lastRunAt ? ` · last ${when(r.lastRunAt)}` : ''}</span>}
           actions={<><button type="button" className="btn small" onClick={() => void control(str(r.id), 'run')}>Run now</button>{statusOf(r) === 'paused' ? <button type="button" className="btn small" onClick={() => void control(str(r.id), 'resume')}>Resume</button> : <button type="button" className="btn small" onClick={() => void control(str(r.id), 'pause')}>Pause</button>}</>} />
       ))}
+      <RoutineGrants />
       <h2 style={{ margin: 0, fontSize: 15 }}>Command queue ({queue.length})</h2>
       {queue.length === 0 && <div className="empty" style={{ color: 'var(--faint)' }}>Empty.</div>}
       {queue.map((q) => <RecordCard key={str(q.id)} r={q} />)}

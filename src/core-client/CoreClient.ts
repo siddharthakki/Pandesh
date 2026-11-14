@@ -1214,6 +1214,17 @@ export class CoreClient {
     return this.request('/v1/assistant/brief', { query: { external: external ? '1' : '0' } });
   }
 
+  /** Standing write permission (host-only): the folder routines and the state of each one's permission. */
+  async routineWriteGrants(): Promise<{ routines: RoutineWriteGrantRow[]; operations: string[]; caps: Record<string, number>; defaults: Record<string, number> }> {
+    return this.requestAsHost('/v1/routine-write-grants');
+  }
+  async grantRoutineWrite(taskId: string, limits?: Record<string, number>): Promise<unknown> {
+    return this.requestAsHost(`/v1/scheduled-tasks/${encodeURIComponent(taskId)}/write-grant`, { method: 'POST', body: { confirm: true, ...(limits ? { limits } : {}) } });
+  }
+  async revokeRoutineWrite(taskId: string): Promise<{ revoked: number }> {
+    return this.requestAsHost(`/v1/scheduled-tasks/${encodeURIComponent(taskId)}/write-grant`, { method: 'DELETE' });
+  }
+
   /** The user-configured daily brief routine, or null when it was never set up. */
   async getDailyBriefRoutine(): Promise<{ routine: DailyBriefRoutine | null }> {
     return this.request('/v1/assistant/routine/daily-brief');
@@ -1368,4 +1379,11 @@ export class CoreClient {
     this.stopHeartbeatWatchdog();
     this.ws?.close();
   }
+}
+
+/** One folder routine as the host window shows it for standing write permission. */
+export interface RoutineWriteGrantRow {
+  taskId: string; title: string; instruction: string; dailyTime: string | null; folder: string; access: string | null; grantable: boolean;
+  status: 'none' | 'active' | 'stale';
+  active: { id: string; grantedAt: string; frozen: { operations: string[]; limits: Record<string, number> } & Record<string, unknown> } | null;
 }

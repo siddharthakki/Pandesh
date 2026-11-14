@@ -143,6 +143,9 @@ export const DESKTOP_CHANNELS = {
   getAssistantBrief: 'desktop:getAssistantBrief',
   /** Pandesh: the one proactive routine — a user-configured daily brief. */
   getDailyBriefRoutine: 'desktop:getDailyBriefRoutine',
+  listRoutineWriteGrants: 'desktop:listRoutineWriteGrants',
+  grantRoutineWrite: 'desktop:grantRoutineWrite',
+  revokeRoutineWrite: 'desktop:revokeRoutineWrite',
   configureDailyBriefRoutine: 'desktop:configureDailyBriefRoutine',
   household: 'desktop:household',
   /** Answers a pending approval from a visible card (Home included). */

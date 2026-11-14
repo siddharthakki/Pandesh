@@ -1518,6 +1518,18 @@ function registerIpc(): void {
     if (!session) throw new Error('desktop session is not started');
     return session.household(String(action ?? ''), args && typeof args === 'object' ? args : {});
   });
+  ipcMain.handle(DESKTOP_CHANNELS.listRoutineWriteGrants, async () => {
+    if (!session) throw new Error('desktop session is not started');
+    return session.listRoutineWriteGrants();
+  });
+  ipcMain.handle(DESKTOP_CHANNELS.grantRoutineWrite, async (_event, taskId: string, limits?: Record<string, number>) => {
+    if (!session) throw new Error('desktop session is not started');
+    return session.grantRoutineWrite(String(taskId ?? ''), limits && typeof limits === 'object' ? limits : undefined);
+  });
+  ipcMain.handle(DESKTOP_CHANNELS.revokeRoutineWrite, async (_event, taskId: string) => {
+    if (!session) throw new Error('desktop session is not started');
+    return session.revokeRoutineWrite(String(taskId ?? ''));
+  });
   ipcMain.handle(DESKTOP_CHANNELS.getDailyBriefRoutine, async () => {
     if (!session) throw new Error('desktop session is not started');
     return session.getDailyBriefRoutine();

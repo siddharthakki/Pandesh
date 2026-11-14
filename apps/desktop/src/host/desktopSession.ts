@@ -2966,6 +2966,12 @@ export class DesktopSession {
     return client.requestAsHost(route.path, route.method ? { method: route.method, body: route.body } : {});
   }
 
+  /** Standing write permission: folder routines and their grant state (host-only Core routes). */
+  async listRoutineWriteGrants(): Promise<unknown> { return this.requireClient().routineWriteGrants(); }
+  /** The owner pressed Grant after seeing the folder, operation and limits: Core freezes exactly that. */
+  async grantRoutineWrite(taskId: string, limits?: Record<string, number>): Promise<unknown> { return this.requireClient().grantRoutineWrite(taskId, limits); }
+  async revokeRoutineWrite(taskId: string): Promise<unknown> { return this.requireClient().revokeRoutineWrite(taskId); }
+
   /** The configured daily brief routine, or null when it was never set up. */
   async getDailyBriefRoutine(): Promise<DesktopDailyBriefRoutine | null> {
     const client = this.requireClient();

@@ -4,7 +4,7 @@
  */
 import { CoreError } from '../domain/errors';
 import { createGrant, getActiveGrant, listGrants, revokeGrant, checkGrantForWrite, GRANTABLE_OPERATIONS, GRANT_LIMIT_CAPS, GRANT_DEFAULT_LIMITS } from '../domain/routineWriteGrants';
-import { getScheduledTask } from '../domain/scheduledTasks';
+import { getScheduledTask, listScheduledTasks } from '../domain/scheduledTasks';
 import type { ApiContext, ApiResult } from './context';
 import type { Router } from './router';
 
@@ -16,6 +16,22 @@ function requireHost(ctx: ApiContext): string {
 const bodyOf = (ctx: ApiContext): Record<string, unknown> => (ctx.body && typeof ctx.body === 'object' && !Array.isArray(ctx.body) ? ctx.body as Record<string, unknown> : {});
 
 export function registerRoutineGrantRoutes(router: Router<ApiContext, ApiResult>): void {
+  // What the host window shows: every enabled routine that works in a folder, the exact permission it could be given, and the state.
+  router.get('/v1/routine-write-grants', (ctx) => {
+    requireHost(ctx);
+    const routines = listScheduledTasks(ctx.db, false).filter((t) => !t.routine).map((t) => {
+      const scope = t.scope as { workspaceRoot?: string; workspaceAccess?: string } | null;
+      const folder = scope?.workspaceRoot ?? null;
+      const active = getActiveGrant(ctx.db, t.id);
+      return {
+        taskId: t.id, title: t.title, instruction: t.instruction, dailyTime: t.dailyTime, folder, access: scope?.workspaceAccess ?? null,
+        grantable: Boolean(folder && scope?.workspaceAccess === 'read_write'),
+        status: !active ? 'none' : (folder && checkGrantForWrite(ctx.db, t.id, folder).ok ? 'active' : 'stale'),
+        active: active ? { id: active.id, grantedAt: active.grantedAt, frozen: active.frozen } : null,
+      };
+    }).filter((r) => r.folder);
+    return { status: 200, body: { routines, operations: GRANTABLE_OPERATIONS, caps: GRANT_LIMIT_CAPS, defaults: GRANT_DEFAULT_LIMITS } };
+  });
   router.get('/v1/scheduled-tasks/:id/write-grant', (ctx, match) => {
     requireHost(ctx);
     const task = getScheduledTask(ctx.db, match.params.id);
