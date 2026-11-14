@@ -12,7 +12,76 @@ import { progressOf, taskState, type GmailOrganizeTask } from './connectors/gmai
 export type StatusTopic = 'notifications' | 'gmail' | 'tasks' | 'reminders';
 
 const GMAIL_WORDS = /\b(?:gmail|inbox|e-?mails?|mail|organi[sz]\w*|labell?\w*|finance)\b/i;
-const PROGRESS_WORDS = /\b(?:status|progress|update|how (?:far|many|much)|done yet|finished|complete[d]?|still|remaining|left)\b/i;
+// "how many/much" is a progress question only when it asks about work being done ("how many have been organized");
+// "how many emails are in my inbox" is a count of mailbox contents and needs a Gmail tool, never the recorded status.
+const PROGRESS_WORDS = /\b(?:status|progress|update|how far|done yet|finished|complete[d]?|still|remaining|left)\b|\bhow (?:many|much)\b[^.?!]{0,60}\b(?:organi[sz]ed|labell?ed|processed|done|finished|completed|left|remaining|moved|archived|applied|handled)\b/i;
+
+/**
+ * The classification boundary of every pre-model shortcut: these answer questions about Pandesh's own recorded state.
+ * A question about files, folders, paths or code is never one of them, whatever other words it contains. Build 170
+ * (installed-binary finding R02): "How many files are in the rw/inbox folder?" was answered with the Gmail status
+ * because "inbox" is a Gmail word and "how many" a progress word.
+ *
+ * A router may only decline here, never grant: declining sends the request to the model with the ordinary tools, whose
+ * approvals, privacy checks and cloud-egress rules apply unchanged. This is not a security decision.
+ */
+const FS_PATH_TOKEN = /(?:^|[\s"'`(])(?:[A-Za-z]:[\\/]|\\\\|~[\\/]|\.{1,2}[\\/])|(?:^|[\s"'`(])[\w.~-]*[A-Za-z][\w.~-]*[\\/][\w.\\/~-]*[A-Za-z]/;
+const FS_NOT_A_PATH = /\b(?:and\/or|w\/o|n\/a|he\/she|his\/her|yes\/no|either\/or|read\/write|input\/output)\b/gi;
+const FS_FILE_NAME = /\b[\w-]+\.(?:txt|csv|tsv|json|md|pdf|docx?|xlsx?|pptx?|log|ts|tsx|js|mjs|py|html?|zip|eml|msg|png|jpe?g|yaml|yml|xml|ini|bat|ps1)\b/i;
+const FS_NOUNS = /\b(?:files?|folders?|director(?:y|ies)|sub-?folders?|paths?|drives?|workspace|repo(?:sitory)?|disk|datei(?:en)?|ordner|verzeichnis\w*|pfad|laufwerk)\b/i;
+
+/** Text inside quotation marks or code spans is mentioned, not asked about. */
+function withoutQuoted(text: string): string {
+  return text.replace(/`[^`]*`|"[^"]*"|\u201c[^\u201d]*\u201d|\u2018[^\u2019]*\u2019/g, ' ');
+}
+
+/** True when the request is about files, folders, paths or code rather than about Pandesh's state. */
+export function isAboutFilesystem(text: string): boolean {
+  const t = String(text || '').replace(FS_NOT_A_PATH, ' ');
+  return FS_PATH_TOKEN.test(t) || FS_FILE_NAME.test(t) || FS_NOUNS.test(withoutQuoted(t));
+}
+
+/**
+ * A question whose answer exists only on the disk ("how many files are in rw/inbox", "what is in C:\\Temp"). Core
+ * requires a real, successful read before such an answer may be reported as done.
+ */
+export function asksForDiskObservation(text: string): boolean {
+  const t = String(text || '').trim();
+  if (!t || t.length > 300 || !isAboutFilesystem(t)) return false;
+  if (/\b(?:create|write|save|move|copy|delete|remove|rename|organi[sz]e|sort|clean|install|run|build|fix|edit|change|add|make|zip|upload)\b/i.test(withoutQuoted(t))) return false;
+  return /\b(?:how\s+(?:many|big|large|much)|count|list|show|what(?:'s|\s+is|\s+are)|which|is\s+there|are\s+there|exists?|contains?|size|newest|oldest|largest|biggest|names?|wie\s+viele|welche|zeig\w*)\b|\?\s*$/i.test(withoutQuoted(t));
+}
+/**
+ * The folders and files a disk question names ("rw/inbox", "C:\Temp", "notes.txt", "the Reports folder"). Empty when the
+ * request names none, in which case no particular target can be demanded of the read.
+ */
+export function requestedDiskTargets(text: string): string[] {
+  const t = withoutQuoted(String(text || '').replace(FS_NOT_A_PATH, ' '));
+  const out = new Set<string>();
+  const norm = (v: string) => v.replace(/\\/g, '/').replace(/^\.\//, '').replace(/\/+$/, '').toLowerCase();
+  for (const raw of t.split(/\s+/)) {
+    const tok = raw.replace(/^[("'`]+|[)"'`?!,;]+$/g, '').replace(/\.$/, '');
+    if (/[\\/]/.test(tok) || FS_FILE_NAME.test(tok)) { const n = norm(tok); if (n && !/^[a-z]:$/.test(n)) out.add(n); }
+  }
+  for (const m of t.matchAll(/\b(?:the|in|im|my)\s+([\w.-]+)\s+(?:folder|director(?:y|ies)|ordner)\b/gi)) {
+    const name = m[1].toLowerCase();
+    if (!/^(?:this|that|same|whole|entire|main|root|parent|current|a|an|the|my|that|these|those|other|new|old)$/.test(name)) out.add(name);
+  }
+  return [...out];
+}
+
+/** True when a successful read touched a target the request names (or the request names none). */
+export function readCoversRequestedTarget(text: string, readArgs: unknown[]): boolean {
+  const targets = requestedDiskTargets(text);
+  if (!targets.length) return true;
+  const strings: string[] = [];
+  const walk = (v: unknown, depth = 0) => {
+    if (typeof v === 'string') strings.push(v.replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase());
+    else if (depth < 3 && v && typeof v === 'object') for (const x of Object.values(v as Record<string, unknown>)) walk(x, depth + 1);
+  };
+  for (const a of readArgs) walk(a);
+  return targets.some((tg) => strings.some((s) => `/${s}/`.includes(`/${tg}/`)));
+}
 /** A command to do Gmail work is a task, never a status question, even when it mentions progress. */
 const IMPERATIVE = /^\s*(?:please\s+)?(?:move|archive|label|organi[sz]e|delete|apply|start|create|run|continue|proceed|go|do|make|send|process)\b/i;
 const BARE_FOLLOW_UP = /^\s*(?:status|update(?: me)?|progress|and\s*\??|so\s*\??|any (?:news|update|progress)\s*\??|(?:is it |are you )?(?:still )?(?:not )?(?:done|finished|ready)(?: yet)?\s*\??|a?still not d\w+\s*\??)\s*[?!.]*\s*$/i;
@@ -30,6 +99,15 @@ const REMINDER_DETAIL = /\b(?:time\s*zone|timezone|why|how\s+(?:do|does|can|ofte
 export function classifyStatusRequest(text: string, hasRecentGmailWork = false): StatusTopic[] | null {
   const t = String(text || '').trim();
   if (!t || t.length > 300) return null;
+  // Not about Pandesh's own state: files, folders, paths and code go to the model with its tools.
+  if (isAboutFilesystem(t)) return null;
+  // Quoted text is mentioned, not asked about; a negated request ("don't give me the status") asks for nothing.
+  const asked = withoutQuoted(t);
+  if (/\b(?:don'?t|do\s+not|without|no\s+need\s+(?:to|for)|never)\b[^.?!]{0,40}\b(?:status|progress|update|report|notif\w*)\b/i.test(asked)) return null;
+  return classifyStatusWords(asked, hasRecentGmailWork);
+}
+
+function classifyStatusWords(t: string, hasRecentGmailWork: boolean): StatusTopic[] | null {
   const topics: StatusTopic[] = [];
   const asksQuestion = /\?|\b(?:how|why|what|which|show|list|tell|explain|configur\w*|status|enabled|working|didn.?t|did not|never)\b/i.test(t);
   if (/\bnotif\w*\b/i.test(t) && asksQuestion && !/\b(?:send|create|write|draft)\b/i.test(t)) topics.push('notifications');

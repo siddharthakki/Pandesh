@@ -96,7 +96,7 @@ import { recordExecutionQuality } from '../domain/executionQuality';
 import { checkGrantForWrite, countDirectoryEntries, grantContentDigest, recordGrantUse, scheduledTaskOfAttempt } from '../domain/routineWriteGrants';
 import { AUTHORIZE_MISSION_TOOL,buildWorkspaceWriteEnvelope, createPendingMissionAuthorization, evaluateAuthorizedDispatch, evaluateMissionAction, getMissionAuthorization, markMissionAuthorized, markMissionRejected, protectedWriteReason, recordAuthorizedAction } from './missionAuthorization';
 import { NON_WORKSPACE_MARKERS } from '../domain/taskToolSurface';
-import { announcesWorkStarting, asksAboutConversationTask, auditPromises, classifyStatusRequest, composeStatusAnswer, describeConversationTask, hasActiveWorker, hasRecentGmailWork, latestConversationTask, type StatusTopic } from './assistantStatus';
+import { announcesWorkStarting, asksAboutConversationTask, asksForDiskObservation, readCoversRequestedTarget, auditPromises, classifyStatusRequest, composeStatusAnswer, describeConversationTask, hasActiveWorker, hasRecentGmailWork, latestConversationTask, type StatusTopic } from './assistantStatus';
 import { notificationCapability } from '../domain/notificationOutbox';
 import { boundConversationContext, isExplicitResumeRequest, isSmallTalk, selectRelevantTask, LATEST_REQUEST_AUTHORITATIVE } from '../domain/conversationRelevance';
 import type { PowerShellRunner } from './windowsPrinting';
@@ -6676,6 +6676,25 @@ When the user asks to continue, resume, or check progress/updates, resume this w
         deliverables = deliverables ?? { expected: [], missing: [], present: [] };
         deliverables.expected.push(unbacked); deliverables.missing.push(unbacked);
         safeRecordRuntimeEvent(db, broadcaster, attemptId, 'unbacked_working_claim', { detail: unbacked }, actor);
+      }
+    }
+
+    // An answer that exists only on the disk ("how many files are in rw/inbox") is an observation. If no read of the disk
+    // succeeded this turn, the number or list in the reply was not observed, whatever the model wrote: say so, and the
+    // task is not complete. Independent of routing and of permissions: it only ever adds a correction.
+    if (!signal?.aborted && finalReply && asksForDiskObservation(requestText)) {
+      const DISK_READ = /^(?:list_directory|read_file|search_files|find_files|glob|grep|file_info|stat_file|get_file_info|document_read|pc_organize_scan|run_checks)$/;
+      const reads = toolCallsRecorded.filter((t) => t.status === 'completed' && DISK_READ.test(t.tool) && !(t.result as { isError?: boolean } | undefined)?.isError);
+      // A successful read of an UNRELATED path observes nothing about the folder the question names.
+      const observed = reads.length > 0 && readCoversRequestedTarget(requestText, reads.map((t) => t.args));
+      if (!observed) {
+        const note = reads.length
+          ? 'the folder or file you asked about was not read in this turn (only other paths were), so the answer above was not observed and must not be trusted'
+          : 'nothing was read from the disk in this turn (no successful folder or file read), so the answer above was not observed and must not be trusted';
+        finalReply += `\n\nCorrection: ${note}.`;
+        deliverables = deliverables ?? { expected: [], missing: [], present: [] };
+        deliverables.expected.push(note); deliverables.missing.push(note);
+        safeRecordRuntimeEvent(db, broadcaster, attemptId, 'disk_observation_missing', { tools: toolCallsRecorded.map((t) => `${t.tool}:${t.status}`) }, actor);
       }
     }
 
