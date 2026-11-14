@@ -129,9 +129,18 @@ export async function parseSkillMarkdown(text: string, options: ParseOptions): P
   const match = /^﻿?---\r?\n([\s\S]*?)\r?\n---\r?\n?/.exec(text);
   if (match) {
     body = text.slice(match[0].length);
-    for (const line of match[1].split(/\r?\n/)) {
-      const kv = /^([A-Za-z][\w-]*)\s*:\s*(.*)$/.exec(line);
-      if (kv) front[kv[1].toLowerCase()] = kv[2].trim();
+    // `key: >` / `key: |` block scalars (used by published skills for long descriptions): the indented lines that follow
+    // belong to the key, joined by spaces (folded) or newlines (literal). Nested maps such as `metadata:` stay unread.
+    const fmLines = match[1].split(/\r?\n/);
+    for (let i = 0; i < fmLines.length; i++) {
+      const kv = /^([A-Za-z][\w-]*)\s*:\s*(.*)$/.exec(fmLines[i]);
+      if (!kv) continue;
+      const value = kv[2].trim();
+      if (/^[>|][+-]?$/.test(value)) {
+        const block: string[] = [];
+        while (i + 1 < fmLines.length && /^\s+\S/.test(fmLines[i + 1])) block.push(fmLines[++i].trim());
+        front[kv[1].toLowerCase()] = block.join(value.startsWith('|') ? '\n' : ' ');
+      } else front[kv[1].toLowerCase()] = value;
     }
   }
   const heading = /^#\s+(.+)$/m.exec(body)?.[1]?.trim();
@@ -171,6 +180,9 @@ export async function parseSkillMarkdown(text: string, options: ParseOptions): P
 // ---------------------------------------------------------------------------------------------------------------- registry
 
 const STOP = new Set(['the', 'a', 'an', 'and', 'or', 'to', 'of', 'in', 'on', 'for', 'with', 'this', 'that', 'it', 'is', 'are', 'be', 'my', 'me', 'i', 'we', 'you', 'please', 'can', 'could', 'should', 'would', 'how', 'do', 'does', 'what', 'why', 'when', 'then', 'also', 'into', 'from', 'by', 'at', 'as', 'not', 'any', 'all']);
+
+/** Everyday words that say little about which skill fits ("write me a poem" must not select write-swift). Used when a minimum score is set. */
+const GENERIC_QUERY_WORDS = new Set(["write", "make", "create", "build", "read", "search", "check", "use", "using", "short", "new", "file", "files", "app", "apps", "help", "show", "find", "get", "set", "add", "run", "look", "tell", "need", "want", "like", "good", "best", "work", "thing", "things", "data", "text", "page", "code", "simple", "thread", "post", "posts", "link", "folder", "item", "list", "demo", "live"]);
 
 export function tokens(text: string): string[] {
   const out = new Set<string>();
@@ -253,6 +265,8 @@ export interface ResolveContext {
   approvedHashes?: ReadonlySet<string>;
   maxSkills?: number;
   budgetTokens?: number;
+  /** Minimum relevance for a skill to be selected (default 0.6, any shared word). */
+  minScore?: number;
 }
 
 export type SkillDecision =
@@ -320,11 +334,11 @@ export function resolveSkills(registry: SkillRegistry, ctx: ResolveContext): Res
     const tagTokens = new Set([...skill.tags.flatMap(tokens), ...skill.intents.flatMap(tokens)]);
     const descTokens = new Set(tokens(skill.description));
     let score = 0;
-    for (const t of queryTokens) score += (nameTokens.has(t) ? 5 : 0) + (tagTokens.has(t) ? 3 : 0) + (descTokens.has(t) ? 1 : 0);
+    for (const t of queryTokens) if (ctx.minScore === undefined || !GENERIC_QUERY_WORDS.has(t)) score += (nameTokens.has(t) ? 5 : 0) + (tagTokens.has(t) ? 3 : 0) + (descTokens.has(t) ? 1 : 0);
     score += skill.taskClasses.filter(c => taskClasses.includes(c)).length * 2;
     if (skill.intents.some(i => ctx.intent.toLowerCase().includes(i.toLowerCase()))) score += 4;
     score += { builtin: 0.5, user: 0.3, workspace: 0.2, untrusted: 0 }[skill.trust];
-    if (score > 0.6) scored.push({ skill, score });
+    if (score > (ctx.minScore ?? 0.6)) scored.push({ skill, score });
   }
 
   scored.sort((a, b) => b.score - a.score || a.skill.id.localeCompare(b.skill.id));
