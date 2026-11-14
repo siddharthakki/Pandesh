@@ -61,11 +61,11 @@ export const TOOL_GROUPS: Record<string, ToolGroup> = {
   },
   email: {
     purpose: 'Gmail: search, read, draft, send, organize email',
-    pattern: /\b(?:e-?mails?|mail|gmail|(?<![\\/_-])inbox(?![-_.]\w)(?!['"`’”]?\s+(?:folder|directory|dir)\b)(?<!\b(?:folder|directory|dir)\s+(?:called\s+|named\s+)?['"`‘“]?inbox)|drafts?|replies|reply to|newsletters?|attachments?)\b|[\w.+-]+@[\w-]+\.\w+/i, // "inbox" is mail only when it is not a folder on disk (live runs sent "the inbox folder" to Gmail tools)
+    pattern: /\b(?:e-?mails?|mail|gmail|posteingang|(?<![\\/_-])inbox(?![-_.]\w)(?!['"`’”]?\s+(?:folder|directory|dir)\b)(?<!\b(?:folder|directory|dir)\s+(?:called\s+|named\s+)?['"`‘“]?inbox)|drafts?|replies|reply to|newsletters?|attachments?)\b|[\w.+-]+@[\w-]+\.\w+/i, // "inbox" is mail only when it is not a folder on disk (live runs sent "the inbox folder" to Gmail tools)
   },
   calendar: {
     purpose: 'Google Calendar: events, availability, create or change an event',
-    pattern: /\b(?:calendar|meetings?|events?|appointments?|availability|free (?:slot|time)|invites?)\b/i,
+    pattern: /\b(?:calendar|kalender|meetings?|events?|appointments?|termine?|besprechung\w*|availability|free (?:slot|time)|invites?)\b/i,
   },
   memory: {
     purpose: 'durable memory: remember, recall or forget facts about the user',
@@ -203,10 +203,35 @@ export function groupOfTool(name: string, capability?: CapabilityMark): string |
   return null;
 }
 
+const FOLDER_WORD = String.raw`(?:folders?|directory|directories|dir|ordner|verzeichnis\w*)`;
+const MAIL_OR_CAL = String.raw`(?:e-?mails?|mail|gmail|inbox|posteingang|calendar|kalender|events?|termine?)`;
+const DEV_CONTEXT = /\b(?:javascript|typescript|react|vue|angular|node(?:\.?js)?|dom|css|html|callback|listeners?|handlers?|component|stack ?trace|compile[rd]?|my code|the code|function|method|class)\b/i;
+
+/**
+ * What the request is ABOUT, for group matching: text that only mentions a mail or calendar word is not asking for the
+ * tool. A quoted sentence, a path or file name, "the events folder", a negated "don't check my email" and the word
+ * "event" in a JavaScript question are mentions. Only ever removes words before matching, so it can hide a group from
+ * the first offer (the model can still ask for it with request_tools); it grants nothing and is not a permission check.
+ */
+export function scrubMentions(text: string): string {
+  let t = text;
+  t = t.replace(/`[^`]*`|"[^"]*"|“[^”]*”/g, ' '); // quoted and code spans
+  t = t.replace(/[\w.~-]*[\\/][\w.\\/~-]*|\b[\w-]+\.(?:txt|csv|json|md|pdf|docx?|xlsx?|log|ts|js|html?|zip)\b/gi, ' '); // paths, file names
+  t = t.replace(new RegExp(String.raw`\b(?:[\w-]+\s+)?(?:ordner|verzeichnis\w*)\s+[\w-]+|\b[\w-]+\s+${FOLDER_WORD}\b|\b(?:folder|directory|dir)\s+(?:called|named)\s+[\w-]+`, 'gi'), ' '); // "the events folder", "im Ordner calendar"
+  // "don't check my email or calendar", "please don't summarize my inbox"
+  t = t.replace(new RegExp(String.raw`\b(?:don'?t|do not|without|never|no need to|not)\s+(?:\w+\s+){0,2}?(?:my\s+|the\s+)?${MAIL_OR_CAL}(?:\s+(?:or|and)\s+(?:my\s+|the\s+)?${MAIL_OR_CAL})*`, 'gi'), ' ');
+  if (DEV_CONTEXT.test(t)) t = t.replace(/\b(?:events?|inbox|mail)\b/gi, ' '); // JavaScript events, an inbox button
+  return t;
+}
+
+/** Groups whose words ("inbox", "events", "mail") are also everyday words for files and code; the rest match the raw text. */
+const MENTION_SENSITIVE = new Set(['email', 'calendar']);
+
 export function groupsForText(text: string): Set<string> {
   const groups = new Set<string>();
   if (!text) return groups;
-  for (const [group, spec] of Object.entries(TOOL_GROUPS)) if (spec.pattern.test(text)) groups.add(group);
+  const asked = scrubMentions(text);
+  for (const [group, spec] of Object.entries(TOOL_GROUPS)) if (spec.pattern.test(MENTION_SENSITIVE.has(group) ? asked : text)) groups.add(group);
   return groups;
 }
 

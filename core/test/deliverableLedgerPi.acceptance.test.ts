@@ -133,8 +133,14 @@ describe('deliverable ledger through the real Pi engine', () => {
   }, 60_000);
 
   it('C. a turn that only answers a question is never judged partial', async () => {
+    script = () => ({ text: 'Paris.' });
+    const { att } = await turn('What is the capital of France?');
+    expect(deriveResultStatus(db, att.id).status).toBe('completed');
+  }, 60_000);
+
+  it('C2. a disk question answered without any read is not judged completed (R02: no observation, no completion)', async () => {
     script = () => ({ text: 'The inbox holds six source files.' });
     const { att } = await turn('How many files are in the inbox folder?');
-    expect(deriveResultStatus(db, att.id).status).toBe('completed');
+    expect(deriveResultStatus(db, att.id).status).not.toBe('completed');
   }, 60_000);
 });

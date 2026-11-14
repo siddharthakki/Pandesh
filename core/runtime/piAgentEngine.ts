@@ -96,7 +96,8 @@ import { recordExecutionQuality } from '../domain/executionQuality';
 import { checkGrantForWrite, countDirectoryEntries, grantContentDigest, recordGrantUse, scheduledTaskOfAttempt } from '../domain/routineWriteGrants';
 import { AUTHORIZE_MISSION_TOOL,buildWorkspaceWriteEnvelope, createPendingMissionAuthorization, evaluateAuthorizedDispatch, evaluateMissionAction, getMissionAuthorization, markMissionAuthorized, markMissionRejected, protectedWriteReason, recordAuthorizedAction } from './missionAuthorization';
 import { NON_WORKSPACE_MARKERS } from '../domain/taskToolSurface';
-import { announcesWorkStarting, asksAboutConversationTask, auditPromises, classifyStatusRequest, composeStatusAnswer, describeConversationTask, hasActiveWorker, hasRecentGmailWork, latestConversationTask, type StatusTopic } from './assistantStatus';
+import { observationCoversRequest } from './diskObservation';
+import { announcesWorkStarting, asksAboutConversationTask, asksForDiskObservation, auditPromises, classifyStatusRequest, composeStatusAnswer, describeConversationTask, hasActiveWorker, hasRecentGmailWork, latestConversationTask, type StatusTopic } from './assistantStatus';
 import { notificationCapability } from '../domain/notificationOutbox';
 import { boundConversationContext, isExplicitResumeRequest, isSmallTalk, selectRelevantTask, LATEST_REQUEST_AUTHORITATIVE } from '../domain/conversationRelevance';
 import type { PowerShellRunner } from './windowsPrinting';
@@ -393,6 +394,21 @@ export function describeUnansweredApproval(outcome: PiToolApprovalOutcome): stri
     return `The web-access approval request could not be created (${outcome.reason}), so nothing was searched. This is a system error, not the user's decision.`;
   }
   return 'The web-access approval request was not answered, so nothing was searched.';
+}
+
+/** An internal record id (proj_<uuid>, ptask_<uuid>, artifact_<uuid>…): context for the model and the journal, not chat text. */
+const INTERNAL_RECORD_ID_SOURCE = String.raw`\b(?:[a-z]+_)+[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b`;
+
+/**
+ * A tool receipt made fit for the chat when Core has to show it as the reply: "(ref proj_…/ptask_…)" parentheticals
+ * and any other internal record id are removed; the rest of the receipt (what was done, where) stays.
+ */
+export function withoutInternalRecordIds(text: string): string {
+  const hasId = new RegExp(INTERNAL_RECORD_ID_SOURCE, 'i');
+  return text
+    .replace(/[ \t]*\((?:ref|id)\b[^()\n]*\)/gi, (m) => (hasId.test(m) ? '' : m))
+    .replace(new RegExp(String.raw`[ \t]*\(?${INTERNAL_RECORD_ID_SOURCE}(?:\/${INTERNAL_RECORD_ID_SOURCE})*\)?`, 'gi'), '')
+    .replace(/[ \t]+([.,;:])/g, '$1');
 }
 
 /**
@@ -1121,7 +1137,9 @@ export class PiAgentEngine implements EngineAdapter {
     const controls = resolveOllamaChatControls({ profile: 'pi', model: selectedModel });
     const baseNumCtx = controls.numCtx ?? PI_CONTEXT_WINDOW;
     if (!cloudTarget) {
+      safeRecordRuntimeEvent(db, broadcaster, attemptId, 'model_loading_started', { phase: 'loading', model: selectedModel }, actor);
       const residency = await ensureModelResident(selectedModel, { baseUrl: this.defaultUrl, signal, numCtx: baseNumCtx });
+      safeRecordRuntimeEvent(db, broadcaster, attemptId, 'model_loading_finished', { phase: 'loading', model: selectedModel, ok: residency.ok, durationMs: residency.durationMs }, actor);
       console.log(`[karkedikha-core ${new Date().toISOString()}] attemptId=${attemptId} stage=model_residency model=${selectedModel} ok=${residency.ok} durationMs=${residency.durationMs} numCtx=${baseNumCtx}${residency.error ? ' error=' + residency.error : ''}`);
     }
     const ollamaRoot = this.defaultUrl.replace(/\/v1\/?$/, '').replace(/\/$/, '');
@@ -5757,8 +5775,32 @@ When the user asks to continue, resume, or check progress/updates, resume this w
     // A model that keeps calling tools this turn does not have can never finish; stop it instead of spending minutes of GPU
     // time on "Tool X not found" (live demo 2026-11-09: 519 such calls in 6.7 minutes before the turn failed).
     let unknownToolStreak = 0;
+    // Live-activity signals: counts and phase names only, never model text, reasoning or tool arguments. One event per
+    // pass boundary and one per phase change, so a long pass is visible without token-by-token noise.
+    let passNo = 0;
+    let passPhase = '';
+    let passToolCalls = 0;
+    let passTextChars = 0;
+    let passReasoned = false;
+    let passStartedAt = 0;
+    const passPhaseOnce = (phase: string) => {
+      if (passPhase === phase) return;
+      passPhase = phase;
+      safeRecordRuntimeEvent(db, broadcaster, attemptId, 'model_pass_phase', { pass: passNo, phase }, actor);
+    };
     agent.subscribe((event: any) => {
       try {
+        if (event.type === 'turn_start') {
+          passNo += 1; passPhase = ''; passToolCalls = 0; passTextChars = 0; passReasoned = false; passStartedAt = Date.now();
+          safeRecordRuntimeEvent(db, broadcaster, attemptId, 'model_pass_started', { pass: passNo }, actor);
+        } else if (event.type === 'turn_end') {
+          safeRecordRuntimeEvent(db, broadcaster, attemptId, 'model_pass_ended', { pass: passNo, toolCalls: passToolCalls, textChars: passTextChars, reasoned: passReasoned, durationMs: passStartedAt ? Date.now() - passStartedAt : null }, actor);
+        } else if (event.type === 'message_update') {
+          const t = event.assistantMessageEvent?.type;
+          if (t === 'thinking_start' || t === 'thinking_delta') { passReasoned = true; passPhaseOnce('reasoning'); }
+          else if (t === 'text_delta') { passTextChars += typeof event.assistantMessageEvent.delta === 'string' ? event.assistantMessageEvent.delta.length : 0; passPhaseOnce('writing'); }
+          else if (t === 'toolcall_start') { passToolCalls += 1; passPhaseOnce('selecting_tool'); }
+        }
         if (event.type === 'tool_execution_end') {
           const resultText = String(event.result?.content?.[0]?.text ?? '');
           unknownToolStreak = event.isError && isUnknownToolResult(resultText) ? unknownToolStreak + 1 : 0;
@@ -5876,6 +5918,24 @@ When the user asks to continue, resume, or check progress/updates, resume this w
         safeRecordRuntimeEvent(db, broadcaster, attemptId, 'attempt_request_superseded', { correction: instruction.slice(0, 300) }, actor);
         await tolerateSupersede(async () => {
           await agent.prompt(correctionRestartPrompt(ctx.currentMessage ?? prompt, instruction));
+          await agent.waitForIdle();
+        });
+      }
+      // CI flake (PR #75/#76, 2026-11-12): add_task succeeded, then the model call that should have answered failed at
+      // the transport in 1 ms. Nothing re-asked the model, so the turn fell through to Core's fallbacks and showed the raw
+      // tool receipt. A model call that fails right after tool results is sent once more from the same transcript: the
+      // tools are not run again, and the model's own answer stays the reply.
+      const messagesNow: any[] = agent.state.messages;
+      const failedCall: any = messagesNow[messagesNow.length - 1];
+      const beforeFailure: any = messagesNow[messagesNow.length - 2];
+      if (!signal?.aborted && supersedeWith === null
+        && failedCall?.role === 'assistant' && (failedCall.stopReason === 'error' || failedCall.errorMessage)
+        && !(failedCall.content || []).some((c: any) => (c.type === 'text' && String(c.text ?? '').trim()) || c.type === 'toolCall')
+        && (beforeFailure?.role === 'toolResult' || beforeFailure?.role === 'tool')) {
+        safeRecordRuntimeEvent(db, broadcaster, attemptId, 'model_call_retried_after_error', { error: String(failedCall.errorMessage ?? '').slice(0, 300) }, actor);
+        agent.state.messages = messagesNow.slice(0, -1);
+        await tolerateSupersede(async () => {
+          await agent.continue();
           await agent.waitForIdle();
         });
       }
@@ -6462,7 +6522,8 @@ When the user asks to continue, resume, or check progress/updates, resume this w
             isUnanswered = true;
           }
         } else {
-          const rawOutputs = successfulTools.map((t) => extractToolResultText(t.result));
+          // A receipt shown as the reply keeps what was done but never Core's internal record ids (CI flake, PR #75/#76).
+          const rawOutputs = successfulTools.map((t) => withoutInternalRecordIds(extractToolResultText(t.result)));
           const nonJsonOutputs = rawOutputs.filter(o => o && !o.trim().startsWith('{') && !o.trim().startsWith('['));
           if (nonJsonOutputs.length > 0) {
             finalReply = nonJsonOutputs.join('\n\n');
@@ -6688,6 +6749,26 @@ When the user asks to continue, resume, or check progress/updates, resume this w
         deliverables = deliverables ?? { expected: [], missing: [], present: [] };
         deliverables.expected.push(unbacked); deliverables.missing.push(unbacked);
         safeRecordRuntimeEvent(db, broadcaster, attemptId, 'unbacked_working_claim', { detail: unbacked }, actor);
+      }
+    }
+
+    // An answer that exists only on the disk ("how many files are in rw/inbox") is an observation. If no read of the disk
+    // succeeded this turn, the number or list in the reply was not observed, whatever the model wrote: say so, and the
+    // task is not complete. Independent of routing and of permissions: it only ever adds a correction.
+    if (!signal?.aborted && finalReply && asksForDiskObservation(requestText)) {
+      const DISK_READ = /^(?:list_directory|read_file|search_files|find_files|glob|grep|file_info|stat_file|get_file_info|document_read|pc_organize_scan|run_checks)$/;
+      const reads = toolCallsRecorded.filter((t) => t.status === 'completed' && DISK_READ.test(t.tool) && !(t.result as { isError?: boolean } | undefined)?.isError);
+      // The evidence must be about what was asked: a read of another folder does not observe the one the request names.
+      const coverage = observationCoversRequest(requestText, reads);
+      const observed = coverage.covered;
+      if (!observed) {
+        const note = reads.length === 0
+          ? 'nothing was read from the disk in this turn (no successful folder or file read), so the answer above was not observed and must not be trusted'
+          : `no successful read in this turn covered ${coverage.missing.map((m) => `"${m}"`).join(', ')}, so the answer above about it was not observed and must not be trusted`;
+        finalReply += `\n\nCorrection: ${note}.`;
+        deliverables = deliverables ?? { expected: [], missing: [], present: [] };
+        deliverables.expected.push(note); deliverables.missing.push(note);
+        safeRecordRuntimeEvent(db, broadcaster, attemptId, 'disk_observation_missing', { tools: toolCallsRecorded.map((t) => `${t.tool}:${t.status}`) }, actor);
       }
     }
 
