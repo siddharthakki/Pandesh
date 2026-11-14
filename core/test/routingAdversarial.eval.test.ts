@@ -14,6 +14,7 @@ import { createRequest } from '../domain/requests';
 import { createAttempt } from '../domain/attempts';
 import { acquireFence } from '../domain/fence';
 import { updateTaskOutcome } from '../domain/taskOutcomes';
+import { groupsForText } from '../runtime/chatToolSelection';
 import { TURN_STATE_CLOSE } from '../runtime/turnState';
 
 /**
@@ -150,7 +151,9 @@ describe.skipIf(!RUN)('adversarial routing evaluation (complete request path)', 
         const meta = (type: string) => { const ev = events.find((x) => x.eventType === type); try { return ev ? JSON.parse(ev.metadata) : null; } catch { return null; } };
         const status_ev = meta('assistant_status_answered');
         const route = status_ev ? `shortcut:${(status_ev.topics as string[]).join('+')}` : events.some((x) => x.eventType === 'task_history_answered') ? 'shortcut:task_history' : 'model';
-        const pointed: string[] = (meta('tool_selection')?.groups ?? []).map((g: any) => g.group);
+        const sel = meta('tool_selection');
+        // Web turns take an earlier research path and record no tool_selection event: fall back to the selector itself.
+        const pointed: string[] = sel ? (sel.groups ?? []).map((g: any) => g.group) : route === 'model' ? [...groupsForText(e.text)] : [];
         const wantRoute = e.route ?? 'model';
         const routeOk = wantRoute === route;
         const recall = wantRoute === 'model' && e.g?.length ? e.g.every((g) => pointed.includes(g)) : null;
