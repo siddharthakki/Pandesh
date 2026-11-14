@@ -213,7 +213,9 @@ describe('screenshot capture and analysis through the real turn', () => {
 
   it('prefers the smallest vision-named reader and skips uncensored variants (owner model list)', async () => {
     const calls: string[] = [];
+    let loaded: string[] = [];
     const fake = (async (url: string, init?: { body?: string }) => {
+      if (url.endsWith('/api/ps')) return new Response(JSON.stringify({ models: loaded.map((name) => ({ name })) }));
       if (url.endsWith('/api/tags')) return new Response(JSON.stringify({ models: [
         { name: 'gemma4:26b-a4b-it-qat', size: 15e9 }, { name: 'hf.co/x/DeepSeek-heretic-GGUF:Q8_0', size: 10e9 }, { name: 'qwen2.5vl:7b', size: 6e9 }, { name: 'gemma4:12b', size: 7.6e9 }] }));
       if (url.endsWith('/api/show')) return new Response(JSON.stringify({ capabilities: ['completion', 'vision'] }));
@@ -224,6 +226,10 @@ describe('screenshot capture and analysis through the real turn', () => {
     const out = await createLocalVisionInspector({ baseUrl: 'http://127.0.0.1:11434', fetchFn: fake })({ path: png, question: 'what is on screen' });
     expect(out.ok && out.model).toBe('qwen2.5vl:7b');
     expect(calls).toEqual(['qwen2.5vl:7b']);
+    // the chat model (gemma4:12b reports vision and tools) is already loaded: it reads, and nothing else is loaded
+    loaded = ['gemma4:12b'];
+    const again = await createLocalVisionInspector({ baseUrl: 'http://127.0.0.1:11434', fetchFn: fake })({ path: png, question: 'what is on screen' });
+    expect(again.ok && again.model).toBe('gemma4:12b');
   });
 
   it('unbackedScreenClaims leaves honest replies alone', () => {

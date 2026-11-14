@@ -32,7 +32,7 @@ async function localVisionModels(root: string, fetchFn: typeof fetch): Promise<s
   const tags = await fetchFn(`${root}/api/tags`, { signal: AbortSignal.timeout(5_000) });
   if (!tags.ok) return [];
   const listed = ((await tags.json()) as { models?: Array<{ name?: string; size?: number }> }).models ?? [];
-  // Cheapest reader first: a model named for vision, then the smallest, so reading a screenshot does not evict a big chat model.
+  // Cheapest reader first unless one is already loaded: a model named for vision, then the smallest.
   const names = listed
     .filter((m) => m.name && !NOT_AUTO.test(String(m.name)))
     .sort((x, y) => Number(/(?:^|[^a-z])(?:vl|vision|llava|minicpm-v)/i.test(String(y.name))) - Number(/(?:^|[^a-z])(?:vl|vision|llava|minicpm-v)/i.test(String(x.name))) || Number(x.size ?? Infinity) - Number(y.size ?? Infinity))
@@ -46,6 +46,15 @@ async function localVisionModels(root: string, fetchFn: typeof fetch): Promise<s
       if (caps.includes('vision')) found.push(name);
     } catch { /* an unreadable model is not a vision model */ }
   }
+  // A vision model that is already loaded (typically the chat model itself, e.g. gemma4) reads first: no second model
+  // is loaded and nothing is evicted from GPU memory.
+  try {
+    const ps = await fetchFn(`${root}/api/ps`, { signal: AbortSignal.timeout(3_000) });
+    if (ps.ok) {
+      const loaded = new Set(((await ps.json()) as { models?: Array<{ name?: string }> }).models?.map((m) => String(m.name ?? '')) ?? []);
+      found.sort((x, y) => Number(loaded.has(y)) - Number(loaded.has(x)));
+    }
+  } catch { /* unknown which are loaded: keep the cheapest-first order */ }
   return found;
 }
 
