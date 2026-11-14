@@ -124,3 +124,28 @@ describe('approval de-duplication', () => {
     expect(r.steps.filter((s) => s.kind === 'approval')).toHaveLength(1);
   });
 });
+
+describe('interruption and resume are shown honestly (Build 170 limitations closed)', () => {
+  it('"no actionable gate" is an interruption, not a failure, and is not overwritten', () => {
+    const r = fold([
+      ev(0, { kind: 'approval', summary: 'Waiting for mutation approval: x' }),
+      ev(5, { kind: 'error', summary: 'waiting for approval but Core has no actionable gate' }),
+      ev(6, { kind: 'error', summary: 'waiting for approval but Core has no actionable gate' }),
+    ]);
+    expect(r.outcome).toBe('interrupted');
+    expect(r.phase).toBe('interrupted');
+    expect(r.reason).toMatch(/no longer exists/);
+    expect(r.steps.find((s) => s.kind === 'approval')?.state).toBe('blocked');
+  });
+  it('a genuine error is still a failure', () => {
+    const r = fold([ev(0, { domain: 'attempt', eventType: 'step_start' }), ev(2, { kind: 'error', summary: 'model server unreachable' })]);
+    expect(r.outcome).toBe('failed');
+  });
+  it('a second pass 1 after resume says so instead of repeating the first row', () => {
+    const end = (s: number) => ev(s, { domain: 'attempt', eventType: 'model_pass_ended', detail: { pass: 1, toolCalls: 1, textChars: 0, durationMs: 1000 } });
+    const r = fold([end(2), ev(5, { domain: 'attempt', eventType: 'attempt_resumed' }), end(9)]);
+    const labels = r.steps.filter((s) => s.kind === 'model').map((s) => s.label);
+    expect(labels[0]).toBe('Model pass 1: requested 1 tool call');
+    expect(labels[1]).toBe('Model pass 1 (after resume): requested 1 tool call');
+  });
+});

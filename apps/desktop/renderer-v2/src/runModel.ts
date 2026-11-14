@@ -139,7 +139,16 @@ export function applyEvent(current: RunState | null, e: LiveEvent): RunState | n
     return r;
   }
   if (e.kind === 'error') {
-    r.lastSignalAt = at; r.outcome = 'failed'; r.reason = e.summary;
+    r.lastSignalAt = at;
+    // "waiting for approval but Core has no actionable gate" means the approval the task waited on no longer exists (Core
+    // restarted). Nothing failed and nothing is waiting: say interrupted, and never overwrite an interruption with it.
+    if (r.outcome === 'interrupted') return r;
+    if (/no actionable gate/i.test(String(e.summary ?? ''))) {
+      r.outcome = 'interrupted'; r.reason = 'The approval this task was waiting for no longer exists in Core (it was interrupted); resume it from Tasks';
+      closeOpen(r, at, 'blocked'); setPhase(r, 'interrupted', at);
+      return r;
+    }
+    r.outcome = 'failed'; r.reason = e.summary;
     closeOpen(r, at, 'failed');
     setPhase(r, 'failed', at);
     return r;
@@ -217,9 +226,14 @@ export function applyEvent(current: RunState | null, e: LiveEvent): RunState | n
       case 'model_pass_ended': {
         const calls = d.toolCalls ?? 0;
         r.lastPassToolless = calls === 0 && (d.textChars ?? 0) > 0;
+        // After a resume Core numbers its passes again from 1. A second "pass 1" is a new pass of the resumed run, and
+        // says so, rather than looking like the first one repeated.
+        const passNo = d.pass ?? r.pass;
+        const again = r.steps.some((s) => s.kind === 'model' && s.id.startsWith('pass-') && s.facts[0] === `pass ${passNo}`);
+        const tag = again ? ' (after resume)' : '';
         push(r, {
           id: `pass-${r.pass}-${at}`, kind: 'model',
-          label: calls > 0 ? `Model pass ${d.pass ?? r.pass}: requested ${calls} tool call${calls === 1 ? '' : 's'}` : `Model pass ${d.pass ?? r.pass}: answered without calling a tool`,
+          label: (calls > 0 ? `Model pass ${passNo}${tag}: requested ${calls} tool call${calls === 1 ? '' : 's'}` : `Model pass ${passNo}${tag}: answered without calling a tool`),
           state: 'ok', startedAt: at - (d.durationMs ?? 0), endedAt: at,
           facts: [`pass ${d.pass ?? r.pass}`, `${calls} tool call${calls === 1 ? '' : 's'}`, `${d.textChars ?? 0} characters of text`, d.reasoned ? 'reasoning present' : 'no separate reasoning'],
         });
