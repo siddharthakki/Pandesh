@@ -685,7 +685,7 @@ function matchAuthorization(auth: StandingAuthorization, input: { toolName: stri
 const CHAT_READ_TOOLS: ReadonlySet<string> = new Set([
   'recall_execution', 'personal_overview', 'search_second_brain', 'list_tasks',
   'get_system_info', 'list_system_drives', 'request_search_permission', 'find_project_roots', 'search_files', 'resolve_time',
-  'dev_stories_status', 'list_reminders', 'list_commitments', 'list_scheduled_tasks', 'get_briefing_data', 'web_research',
+  'dev_stories_status', 'list_reminders', 'list_commitments', 'list_scheduled_tasks', 'get_briefing_data', 'web_research', 'agent_reach',
   'find_duplicate_files', 'list_directory', 'get_project_context', 'read_file', 'search_recent_projects', 'list_printers',
   'wish_status', 'calculate',
   // Reads what Windows lists as installed; opens a place in the Pandesh window (changes nothing, stops nothing).
@@ -709,7 +709,7 @@ export function classifyChatToolCall(toolName: string, args: Record<string, unkn
 }
 
 /** Approval cards that only ask consent for read-only access or a public lookup; Plan Only keeps them as cards. */
-export const READ_ONLY_CONSENT_TOOLS: ReadonlySet<string> = new Set(['request_search_permission', 'web_research']);
+export const READ_ONLY_CONSENT_TOOLS: ReadonlySet<string> = new Set(['request_search_permission', 'web_research', 'agent_reach']);
 
 /**
  * Safety net for every approval site: in a Plan Only turn a mutation or delivery approval is recorded as already
