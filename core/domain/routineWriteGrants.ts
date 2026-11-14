@@ -219,10 +219,17 @@ export function verifyRoutineSemantics(db: CoreDatabase, attemptId: string, inst
     `SELECT path FROM routine_write_grant_uses WHERE attemptId IN (SELECT id FROM attempts WHERE requestId = (SELECT requestId FROM attempts WHERE id = ?))`, [attemptId]);
   // The folder the instruction NAMES decides what is recounted. What the model happened to list last does not: a routine that lists
   // the workspace root after the inbox must not be judged against the root (found by the release-candidate smoke).
-  const inside = (f: string): boolean => { const rel = path.relative(workspaceRoot, f); return !rel.startsWith('..') && !path.isAbsolute(rel); };
+  // Containment is decided on REAL paths: a junction or symlink inside the folder that points outside it must not be recounted.
+  const real = (f: string): string | null => { try { return fs.realpathSync.native(f); } catch { return null; } };
+  const inside = (f: string): boolean => {
+    const root = real(workspaceRoot); const target = real(f);
+    if (!root || !target) return false;
+    const rel = path.relative(root, target);
+    return rel === '' || (!rel.startsWith('..') && !path.isAbsolute(rel));
+  };
   let folder: string | null = null;
   const named = /\bin the ['"`]?([\w./\\-]+)['"`]? (?:folder|directory)\b/i.exec(instruction);
-  if (named) { const f = path.resolve(workspaceRoot, named[1]); if (inside(f)) folder = f; }
+  if (named) { const f = path.resolve(workspaceRoot, named[1]); if (inside(f)) folder = real(f); }
   // No folder named: not recounted. A listing is not evidence of which folder the count was for.
   if (!folder) return { checked: 0, problems: [] };
   let actual: number;
