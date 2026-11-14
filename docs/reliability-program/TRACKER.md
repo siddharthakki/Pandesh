@@ -162,3 +162,5 @@ Owner decision: standing write grants stay development-only. No merge, install, 
 M2 claim stays limited to verified operations: files, reminders, notes, promises, routines. Email and calendar actions remain fail-closed on an unknown outcome; no exactly-once claim for them.
 
 Incident (mine): `git worktree remove --force` on two throwaway worktrees whose `node_modules` were junctions emptied the shared installs in D:\Projects\Pandesh and D:\Projects\Pandesh-freshcheck (untracked files only; production unaffected). Both restored with `npm ci` from their own lockfiles. `D:\Projects\Pandesh-audit\.tmp\rc-b164\node_modules` is empty and was not touched knowingly; it may need a reinstall if that worktree is used.
+
+Full suite at the final commit: 7439 passed, 2 failed (`delegationVerification`, `m12RetrievalIntegrationPackaging`), both failing identically at base f06035b. `coreInstanceIsolation` passed.
