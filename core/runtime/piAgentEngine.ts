@@ -1118,7 +1118,9 @@ export class PiAgentEngine implements EngineAdapter {
     const controls = resolveOllamaChatControls({ profile: 'pi', model: selectedModel });
     const baseNumCtx = controls.numCtx ?? PI_CONTEXT_WINDOW;
     if (!cloudTarget) {
+      safeRecordRuntimeEvent(db, broadcaster, attemptId, 'model_loading_started', { phase: 'loading', model: selectedModel }, actor);
       const residency = await ensureModelResident(selectedModel, { baseUrl: this.defaultUrl, signal, numCtx: baseNumCtx });
+      safeRecordRuntimeEvent(db, broadcaster, attemptId, 'model_loading_finished', { phase: 'loading', model: selectedModel, ok: residency.ok, durationMs: residency.durationMs }, actor);
       console.log(`[karkedikha-core ${new Date().toISOString()}] attemptId=${attemptId} stage=model_residency model=${selectedModel} ok=${residency.ok} durationMs=${residency.durationMs} numCtx=${baseNumCtx}${residency.error ? ' error=' + residency.error : ''}`);
     }
     const ollamaRoot = this.defaultUrl.replace(/\/v1\/?$/, '').replace(/\/$/, '');
@@ -5745,8 +5747,32 @@ When the user asks to continue, resume, or check progress/updates, resume this w
     // A model that keeps calling tools this turn does not have can never finish; stop it instead of spending minutes of GPU
     // time on "Tool X not found" (live demo 2026-11-09: 519 such calls in 6.7 minutes before the turn failed).
     let unknownToolStreak = 0;
+    // Live-activity signals: counts and phase names only, never model text, reasoning or tool arguments. One event per
+    // pass boundary and one per phase change, so a long pass is visible without token-by-token noise.
+    let passNo = 0;
+    let passPhase = '';
+    let passToolCalls = 0;
+    let passTextChars = 0;
+    let passReasoned = false;
+    let passStartedAt = 0;
+    const passPhaseOnce = (phase: string) => {
+      if (passPhase === phase) return;
+      passPhase = phase;
+      safeRecordRuntimeEvent(db, broadcaster, attemptId, 'model_pass_phase', { pass: passNo, phase }, actor);
+    };
     agent.subscribe((event: any) => {
       try {
+        if (event.type === 'turn_start') {
+          passNo += 1; passPhase = ''; passToolCalls = 0; passTextChars = 0; passReasoned = false; passStartedAt = Date.now();
+          safeRecordRuntimeEvent(db, broadcaster, attemptId, 'model_pass_started', { pass: passNo }, actor);
+        } else if (event.type === 'turn_end') {
+          safeRecordRuntimeEvent(db, broadcaster, attemptId, 'model_pass_ended', { pass: passNo, toolCalls: passToolCalls, textChars: passTextChars, reasoned: passReasoned, durationMs: passStartedAt ? Date.now() - passStartedAt : null }, actor);
+        } else if (event.type === 'message_update') {
+          const t = event.assistantMessageEvent?.type;
+          if (t === 'thinking_start' || t === 'thinking_delta') { passReasoned = true; passPhaseOnce('reasoning'); }
+          else if (t === 'text_delta') { passTextChars += typeof event.assistantMessageEvent.delta === 'string' ? event.assistantMessageEvent.delta.length : 0; passPhaseOnce('writing'); }
+          else if (t === 'toolcall_start') { passToolCalls += 1; passPhaseOnce('selecting_tool'); }
+        }
         if (event.type === 'tool_execution_end') {
           const resultText = String(event.result?.content?.[0]?.text ?? '');
           unknownToolStreak = event.isError && isUnknownToolResult(resultText) ? unknownToolStreak + 1 : 0;
