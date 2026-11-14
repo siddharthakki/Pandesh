@@ -1,0 +1,8 @@
+{
+  "ms": 237276,
+  "out": {
+    "ok": true,
+    "model": "qwen3.8:27b-mtp-q4_K_M",
+    "text": "The window title is **WhatsApp - Alice Tester**. The messages shown are:\n\n- **Alice:** Lunch at 1? Table 7 is booked.\n- **Me:** Yes, see you at 1 pm.\n- **Alice:** Code word is PINEAPPLE-4417\n\nAll three messages are fully legible; nothing is cut off."
+  }
+}
