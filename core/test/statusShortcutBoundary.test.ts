@@ -175,3 +175,31 @@ describe('status shortcut boundary: filesystem questions are never Pandesh Gmail
     expect(t.result.reply).toMatch(/Gmail organization/);
   });
 });
+
+describe('review findings: evidence must be OF the named folder, and status questions are not over-declined', () => {
+  it('only a read of the named folder or file observes it', async () => {
+    const { observationCoversRequest: cov, namedDiskTargets } = await import('../runtime/diskObservation');
+    const ask = 'How many files are in the inbox folder?';
+    expect(cov(ask, [{ args: { dirPath: 'D:/ws/inbox' } }]).covered).toBe(true);
+    expect(cov(ask, [{ args: { dirPath: 'D:/ws/inbox/sub/deep' } }]).covered).toBe(false); // a sub-folder is not the folder
+    expect(cov(ask, [{ args: { filePath: 'D:/ws/inbox/mail.txt' } }]).covered).toBe(false); // one file is not a count
+    expect(cov(ask, [{ args: { dirPath: 'D:/ws/old-inbox' } }]).covered).toBe(false);
+    expect(cov('How many files are in rw/inbox?', [{ args: { dirPath: 'rw/inbox/../outbox' } }]).covered).toBe(false);
+    expect(cov(ask, [{ args: { dirPath: 'D:/ws/outbox', content: 'see /inbox/' } }]).covered).toBe(false); // content is not a path
+    expect(cov(ask, [{ args: { dirPath: 'D:/ws', pattern: 'inbox' } }]).covered).toBe(false); // a search pattern is not a path
+    expect(cov(String.raw`What's in C:\Temp?`, [{ args: { dirPath: 'D:/other' } }]).covered).toBe(false);
+    expect(cov(String.raw`What's in C:\Temp?`, [{ args: { dirPath: 'C:/Temp' } }]).covered).toBe(true);
+    expect(cov('How many items are in the folder inbox?', [{ args: { dirPath: 'D:/other' } }]).covered).toBe(false);
+    // not targets: alternatives, dates, urls, a path's own tail
+    expect(namedDiskTargets('How many files and/or folders are in rw/inbox on 11/14?')).toEqual(['rw/inbox']);
+    expect(namedDiskTargets('See https://example.com/x and a/b.txt')).toEqual(['a/b.txt']);
+  });
+
+  it('conceptual questions are not disk questions; genuine status questions are not declined', async () => {
+    const { asksForDiskObservation } = await import('../runtime/assistantStatus');
+    for (const q of ['What is a directory?', 'What is the difference between a file and a folder?', 'How do I list files in Python?', 'Which drive is faster, SSD or NVMe?']) expect(asksForDiskObservation(q)).toBe(false);
+    expect(asksForDiskObservation('How many files are in rw/inbox?')).toBe(true);
+    for (const q of ['Status of the Gmail drive cleanup?', 'Gmail/Calendar status?', 'email/notification status', 'status of the Q3/Q4 email labelling']) expect(classifyStatusRequest(q, true), q).not.toBeNull();
+    for (const q of ['how many docs are in my Inbox dir status', 'how many files are in the Inbox directory?']) expect(classifyStatusRequest(q, true), q).toBeNull();
+  });
+});
