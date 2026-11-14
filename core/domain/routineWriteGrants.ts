@@ -217,11 +217,13 @@ export function verifyRoutineSemantics(db: CoreDatabase, attemptId: string, inst
   if (!workspaceRoot || !/\bcount\b[^.]*\bfiles?\b/i.test(instruction)) return { checked: 0, problems: [] };
   const rows = db.all<{ path: string }>(
     `SELECT path FROM routine_write_grant_uses WHERE attemptId IN (SELECT id FROM attempts WHERE requestId = (SELECT requestId FROM attempts WHERE id = ?))`, [attemptId]);
-  const listed = db.all<{ argsSummary: string }>(
-    `SELECT argsSummary FROM tool_invocations WHERE toolName = 'list_directory' AND attemptId IN (SELECT id FROM attempts WHERE requestId = (SELECT requestId FROM attempts WHERE id = ?)) ORDER BY startedAt DESC`, [attemptId]);
+  // The folder the instruction NAMES decides what is recounted. What the model happened to list last does not: a routine that lists
+  // the workspace root after the inbox must not be judged against the root (found by the release-candidate smoke).
+  const inside = (f: string): boolean => { const rel = path.relative(workspaceRoot, f); return !rel.startsWith('..') && !path.isAbsolute(rel); };
   let folder: string | null = null;
-  for (const l of listed) { try { const p = (JSON.parse(l.argsSummary) as { dirPath?: string }).dirPath; if (p) { folder = path.resolve(workspaceRoot, p); break; } } catch { /* truncated summary */ } }
-  if (!folder) { const m = /\bin the ['"`]?([\w./\-]+)['"`]? (?:folder|directory)\b/i.exec(instruction); if (m) folder = path.resolve(workspaceRoot, m[1]); }
+  const named = /\bin the ['"`]?([\w./\\-]+)['"`]? (?:folder|directory)\b/i.exec(instruction);
+  if (named) { const f = path.resolve(workspaceRoot, named[1]); if (inside(f)) folder = f; }
+  // No folder named: not recounted. A listing is not evidence of which folder the count was for.
   if (!folder) return { checked: 0, problems: [] };
   let actual: number;
   try { actual = countDirectoryEntries(fs.readdirSync(folder, { withFileTypes: true })).fileCount; } catch { return { checked: 0, problems: [`${path.basename(folder)}: cannot be recounted`] }; }

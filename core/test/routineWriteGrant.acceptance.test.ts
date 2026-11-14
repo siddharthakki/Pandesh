@@ -203,6 +203,14 @@ describe('standing write permission for a scheduled routine', () => {
       expect(sem.checked).toBe(1);
       expect(sem.problems[0]).toMatch(/says 0 but inbox holds 3/);
     });
+    it('the folder the instruction names is recounted, whatever the model happened to list last (smoke finding)', async () => {
+      seedInbox(); createGrant(db, { taskId, grantedBy: 'host:test' });
+      const att = await routineRun([{ file: 'reports/inbox-count.txt', content: '3' }]);
+      db.run("INSERT INTO tool_invocations (id, attemptId, toolName, argsSummary, status, startedAt) VALUES (?, ?, 'list_directory', ?, 'succeeded', ?)", [`ti-${Date.now()}`, att.id, JSON.stringify({ dirPath: '.' }), new Date(Date.now() + 5000).toISOString()]);
+      expect(verifyRoutineSemantics(db, att.id, COUNT, ws)).toEqual({ checked: 1, problems: [] });
+      // no named folder and an ambiguous listing: not checked, never a false alarm
+      expect(verifyRoutineSemantics(db, att.id, 'Count the files and write the number into reports/inbox-count.txt.', ws)).toEqual({ checked: 0, problems: [] });
+    });
     it('the right count passes, and an instruction Core cannot recompute is reported as unchecked, not verified', async () => {
       seedInbox(); createGrant(db, { taskId, grantedBy: 'host:test' });
       const att = await routineRun([{ file: 'reports/inbox-count.txt', content: '3' }]);
