@@ -163,6 +163,8 @@ export interface InventoryProbeDeps {
   /** Paired JUGAAD phones, reported by the companion module. */
   companionDevices?: () => number;
   scheduledRoutines?: () => number;
+  /** Test seam: replaces the live model snapshot behind capability_explain. */
+  modelSnapshot?: () => Promise<import('./modelAwareness').ModelSnapshot>;
 }
 
 export const defaultExec: ExecRunner = (file, args, timeoutMs) => new Promise((resolve) => {
@@ -538,6 +540,11 @@ export function createCapabilityInventoryAdapter(deps: InventoryProbeDeps): Gove
         parameters: { type: 'object', properties: { category: { type: 'string', enum: ['media', 'documents', 'runtime', 'ai', 'agents', 'web', 'accounts', 'devices', 'system'], description: 'Optional: show one category only.' }, refresh: { type: 'boolean', description: 'Probe again instead of using the last minute\'s result.' } } },
       },
       {
+        name: 'capability_explain',
+        description: 'Explain, from live facts, what Pandesh can and cannot do on this PC and precisely why: which local models are installed, loaded and active, what each can do (see images, use tools), what fits graphics memory, which model would be used for a job and why, and why something is unavailable. Read-only. Abilities are never permissions: approvals decide whether anything runs.',
+        parameters: { type: 'object', properties: { topic: { type: 'string', enum: ['models', 'image_reading', 'tool_calling', 'capability'], description: 'models = every installed model with its state; image_reading = what would read a screenshot or picture and why; tool_calling = which model can call tools; capability = why one capability key is or is not available.' }, capability: { type: 'string', description: 'With topic capability: the key, for example ocr, video_production, vision_model, gmail.' } }, required: ['topic'] },
+      },
+      {
         name: 'wish_production_options',
         description: 'Wish-to-Reality: list the deliverables this PC can genuinely produce for a paying customer right now (promo videos, one-page websites, document digitization, AI imagery, conversions), each checked against the live capability inventory, with honest production cost, limitations and the human work still needed. Read-only; never contacts anyone.',
         parameters: { type: 'object', properties: {} },
@@ -555,6 +562,22 @@ export function createCapabilityInventoryAdapter(deps: InventoryProbeDeps): Gove
       if (call.name === 'pc_capability_inventory') {
         const inv = await probeCapabilityInventory(deps, { refresh: args.refresh === true });
         return ok(renderInventory(inv, typeof args.category === 'string' ? args.category : undefined), 'capability_inventory');
+      }
+      if (call.name === 'capability_explain') {
+        const { snapshotModels, renderModelDetail } = await import('./modelAwareness');
+        const topic = String(args.topic ?? 'models');
+        if (topic === 'capability') {
+          const inv = await probeCapabilityInventory(deps);
+          const key = String(args.capability ?? '');
+          const cap = inv.capabilities.find((c) => c.key === key);
+          if (!cap) return failed(`"${key}" is not a capability Pandesh tracks. Known: ${inv.capabilities.map((c) => c.key).join(', ')}.`, 'capability_unknown');
+          const why = cap.available ? `Available: a Pandesh tool drives it (${cap.providers.join(', ')}). Whether a given request may use it is still the user's approval.`
+            : cap.detected.length ? `Not usable through Pandesh: ${cap.detected.join(', ')} is installed on this PC but no Pandesh tool drives it.`
+              : `Not available: nothing on this PC provides it.${cap.recommendation ? ` ${cap.recommendation.label} would (${cap.recommendation.why}); Pandesh can install it with the user's approval.` : ''}`;
+          return ok(`${key}: ${why}`, 'capability_explained');
+        }
+        const snap = await (deps.modelSnapshot ? deps.modelSnapshot() : snapshotModels({ baseUrl: deps.ollamaUrl }));
+        return ok(renderModelDetail(snap, topic === 'image_reading' ? { vision: true } : topic === 'tool_calling' ? { tools: true } : undefined), 'capability_explained');
       }
       if (call.name === 'pc_install_utility') return install(String(args.utility ?? ''));
       if (call.name === 'wish_production_options') {

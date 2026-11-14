@@ -98,7 +98,8 @@ import { AUTHORIZE_MISSION_TOOL,buildWorkspaceWriteEnvelope, createPendingMissio
 import { NON_WORKSPACE_MARKERS } from '../domain/taskToolSurface';
 import { readAgentReachConfig, runAgentReach, validateAgentReachCall } from './agentReachTool';
 import { readSkill, selectSkillsForTurn } from '../platform/skills/skillService';
-import { announcesWorkStarting, asksAboutConversationTask, auditPromises, classifyStatusRequest, composeStatusAnswer, describeConversationTask, hasActiveWorker, hasRecentGmailWork, latestConversationTask, type StatusTopic } from './assistantStatus';
+import { observationCoversRequest } from './diskObservation';
+import { announcesWorkStarting, asksAboutConversationTask, asksForDiskObservation, auditPromises, classifyStatusRequest, composeStatusAnswer, describeConversationTask, hasActiveWorker, hasRecentGmailWork, latestConversationTask, type StatusTopic } from './assistantStatus';
 import { notificationCapability } from '../domain/notificationOutbox';
 import { boundConversationContext, isExplicitResumeRequest, isSmallTalk, selectRelevantTask, LATEST_REQUEST_AUTHORITATIVE } from '../domain/conversationRelevance';
 import type { PowerShellRunner } from './windowsPrinting';
@@ -117,6 +118,8 @@ import { createPiCloudFetch, resolvePiCloudTarget } from './piCloudTarget';
 import { CLOUD_OFFER_DECLINED_REPLY, classifyOfferReply, cloudOfferAcceptedReply, pendingCloudOffer } from './escalation';
 import { asksToMakeSomething as asksToMakeOutsideChat } from './makeIntent';
 import { modelLacksTools } from './ollamaModelInfo';
+import { unbackedScreenClaims } from './screenClaims';
+import { noteActiveModel, renderModelSummary, snapshotModels } from './modelAwareness';
 import type { CloudCredentialStore } from './cloudCredentials';
 import { TURN_STATE_PROMPT_RULE, attachTurnState, formatTurnState } from './turnState';
 import { formatProjectNotesSection, readProjectNotes } from './projectNotes';
@@ -393,6 +396,21 @@ export function describeUnansweredApproval(outcome: PiToolApprovalOutcome): stri
     return `The web-access approval request could not be created (${outcome.reason}), so nothing was searched. This is a system error, not the user's decision.`;
   }
   return 'The web-access approval request was not answered, so nothing was searched.';
+}
+
+/** An internal record id (proj_<uuid>, ptask_<uuid>, artifact_<uuid>…): context for the model and the journal, not chat text. */
+const INTERNAL_RECORD_ID_SOURCE = String.raw`\b(?:[a-z]+_)+[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b`;
+
+/**
+ * A tool receipt made fit for the chat when Core has to show it as the reply: "(ref proj_…/ptask_…)" parentheticals
+ * and any other internal record id are removed; the rest of the receipt (what was done, where) stays.
+ */
+export function withoutInternalRecordIds(text: string): string {
+  const hasId = new RegExp(INTERNAL_RECORD_ID_SOURCE, 'i');
+  return text
+    .replace(/[ \t]*\((?:ref|id)\b[^()\n]*\)/gi, (m) => (hasId.test(m) ? '' : m))
+    .replace(new RegExp(String.raw`[ \t]*\(?${INTERNAL_RECORD_ID_SOURCE}(?:\/${INTERNAL_RECORD_ID_SOURCE})*\)?`, 'gi'), '')
+    .replace(/[ \t]+([.,;:])/g, '$1');
 }
 
 /**
@@ -1117,10 +1135,13 @@ export class PiAgentEngine implements EngineAdapter {
     const cloudTarget = ctx.provider && ctx.provider !== 'ollama'
       ? resolvePiCloudTarget({ provider: ctx.provider, context: ctx.cloud?.context, credentials: ctx.cloud?.credentials })
       : null;
+    noteActiveModel(selectedModel, cloudTarget ? cloudTarget.provider : 'ollama');
     const controls = resolveOllamaChatControls({ profile: 'pi', model: selectedModel });
     const baseNumCtx = controls.numCtx ?? PI_CONTEXT_WINDOW;
     if (!cloudTarget) {
+      safeRecordRuntimeEvent(db, broadcaster, attemptId, 'model_loading_started', { phase: 'loading', model: selectedModel }, actor);
       const residency = await ensureModelResident(selectedModel, { baseUrl: this.defaultUrl, signal, numCtx: baseNumCtx });
+      safeRecordRuntimeEvent(db, broadcaster, attemptId, 'model_loading_finished', { phase: 'loading', model: selectedModel, ok: residency.ok, durationMs: residency.durationMs }, actor);
       console.log(`[karkedikha-core ${new Date().toISOString()}] attemptId=${attemptId} stage=model_residency model=${selectedModel} ok=${residency.ok} durationMs=${residency.durationMs} numCtx=${baseNumCtx}${residency.error ? ' error=' + residency.error : ''}`);
     }
     const ollamaRoot = this.defaultUrl.replace(/\/v1\/?$/, '').replace(/\/$/, '');
@@ -5177,11 +5198,12 @@ ${availableToolNames.has('system_hardware_telemetry') ? `- For disk, storage, or
 ` : '';
 
     const specialistPromptSection = ['desktop_screenshot', 'desktop_windows_list', 'inspect_page', 'scout_add_watch', 'hermes_list_skills'].some((t) => availableToolNames.has(t)) ? `COMPUTER, BROWSER, WATCHES AND SPECIALIST SKILLS (STRICT RULES):
-${availableToolNames.has('desktop_screenshot') ? `- 'desktop_screenshot' only CAPTURES: it saves a PNG of the whole visible Windows desktop on this PC and returns its path, size and SHA-256. Capturing is not opening (showing the image to the user, which this tool does not do) and not inspecting (reading what is on it, which no model can do in this build). So never describe the screen from a screenshot, and never say you looked at, checked, verified or confirmed anything with one; say you saved it and where. It has no privacy filter: every visible window is in the file as it is, private messaging apps included, so never claim it leaves out, blurs or protects any app. Pandesh's real messaging rules: sending any message always needs the user's approval, and Pandesh never scrapes a WhatsApp Web session. 'desktop_windows_list' returns the titles of the visible top-level windows; that is real data you may report to say which apps are open. Both change nothing but read everything the user has open, so the user is asked before every call; use them only when the user asks about their screen or open apps, never to find out which Pandesh view is open (answer that from the product facts or navigate_to).\n` : ''}${availableToolNames.has('inspect_page') ? `- 'inspect_page' opens a real page in the managed browser: a workspace-relative HTML path, or a live URL on this machine (http://127.0.0.1:<port>/...). It acts on a running page, so it needs the operator's approval. Quote only what the tool returned; never describe a page you did not open.\n` : ''}${availableToolNames.has('scout_add_watch') ? `- 'scout_add_watch' creates a durable watch that Core then checks on its own schedule; 'scout_list_watches', 'scout_run_watch' and 'scout_run_all' read and check them. Only add a watch when the user asked for one, and never claim a watch is running without a tool result.\n` : ''}${availableToolNames.has('hermes_list_skills') ? `- 'hermes_list_skills' lists the skills installed in the local Hermes agent; 'hermes_invoke_skill' runs one of them and returns Hermes' own result. Never invent a skill name — list the skills first, then invoke one of the names that were listed.\n` : ''}- When a tool result says NOT DONE, NOT AVAILABLE or that it was declined, say so plainly. Never present a tool's failure as a success, and never invent a file path, a number or a quote. When the user declined an approval, say "you declined" — it is the user's choice, not a system protection — and do not offer a manual way around it. Offer to do something (send, book, buy, post) only when a tool for it is in your tool list.
+${availableToolNames.has('desktop_screenshot') ? `- 'desktop_screenshot' only CAPTURES: it saves a PNG of the whole visible Windows desktop on this PC and returns its path, size and SHA-256. Capturing is not opening (showing the image to the user, which this tool does not do) and not inspecting (reading what is on it). When the user asks what is on their screen or to analyze it, call it with the "question" argument set to their ask: a vision model on THIS PC then reads the capture (nothing leaves the PC) and the result carries its reading, which you may report as what that model reported, naming it. If the result says the image was not inspected, say that and the reason it gives; never describe the screen yourself, and never say you looked at, checked, verified or confirmed anything unless the result contains a local vision model's reading. Without a reading, say you saved it and where. It has no privacy filter: every visible window is in the file as it is, private messaging apps included, so never claim it leaves out, blurs or protects any app. Pandesh's real messaging rules: sending any message always needs the user's approval, and Pandesh never scrapes a WhatsApp Web session. 'desktop_windows_list' returns the titles of the visible top-level windows; that is real data you may report to say which apps are open. Both change nothing but read everything the user has open, so the user is asked before every call; use them only when the user asks about their screen or open apps, never to find out which Pandesh view is open (answer that from the product facts or navigate_to).\n` : ''}${availableToolNames.has('inspect_page') ? `- 'inspect_page' opens a real page in the managed browser: a workspace-relative HTML path, or a live URL on this machine (http://127.0.0.1:<port>/...). It acts on a running page, so it needs the operator's approval. Quote only what the tool returned; never describe a page you did not open.\n` : ''}${availableToolNames.has('scout_add_watch') ? `- 'scout_add_watch' creates a durable watch that Core then checks on its own schedule; 'scout_list_watches', 'scout_run_watch' and 'scout_run_all' read and check them. Only add a watch when the user asked for one, and never claim a watch is running without a tool result.\n` : ''}${availableToolNames.has('hermes_list_skills') ? `- 'hermes_list_skills' lists the skills installed in the local Hermes agent; 'hermes_invoke_skill' runs one of them and returns Hermes' own result. Never invent a skill name — list the skills first, then invoke one of the names that were listed.\n` : ''}- When a tool result says NOT DONE, NOT AVAILABLE or that it was declined, say so plainly. Never present a tool's failure as a success, and never invent a file path, a number or a quote. When the user declined an approval, say "you declined" — it is the user's choice, not a system protection — and do not offer a manual way around it. Offer to do something (send, book, buy, post) only when a tool for it is in your tool list.
 ` : '';
 
     const pcOrgPromptSection = ['pc_capability_inventory', 'pc_organize_scan', 'routine_create', 'household_scan_obligations'].some((t) => availableToolNames.has(t)) ? `PC ORGANIZATION, ROUTINES, HOUSEHOLD & JUGAAD (STRICT RULES):
-${availableToolNames.has('pc_capability_inventory') ? `- "What tools/software/models does this PC have?" → 'pc_capability_inventory'. If a task needs something missing, name the utility it recommends and offer 'pc_install_utility' (the user approves the exact package); never refuse just because a tool is missing.\n` : ''}${availableToolNames.has('pc_organize_scan') ? `- "Analyze/organize my PC, Downloads, Documents, tax files…" → 'pc_organize_scan' with the folders the user named (never a whole drive). Present its plan as it is: hierarchy, exact moves, what stays, project/model folders kept whole, duplicates, temporary files, space and risks. Nothing moves until the user approves 'pc_organize_apply'; offer saveRules when they want it kept organized. 'pc_organize_undo' reverses a plan. Pandesh never deletes files.\n` : ''}${availableToolNames.has('routine_create') ? `- "Every week…/every morning…/monitor…" → 'routine_create' (folder_cleanup, obligations_check or expiry_watch) with the time, weekdays and folders the user asked for; 'routine_list' shows schedule, authority and history; 'routine_control' pauses, resumes, edits, runs now or cancels.\n` : ''}${availableToolNames.has('household_scan_obligations') ? `- Bills, invoices, subscriptions, renewals, contracts, warranties → 'household_scan_obligations' (sources ["gmail"] and/or folders), then 'household_obligations' to list (withinDays 31 for "next month"). An invoice email does NOT prove a bill is unpaid: report payment status exactly as the tool gives it (requested, due soon, possibly overdue, confirmed, unknown). Only the user confirms a record ('household_obligation_update'); a confirmed record becomes a JUGAAD Important Date.\n` : ''}` : '';
+${availableToolNames.has('capability_explain') ? `- "What can you do / can you see images / which model would you use / why can't you X?" → 'capability_explain' (live: installed, loaded, active models, what fits, why). Answer from it; never from memory, and never confuse what a model CAN do with what the user has permitted.
+` : ''}${availableToolNames.has('pc_capability_inventory') ? `- "What tools/software/models does this PC have?" → 'pc_capability_inventory'. If a task needs something missing, name the utility it recommends and offer 'pc_install_utility' (the user approves the exact package); never refuse just because a tool is missing.\n` : ''}${availableToolNames.has('pc_organize_scan') ? `- "Analyze/organize my PC, Downloads, Documents, tax files…" → 'pc_organize_scan' with the folders the user named (never a whole drive). Present its plan as it is: hierarchy, exact moves, what stays, project/model folders kept whole, duplicates, temporary files, space and risks. Nothing moves until the user approves 'pc_organize_apply'; offer saveRules when they want it kept organized. 'pc_organize_undo' reverses a plan. Pandesh never deletes files.\n` : ''}${availableToolNames.has('routine_create') ? `- "Every week…/every morning…/monitor…" → 'routine_create' (folder_cleanup, obligations_check or expiry_watch) with the time, weekdays and folders the user asked for; 'routine_list' shows schedule, authority and history; 'routine_control' pauses, resumes, edits, runs now or cancels.\n` : ''}${availableToolNames.has('household_scan_obligations') ? `- Bills, invoices, subscriptions, renewals, contracts, warranties → 'household_scan_obligations' (sources ["gmail"] and/or folders), then 'household_obligations' to list (withinDays 31 for "next month"). An invoice email does NOT prove a bill is unpaid: report payment status exactly as the tool gives it (requested, due soon, possibly overdue, confirmed, unknown). Only the user confirms a record ('household_obligation_update'); a confirmed record becomes a JUGAAD Important Date.\n` : ''}` : '';
 
     const filesPromptSection = availableToolNames.has('read_file') || availableToolNames.has('search_files') ? `6a. FILES & DOCUMENTS (invoices, receipts, statements, contracts, PDFs, photos):
 - These are files on this computer unless the user says email, mail or inbox. Look in the User-Selected Workspace first with 'search_files' or 'list_directory' and use 'lastModified' (or the date inside the document) for "newest" or "latest". If nothing is there, ask with 'request_search_permission' to look in Downloads or Documents. Use gmail_* tools only when the user mentions email.
@@ -5619,6 +5641,14 @@ When the user asks to continue, resume, or check progress/updates, resume this w
     // A local model Ollama says cannot use tools (qwen2.5vl:7b) is sent none: with 52 tool definitions Ollama refused
     // the call ("does not support tools") and the turn failed before a word was written (owner test, 2026-11-12).
     const modelWithoutTools = !cloudTarget && !simpleInteractive && await modelLacksTools(ollamaRoot, selectedModel);
+    // What the models on this PC can do right now, in a few lines, from live facts (never for a cloud turn: the cloud model
+    // is told nothing about this PC). Detail is on demand through capability_explain. Abilities are not permissions.
+    if (!cloudTarget && !simpleInteractive) {
+      try {
+        const snap = await Promise.race([snapshotModels({ selectedModel, provider: 'ollama' }), new Promise<never>((_, rej) => setTimeout(() => rej(new Error('model snapshot timed out')), 4_000))]);
+        addTurnFact(renderModelSummary(snap));
+      } catch { /* no summary this turn: the model is simply not told */ }
+    }
     if (modelWithoutTools) {
       addTurnFact(`TOOLS UNAVAILABLE: ${selectedModel} cannot use tools, so this turn has none. Answer from the conversation and any picture the user attached. If the request needs an action (a screenshot, a file, a search, an email), say plainly that ${selectedModel} cannot do it and that the user can pick Auto or another model.`);
       safeRecordRuntimeEvent(db, broadcaster, attemptId, 'model_without_tools', { model: selectedModel }, actor);
@@ -5823,8 +5853,32 @@ When the user asks to continue, resume, or check progress/updates, resume this w
     // A model that keeps calling tools this turn does not have can never finish; stop it instead of spending minutes of GPU
     // time on "Tool X not found" (live demo 2026-11-09: 519 such calls in 6.7 minutes before the turn failed).
     let unknownToolStreak = 0;
+    // Live-activity signals: counts and phase names only, never model text, reasoning or tool arguments. One event per
+    // pass boundary and one per phase change, so a long pass is visible without token-by-token noise.
+    let passNo = 0;
+    let passPhase = '';
+    let passToolCalls = 0;
+    let passTextChars = 0;
+    let passReasoned = false;
+    let passStartedAt = 0;
+    const passPhaseOnce = (phase: string) => {
+      if (passPhase === phase) return;
+      passPhase = phase;
+      safeRecordRuntimeEvent(db, broadcaster, attemptId, 'model_pass_phase', { pass: passNo, phase }, actor);
+    };
     agent.subscribe((event: any) => {
       try {
+        if (event.type === 'turn_start') {
+          passNo += 1; passPhase = ''; passToolCalls = 0; passTextChars = 0; passReasoned = false; passStartedAt = Date.now();
+          safeRecordRuntimeEvent(db, broadcaster, attemptId, 'model_pass_started', { pass: passNo }, actor);
+        } else if (event.type === 'turn_end') {
+          safeRecordRuntimeEvent(db, broadcaster, attemptId, 'model_pass_ended', { pass: passNo, toolCalls: passToolCalls, textChars: passTextChars, reasoned: passReasoned, durationMs: passStartedAt ? Date.now() - passStartedAt : null }, actor);
+        } else if (event.type === 'message_update') {
+          const t = event.assistantMessageEvent?.type;
+          if (t === 'thinking_start' || t === 'thinking_delta') { passReasoned = true; passPhaseOnce('reasoning'); }
+          else if (t === 'text_delta') { passTextChars += typeof event.assistantMessageEvent.delta === 'string' ? event.assistantMessageEvent.delta.length : 0; passPhaseOnce('writing'); }
+          else if (t === 'toolcall_start') { passToolCalls += 1; passPhaseOnce('selecting_tool'); }
+        }
         if (event.type === 'tool_execution_end') {
           const resultText = String(event.result?.content?.[0]?.text ?? '');
           unknownToolStreak = event.isError && isUnknownToolResult(resultText) ? unknownToolStreak + 1 : 0;
@@ -5942,6 +5996,24 @@ When the user asks to continue, resume, or check progress/updates, resume this w
         safeRecordRuntimeEvent(db, broadcaster, attemptId, 'attempt_request_superseded', { correction: instruction.slice(0, 300) }, actor);
         await tolerateSupersede(async () => {
           await agent.prompt(correctionRestartPrompt(ctx.currentMessage ?? prompt, instruction));
+          await agent.waitForIdle();
+        });
+      }
+      // CI flake (PR #75/#76, 2026-11-12): add_task succeeded, then the model call that should have answered failed at
+      // the transport in 1 ms. Nothing re-asked the model, so the turn fell through to Core's fallbacks and showed the raw
+      // tool receipt. A model call that fails right after tool results is sent once more from the same transcript: the
+      // tools are not run again, and the model's own answer stays the reply.
+      const messagesNow: any[] = agent.state.messages;
+      const failedCall: any = messagesNow[messagesNow.length - 1];
+      const beforeFailure: any = messagesNow[messagesNow.length - 2];
+      if (!signal?.aborted && supersedeWith === null
+        && failedCall?.role === 'assistant' && (failedCall.stopReason === 'error' || failedCall.errorMessage)
+        && !(failedCall.content || []).some((c: any) => (c.type === 'text' && String(c.text ?? '').trim()) || c.type === 'toolCall')
+        && (beforeFailure?.role === 'toolResult' || beforeFailure?.role === 'tool')) {
+        safeRecordRuntimeEvent(db, broadcaster, attemptId, 'model_call_retried_after_error', { error: String(failedCall.errorMessage ?? '').slice(0, 300) }, actor);
+        agent.state.messages = messagesNow.slice(0, -1);
+        await tolerateSupersede(async () => {
+          await agent.continue();
           await agent.waitForIdle();
         });
       }
@@ -6528,7 +6600,8 @@ When the user asks to continue, resume, or check progress/updates, resume this w
             isUnanswered = true;
           }
         } else {
-          const rawOutputs = successfulTools.map((t) => extractToolResultText(t.result));
+          // A receipt shown as the reply keeps what was done but never Core's internal record ids (CI flake, PR #75/#76).
+          const rawOutputs = successfulTools.map((t) => withoutInternalRecordIds(extractToolResultText(t.result)));
           const nonJsonOutputs = rawOutputs.filter(o => o && !o.trim().startsWith('{') && !o.trim().startsWith('['));
           if (nonJsonOutputs.length > 0) {
             finalReply = nonJsonOutputs.join('\n\n');
@@ -6754,6 +6827,40 @@ When the user asks to continue, resume, or check progress/updates, resume this w
         deliverables = deliverables ?? { expected: [], missing: [], present: [] };
         deliverables.expected.push(unbacked); deliverables.missing.push(unbacked);
         safeRecordRuntimeEvent(db, broadcaster, attemptId, 'unbacked_working_claim', { detail: unbacked }, actor);
+      }
+    }
+
+    // An answer that exists only on the disk ("how many files are in rw/inbox") is an observation. If no read of the disk
+    // succeeded this turn, the number or list in the reply was not observed, whatever the model wrote: say so, and the
+    // task is not complete. Independent of routing and of permissions: it only ever adds a correction.
+    if (!signal?.aborted && finalReply && asksForDiskObservation(requestText)) {
+      const DISK_READ = /^(?:list_directory|read_file|search_files|find_files|glob|grep|file_info|stat_file|get_file_info|document_read|pc_organize_scan|run_checks)$/;
+      const reads = toolCallsRecorded.filter((t) => t.status === 'completed' && DISK_READ.test(t.tool) && !(t.result as { isError?: boolean } | undefined)?.isError);
+      // The evidence must be about what was asked: a read of another folder does not observe the one the request names.
+      const coverage = observationCoversRequest(requestText, reads);
+      const observed = coverage.covered;
+      if (!observed) {
+        const note = reads.length === 0
+          ? 'nothing was read from the disk in this turn (no successful folder or file read), so the answer above was not observed and must not be trusted'
+          : `no successful read in this turn covered ${coverage.missing.map((m) => `"${m}"`).join(', ')}, so the answer above about it was not observed and must not be trusted`;
+        finalReply += `\n\nCorrection: ${note}.`;
+        deliverables = deliverables ?? { expected: [], missing: [], present: [] };
+        deliverables.expected.push(note); deliverables.missing.push(note);
+        safeRecordRuntimeEvent(db, broadcaster, attemptId, 'disk_observation_missing', { tools: toolCallsRecorded.map((t) => `${t.tool}:${t.status}`) }, actor);
+      }
+    }
+
+    // "I took a screenshot" needs a successful capture receipt, and "the screenshot shows ..." needs a local vision model's
+    // reading, both from this turn. Only ever appends a correction; independent of routing and permissions.
+    if (!signal?.aborted && finalReply) {
+      const screenCorrection = unbackedScreenClaims(finalReply, toolCallsRecorded.map((t) => ({ tool: t.tool, status: t.status, isError: Boolean((t.result as { isError?: boolean } | undefined)?.isError), text: extractToolResultText(t.result) })));
+      if (screenCorrection) {
+        finalReply += `
+
+${screenCorrection}`;
+        deliverables = deliverables ?? { expected: [], missing: [], present: [] };
+        deliverables.expected.push(screenCorrection); deliverables.missing.push(screenCorrection);
+        safeRecordRuntimeEvent(db, broadcaster, attemptId, 'screenshot_claim_unbacked', { tools: toolCallsRecorded.map((t) => `${t.tool}:${t.status}`) }, actor);
       }
     }
 

@@ -22,7 +22,7 @@ import {
   permissionModesPromptSection, permissionPromptState, revokeStandingAuthorization, setConversationPermissionMode,
 } from '../domain/permissionModes';
 import { KNOWN_MISHEARINGS, inputModalityOf, parseInputModality, spokenInputPromptSection } from '../domain/spokenInput';
-import { SCREENSHOT_CONTENTS_NOTE, SCREEN_READING_TOOLS, createComputerUseCapabilityAdapter } from '../runtime/computerUseCapability';
+import { NOT_INSPECTED_NOTE, SCREENSHOT_CONTENTS_NOTE, SCREEN_READING_TOOLS, createComputerUseCapabilityAdapter } from '../runtime/computerUseCapability';
 
 let dir: string;
 let db: CoreDatabase;
@@ -152,7 +152,7 @@ describe('spoken messages', () => {
 });
 
 describe('desktop_screenshot says what it is', () => {
-  it('reports that its contents are not visible to Pandesh and that nothing is filtered', async () => {
+  it('says a capture is not a reading, says when nothing read it, and that nothing is filtered', async () => {
     const dataDir = path.join(dir, 'data');
     const adapter = createComputerUseCapabilityAdapter({
       dataDir,
@@ -164,31 +164,35 @@ describe('desktop_screenshot says what it is', () => {
       },
     });
     const definition = adapter.definitions().find((d) => d.name === 'desktop_screenshot');
-    expect(definition?.description).toMatch(/Pandesh cannot see what is in the image in this build/);
+    expect(definition?.description).toMatch(/Pass `question`.+a vision model on this PC reads the capture.+without `question` the image is only saved and not read.+Nothing is sent off this PC/);
     expect(definition?.description).toMatch(/nothing filtered/);
 
     const result = await adapter.run({ name: 'desktop_screenshot', arguments: {} } as never, {} as never);
     expect(result.status).toBe('succeeded');
     expect(result.output).toMatch(/^Captured the Windows desktop: .+desktop-\d+\.png \(4 bytes, 1920x1080, sha256 [0-9a-f]{64}\)\. /);
     expect(result.output).toContain(SCREENSHOT_CONTENTS_NOTE);
-    // Capturing, opening and inspecting are kept apart; the tool only captures.
-    expect(SCREENSHOT_CONTENTS_NOTE).toMatch(/^Captured means saved, nothing more: .+neither opened for anyone nor inspected\./);
-    expect(SCREENSHOT_CONTENTS_NOTE).toMatch(/Pandesh cannot inspect it in this build \(no model reads the image/);
-    expect(SCREENSHOT_CONTENTS_NOTE).toMatch(/do not describe, check or verify anything on the screen with it, and never say it shows, confirms or proves something/);
+    // Without a question nothing reads the image, and the result says so in words the model must not talk around.
+    expect(result.output).toContain(NOT_INSPECTED_NOTE);
+    expect(result.output).toMatch(/Reason: the user did not ask what is on the screen/);
+    expect(result.output).toMatch(/computer_desktop_captured|Captured the Windows desktop/);
+    // Capturing, opening and inspecting are kept apart.
+    expect(SCREENSHOT_CONTENTS_NOTE).toMatch(/^Captured means saved: .+has not been opened for anyone\. It was read by a model only if this result says a local vision model read it\./);
+    expect(NOT_INSPECTED_NOTE).toMatch(/^Not inspected: no model has read this image/);
+    expect(NOT_INSPECTED_NOTE).toMatch(/Do not describe, check or verify anything on the screen from it, and never say it shows, confirms or proves something/);
     expect(SCREENSHOT_CONTENTS_NOTE).toMatch(/The user can open it at the path above/);
     expect(SCREENSHOT_CONTENTS_NOTE).toMatch(/nothing is excluded, blurred or filtered/);
     expect(SCREENSHOT_CONTENTS_NOTE).not.toMatch(/exclude private|messaging apps? (?:are|is) (?:excluded|hidden)/i);
   });
 
-  it('the system prompt tells the model the tool only captures and never verifies anything', () => {
+  it('the system prompt tells the model the tool captures, reads only on a question, and never describes an unread screen', () => {
     const engine = fs.readFileSync(path.join(__dirname, '../runtime/piAgentEngine.ts'), 'utf8');
     const start = engine.indexOf("- 'desktop_screenshot' only CAPTURES");
     const end = engine.indexOf('never to find out which Pandesh view is open', start);
     expect(start).toBeGreaterThan(-1);
     expect(end).toBeGreaterThan(start);
     const line = engine.slice(start, end);
-    expect(line).toMatch(/Capturing is not opening .+ and not inspecting .+no model can do in this build/);
-    expect(line).toMatch(/never say you looked at, checked, verified or confirmed anything with one; say you saved it and where/);
+    expect(line).toMatch(/Capturing is not opening .+ and not inspecting .+call it with the "question" argument.+a vision model on THIS PC then reads the capture \(nothing leaves the PC\)/);
+    expect(line).toMatch(/never describe the screen yourself, and never say you looked at, checked, verified or confirmed anything unless the result contains a local vision model's reading/);
     expect(line).toMatch(/never claim it leaves out, blurs or protects any app/);
     expect(line).toMatch(/Pandesh never scrapes a WhatsApp Web session/);
     expect(line).toMatch(/the user is asked before every call/);
