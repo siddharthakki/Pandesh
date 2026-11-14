@@ -160,6 +160,33 @@ await scenario('D06', 'Notification delivery: the real scheduler queues a notice
     notes: `outbox=${JSON.stringify(row)} channel=${JSON.stringify(channel)} events=${events.join(',')} hostLog=${logged}` };
 });
 
+await scenario('D07', 'Standing write permission panel: the owner grants and revokes a routine from the real Automations screen; Core freezes exactly what the panel showed', async () => {
+  const id = `sched_d07_${Date.now()}`; const folder = path.join(WS, 'd07-routine-folder'); fs.mkdirSync(folder, { recursive: true });
+  const now = new Date().toISOString(); const later = new Date(Date.now() + 864e5).toISOString();
+  const wdb = new DatabaseSync(path.join(PROFILE, 'core.db'));
+  try { wdb.prepare('INSERT INTO scheduled_tasks (id,title,instruction,dailyTime,repeat,timezone,conversationId,enabled,nextRunAt,lastRunAt,lastAttemptId,createdAt,updatedAt,model,routine,recurrenceJson,purpose,scopeJson) VALUES (?,?,?,?,?,?,NULL,1,?,NULL,NULL,?,?,?,NULL,NULL,NULL,?)').run(id, 'D07 count report', 'Count the files in the inbox folder and write only that number into reports/n.txt', '04:00', 'daily', 'UTC', later, now, now, 'gemma4:26b-a4b-it-qat', JSON.stringify({ workspaceRoot: folder, workspaceAccess: 'read_write' })); } finally { wdb.close(); }
+  const click = (txt, scope = 'document') => cdp.eval(`(() => { const root = ${scope === 'document' ? 'document' : `document.querySelector('[data-testid="grant-${id}"]')`}; const b = [...(root?.querySelectorAll('button') ?? [])].find((x) => x.textContent.trim().startsWith(${JSON.stringify(txt)})); if (!b) return false; b.click(); return true; })()`);
+  const text = () => cdp.eval(`document.querySelector('[data-testid="grant-${id}"]')?.innerText ?? ''`);
+  // open Automations (nav button), wait for the panel row
+  const clickSel = (sel) => cdp.eval(`(() => { const b = document.querySelector(${JSON.stringify(sel)}); if (!b) return false; b.click(); return true; })()`);
+  for (let i = 0; i < 20 && !(await text()); i++) {
+    await clickSel('button[aria-label="Spaces"]'); await sleep(700);
+    await cdp.eval(`(() => { const b = [...document.querySelectorAll('button.menu-item')].find((x) => x.textContent.trim().startsWith('Automations')); if (b) b.click(); return !!b; })()`); await sleep(1500);
+  }
+  let card = await text(); if (!card) return { ok: false, notes: 'panel row never appeared (navigation or load failed)' };
+  const shows = { folder: card.includes(folder) || card.includes(path.normalize(folder)), op: /Create or replace a file/.test(card), limits: /8 files per run/.test(card), off: /No standing permission/.test(card) };
+  await click('Grant…', 'card'); await sleep(500); const confirmCard = await text();
+  const confirmShows = /Never covered: shell commands/.test(confirmCard) && /take it back/.test(confirmCard);
+  const beforeConfirm = q('select count(*) n from routine_write_grants where taskId = ?', id)[0].n;   // nothing is granted until Confirm
+  await click('Confirm and grant', 'card'); await sleep(2500);
+  const g = q("select status, grantedBy, frozenJson from routine_write_grants where taskId = ?", id)[0]; card = await text();
+  const granted = !!g && g.status === 'active' && /^host:/.test(g.grantedBy) && JSON.parse(g.frozenJson).operations?.join() === 'write_file' && /Standing permission is on/.test(card);
+  await click('Revoke', 'card'); await sleep(2500);
+  const r = q("select status, revokedBy from routine_write_grants where taskId = ?", id)[0]; card = await text();
+  const revoked = r?.status === 'revoked' && /No standing permission/.test(card);
+  return { ok: Object.values(shows).every(Boolean) && confirmShows && beforeConfirm === 0 && granted && revoked, status: null, reply: null, notes: `shows=${JSON.stringify(shows)} confirm=${confirmShows} grantedBeforeConfirm=${beforeConfirm} granted=${granted} revoked=${revoked} grantedBy=${g?.grantedBy}` };
+});
+
 const after = prodSnapshot();
 const isolation = { productionProcessesUnchanged: JSON.stringify(before.procs) === JSON.stringify(after.procs), productionCoreUnchanged: JSON.stringify(before.core) === JSON.stringify(after.core), runKeyUnchanged: before.runKey === after.runKey, port3030Unchanged: before.port3030 === after.port3030, testCoreInProfile: fs.existsSync(path.join(PROFILE, 'core.db')) };
 const count = (v) => results.filter((r) => r.verdict === v).length;

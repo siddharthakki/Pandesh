@@ -13,6 +13,7 @@ function requireHost(ctx: ApiContext): string {
   if (!(p?.isTrustedHost && p.source === 'host_transport' && !p.isModelOrTool)) throw new CoreError('forbidden', 'only the Pandesh app can do this');
   return p.id;
 }
+const asHost = (id: string): string => (id.startsWith('host:') ? id : `host:${id}`);
 const bodyOf = (ctx: ApiContext): Record<string, unknown> => (ctx.body && typeof ctx.body === 'object' && !Array.isArray(ctx.body) ? ctx.body as Record<string, unknown> : {});
 
 export function registerRoutineGrantRoutes(router: Router<ApiContext, ApiResult>): void {
@@ -48,14 +49,14 @@ export function registerRoutineGrantRoutes(router: Router<ApiContext, ApiResult>
       taskId: match.params.id,
       operations: Array.isArray(b.operations) ? b.operations.map(String) : undefined,
       limits: b.limits && typeof b.limits === 'object' ? b.limits as Record<string, number> : undefined,
-      grantedBy: `host:${who}`,
+      grantedBy: asHost(who),
     });
     return { status: 200, body: { grant } };
   });
   router.delete('/v1/scheduled-tasks/:id/write-grant', (ctx, match) => {
     const who = requireHost(ctx);
     getScheduledTask(ctx.db, match.params.id);
-    const revoked = revokeGrant(ctx.db, match.params.id, `host:${who}`, 'revoked by the owner');
+    const revoked = revokeGrant(ctx.db, match.params.id, asHost(who), 'revoked by the owner');
     return { status: 200, body: { revoked } };
   });
 }

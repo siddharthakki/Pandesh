@@ -243,4 +243,15 @@ describe('standing write permission API', () => {
     expect(((await (await call('DELETE', undefined, 'host')).json()) as any).revoked).toBe(1);
     expect(((await (await call('GET', undefined, 'host')).json()) as any).active).toBeNull();
   });
+  it('the host list shows each folder routine with its grant state: none, active, then stale after a change', async () => {
+    const list = (who: 'host' | 'client') => fetch(`http://127.0.0.1:${api.port}/v1/routine-write-grants`, { headers: { Authorization: `Bearer ${TOKEN}`, ...(who === 'host' ? { 'X-Host-Token': HOST } : {}), 'X-Client-Id': 'test-client' } });
+    expect((await list('client')).status).toBe(403);
+    const row = async () => ((await (await list('host')).json()) as any).routines.find((r: any) => r.taskId === taskId);
+    expect(await row()).toMatchObject({ status: 'none', grantable: true, folder: path.join(dir, 'f') });
+    expect((await call('POST', { confirm: true }, 'host')).status).toBe(200);
+    expect(await row()).toMatchObject({ status: 'active', active: { frozen: { operations: ['write_file'] } } });
+    db.run('UPDATE scheduled_tasks SET instruction = ? WHERE id = ?', ['something else entirely', taskId]);
+    expect((await row()).status).toBe('stale');
+    expect(((await (await list('host')).json()) as any).operations).toEqual(['write_file']);
+  });
 });
