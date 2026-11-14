@@ -53,7 +53,7 @@ export const TOOL_GROUPS: Record<string, ToolGroup> = {
   },
   web: {
     purpose: 'search the public web and official sources, with links',
-    pattern: /\b(?:search|web|online|internet|google|look (?:it )?up|latest|current|news|official|sources?|websites?|links?|urls?|jobs?|vacanc\w*|research)\b|https?:\/\//i,
+    pattern: /\b(?:search|web|online|internet|google|look (?:it )?up|latest|current|news|official|sources?|websites?|links?|urls?|jobs?|vacanc\w*|research|reddit|youtube|subtitles?|transcripts?)\b|https?:\/\//i,
   },
   browser: {
     purpose: 'open a web page in the browser and inspect what it says',
@@ -154,7 +154,7 @@ export const NATIVE_GROUP: Record<string, string> = {
   create_wish_goal: 'wish', advance_wish: 'wish', wish_status: 'wish', update_wish_goal: 'wish', record_wish_money: 'wish',
   build_wish_deliverable: 'wish', wish_order: 'wish', wish_owner_decision: 'wish',
   get_briefing_data: 'briefing',
-  web_research: 'web',
+  web_research: 'web', agent_reach: 'web',
   run_checks: 'coding', delegate_to_opencode: 'coding', delegate_to_coding_agent: 'coding',
   list_printers: 'printing', print_test_page: 'printing',
   send_to_phone: 'phone',
