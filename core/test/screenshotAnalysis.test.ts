@@ -211,6 +211,21 @@ describe('screenshot capture and analysis through the real turn', () => {
     if (!out.ok) expect(out.reason).toMatch(/never sent off this PC without separate consent/);
   });
 
+  it('prefers the smallest vision-named reader and skips uncensored variants (owner model list)', async () => {
+    const calls: string[] = [];
+    const fake = (async (url: string, init?: { body?: string }) => {
+      if (url.endsWith('/api/tags')) return new Response(JSON.stringify({ models: [
+        { name: 'gemma4:26b-a4b-it-qat', size: 15e9 }, { name: 'hf.co/x/DeepSeek-heretic-GGUF:Q8_0', size: 10e9 }, { name: 'qwen2.5vl:7b', size: 6e9 }, { name: 'gemma4:12b', size: 7.6e9 }] }));
+      if (url.endsWith('/api/show')) return new Response(JSON.stringify({ capabilities: ['completion', 'vision'] }));
+      calls.push(JSON.parse(init!.body!).model);
+      return new Response(JSON.stringify({ message: { content: 'ok text' } }));
+    }) as unknown as typeof fetch;
+    const png = path.join(tempDir, 'y.png'); fs.writeFileSync(png, syntheticPng());
+    const out = await createLocalVisionInspector({ baseUrl: 'http://127.0.0.1:11434', fetchFn: fake })({ path: png, question: 'what is on screen' });
+    expect(out.ok && out.model).toBe('qwen2.5vl:7b');
+    expect(calls).toEqual(['qwen2.5vl:7b']);
+  });
+
   it('unbackedScreenClaims leaves honest replies alone', () => {
     expect(unbackedScreenClaims('I could not analyze the screenshot because no vision model is installed.', [{ tool: 'desktop_screenshot', status: 'completed', isError: false, text: 'Captured' }])).toBeNull();
     expect(unbackedScreenClaims('I saved a screenshot at D:\\x.png.', [{ tool: 'desktop_screenshot', status: 'completed', isError: false, text: 'Captured' }])).toBeNull();

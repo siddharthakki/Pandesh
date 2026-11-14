@@ -31,7 +31,12 @@ const NOT_AUTO = /abliterat|uncensor|heretic|jailbr/i;
 async function localVisionModels(root: string, fetchFn: typeof fetch): Promise<string[]> {
   const tags = await fetchFn(`${root}/api/tags`, { signal: AbortSignal.timeout(5_000) });
   if (!tags.ok) return [];
-  const names = ((await tags.json()) as { models?: Array<{ name?: string }> }).models?.map((m) => String(m.name ?? '')).filter((n) => n && !NOT_AUTO.test(n)) ?? [];
+  const listed = ((await tags.json()) as { models?: Array<{ name?: string; size?: number }> }).models ?? [];
+  // Cheapest reader first: a model named for vision, then the smallest, so reading a screenshot does not evict a big chat model.
+  const names = listed
+    .filter((m) => m.name && !NOT_AUTO.test(String(m.name)))
+    .sort((x, y) => Number(/(?:^|[^a-z])(?:vl|vision|llava|minicpm-v)/i.test(String(y.name))) - Number(/(?:^|[^a-z])(?:vl|vision|llava|minicpm-v)/i.test(String(x.name))) || Number(x.size ?? Infinity) - Number(y.size ?? Infinity))
+    .map((m) => String(m.name));
   const found: string[] = [];
   for (const name of names.slice(0, 16)) {
     try {
