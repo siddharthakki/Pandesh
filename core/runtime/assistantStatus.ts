@@ -51,6 +51,37 @@ export function asksForDiskObservation(text: string): boolean {
   if (/\b(?:create|write|save|move|copy|delete|remove|rename|organi[sz]e|sort|clean|install|run|build|fix|edit|change|add|make|zip|upload)\b/i.test(withoutQuoted(t))) return false;
   return /\b(?:how\s+(?:many|big|large|much)|count|list|show|what(?:'s|\s+is|\s+are)|which|is\s+there|are\s+there|exists?|contains?|size|newest|oldest|largest|biggest|names?|wie\s+viele|welche|zeig\w*)\b|\?\s*$/i.test(withoutQuoted(t));
 }
+/**
+ * The folders and files a disk question names ("rw/inbox", "C:\Temp", "notes.txt", "the Reports folder"). Empty when the
+ * request names none, in which case no particular target can be demanded of the read.
+ */
+export function requestedDiskTargets(text: string): string[] {
+  const t = withoutQuoted(String(text || '').replace(FS_NOT_A_PATH, ' '));
+  const out = new Set<string>();
+  const norm = (v: string) => v.replace(/\\/g, '/').replace(/^\.\//, '').replace(/\/+$/, '').toLowerCase();
+  for (const raw of t.split(/\s+/)) {
+    const tok = raw.replace(/^[("'`]+|[)"'`?!,;]+$/g, '').replace(/\.$/, '');
+    if (/[\\/]/.test(tok) || FS_FILE_NAME.test(tok)) { const n = norm(tok); if (n && !/^[a-z]:$/.test(n)) out.add(n); }
+  }
+  for (const m of t.matchAll(/\b(?:the|in|im|my)\s+([\w.-]+)\s+(?:folder|director(?:y|ies)|ordner)\b/gi)) {
+    const name = m[1].toLowerCase();
+    if (!/^(?:this|that|same|whole|entire|main|root|parent|current|a|an|the|my|that|these|those|other|new|old)$/.test(name)) out.add(name);
+  }
+  return [...out];
+}
+
+/** True when a successful read touched a target the request names (or the request names none). */
+export function readCoversRequestedTarget(text: string, readArgs: unknown[]): boolean {
+  const targets = requestedDiskTargets(text);
+  if (!targets.length) return true;
+  const strings: string[] = [];
+  const walk = (v: unknown, depth = 0) => {
+    if (typeof v === 'string') strings.push(v.replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase());
+    else if (depth < 3 && v && typeof v === 'object') for (const x of Object.values(v as Record<string, unknown>)) walk(x, depth + 1);
+  };
+  for (const a of readArgs) walk(a);
+  return targets.some((tg) => strings.some((s) => `/${s}/`.includes(`/${tg}/`)));
+}
 /** A command to do Gmail work is a task, never a status question, even when it mentions progress. */
 const IMPERATIVE = /^\s*(?:please\s+)?(?:move|archive|label|organi[sz]e|delete|apply|start|create|run|continue|proceed|go|do|make|send|process)\b/i;
 const BARE_FOLLOW_UP = /^\s*(?:status|update(?: me)?|progress|and\s*\??|so\s*\??|any (?:news|update|progress)\s*\??|(?:is it |are you )?(?:still )?(?:not )?(?:done|finished|ready)(?: yet)?\s*\??|a?still not d\w+\s*\??)\s*[?!.]*\s*$/i;
