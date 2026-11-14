@@ -37,6 +37,8 @@ function frame(res: http.ServerResponse, message: Record<string, unknown>, done:
 /** A model that acts on the user's own words: lists the folder the request names, then reports what the tool returned. */
 function scripted(call: ModelCall): { text?: string; tool?: { name: string; args: Record<string, unknown> } } {
   const last = call.messages[call.messages.length - 1];
+  const userText = String([...call.messages].reverse().find((m) => m.role === 'user')?.content ?? '');
+  if (/decoy/i.test(userText)) return last.role === 'tool' ? { text: 'There are 12 files in rw/inbox.' } : { tool: { name: 'list_directory', args: { dirPath: path.join(workspace, 'notifications') } } };
   if (last.role === 'tool') return { text: `Result: ${typeof last.content === 'string' ? last.content : JSON.stringify(last.content)}` };
   const raw = typeof last.content === 'string' ? last.content : JSON.stringify(last.content);
   const text = raw.includes(TURN_STATE_CLOSE) ? raw.slice(raw.lastIndexOf(TURN_STATE_CLOSE) + TURN_STATE_CLOSE.length) : raw;
@@ -89,6 +91,7 @@ describe('status shortcut boundary: filesystem questions are never Pandesh Gmail
     tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pandesh-status-boundary-'));
     workspace = path.join(tempDir, 'ws');
     fs.mkdirSync(path.join(workspace, 'rw', 'inbox'), { recursive: true });
+    fs.mkdirSync(path.join(workspace, 'notifications'), { recursive: true }); fs.writeFileSync(path.join(workspace, 'notifications', 'n1.txt'), 'n');
     for (const n of ['a.txt', 'b.txt', 'c.txt']) fs.writeFileSync(path.join(workspace, 'rw', 'inbox', n), n);
     db = openDatabase(path.join(tempDir, 'core.db'));
     runMigrations(db);
@@ -135,6 +138,25 @@ describe('status shortcut boundary: filesystem questions are never Pandesh Gmail
     const t = await turn(conv.id, 'How many files are in the liar folder?');
     expect(t.result.reply).toMatch(/Correction: nothing was read from the disk/);
     expect(t.events).toContain('disk_observation_missing');
+  });
+
+  it('listing an unrelated folder does not observe rw/inbox: the invented count is corrected, not completed', async () => {
+    const conv = createConversation(db, { mode: 'baat_kar', actor: 'user', title: 'decoy' });
+    const t = await turn(conv.id, 'decoy: how many files are in the rw/inbox folder?');
+    expect(t.tools.some((x) => x.toolName === 'list_directory')).toBe(true);
+    expect(t.events).toContain('disk_observation_missing');
+    expect(t.result.reply).toMatch(/no successful read in this turn covered "rw\/inbox"/);
+  });
+
+  it('a read of the named folder (relative or absolute) counts as the observation', async () => {
+    const { observationCoversRequest } = await import('../runtime/diskObservation');
+    expect(observationCoversRequest('How many files are in the rw/inbox folder?', [{ args: { dirPath: path.join(workspace, 'rw', 'inbox') } }]).covered).toBe(true);
+    expect(observationCoversRequest('How many files are in the rw/inbox folder?', [{ args: { dirPath: workspace } }]).covered).toBe(false);
+    expect(observationCoversRequest('Count the files in rw\inbox', [{ args: { dirPath: 'rw/inbox' } }]).covered).toBe(true);
+    expect(observationCoversRequest('What is in the events folder?', [{ args: { dirPath: path.join(workspace, 'events') } }]).covered).toBe(true);
+    expect(observationCoversRequest('What is in the events folder?', [{ args: { dirPath: path.join(workspace, 'calendar') } }]).covered).toBe(false);
+    expect(observationCoversRequest('Read docs/notes.txt', [{ args: { filePath: path.join(workspace, 'docs', 'notes.txt') } }]).covered).toBe(true);
+    expect(observationCoversRequest('How many files are in my workspace?', [{ args: { dirPath: workspace } }]).covered).toBe(true);
   });
 
   it('a failed folder read is reported as not observed', async () => {

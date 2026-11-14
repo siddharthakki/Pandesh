@@ -96,6 +96,7 @@ import { recordExecutionQuality } from '../domain/executionQuality';
 import { checkGrantForWrite, countDirectoryEntries, grantContentDigest, recordGrantUse, scheduledTaskOfAttempt } from '../domain/routineWriteGrants';
 import { AUTHORIZE_MISSION_TOOL,buildWorkspaceWriteEnvelope, createPendingMissionAuthorization, evaluateAuthorizedDispatch, evaluateMissionAction, getMissionAuthorization, markMissionAuthorized, markMissionRejected, protectedWriteReason, recordAuthorizedAction } from './missionAuthorization';
 import { NON_WORKSPACE_MARKERS } from '../domain/taskToolSurface';
+import { observationCoversRequest } from './diskObservation';
 import { announcesWorkStarting, asksAboutConversationTask, asksForDiskObservation, auditPromises, classifyStatusRequest, composeStatusAnswer, describeConversationTask, hasActiveWorker, hasRecentGmailWork, latestConversationTask, type StatusTopic } from './assistantStatus';
 import { notificationCapability } from '../domain/notificationOutbox';
 import { boundConversationContext, isExplicitResumeRequest, isSmallTalk, selectRelevantTask, LATEST_REQUEST_AUTHORITATIVE } from '../domain/conversationRelevance';
@@ -6684,9 +6685,14 @@ When the user asks to continue, resume, or check progress/updates, resume this w
     // task is not complete. Independent of routing and of permissions: it only ever adds a correction.
     if (!signal?.aborted && finalReply && asksForDiskObservation(requestText)) {
       const DISK_READ = /^(?:list_directory|read_file|search_files|find_files|glob|grep|file_info|stat_file|get_file_info|document_read|pc_organize_scan|run_checks)$/;
-      const observed = toolCallsRecorded.some((t) => t.status === 'completed' && DISK_READ.test(t.tool) && !(t.result as { isError?: boolean } | undefined)?.isError);
+      const reads = toolCallsRecorded.filter((t) => t.status === 'completed' && DISK_READ.test(t.tool) && !(t.result as { isError?: boolean } | undefined)?.isError);
+      // The evidence must be about what was asked: a read of another folder does not observe the one the request names.
+      const coverage = observationCoversRequest(requestText, reads);
+      const observed = coverage.covered;
       if (!observed) {
-        const note = 'nothing was read from the disk in this turn (no successful folder or file read), so the answer above was not observed and must not be trusted';
+        const note = reads.length === 0
+          ? 'nothing was read from the disk in this turn (no successful folder or file read), so the answer above was not observed and must not be trusted'
+          : `no successful read in this turn covered ${coverage.missing.map((m) => `"${m}"`).join(', ')}, so the answer above about it was not observed and must not be trusted`;
         finalReply += `\n\nCorrection: ${note}.`;
         deliverables = deliverables ?? { expected: [], missing: [], present: [] };
         deliverables.expected.push(note); deliverables.missing.push(note);
