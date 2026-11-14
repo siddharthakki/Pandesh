@@ -295,6 +295,10 @@ export function personalOverview(db: CoreDatabase, opts: { focus?: OverviewFocus
     if (state.staleTasks.length) out.push(`In progress but untouched for 14+ days (possibly neglected): ${state.staleTasks.map((t) => formatTask(t)).join('; ')}`);
     const openPromises = safeAll<{ id: string; title: string; dueAt: string | null; createdAt: string }>(db, "SELECT id, title, dueAt, createdAt FROM commitments WHERE status = 'open' ORDER BY COALESCE(dueAt, createdAt) LIMIT 20");
     if (openPromises.length) out.push(`Open promises: ${openPromises.map((c) => `"${c.title}"${c.dueAt ? ` due ${c.dueAt.slice(0, 10)}` : ''} [${c.id}]`).join('; ')}`);
+    // Whole tasks that ended interrupted, partly done or failed, from ANY conversation (audit S14: a new chat did not know the
+    // task that a restart had interrupted). Attempts that were continued by a successor are not listed: the successor is.
+    const unfinishedTasks = unfinishedAttempts(db, new Date(new Date(state.now).getTime() - Math.max(state.windowDays, 14) * 86_400_000).toISOString());
+    if (unfinishedTasks.length) out.push(`Tasks that did NOT finish (not done; say so, and ask whether to resume): ${unfinishedTasks.map((t) => `${t.result} "${t.objective}" (${d(t.at)}${t.reason ? `: ${t.reason}` : ''}) [${t.id}]`).join('; ')}`);
     if (state.pandeshFailed.length) out.push(`Actions Pandesh attempted that FAILED (not done): ${state.pandeshFailed.slice(0, 10).map((e) => `${e.toolName} at ${d(e.at)}: ${e.summary} [${e.invocationId}]`).join('; ')}`);
     if (state.pendingApprovals.length) out.push(`Waiting for your approval: ${state.pendingApprovals.map((a) => `${a.kind} "${a.summary}" since ${d(a.requestedAt)} [${a.id}]`).join('; ')}`);
     if (!state.blockedTasks.length && !state.staleTasks.length && !openPromises.length && !state.pandeshFailed.length && !state.pendingApprovals.length) out.push('- nothing recorded as blocked, stalled, promised, failed or waiting');
@@ -391,3 +395,25 @@ export function buildPersonalContextSection(db: CoreDatabase, opts: PersonalCont
 }
 
 export type { MemoryFactRecord };
+
+export interface UnfinishedTask { id: string; objective: string; result: 'interrupted' | 'partial' | 'failed'; reason: string | null; at: string }
+
+/** Attempts whose work did not finish (interrupted by a restart, partly done, or failed) and that nothing continued. */
+export function unfinishedAttempts(db: CoreDatabase, sinceIso: string, limit = 8): UnfinishedTask[] {
+  const rows = safeAll<{ id: string; message: string; failureReason: string | null; updatedAt: string; status: string; hasSuccessor: number }>(db,
+    `SELECT a.id, r.currentMessage AS message, a.failureReason, a.updatedAt, a.status,
+            EXISTS (SELECT 1 FROM attempts s WHERE s.predecessorAttemptId = a.id) AS hasSuccessor
+       FROM attempts a JOIN requests r ON r.id = a.requestId
+      WHERE a.updatedAt >= ? AND a.kind != 'baat_kar_internal' AND (a.status = 'failed' OR a.status = 'recovery_required')
+        AND r.routeReason NOT IN ('m38_capability_dispatch','background_task_resumption','mission','delegation','live','test')
+      ORDER BY a.updatedAt DESC LIMIT 60`, [sinceIso]);
+  const out: UnfinishedTask[] = [];
+  for (const r of rows) {
+    if (r.hasSuccessor) continue;
+    const reason = r.failureReason ?? null;
+    const result: UnfinishedTask['result'] = r.status === 'recovery_required' || reason?.startsWith('Interrupted:') ? 'interrupted' : reason?.startsWith('Partly done:') ? 'partial' : 'failed';
+    out.push({ id: r.id, objective: r.message.replace(/\s+/g, ' ').slice(0, 90), result, reason: reason ? reason.replace(/\s+/g, ' ').slice(0, 100) : null, at: r.updatedAt });
+    if (out.length >= limit) break;
+  }
+  return out;
+}

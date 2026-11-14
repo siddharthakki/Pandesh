@@ -129,3 +129,23 @@ describe('routing and journal fixes', () => {
     expect(refs.find((r) => r.role === 'created')?.id).toBe('ptask_22222222-2222-4222-8222-222222222222');
   });
 });
+
+describe('adding the same task twice (M0 P01)', () => {
+  it('completes the existing task instead of creating a second one, and a done task can be added again', () => {
+    const first = addTask(db, { project: 'Shed', title: 'Buy wood', createProjectIfMissing: true, source: 'test' });
+    const again = addTask(db, { project: 'Shed', title: ' buy WOOD ', dueAt: '2026-12-01', priority: 'high', source: 'test' });
+    expect(again.id).toBe(first.id);
+    expect(again.dueAt?.slice(0, 10)).toBe('2026-12-01'); expect(again.priority).toBe('high');
+    expect(listTasks(db, {}).filter((t) => /wood/i.test(t.title))).toHaveLength(1);
+    updateTask(db, { ref: first.ref, status: 'done', source: 'test' });
+    expect(addTask(db, { project: 'Shed', title: 'Buy wood', source: 'test' }).id).not.toBe(first.id);
+  });
+});
+
+describe('review finding: a different due date is a different task', () => {
+  it('does not merge same-title tasks with different dates', () => {
+    const a = addTask(db, { project: 'Calls', title: 'Call Sam', dueAt: '2026-12-01', createProjectIfMissing: true, source: 'test' });
+    const b = addTask(db, { project: 'Calls', title: 'Call Sam', dueAt: '2026-12-15', source: 'test' });
+    expect(b.id).not.toBe(a.id);
+  });
+});

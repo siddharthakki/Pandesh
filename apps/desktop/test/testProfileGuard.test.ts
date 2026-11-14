@@ -41,3 +41,22 @@ describe('test-copy guard', () => {
     expect(clear.slice(0, 400)).toContain("hostLog('Google OAuth client removed");
   });
 });
+
+describe('real-profile detection cannot be redirected by the environment', () => {
+  it('uses the OS profile folder, so a LOCALAPPDATA-redirected copy is still a test copy', async () => {
+    const { realDesktopDataDirFromOs } = await import('../src/host/desktopHostPreferences');
+    const saved = process.env.LOCALAPPDATA; const savedProfile = process.env.USERPROFILE;
+    try {
+      process.env.LOCALAPPDATA = 'D:\PandeshMicrotests\fake-localappdata'; process.env.USERPROFILE = 'D:\PandeshMicrotests\fake-home';
+      const real = realDesktopDataDirFromOs();
+      expect(real.toLowerCase()).not.toContain('fake-');
+      const redirectedProfile = path.join(process.env.LOCALAPPDATA, 'KarkeDikha', 'desktop');
+      expect(isTestProfile(redirectedProfile, real)).toBe(true);
+      expect(googleConnectRefusal(redirectedProfile, real, {})).toMatch(/test copy/);
+    } finally { if (saved === undefined) delete process.env.LOCALAPPDATA; else process.env.LOCALAPPDATA = saved; if (savedProfile === undefined) delete process.env.USERPROFILE; else process.env.USERPROFILE = savedProfile; }
+  });
+  it('main.ts decides test-vs-real from the OS profile, never from LOCALAPPDATA', () => {
+    const main = fs.readFileSync(path.join(__dirname, '../src/main.ts'), 'utf8');
+    expect(main).not.toMatch(/(ownsLoginItem|isTestProfile|googleConnectRefusal|windowTitleForProfile)\([^)]*defaultDesktopDataDir\(\)/);
+  });
+});

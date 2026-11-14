@@ -1,0 +1,33 @@
+{
+  "summary": {
+    "label": "gate5-desktop",
+    "at": "2026-11-14T03:17:09.171Z",
+    "path": "real Electron host + v2 renderer over CDP",
+    "scenarios": 1,
+    "pass": 1,
+    "falseCompletion": 0,
+    "honestFail": 0,
+    "harnessError": 0,
+    "isolation": {
+      "productionProcessesUnchanged": true,
+      "productionCoreUnchanged": true,
+      "runKeyUnchanged": true,
+      "port3030Unchanged": true,
+      "testCoreInProfile": true
+    },
+    "windowTitle": "Pandesh"
+  },
+  "results": [
+    {
+      "id": "D06",
+      "title": "Notification delivery: the real scheduler queues a notice, the real host shows a Windows toast, Core records it delivered",
+      "ok": true,
+      "attemptStatus": "delivered",
+      "ms": 3056,
+      "notes": "outbox={\"id\":\"notif_a8dd9dba-2411-4242-88ef-55f3f8d72af0\",\"status\":\"delivered\",\"attempts\":1,\"deliveredVia\":\"windows_toast\",\"deliveredAt\":\"2026-11-14T03:17:07.341Z\",\"lastError\":null,\"title\":\"Routine \\\"D06 desktop notice\\\" did not run\"} channel={\"channel\":\"desktop\",\"supported\":1,\"detail\":\"Windows desktop notifications (toast)\",\"lastSeenAt\":\"2026-11-14T03:17:07.295Z\"} events=notification_enqueued,notification_delivered hostLog=null",
+      "replyHead": "",
+      "error": false,
+      "verdict": "PASS"
+    }
+  ]
+}

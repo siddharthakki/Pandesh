@@ -61,7 +61,7 @@ export const TOOL_GROUPS: Record<string, ToolGroup> = {
   },
   email: {
     purpose: 'Gmail: search, read, draft, send, organize email',
-    pattern: /\b(?:e-?mails?|mail|gmail|inbox|drafts?|replies|reply to|newsletters?|attachments?)\b|[\w.+-]+@[\w-]+\.\w+/i,
+    pattern: /\b(?:e-?mails?|mail|gmail|(?<![\\/_-])inbox(?![-_.]\w)(?!['"`’”]?\s+(?:folder|directory|dir)\b)(?<!\b(?:folder|directory|dir)\s+(?:called\s+|named\s+)?['"`‘“]?inbox)|drafts?|replies|reply to|newsletters?|attachments?)\b|[\w.+-]+@[\w-]+\.\w+/i, // "inbox" is mail only when it is not a folder on disk (live runs sent "the inbox folder" to Gmail tools)
   },
   calendar: {
     purpose: 'Google Calendar: events, availability, create or change an event',

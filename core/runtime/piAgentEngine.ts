@@ -78,7 +78,9 @@ import {
 } from '../domain/commitments';
 import { finalizeTaskOutcome, ensureTaskOutcome, listTaskOutcomes, objectiveFromRequest, updateTaskOutcome } from '../domain/taskOutcomes';
 import { isInspectionOrAdvisoryOnly } from '../domain/actionIntent';
-import { evaluateTurnOutcome } from './turnOutcome';
+import { evaluateTurnOutcome, isConsequentialTool } from './turnOutcome';
+import { findPriorTwin, predecessorChain, reconcileFileWrite, reconcileOwnAction, RECONCILABLE_TOOLS, replayRefusal } from './replayGuard';
+import { deliverableLedger, missingTaskDates, missingTaskDependency, missingTaskPriorities, unbackedWorkingClaim, type LedgerResult } from './deliverableLedger';
 import { resolveActiveProject, isProjectInspectionRequest, gatherProjectEvidence, formatProjectEvidenceForModel, composeEvidenceAnswer, isReplyGroundedInProject, isLocalModelEndpoint } from './projectContext';
 import { resolveTimeExpression, localWallTimeToIso as zonedWallToIso, utcOffsetLabel as zoneOffsetLabel, upcomingDaysTable, isValidTimeZone } from '../domain/timeResolution';
 import { cancelScheduledTask, createScheduledTask, listScheduledTasks } from '../domain/scheduledTasks';
@@ -91,7 +93,8 @@ import { GOOGLE_SETUP_WHERE, navigationPromptLines } from '../domain/productNavi
 import { navigateTo } from '../domain/uiNavigation';
 import { destinationsFor, parseUiSurface, type UiSurface } from '../shared/uiDestinations';
 import { recordExecutionQuality } from '../domain/executionQuality';
-import { AUTHORIZE_MISSION_TOOL, buildWorkspaceWriteEnvelope, createPendingMissionAuthorization, evaluateAuthorizedDispatch, evaluateMissionAction, getMissionAuthorization, markMissionAuthorized, markMissionRejected, protectedWriteReason, recordAuthorizedAction } from './missionAuthorization';
+import { checkGrantForWrite, countDirectoryEntries, grantContentDigest, recordGrantUse, scheduledTaskOfAttempt } from '../domain/routineWriteGrants';
+import { AUTHORIZE_MISSION_TOOL,buildWorkspaceWriteEnvelope, createPendingMissionAuthorization, evaluateAuthorizedDispatch, evaluateMissionAction, getMissionAuthorization, markMissionAuthorized, markMissionRejected, protectedWriteReason, recordAuthorizedAction } from './missionAuthorization';
 import { NON_WORKSPACE_MARKERS } from '../domain/taskToolSurface';
 import { announcesWorkStarting, asksAboutConversationTask, auditPromises, classifyStatusRequest, composeStatusAnswer, describeConversationTask, hasActiveWorker, hasRecentGmailWork, latestConversationTask, type StatusTopic } from './assistantStatus';
 import { notificationCapability } from '../domain/notificationOutbox';
@@ -1235,6 +1238,7 @@ export class PiAgentEngine implements EngineAdapter {
       }
       if (!missing.length) return null;
       safeRecordRuntimeEvent(db, broadcaster, attemptId, 'write_held_for_source_evidence', { tool: toolName, unread: missing.map((f) => path.basename(f)) }, actor);
+      writeHeldAt = toolCallsRecorded.length;
       const reads = await coreReadDocuments(missing);
       const gathered = reads.filter((r) => r.ok).map((r) => r.text).join('\n\n');
       const failedReads = reads.filter((r) => !r.ok).map((r) => `${path.basename(r.file)}: ${r.text.slice(0, 160)}`);
@@ -1245,6 +1249,11 @@ export class PiAgentEngine implements EngineAdapter {
     const phoneShares: string[] = [];
     const pendingInvocations: string[] = [];
     /** Calls that failed this turn, by tool+arguments, with why: an identical retry learns nothing new. */
+    let writeHeldAt = -1; // index in toolCallsRecorded when a write was last held back for source evidence (see the nudge before the deliverable ledger)
+    let scheduledOriginCache: boolean | null = null;
+
+    const scheduledRunOrigin = (): boolean => { if (scheduledOriginCache === null) { try { scheduledOriginCache = db.get<{ clientId: string }>('SELECT r.clientId AS clientId FROM attempts a JOIN requests r ON r.id = a.requestId WHERE a.id = ?', [attemptId])?.clientId === 'core:scheduler'; } catch { scheduledOriginCache = false; } } return scheduledOriginCache; };
+
     const failedCalls = new Map<string, string>();
     let refusedRepeats = 0;
     const callSignature = (name: string, args: unknown) => `${name}:${JSON.stringify(args ?? {}, (_k, v) => (v && typeof v === 'object' && !Array.isArray(v) ? Object.fromEntries(Object.entries(v).sort()) : v))}`;
@@ -1666,7 +1675,7 @@ export class PiAgentEngine implements EngineAdapter {
     }
 
     type WriteGrant =
-      | { ok: true; source: 'mission_envelope' | 'human_approval'; reason: string; approvalId?: string; mission?: { id: string; digest: string; normalizedPath?: string; contentDigest?: string; contentBytes?: number } }
+      | { ok: true; source: 'mission_envelope' | 'human_approval' | 'standing_grant'; reason: string; approvalId?: string; standingGrantId?: string; mission?:{ id: string; digest: string; normalizedPath?: string; contentDigest?: string; contentBytes?: number } }
       | { ok: false; reason: string; text: string };
 
     /** What a file is right now ("absent", or its size and SHA-256): compared before and after an approval card. */
@@ -1711,6 +1720,30 @@ export class PiAgentEngine implements EngineAdapter {
         if (mission?.status === 'rejected') {
           return notDone('the user declined file changes for this task', 'Not written: the user declined file changes in this workspace for this task. Nothing was changed. Ask the user how to proceed.');
         }
+        // An unattended routine the owner gave a standing write permission to (Core checks it afresh every run: the
+        // routine's instruction, folder, model and limits must still be exactly what was approved). Only write_file, only
+        // inside the frozen folder; every path, link and credential check below still applies.
+        if (!mission && scheduledRunOrigin()) {
+          const taskId = scheduledTaskOfAttempt(db, attemptId);
+          if (taskId) {
+            const check = checkGrantForWrite(db, taskId, selectedWorkspace);
+            if (check.ok) {
+              const g = check.grant;
+              const standingEnvelope = {
+                ...envelope,
+                objective: `Standing permission ${g.id} for the routine ${taskId}`,
+                allowedMutationScope: [`create or modify text files inside ${g.frozen.folder}, for this routine only (standing permission)`],
+                fileChangeLimits: { ...g.frozen.limits },
+              };
+              try {
+                mutateWithBroadcast(db, broadcaster, () => { createPendingMissionAuthorization(db, attemptId, standingEnvelope); markMissionAuthorized(db, attemptId, `standing_grant:${g.id}`); });
+                mission = getMissionAuthorization(db, attemptId);
+              } catch { mission = null; }
+            } else if (check.grantId) {
+              safeRecordRuntimeEvent(db, broadcaster, attemptId, 'standing_grant_not_applied', { taskId, grantId: check.grantId, reason: check.reason }, actor);
+            }
+          }
+        }
         if (!mission || mission.status !== 'authorized') {
           try {
             mission = mutateWithBroadcast(db, broadcaster, () => createPendingMissionAuthorization(db, attemptId, envelope));
@@ -1748,8 +1781,9 @@ export class PiAgentEngine implements EngineAdapter {
         }
         const verdict = evaluateAuthorizedDispatch(db, { attemptId, toolName: 'write_file', arguments: writeArgs });
         if (verdict.decision === 'auto_authorize' && verdict.authorization) {
+          const standingGrantId = verdict.authorization.authorizedBy?.startsWith('standing_grant:') ? verdict.authorization.authorizedBy.slice('standing_grant:'.length) : undefined;
           return {
-            ok: true, source: 'mission_envelope', reason: verdict.reason,
+            ok: true, source: standingGrantId ? 'standing_grant' : 'mission_envelope', reason: verdict.reason, standingGrantId,
             mission: { id: verdict.authorization.id, digest: verdict.authorization.digest, normalizedPath: verdict.normalizedPath, contentDigest: verdict.contentDigest, contentBytes: verdict.contentBytes },
           };
         }
@@ -2831,7 +2865,10 @@ export class PiAgentEngine implements EngineAdapter {
         execute: async (_id: string, args: any) => {
           try {
             const runAt = args.date && args.time ? localWallTimeToIso(String(args.date), String(args.time)) : (args.inMinutes !== undefined ? new Date(Date.now() + Number(args.inMinutes) * 60_000).toISOString() : undefined);
-            const t = createScheduledTask(db, { title: String(args.title), instruction: String(args.instruction), dailyTime: args.dailyTime ? String(args.dailyTime) : undefined, runAt, timezone: localTimeZone, model: selectedModel });
+            // M3 (audit S07): the routine freezes the folder and the write access it was created with, so a scheduled run
+            // works in that folder instead of running with no folder at all and failing silently.
+            const scope = selectedWorkspace ? { workspaceRoot: selectedWorkspace, workspaceAccess: frozenWorkspaceAccess(db, [attemptId]), createdFromAttempt: attemptId } : null;
+            const t = createScheduledTask(db, { title: String(args.title), instruction: String(args.instruction), dailyTime: args.dailyTime ? String(args.dailyTime) : undefined, runAt, timezone: localTimeZone, model: selectedModel, scope });
             return { content: [{ type: 'text', text: `Scheduled (id ${t.id}): "${t.title}" — ${t.repeat === 'daily' ? `every day at ${t.dailyTime} ${t.timezone}` : 'once'}; next run ${formatLocal(t.nextRunAt)}. Stored durably in Core.` }] };
           } catch (err: any) { return { content: [{ type: 'text', text: `Could not schedule: ${err.message}` }], isError: true }; }
         },
@@ -3064,7 +3101,7 @@ export class PiAgentEngine implements EngineAdapter {
             folderLedger.noteListed(targetDir, items);
 
             return {
-              content: [{ type: 'text', text: JSON.stringify({ directory: targetDir, totalCount: entries.length, returnedCount: items.length, items }, null, 2) }],
+              content: [{ type: 'text', text: JSON.stringify({ directory: targetDir, ...countDirectoryEntries(entries, includeHidden), totalCount: entries.length, returnedCount: items.length, items }, null, 2) }],
               details: items,
             };
           } catch (err: any) {
@@ -3347,6 +3384,14 @@ export class PiAgentEngine implements EngineAdapter {
             fs.mkdirSync(path.dirname(full), { recursive: true });
             fs.writeFileSync(full, args.content, 'utf8');
             folderLedger.noteWritten(full);
+            // A write made under a standing permission is read back and checked by Core itself, and recorded per use.
+            if (grant.standingGrantId) {
+              const taskId = scheduledTaskOfAttempt(db, attemptId) ?? '';
+              let readbackMatched = false;
+              try { readbackMatched = grantContentDigest(fs.readFileSync(full, 'utf8')) === grantContentDigest(String(args.content)); } catch { readbackMatched = false; }
+              try { mutateWithBroadcast(db, broadcaster, () => recordGrantUse(db, { grantId: grant.standingGrantId!, taskId, attemptId, path: full, contentDigest: grantContentDigest(String(args.content)), contentBytes: Buffer.byteLength(String(args.content), 'utf8'), readbackMatched })); } catch (err) { console.error('[piAgentEngine] Failed to audit a standing-grant write:', err); }
+              if (!readbackMatched) return refuse(`NOT VERIFIED: ${path.basename(full)} was written but reading it back did not return the same text. Do not report it as done.`, 'readback mismatch');
+            }
             const changeView = fileActivity(full, { diff: redactCredentialShapes(unifiedDiff(before, String(args.content ?? ''), workspaceRelative(full) ?? path.basename(full))) });
             try {
               mutateWithBroadcast(db, broadcaster, () => {
@@ -3371,6 +3416,7 @@ export class PiAgentEngine implements EngineAdapter {
                     reason: grant.reason,
                     mode: frozenPermissionFor(db, [attemptId]).mode,
                     approvalId: grant.approvalId ?? null,
+                    standingGrantId: grant.standingGrantId ?? null,
                     missionAuthorizationId: grant.mission?.id ?? null,
                     envelopeDigest: grant.mission?.digest ?? null,
                     contentBytes: Buffer.byteLength(args.content, 'utf8'),
@@ -3654,8 +3700,19 @@ export class PiAgentEngine implements EngineAdapter {
           required: ['command'],
         },
         execute: async (_id: string, args: any) => {
-          const targetDir = args.workspacePath ? path.resolve(args.workspacePath) : (selectedWorkspace || inspectedPath);
-          if (!targetDir || !isPathAuthorized(targetDir)) {
+          // A relative workspacePath ("." or "bugfix") means relative to the selected folder, never to the Core process's own
+          // working directory (audit G10: 51 of 138 run_checks calls failed in production, partly from this).
+          const baseDir = selectedWorkspace || inspectedPath;
+          const targetDir = args.workspacePath
+            ? (path.isAbsolute(String(args.workspacePath)) || !baseDir ? path.resolve(args.workspacePath) : path.resolve(baseDir, String(args.workspacePath)))
+            : baseDir;
+          if (!targetDir) {
+            return {
+              content: [{ type: 'text', text: 'Error: No folder is selected, so nothing can be run. The check did NOT run. Ask the user to pick a folder, or answer without claiming the command was verified.' }],
+              isError: true,
+            };
+          }
+          if (!isPathAuthorized(targetDir)) {
             return {
               content: [{ type: 'text', text: `Error: Working directory "${targetDir}" is outside the authorized scope.` }],
               isError: true,
@@ -5539,6 +5596,46 @@ When the user asks to continue, resume, or check progress/updates, resume this w
           safeRecordRuntimeEvent(db, broadcaster, attemptId, 'hidden_tool_called', { toolName, added: joined }, actor);
         }
 
+        // M3: a scheduled run IS the routine; it must do the work, never create or change schedules (live run: the stored instruction
+        // still said "set that up as a scheduled routine" and the run created a duplicate schedule instead of writing the file).
+        if (toolName === 'schedule_task' && scheduledRunOrigin()) {
+          safeRecordRuntimeEvent(db, broadcaster, attemptId, 'schedule_from_scheduled_run_refused', { toolName }, actor);
+          return { block: true, reason: 'NOT DONE (refused by Pandesh Core): this is a scheduled run. Do the task itself now with the file and other tools; creating or changing schedules is not part of a scheduled run, and the schedule already exists.' };
+        }
+
+        // M2 replay guard: a resumed attempt never repeats a consequential call the interrupted attempt already made.
+        // run_checks is verification: after a fix it must run again, never echo an old result (review finding).
+        if (isConsequentialTool(toolName) && toolName !== 'run_checks') {
+          const resumed = predecessorChain(db, attemptId).length > 0;
+          let twin = findPriorTwin(db, attemptId, toolName, args, selectedWorkspace ?? null);
+          let inPlace = false;
+          if (resumed && RECONCILABLE_TOOLS.has(toolName)) {
+            // The real file decides (a crash can fall between the write and the journal commit): identical content already on
+            // disk = done, whatever the journal says or however the path was spelled; missing or different = not done.
+            const state = reconcileFileWrite(args, selectedWorkspace ?? null);
+            if (state === 'in_place') { inPlace = true; twin = twin ?? { kind: 'done', invocationId: '', attemptId: '', at: '', resultExcerpt: '' }; }
+            else if (state === 'differs' && twin?.kind === 'unknown') twin = null; // started, never confirmed, and the file is not there: it did not happen
+            // A recorded success whose file has changed since stays blocked: rewriting could destroy a later edit.
+          }
+          // Core's own stores (reminders, notes, promises, routines) settle an unknown outcome by looking: the record is there (done) or it
+          // is not (the call never completed, so it may run). Email and calendar live outside Core and stay fail-closed.
+          if (resumed && twin?.kind === 'unknown') {
+            const own = reconcileOwnAction(db, toolName, args, twin.at);
+            if (own.state === 'happened') twin = { ...twin, kind: 'done', resultExcerpt: `a matching record already exists (id ${own.id})` };
+            else if (own.state === 'not_happened') twin = null;
+          }
+          // Everything else that cannot be checked by Core fails closed: an 'unknown' call is never repeated automatically.
+          if (twin) {
+            safeRecordRuntimeEvent(db, broadcaster, attemptId, 'replay_prevented', { toolName, kind: twin.kind, inPlace, earlierAttemptId: twin.attemptId, earlierInvocationId: twin.invocationId }, actor);
+            const reason = inPlace
+              ? `Already in place: ${String(args.filePath ?? args.path ?? 'the file')} already holds exactly this content, so it was NOT written again. Continue with what is still missing.`
+              : replayRefusal(twin, toolName);
+            // A call that already succeeded earlier counts as performed for this task's outcome; an unknown one does not.
+            if (twin.kind === 'done') toolCallsRecorded.push({ tool: toolName, args, status: 'completed', result: { content: [{ type: 'text', text: reason }], details: { success: true, replayedFrom: twin.invocationId || 'in_place' } } });
+            return { block: true, reason };
+          }
+        }
+
         const earlierFailure = failedCalls.get(callSignature(toolName, args));
         if (earlierFailure !== undefined) {
           refusedRepeats += 1;
@@ -6500,6 +6597,88 @@ When the user asks to continue, resume, or check progress/updates, resume this w
       }
     }
 
+    // A write held back for source evidence is repeated by the model, or the turn has done nothing (M3 live run: after the held write the
+    // model reported "updated" without writing; Core withheld the claim and the routine ended partial). One nudge, from the source of the failure.
+    if (writeHeldAt >= 0 && !signal?.aborted && !cloudTarget && selectedWorkspace && tools.some((t) => t.name === 'write_file')
+        && !toolCallsRecorded.slice(writeHeldAt).some((t) => t.tool === 'write_file' && t.status === 'completed')) {
+      safeRecordRuntimeEvent(db, broadcaster, attemptId, 'held_write_not_repeated', { at: writeHeldAt }, actor);
+      const floor = agent.state.messages.length;
+      activeToolNames.add('write_file');
+      await agent.prompt('Pandesh: your earlier write_file call was held back until the source files were read, and Core has now read them (their contents were in that result). The file has NOT been written. Call write_file again now with the corrected content, then say what it now contains.');
+      await agent.waitForIdle();
+      const again = lastAssistantTextFrom(floor);
+      if (again && !isTruncationArtifact(again)) finalReply = again;
+    }
+    // M1 deliverable ledger: what the request asked to exist, checked against the file system (audit S21: six files asked,
+    // four written, "verified"). One "still missing" nudge, then whatever is still absent makes the turn PARTIAL.
+    let deliverables: LedgerResult | null = null;
+    if (!cloudTarget && !signal?.aborted && finalReply && selectedWorkspace) {
+      const writtenFilesNow = () => toolCallsRecorded
+        .filter((t) => t.status === 'completed' && t.tool === 'write_file' && !(t.result as { isError?: boolean } | undefined)?.isError)
+        .map((t) => String((t.args as { filePath?: string } | undefined)?.filePath ?? ''))
+        .filter(Boolean).map((p) => path.resolve(selectedWorkspace, p));
+      // A resumed or escalated attempt continues the SAME request: files its predecessors wrote count, and "fresh" is measured
+      // from the first attempt of the chain (review finding: the replay guard refuses re-writes the ledger would demand).
+      const chain = predecessorChain(db, attemptId);
+      let chainStartMs = startTime; let priorWrites: string[] = [];
+      if (chain.length) {
+        const ids = chain.map(() => '?').join(',');
+        const first = db.get<{ createdAt: string }>(`SELECT MIN(createdAt) AS createdAt FROM attempts WHERE id IN (${ids})`, chain)?.createdAt;
+        if (first && Number.isFinite(Date.parse(first))) chainStartMs = Math.min(startTime, Date.parse(first));
+        priorWrites = db.all<{ argsSummary: string }>(`SELECT argsSummary FROM tool_invocations WHERE attemptId IN (${ids}) AND toolName = 'write_file' AND status = 'succeeded'`, chain)
+          .map((r) => { try { return String((JSON.parse(r.argsSummary) as { filePath?: string }).filePath ?? ''); } catch { return ''; } })
+          .filter(Boolean).map((p) => path.resolve(selectedWorkspace, p));
+      }
+      const unchangedFilesNow = () => toolCallsRecorded.filter((t) => t.status === 'completed' && t.tool === 'write_file' && /^UNCHANGED:/i.test(extractToolResultText(t.result).trim())).map((t) => path.resolve(selectedWorkspace, String((t.args as { filePath?: string } | undefined)?.filePath ?? ''))).filter(Boolean);
+      const judge = () => deliverableLedger({ requestText, workspace: selectedWorkspace, writtenFiles: [...priorWrites, ...writtenFilesNow(), ...unchangedFilesNow()], unchangedFiles: unchangedFilesNow(), turnStartMs: chainStartMs });
+      try {
+        deliverables = judge();
+        if (deliverables.missing.length > 0 && tools.some((t) => t.name === 'write_file')) {
+          safeRecordRuntimeEvent(db, broadcaster, attemptId, 'deliverables_missing', { missing: deliverables.missing, present: deliverables.present }, actor);
+          const floor = agent.state.messages.length;
+          activeToolNames.add('write_file');
+          await agent.prompt(`Deliverable check by Pandesh: the request is not finished — still missing: ${deliverables.missing.join('; ')}. Create exactly these now with write_file (the folder is the selected one), then give your final answer stating what exists. If something cannot be created, say which and why; do not say it exists.`);
+          await agent.waitForIdle();
+          const retried = lastAssistantTextFrom(floor);
+          if (retried && !isTruncationArtifact(retried)) finalReply = retried;
+          deliverables = judge();
+        }
+        if (deliverables.expected.length > 0) safeRecordRuntimeEvent(db, broadcaster, attemptId, 'deliverable_ledger', { expected: deliverables.expected, missing: deliverables.missing, present: deliverables.present }, actor);
+      } catch (err: any) {
+        safeRecordRuntimeEvent(db, broadcaster, attemptId, 'deliverable_ledger_failed', { error: err?.message ?? String(err) }, actor);
+      }
+    }
+    // Dates the owner stated for tasks must be the dates stored (audit S20). One nudge to fix them with update_task, then judged.
+    if (!signal?.aborted && finalReply && !cloudTarget) {
+      const taskFacts = () => [...missingTaskDates(requestText, toolCallsRecorded), ...missingTaskDependency(requestText, toolCallsRecorded), ...missingTaskPriorities(requestText, toolCallsRecorded)];
+      let lost = taskFacts();
+      if (lost.length > 0 && tools.some((t) => t.name === 'update_task') && toolCallsRecorded.some((t) => t.tool === 'add_task' || t.tool === 'create_project')) {
+        safeRecordRuntimeEvent(db, broadcaster, attemptId, 'task_dates_missing', { missing: lost }, actor);
+        try {
+          const floor = agent.state.messages.length;
+          activeToolNames.add('update_task');
+          await agent.prompt(`Task check by Pandesh: what you were given is not stored — ${lost.join('; ')}. Call update_task now for each affected task (dueAt = the date the user stated, ISO; blockedBy = the task or thing it waits for), then give your final answer saying exactly what is stored.`);
+          await agent.waitForIdle();
+          const retried = lastAssistantTextFrom(floor);
+          if (retried && !isTruncationArtifact(retried)) finalReply = retried;
+        } catch (err: any) { safeRecordRuntimeEvent(db, broadcaster, attemptId, 'task_dates_nudge_failed', { error: err?.message ?? String(err) }, actor); }
+        lost = taskFacts();
+      }
+      if (lost.length) {
+        deliverables = deliverables ?? { expected: [], missing: [], present: [] };
+        for (const item of lost) { deliverables.expected.push(item); deliverables.missing.push(item); }
+      }
+    }
+    // Verification is a deliverable too (audit S16): a reply that says "works" after this turn's own check failed.
+    if (!signal?.aborted && finalReply) {
+      const unbacked = unbackedWorkingClaim(finalReply, toolCallsRecorded);
+      if (unbacked) {
+        deliverables = deliverables ?? { expected: [], missing: [], present: [] };
+        deliverables.expected.push(unbacked); deliverables.missing.push(unbacked);
+        safeRecordRuntimeEvent(db, broadcaster, attemptId, 'unbacked_working_claim', { detail: unbacked }, actor);
+      }
+    }
+
     // A reply may not promise background work or a notification that nothing is set up to deliver. Judged after every
     // continuation above: appended earlier, this correction became the reply's last paragraph, so the "do the step you
     // announced" check read the correction instead of the model's promise and never fired (widget chat, 2026-11-12).
@@ -6507,8 +6686,10 @@ When the user asks to continue, resume, or check progress/updates, resume this w
       const capability = notificationCapability(db);
       // Anything that acted counts (a file written, a reminder set, a draft made); looking things up does not. Owner
       // report 2026-11-12: two web searches and a screen switch were the whole "build it" turn.
-      const LOOKUP_ONLY = /^(?:web_research|governed_research|navigate_to|read_file|list_directory|search_files|document_read|inspect_page|calculate|resolve_time|get_system_info|update_task_outcome|request_tools|memory_recall|browser_(?:read|open_site|goto|back|screenshot))$|_(?:search|list|read|get|status|recall)(?:_\w+)?$/;
-      const producedSomething = toolCallsRecorded.some((t) => t.status === 'completed' && !LOOKUP_ONLY.test(t.tool));
+      const LOOKUP_ONLY = /^(?:web_research|governed_research|navigate_to|read_file|list_directory|search_files|document_read|inspect_page|calculate|resolve_time|get_system_info|update_task_outcome|request_tools|memory_recall|browser_(?:read|open_site|goto|back|screenshot))$|_(?:search|list|read|get|status|recall|scan|analy[sz]e|inspect|preview|describe|inventory)(?:_\w+)?$/;
+      // A call that returned an error result produced nothing (M0 F03: pc_organize_scan failed twice, the turn ended with
+      // "completed" and an attempt that never moved a file).
+      const producedSomething = (predecessorChain(db, attemptId).length > 0 && Number(db.get<{ n: number }>(`SELECT COUNT(*) AS n FROM tool_invocations WHERE toolName = 'write_file' AND status = 'succeeded' AND attemptId IN (${predecessorChain(db, attemptId).map(() => '?').join(',')})`, predecessorChain(db, attemptId))?.n ?? 0) > 0) /* a resumed task: what the interrupted attempts already wrote counts */ || toolCallsRecorded.some((t) => t.status === 'completed' && !LOOKUP_ONLY.test(t.tool) && !(t.result as { isError?: boolean } | undefined)?.isError);
       const correction = auditPromises(finalReply, {
         activeWorker: hasActiveWorker(db, conversationId, attemptId),
         canNotify: capability.canNotify,
@@ -6529,6 +6710,15 @@ When the user asks to continue, resume, or check progress/updates, resume this w
       if (unfinishedReason) {
         const ran = toolCallsRecorded.filter((t) => t.status === 'completed' && !/^(?:update_task_outcome|request_tools)$/.test(t.tool)).map((t) => t.tool);
         safeRecordRuntimeEvent(db, broadcaster, attemptId, 'turn_unfinished', { reason: unfinishedReason, model: selectedModel, toolsRun: ran }, actor);
+      } else if (!signal?.aborted && asksUser && asksToBuildOutsideChat && !isQuestion && !producedSomething) {
+        // The reply asks the user something ("try again?") but the work the request named was not done because a tool it needed
+        // failed (M0 E01: Image Studio down, status 'completed'). Not a model failure, so no escalation (a stronger model would
+        // not help), but the task is BLOCKED, not complete. The reason is the tool's own error, from the ledger.
+        const failedTool = toolCallsRecorded.find((t) => t.status === 'failed' || (t.result as { isError?: boolean } | undefined)?.isError);
+        if (failedTool) {
+          const why = extractToolResultText(failedTool.result).replace(/\s+/g, ' ').slice(0, 160) || 'the tool failed';
+          safeRecordRuntimeEvent(db, broadcaster, attemptId, 'turn_blocked', { tool: failedTool.tool, reason: why }, actor);
+        }
       }
     }
 
@@ -6784,6 +6974,13 @@ When the user asks to continue, resume, or check progress/updates, resume this w
       turnOutcome = { verdict: 'verified', reason: `answered from ${projectEvidence.filesRead.length} file(s) read in ${projectEvidence.root}${projectReplyReplaced ? ' (reply replaced by evidence-only answer)' : ''}`, performed: ['project_inspection'], refused: [], failed: [] };
       try { mutateWithBroadcast(db, broadcaster, () => { ensureTaskOutcome(db, { attemptId, conversationId: conversationId || null, requestId, objective: objectiveFromRequest(requestText) }); }); } catch {}
     }
+    // M1: a deliverable the request named (or its own output links to) is not there. Whatever else succeeded, the task is
+    // PARTIAL, never 'verified' (audit S21). A refused action stays 'unverified' (nothing happened at all).
+    if (deliverables && deliverables.missing.length > 0 && (turnOutcome.verdict === 'verified' || turnOutcome.verdict === 'conversational' || turnOutcome.verdict === 'attempted_failed')) {
+      const have = deliverables.present.length ? `These exist: ${deliverables.present.join(', ')}. ` : '';
+      turnOutcome = { verdict: 'partial', reason: `Partly done: still missing ${deliverables.missing.join('; ')}`, performed: turnOutcome.performed, refused: turnOutcome.refused, failed: turnOutcome.failed };
+      finalReply += `\n\n**Checked by Pandesh — deliverables:** ${have}Missing: ${deliverables.missing.join('; ')}. The task is partly done, not complete.`;
+    }
     if (turnOutcome.verdict === 'unverified' && !/not (done|available|created|sent|made|run|granted)|declined|could not|was not|wasn't|untouched|nothing (?:was )?changed|denied/i.test(finalReply)) {
       // The reply must not leave the impression that the work happened.
       finalReply += `\n\nCorrection: ${turnOutcome.reason}.`;
@@ -6877,7 +7074,7 @@ When the user asks to continue, resume, or check progress/updates, resume this w
           actor,
           metadata: {
             // The truth: a turn whose requested work was refused or unanswered did not pass.
-            passed: turnOutcome.verdict !== 'unverified' && !isUnanswered,
+            passed: turnOutcome.verdict !== 'unverified' && turnOutcome.verdict !== 'partial' && !isUnanswered,
             verdict: turnOutcome.verdict,
             reason: turnOutcome.reason,
             performed: turnOutcome.performed,
@@ -6930,7 +7127,7 @@ When the user asks to continue, resume, or check progress/updates, resume this w
     // reported as a completed task. A turn whose action ran and failed
     // (a build that does not compile) DID do its job of finding that out, so
     // it completes; the failure lives in the task record and the evidence.
-    if (turnOutcome.verdict === 'unverified') {
+    if (turnOutcome.verdict === 'unverified' || turnOutcome.verdict === 'partial') {
       try {
         mutateWithBroadcast(db, broadcaster, () => {
           failAttempt(db, attemptId, {
@@ -6945,7 +7142,7 @@ When the user asks to continue, resume, or check progress/updates, resume this w
           durationMs: Date.now() - startTime,
           modelCalls: modelCalls.length,
           modelMs: modelCalls.reduce((sum, call) => sum + call.totalMs, 0),
-          outcome: 'unverified',
+          outcome: turnOutcome.verdict,
           reason: turnOutcome.reason,
         }, actor);
         return { success: false, reply: finalReply };

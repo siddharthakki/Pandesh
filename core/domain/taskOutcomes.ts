@@ -326,11 +326,34 @@ export function ensureTaskOutcome(
 export function finalizeTaskOutcome(
   db: CoreDatabase,
   attemptId: string,
-  outcome: { verdict: 'verified' | 'unverified' | 'attempted_failed' | 'conversational'; reason: string; performed: string[]; refused: string[]; failed: string[] },
+  outcome: { verdict: 'verified' | 'unverified' | 'attempted_failed' | 'conversational' | 'partial'; reason: string; performed: string[]; refused: string[]; failed: string[] },
   context: { answerMessageId?: string | null } = {},
 ): TaskOutcomeRecord | undefined {
   const existing = getTaskOutcome(db, attemptId);
   if (!existing) return undefined;
+  // A turn Core recorded as unfinished (a build request that ended with nothing built, or with no reply) is never
+  // 'satisfied', whatever the model wrote into update_task_outcome (M0: C01 and F03 ended with the attempt failed and the
+  // task record satisfied — a status/outcome contradiction).
+  if ((outcome.verdict === 'conversational' || outcome.verdict === 'verified') && getUnfinishedTurn(db, attemptId)) {
+    return updateTaskOutcome(db, {
+      attemptId,
+      status: existing.status === 'blocked' ? 'blocked' : 'partial',
+      evidence: existing.evidence,
+      blocker: getUnfinishedTurn(db, attemptId) === 'no_reply' ? 'the model produced no reply' : 'nothing was built — no file was written or changed',
+      nextAction: existing.nextAction ?? 'Ask again, split the request into smaller steps, or resume with a stronger model.',
+      summary: existing.summary ?? outcome.reason,
+    });
+  }
+  // The work was blocked by a tool that failed and the reply asked the user how to go on: the task is blocked, with the
+  // tool's own error as the blocker (M0 E01).
+  if (outcome.verdict === 'conversational' || outcome.verdict === 'verified') {
+    const blocked = db.get<{ metadata: string }>("SELECT metadata FROM runtime_events WHERE entityId = ? AND eventType = 'turn_blocked' ORDER BY sequence DESC LIMIT 1", [attemptId]);
+    if (blocked) {
+      let blocker = 'a tool this task needs failed';
+      try { const m = JSON.parse(blocked.metadata) as { tool?: string; reason?: string }; blocker = `${m.tool ?? 'a tool'} failed: ${m.reason ?? ''}`.trim(); } catch { /* generic */ }
+      return updateTaskOutcome(db, { attemptId, status: 'blocked', evidence: existing.evidence, blocker, nextAction: existing.nextAction ?? 'Fix or start the tool that failed, then ask again.', summary: existing.summary ?? outcome.reason });
+    }
+  }
   if (outcome.verdict === 'conversational') {
     // The request was answered rather than acted on. The answer itself is the
     // evidence: it is a durable message in the conversation, with an id that
@@ -391,4 +414,11 @@ export function finalizeTaskOutcome(
     nextAction: existing.nextAction ?? 'Retry the step that did not run, or tell the user what is needed to unblock it.',
     summary: existing.summary ?? outcome.reason,
   });
+}
+
+/** The reason Core recorded a turn as unfinished ('nothing_built' | 'no_reply'), or null. */
+function getUnfinishedTurn(db: CoreDatabase, attemptId: string): string | null {
+  const row = db.get<{ metadata: string }>("SELECT metadata FROM runtime_events WHERE entityId = ? AND eventType = 'turn_unfinished' ORDER BY sequence DESC LIMIT 1", [attemptId]);
+  if (!row) return null;
+  try { return (JSON.parse(row.metadata) as { reason?: string }).reason ?? 'nothing_built'; } catch { return 'nothing_built'; }
 }

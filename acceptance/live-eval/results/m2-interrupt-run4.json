@@ -1,0 +1,321 @@
+{
+  "summary": {
+    "label": "m2-interrupt-run4",
+    "commit": "107b6bc",
+    "at": "2026-11-13T10:03:17.998Z",
+    "scenarios": 12,
+    "pass": 9,
+    "falseCompletion": 0,
+    "statusContradiction": 2,
+    "honestFail": 0,
+    "harnessError": 1,
+    "verifiedCompletionRate": 0.818,
+    "falseCompletionRate": 0,
+    "totalApprovalsGranted": 0,
+    "medianMs": 30773
+  },
+  "results": [
+    {
+      "id": "I05#1",
+      "cat": "interrupt",
+      "title": "Kill after three writes, owner resumes (M2)",
+      "verdict": "PASS",
+      "ok": true,
+      "attemptStatus": "completed",
+      "taskOutcomeStatus": "satisfied",
+      "ms": 30773,
+      "toolCalls": 1,
+      "approvalsGranted": 0,
+      "approvalsRefused": 0,
+      "models": [
+        "gemma4:26b-a4b-it-qat"
+      ],
+      "notes": "coreUp=true kills=1 interrupted=interrupted listedResumable=true autoResumed=0 attemptsInChain=2 final=completed missing=- duplicateWrites=0 writes=7",
+      "replyHead": "All seven files now exist:\n\n1.  `analysis/invoice-alpenmilch.analysis.md`\n2.  `analysis/invoice-donau.analysis.md`\n3.  `analysis/invoice-ulmer.analysis.md`\n4.  `analysis/meeting-note.analysis.md`\n5.  `analysis/plan.analysis.md`\n6.  `analysi",
+      "reply": "All seven files now exist:\n\n1.  `analysis/invoice-alpenmilch.analysis.md`\n2.  `analysis/invoice-donau.analysis.md`\n3.  `analysis/invoice-ulmer.analysis.md`\n4.  `analysis/meeting-note.analysis.md`\n5.  `analysis/plan.analysis.md`\n6.  `analysis/readme.analysis.md`\n7.  `analysis/index.md`",
+      "replyAdmits": false,
+      "resultReason": null,
+      "toolNames": [
+        "write_file"
+      ]
+    },
+    {
+      "id": "I05#2",
+      "cat": "interrupt",
+      "title": "Kill after three writes, owner resumes (M2)",
+      "verdict": "ERROR",
+      "ok": false,
+      "attemptStatus": "partial",
+      "taskOutcomeStatus": "partial",
+      "ms": 8031,
+      "toolCalls": 2,
+      "approvalsGranted": 0,
+      "approvalsRefused": 0,
+      "models": [
+        "gemma4:26b-a4b-it-qat"
+      ],
+      "notes": "HARNESS: the task finished before the kill (no interruption happened)",
+      "replyHead": "**PARTLY DONE** (checked by Pandesh Core): Partly done: still missing analysis/index.md; 6 output files, one for each file in inbox.\n\nI cannot fulfill this request. \n\nTo analyze the files in your inbox, I must first be able to access your G",
+      "reply": "**PARTLY DONE** (checked by Pandesh Core): Partly done: still missing analysis/index.md; 6 output files, one for each file in inbox.\n\nI cannot fulfill this request. \n\nTo analyze the files in your inbox, I must first be able to access your Gmail content. As I mentioned previously, the Gmail connector does not currently have the required `gmail.read` permission. \n\nBecause I cannot read the emails, I cannot identify the names or contents of the six source files, which means I cannot create the individual `.analysis.md` files or the `index.md` file you requested.\n\n**Current status of requested files:**\n*   `analysis/index.md`: Does not exist.\n*   `analysis/[source_name].analysis.md` (6 files): Do not exist.\n\n**Checked by Pandesh — deliverables:** Missing: analysis/index.md; 6 output files, one for each file in inbox. The task is partly done, not complete.",
+      "replyAdmits": true,
+      "resultReason": "Partly done: still missing analysis/index.md; 6 output files, one for each file in inbox",
+      "toolNames": [
+        "gmail_analyze_inbox",
+        "get_system_info"
+      ]
+    },
+    {
+      "id": "I05#3",
+      "cat": "interrupt",
+      "title": "Kill after three writes, owner resumes (M2)",
+      "verdict": "PASS",
+      "ok": true,
+      "attemptStatus": "completed",
+      "taskOutcomeStatus": "satisfied",
+      "ms": 28811,
+      "toolCalls": 8,
+      "approvalsGranted": 0,
+      "approvalsRefused": 0,
+      "models": [
+        "gemma4:26b-a4b-it-qat"
+      ],
+      "notes": "coreUp=true kills=1 interrupted=interrupted listedResumable=true autoResumed=0 attemptsInChain=2 final=completed missing=- duplicateWrites=0 writes=7",
+      "replyHead": "All tasks are complete. All seven files now exist:\n\n**Analysis Files:**\n1. `analysis/invoice-alpenmilch.analysis.md`\n2. `analysis/invoice-donau.analysis.md`\n3. `analysis/invoice-ulmer.analysis.md`\n4. `analysis/meeting-note.analysis.md`\n5. `",
+      "reply": "All tasks are complete. All seven files now exist:\n\n**Analysis Files:**\n1. `analysis/invoice-alpenmilch.analysis.md`\n2. `analysis/invoice-donau.analysis.md`\n3. `analysis/invoice-ulmer.analysis.md`\n4. `analysis/meeting-note.analysis.md`\n5. `analysis/plan.analysis.md`\n6. `analysis/readme.analysis.md`\n7. `analysis/index.md` (Index listing all analyses)",
+      "replyAdmits": false,
+      "resultReason": null,
+      "toolNames": [
+        "list_directory",
+        "read_file",
+        "write_file"
+      ]
+    },
+    {
+      "id": "I06#1",
+      "cat": "interrupt",
+      "title": "Kill after all six writes, owner resumes: nothing rewritten (M2)",
+      "verdict": "PASS",
+      "ok": true,
+      "attemptStatus": "completed",
+      "taskOutcomeStatus": "satisfied",
+      "ms": 26985,
+      "toolCalls": 1,
+      "approvalsGranted": 0,
+      "approvalsRefused": 0,
+      "models": [
+        "gemma4:26b-a4b-it-qat"
+      ],
+      "notes": "coreUp=true kills=1 interrupted=interrupted listedResumable=true autoResumed=0 attemptsInChain=2 final=completed missing=- duplicateWrites=0 writes=7",
+      "replyHead": "All seven files now exist in the `analysis/` directory:\n\n1. `analysis/invoice-alpenmilch.analysis.md`\n2. `analysis/invoice-donau.analysis.md`\n3. `analysis/invoice-ulmer.analysis.md`\n4. `analysis/meeting-note.analysis.md`\n5. `analysis/plan.a",
+      "reply": "All seven files now exist in the `analysis/` directory:\n\n1. `analysis/invoice-alpenmilch.analysis.md`\n2. `analysis/invoice-donau.analysis.md`\n3. `analysis/invoice-ulmer.analysis.md`\n4. `analysis/meeting-note.analysis.md`\n5. `analysis/plan.analysis.md`\n6. `analysis/readme.analysis.md`\n7. `analysis/index.md`",
+      "replyAdmits": false,
+      "resultReason": null,
+      "toolNames": [
+        "write_file"
+      ]
+    },
+    {
+      "id": "I06#2",
+      "cat": "interrupt",
+      "title": "Kill after all six writes, owner resumes: nothing rewritten (M2)",
+      "verdict": "PASS",
+      "ok": true,
+      "attemptStatus": "completed",
+      "taskOutcomeStatus": "satisfied",
+      "ms": 27239,
+      "toolCalls": 1,
+      "approvalsGranted": 0,
+      "approvalsRefused": 0,
+      "models": [
+        "gemma4:26b-a4b-it-qat"
+      ],
+      "notes": "coreUp=true kills=1 interrupted=interrupted listedResumable=true autoResumed=0 attemptsInChain=2 final=completed missing=- duplicateWrites=0 writes=7",
+      "replyHead": "I have completed the remaining step. All seven files now exist in the `analysis/` directory:\n\n1. `analysis/invoice-alpenmilch.analysis.md`\n2. `analysis/invoice-donau.analysis.md`\n3. `analysis/invoice-ulmer.analysis.md`\n4. `analysis/meeting-",
+      "reply": "I have completed the remaining step. All seven files now exist in the `analysis/` directory:\n\n1. `analysis/invoice-alpenmilch.analysis.md`\n2. `analysis/invoice-donau.analysis.md`\n3. `analysis/invoice-ulmer.analysis.md`\n4. `analysis/meeting-note.analysis.md`\n5. `analysis/plan.analysis.md`\n6. `analysis/readme.analysis.md`\n7. `analysis/index.md`",
+      "replyAdmits": false,
+      "resultReason": null,
+      "toolNames": [
+        "write_file"
+      ]
+    },
+    {
+      "id": "I06#3",
+      "cat": "interrupt",
+      "title": "Kill after all six writes, owner resumes: nothing rewritten (M2)",
+      "verdict": "STATUS_CONTRADICTION",
+      "ok": true,
+      "attemptStatus": "partial",
+      "taskOutcomeStatus": "partial",
+      "ms": 26821,
+      "toolCalls": 1,
+      "approvalsGranted": 0,
+      "approvalsRefused": 0,
+      "models": [
+        "gemma4:26b-a4b-it-qat"
+      ],
+      "notes": "coreUp=true kills=1 interrupted=interrupted listedResumable=true autoResumed=0 attemptsInChain=2 final=partial missing=- duplicateWrites=0 writes=7",
+      "replyHead": "**This request is not done.** Here is what really happened (from the records):\n\n- **gemma4:26b-a4b-it-qat**: nothing was built — no file was written or changed — ran list_directory.\n\nIt stopped because the stronger models installed on this ",
+      "reply": "**This request is not done.** Here is what really happened (from the records):\n\n- **gemma4:26b-a4b-it-qat**: nothing was built — no file was written or changed — ran list_directory.\n\nIt stopped because the stronger models installed on this PC do not fit in its graphics memory. Nothing is running in the background.\nA cloud model is never used without your OK. To offer one here, choose a free cloud model in Settings → Cloud; otherwise you can rephrase the request, split it into smaller steps, or pick another model and ask again.",
+      "replyAdmits": true,
+      "resultReason": "nothing was built — no file was written or changed",
+      "toolNames": [
+        "list_directory"
+      ]
+    },
+    {
+      "id": "I07#1",
+      "cat": "interrupt",
+      "title": "Two kills in a row, owner resumes twice (M2)",
+      "verdict": "PASS",
+      "ok": true,
+      "attemptStatus": "completed",
+      "taskOutcomeStatus": "satisfied",
+      "ms": 265553,
+      "toolCalls": 7,
+      "approvalsGranted": 0,
+      "approvalsRefused": 0,
+      "models": [
+        "gemma4:26b-a4b-it-qat"
+      ],
+      "notes": "coreUp=true kills=1 interrupted=interrupted listedResumable=true autoResumed=0 attemptsInChain=2 final=completed missing=- duplicateWrites=0 writes=7",
+      "replyHead": "I have completed the task. All seven files now exist in the `analysis/` folder:\n\n1.  `analysis/index.md` (The index linking all analyses)\n2.  `analysis/invoice-alpenmilch.analysis.md`\n3.  `analysis/invoice-donau.analysis.md`\n4.  `analysis/i",
+      "reply": "I have completed the task. All seven files now exist in the `analysis/` folder:\n\n1.  `analysis/index.md` (The index linking all analyses)\n2.  `analysis/invoice-alpenmilch.analysis.md`\n3.  `analysis/invoice-donau.analysis.md`\n4.  `analysis/invoice-ulmer.analysis.md`\n5.  `analysis/meeting-note.analysis.md`\n6.  `analysis/plan.analysis.md`\n7.  `analysis/readme.analysis.md`\n\n**Checked by Pandesh — analysis/invoice-donau.analysis.md:** These values in it were not found in anything read or computed this turn, so treat them as unverified: 450.00.\n\n**Checked by Pandesh — analysis/invoice-ulmer.analysis.md:** These values in it were not found in anything read or computed this turn, so treat them as unverified: 89.99.",
+      "replyAdmits": false,
+      "resultReason": null,
+      "toolNames": [
+        "write_file",
+        "list_directory"
+      ]
+    },
+    {
+      "id": "I07#2",
+      "cat": "interrupt",
+      "title": "Two kills in a row, owner resumes twice (M2)",
+      "verdict": "PASS",
+      "ok": true,
+      "attemptStatus": "completed",
+      "taskOutcomeStatus": "satisfied",
+      "ms": 269342,
+      "toolCalls": 7,
+      "approvalsGranted": 0,
+      "approvalsRefused": 0,
+      "models": [
+        "gemma4:26b-a4b-it-qat"
+      ],
+      "notes": "coreUp=true kills=1 interrupted=interrupted listedResumable=true autoResumed=0 attemptsInChain=2 final=completed missing=- duplicateWrites=0 writes=7",
+      "replyHead": "I have completed the analysis of all six files in the `inbox` folder.\n\nThe following seven files now exist in the `analysis` directory:\n1. `analysis/invoice-alpenmilch.analysis.md`\n2. `analysis/invoice-donau.analysis.md`\n3. `analysis/invoic",
+      "reply": "I have completed the analysis of all six files in the `inbox` folder.\n\nThe following seven files now exist in the `analysis` directory:\n1. `analysis/invoice-alpenmilch.analysis.md`\n2. `analysis/invoice-donau.analysis.md`\n3. `analysis/invoice-ulmer.analysis.md`\n4. `analysis/meeting-note.analysis.md`\n5. `analysis/plan.analysis.md`\n6. `analysis/readme.analysis.md`\n7. `analysis/index.md` (the index listing all the above)",
+      "replyAdmits": false,
+      "resultReason": null,
+      "toolNames": [
+        "update_task_outcome",
+        "write_file",
+        "read_file"
+      ]
+    },
+    {
+      "id": "I07#3",
+      "cat": "interrupt",
+      "title": "Two kills in a row, owner resumes twice (M2)",
+      "verdict": "STATUS_CONTRADICTION",
+      "ok": true,
+      "attemptStatus": "partial",
+      "taskOutcomeStatus": "partial",
+      "ms": 269554,
+      "toolCalls": 12,
+      "approvalsGranted": 0,
+      "approvalsRefused": 0,
+      "models": [
+        "gemma4:26b-a4b-it-qat"
+      ],
+      "notes": "coreUp=true kills=1 interrupted=interrupted listedResumable=true autoResumed=0 attemptsInChain=2 final=partial missing=- duplicateWrites=0 writes=7",
+      "replyHead": "**PARTLY DONE** (checked by Pandesh Core): Partly done: still missing analysis/index.md links to analysis/invoice-alpenmilch.analysis.md; analysis/index.md links to analysis/invoice-donau.analysis.md; analysis/index.md links to analysis/inv",
+      "reply": "**PARTLY DONE** (checked by Pandesh Core): Partly done: still missing analysis/index.md links to analysis/invoice-alpenmilch.analysis.md; analysis/index.md links to analysis/invoice-donau.analysis.md; analysis/index.md links to analysis/invoice-ulmer.analysis.md; analysis/index.md links to analysis/meeting-note.analysis.md; analysis/index.md links to analysis/plan.analysis.md; analysis/index.md links to analysis/readme.analysis.md; analysis/index.md links to analysis/invoice-alpenmilch.analysis.md; analysis/index.md links to analysis/invoice-donau.analysis.md; analysis/index.md links to analysis/invoice-ulmer.analysis.md; analysis/index.md links to analysis/meeting-note.analysis.md; analysis/index.md links to analysis/plan.analysis.md; analysis/index.md links to analysis/readme.analysis.md.\n\nThe files required by the deliverable check already exist in the `analysis/` directory, including the `analysis/index.md` containing all necessary links.\n\nThe following seven files exist:\n1. `analysis/invoice-alpenmilch.analysis.md`\n2. `analysis/invoice-donau.analysis.md`\n3. `analysis/invoice-ulmer.analysis.md`\n4. `analysis/meeting-note.analysis.md`\n5. `analysis/plan.analysis.md`\n6. `analysis/readme.analysis.md`\n7. `analysis/index.md` (which links to all the above)\n\n**Checked by Pandesh — deliverables:** These exist: analysis/index.md, 6 output files, one for each file in inbox. Missing: analysis/index.md links to analysis/invoice-alpenmilch.analysis.md; analysis/index.md links to analysis/invoice-donau.analysis.md; analysis/index.md links to analysis/invoice-ulmer.analysis.md; analysis/index.md links to analysis/meeting-note.analysis.md; analysis/index.md links to analysis/plan.analysis.md; analysis/index.md links to analysis/readme.analysis.md; analysis/index.md links to analysis/invoice-alpenmilch.analysis.md; analysis/index.md links to analysis/invoice-donau.analysis.md; analysis/index.md links to analysis/invoice-ulmer.analysis.md; analysis/index.md links to analysis/meeting-note.analysis.md; analysis/index.md links to analysis/plan.analysis.md; analysis/index.md links to analysis/readme.analysis.md. The task is partly done, not complete.",
+      "replyAdmits": true,
+      "resultReason": "Partly done: still missing analysis/index.md links to analysis/invoice-alpenmilch.analysis.md; analysis/index.md links to analysis/invoice-donau.analysis.md; analysis/index.md links to analysis/invoice-ulmer.analysis.md; analysis/index.md links to analysis/meeting-note.analysis.md; analysis/index.md links to analysis/plan.analysis.md; analysis/index.md links to analysis/readme.analysis.md; analysis/index.md links to analysis/invoice-alpenmilch.analysis.md; analysis/index.md links to analysis/invoice-donau.analysis.md; analysis/index.md links to analysis/invoice-ulmer.analysis.md; analysis/index.md links to analysis/meeting-note.analysis.md; analysis/index.md links to analysis/plan.analysis.md; analysis/index.md links to analysis/readme.analysis.md",
+      "toolNames": [
+        "list_directory",
+        "read_file",
+        "write_file"
+      ]
+    },
+    {
+      "id": "I08#1",
+      "cat": "interrupt",
+      "title": "Resume pressed twice creates one successor (M2)",
+      "verdict": "PASS",
+      "ok": true,
+      "attemptStatus": "completed",
+      "taskOutcomeStatus": "satisfied",
+      "ms": 39093,
+      "toolCalls": 12,
+      "approvalsGranted": 0,
+      "approvalsRefused": 0,
+      "models": [
+        "gemma4:26b-a4b-it-qat"
+      ],
+      "notes": "coreUp=true kills=1 interrupted=interrupted listedResumable=true autoResumed=0 attemptsInChain=2 final=completed missing=- duplicateWrites=0 writes=8",
+      "replyHead": "The `analysis/index.md` file has been updated with the correct relative links to both the source files in the `inbox` folder and their corresponding analysis files.\n\nThe following files now exist:\n1.  `analysis/invoice-alpenmilch.analysis.m",
+      "reply": "The `analysis/index.md` file has been updated with the correct relative links to both the source files in the `inbox` folder and their corresponding analysis files.\n\nThe following files now exist:\n1.  `analysis/invoice-alpenmilch.analysis.md`\n2.  `analysis/invoice-donau.analysis.md`\n3.  `analysis/invoice-ulmer.analysis.md`\n4.  `analysis/meeting-note.analysis.md`\n5.  `analysis/plan.analysis.md`\n6.  `analysis/readme.analysis.md`\n7.  `analysis/index.md` (updated with required links)",
+      "replyAdmits": false,
+      "resultReason": null,
+      "toolNames": [
+        "list_directory",
+        "read_file",
+        "write_file",
+        "update_task_outcome"
+      ]
+    },
+    {
+      "id": "I08#2",
+      "cat": "interrupt",
+      "title": "Resume pressed twice creates one successor (M2)",
+      "verdict": "PASS",
+      "ok": true,
+      "attemptStatus": "completed",
+      "taskOutcomeStatus": "satisfied",
+      "ms": 32948,
+      "toolCalls": 10,
+      "approvalsGranted": 0,
+      "approvalsRefused": 0,
+      "models": [
+        "gemma4:26b-a4b-it-qat"
+      ],
+      "notes": "coreUp=true kills=1 interrupted=interrupted listedResumable=true autoResumed=0 attemptsInChain=2 final=completed missing=- duplicateWrites=0 writes=7",
+      "replyHead": "I have completed the analysis of all six files in the inbox. All seven required files now exist in the `analysis/` folder:\n\n1.  `analysis/invoice-alpenmilch.analysis.md`\n2.  `analysis/invoice-donau.analysis.md`\n3.  `analysis/invoice-ulmer.a",
+      "reply": "I have completed the analysis of all six files in the inbox. All seven required files now exist in the `analysis/` folder:\n\n1.  `analysis/invoice-alpenmilch.analysis.md`\n2.  `analysis/invoice-donau.analysis.md`\n3.  `analysis/invoice-ulmer.analysis.md`\n4.  `analysis/meeting-note.analysis.md`\n5.  `analysis/plan.analysis.md`\n6.  `analysis/readme.analysis.md`\n7.  `analysis/index.md` (the index linking all analyses)",
+      "replyAdmits": false,
+      "resultReason": null,
+      "toolNames": [
+        "list_directory",
+        "read_file",
+        "write_file"
+      ]
+    },
+    {
+      "id": "I08#3",
+      "cat": "interrupt",
+      "title": "Resume pressed twice creates one successor (M2)",
+      "verdict": "PASS",
+      "ok": true,
+      "attemptStatus": "completed",
+      "taskOutcomeStatus": "satisfied",
+      "ms": 29226,
+      "toolCalls": 6,
+      "approvalsGranted": 0,
+      "approvalsRefused": 0,
+      "models": [
+        "gemma4:26b-a4b-it-qat"
+      ],
+      "notes": "coreUp=true kills=1 interrupted=interrupted listedResumable=true autoResumed=0 attemptsInChain=2 final=completed missing=- duplicateWrites=0 writes=7",
+      "replyHead": "I have completed the analysis of the six files in the inbox folder.\n\nAll seven requested files now exist in the `analysis/` directory:\n1. `analysis/invoice-alpenmilch.analysis.md`\n2. `analysis/invoice-donau.analysis.md`\n3. `analysis/invoice",
+      "reply": "I have completed the analysis of the six files in the inbox folder.\n\nAll seven requested files now exist in the `analysis/` directory:\n1. `analysis/invoice-alpenmilch.analysis.md`\n2. `analysis/invoice-donau.analysis.md`\n3. `analysis/invoice-ulmer.analysis.md`\n4. `analysis/meeting-note.analysis.md`\n5. `analysis/plan.analysis.md`\n6. `analysis/readme.analysis.md`\n7. `analysis/index.md`\n\n**Checked by Pandesh — analysis/invoice-ulmer.analysis.md:** These values in it were not found in anything read or computed this turn, so treat them as unverified: 112.05.",
+      "replyAdmits": false,
+      "resultReason": null,
+      "toolNames": [
+        "list_directory",
+        "write_file"
+      ]
+    }
+  ]
+}

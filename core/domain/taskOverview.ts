@@ -6,6 +6,7 @@
 import type { CoreDatabase } from '../db/connection';
 import { isTerminalAttemptStatus } from './attemptTransitions';
 import type { AttemptStatus } from '../shared/wireTypes';
+import { deriveResultStatus } from './resultStatus';
 
 export interface TaskOverviewRow {
   attemptId: string;
@@ -43,6 +44,10 @@ export interface TaskOverviewRow {
   /** True when the attempt had an owner but the lease has expired: the worker
    * is gone and the attempt can no longer make progress. */
   interrupted: boolean;
+  /** The work's result, derived by Core (completed | partial | blocked | failed | cancelled | interrupted | running). */
+  resultStatus: string;
+  /** True when the owner may press Resume: the task was interrupted or ended partly done, was not stopped or declined, and nothing continued it yet. Nothing resumes automatically. */
+  resumable: boolean;
 }
 
 const WORKER_LABELS: Array<[string, string]> = [
@@ -160,6 +165,14 @@ export function listTaskOverview(db: CoreDatabase, limit = 20, nowMs: number = D
       : live
         ? nowMs
         : (Number.isFinite(frozenEndMs) ? frozenEndMs : nowMs);
+    let resultStatus = 'running'; let resumable = false;
+    try {
+      const derived = deriveResultStatus(db, attemptId);
+      resultStatus = derived.status;
+      resumable = (derived.status === 'interrupted' || derived.status === 'partial') && !row.cancelRequestedAt
+        && !db.get('SELECT 1 FROM attempts WHERE predecessorAttemptId = ? LIMIT 1', [attemptId])
+        && !db.get("SELECT 1 FROM approvals WHERE attemptId = ? AND status = 'rejected' LIMIT 1", [attemptId]);
+    } catch { /* the overview never fails on one odd row */ }
     return {
       attemptId,
       requestId: String(row.requestId),
@@ -183,6 +196,8 @@ export function listTaskOverview(db: CoreDatabase, limit = 20, nowMs: number = D
       live,
       leaseExpiresAt,
       interrupted,
+      resultStatus,
+      resumable,
     };
   });
 }

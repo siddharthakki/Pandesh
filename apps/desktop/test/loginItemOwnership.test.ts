@@ -24,7 +24,7 @@ describe('Windows start-at-login ownership', () => {
   it('main.ts checks ownership before it writes or deletes the Windows entry', () => {
     const main = fs.readFileSync(path.join(__dirname, '../src/main.ts'), 'utf8');
     const fn = main.slice(main.indexOf('function applyOpenAtLogin('), main.indexOf('app.setLoginItemSettings('));
-    expect(fn).toContain('if (!ownsLoginItem(dataDir, defaultDesktopDataDir()))');
+    expect(fn).toContain('if (!ownsLoginItem(dataDir, realDesktopDataDirFromOs()))');
     expect(fn).toMatch(/return;\s*\}\s*try \{\s*$/);
     expect(main.match(/app\.setLoginItemSettings\(/g)).toHaveLength(1);
   });

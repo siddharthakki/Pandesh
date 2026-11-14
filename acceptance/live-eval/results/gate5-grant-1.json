@@ -1,0 +1,321 @@
+{
+  "label": "gate5-grant-1",
+  "commit": "ff9df4d",
+  "at": "2026-11-14T03:16:48.204Z",
+  "note": "days are simulated by making each routine due; scheduler, executor, grants, approvals and notifications are real; the approval pump rejects every card",
+  "setup": [
+    {
+      "routine": "A",
+      "created": true,
+      "result": "completed"
+    },
+    {
+      "routine": "B",
+      "created": true,
+      "result": "completed"
+    }
+  ],
+  "ordinaryClientGrantStatus": 403,
+  "noCardOnGrantedDays": true,
+  "cardsRejectedTotal": 4,
+  "cardTools": [
+    "authorize_mission",
+    "authorize_mission",
+    "authorize_mission",
+    "authorize_mission"
+  ],
+  "grantHistory": [
+    [
+      {
+        "id": "rgrant_1a90241c-1267-486d-a336-35daf9ee3a72",
+        "status": "revoked",
+        "revokedBy": "host:host:jarvis",
+        "revokeReason": "revoked by the owner"
+      },
+      {
+        "id": "rgrant_ea5acdd2-9e13-4a0b-a5e3-f1e8f317efae",
+        "status": "active",
+        "revokedBy": null,
+        "revokeReason": null
+      }
+    ],
+    [
+      {
+        "id": "rgrant_174b4568-73b6-4715-9dd3-20fdcd627356",
+        "status": "active",
+        "revokedBy": null,
+        "revokeReason": null
+      }
+    ]
+  ],
+  "days": [
+    {
+      "day": 1,
+      "checks": {
+        "A": {
+          "run": {
+            "attemptId": "att_93c74635-3c26-44ef-b001-0c2c4c51a956",
+            "status": "completed",
+            "resultStatus": "completed",
+            "reason": null
+          },
+          "expected": "writes",
+          "audit": {
+            "source": "standing_grant:rgrant_1a90241c-1267-486d-a336-35daf9ee3a72",
+            "uses": [
+              {
+                "path": "D:\\PandeshRecoveryEval\\gate5-grant-1\\ws\\a\\reports\\date.txt",
+                "readbackMatched": 1,
+                "finalCheck": "match"
+              }
+            ],
+            "events": [
+              "file_write_authorized",
+              "routine_run_verified"
+            ]
+          },
+          "ok": true,
+          "why": "file=\"2026-11-14\" source=standing_grant:rgrant_1a90241c-1267-486d-a336-35daf9ee3a72 uses=1 verified=true"
+        },
+        "B": {
+          "run": {
+            "attemptId": "att_c21f0206-936c-4329-9027-cb7c87bc377a",
+            "status": "completed",
+            "resultStatus": "completed",
+            "reason": null
+          },
+          "expected": "writes",
+          "audit": {
+            "source": "standing_grant:rgrant_174b4568-73b6-4715-9dd3-20fdcd627356",
+            "uses": [
+              {
+                "path": "D:\\PandeshRecoveryEval\\gate5-grant-1\\ws\\b\\reports\\inbox-count.txt",
+                "readbackMatched": 1,
+                "finalCheck": "match"
+              }
+            ],
+            "events": [
+              "file_write_authorized",
+              "routine_run_verified"
+            ]
+          },
+          "ok": true,
+          "why": "file=\"3\" source=standing_grant:rgrant_174b4568-73b6-4715-9dd3-20fdcd627356 uses=1 verified=true"
+        },
+        "cardsRejected": 0
+      },
+      "ok": true,
+      "seconds": 36
+    },
+    {
+      "day": 2,
+      "checks": {
+        "A": {
+          "run": {
+            "attemptId": "att_4857d630-d309-440e-9275-c5baf2004f98",
+            "status": "completed",
+            "resultStatus": "completed",
+            "reason": null
+          },
+          "expected": "writes",
+          "audit": {
+            "source": "standing_grant:rgrant_1a90241c-1267-486d-a336-35daf9ee3a72",
+            "uses": [
+              {
+                "path": "D:\\PandeshRecoveryEval\\gate5-grant-1\\ws\\a\\reports\\date.txt",
+                "readbackMatched": 1,
+                "finalCheck": "match"
+              }
+            ],
+            "events": [
+              "file_write_authorized",
+              "routine_run_verified"
+            ]
+          },
+          "ok": true,
+          "why": "file=\"2026-11-14\" source=standing_grant:rgrant_1a90241c-1267-486d-a336-35daf9ee3a72 uses=1 verified=true"
+        },
+        "B": {
+          "run": {
+            "attemptId": "att_af2c70c4-a032-4894-856b-8d551c18c34f",
+            "status": "completed",
+            "resultStatus": "completed",
+            "reason": null
+          },
+          "expected": "writes",
+          "audit": {
+            "source": "standing_grant:rgrant_174b4568-73b6-4715-9dd3-20fdcd627356",
+            "uses": [
+              {
+                "path": "D:\\PandeshRecoveryEval\\gate5-grant-1\\ws\\b\\reports\\inbox-count.txt",
+                "readbackMatched": 1,
+                "finalCheck": "match"
+              }
+            ],
+            "events": [
+              "file_write_authorized",
+              "routine_run_verified"
+            ]
+          },
+          "ok": true,
+          "why": "file=\"4\" source=standing_grant:rgrant_174b4568-73b6-4715-9dd3-20fdcd627356 uses=1 verified=true"
+        },
+        "cardsRejected": 0
+      },
+      "ok": true,
+      "seconds": 28
+    },
+    {
+      "day": 3,
+      "checks": {
+        "revokeA": {
+          "revoked": 1,
+          "state": null,
+          "ok": true
+        },
+        "A": {
+          "run": {
+            "attemptId": "att_29f37bd4-af54-40eb-a43a-e7f1813f1f41",
+            "status": "failed",
+            "resultStatus": "failed",
+            "reason": "the requested work did not happen: write_file reported that it could not do it"
+          },
+          "expected": "asks",
+          "audit": {
+            "source": "host:jarvis",
+            "uses": [],
+            "events": []
+          },
+          "ok": true,
+          "why": "file=\"\" result=failed source=host:jarvis notified=1 notApplied=false"
+        },
+        "B": {
+          "run": {
+            "attemptId": "att_e5b9a112-c551-4613-a3ab-d705f1104cb6",
+            "status": "completed",
+            "resultStatus": "completed",
+            "reason": null
+          },
+          "expected": "writes",
+          "audit": {
+            "source": "standing_grant:rgrant_174b4568-73b6-4715-9dd3-20fdcd627356",
+            "uses": [
+              {
+                "path": "D:\\PandeshRecoveryEval\\gate5-grant-1\\ws\\b\\reports\\inbox-count.txt",
+                "readbackMatched": 1,
+                "finalCheck": "match"
+              }
+            ],
+            "events": [
+              "file_write_authorized",
+              "routine_run_verified"
+            ]
+          },
+          "ok": true,
+          "why": "file=\"5\" source=standing_grant:rgrant_174b4568-73b6-4715-9dd3-20fdcd627356 uses=1 verified=true"
+        },
+        "cardsRejected": 1
+      },
+      "ok": true,
+      "seconds": 33
+    },
+    {
+      "day": 4,
+      "checks": {
+        "A": {
+          "run": {
+            "attemptId": "att_7c939311-ccd2-438d-a85d-b61f88674ad6",
+            "status": "failed",
+            "resultStatus": "failed",
+            "reason": "the requested work did not happen: write_file reported that it could not do it"
+          },
+          "expected": "asks",
+          "audit": {
+            "source": "host:jarvis",
+            "uses": [],
+            "events": []
+          },
+          "ok": true,
+          "why": "file=\"\" result=failed source=host:jarvis notified=1 notApplied=false"
+        },
+        "B": {
+          "run": {
+            "attemptId": "att_c9f2429b-6453-4d1c-8aba-1d84a99185cb",
+            "status": "failed",
+            "resultStatus": "failed",
+            "reason": "the requested work did not happen: write_file reported that it could not do it"
+          },
+          "expected": "asks",
+          "audit": {
+            "source": "host:jarvis",
+            "uses": [],
+            "events": [
+              "standing_grant_not_applied"
+            ]
+          },
+          "ok": true,
+          "why": "file=\"\" result=failed source=host:jarvis notified=1 notApplied=true"
+        },
+        "cardsRejected": 2
+      },
+      "ok": true,
+      "seconds": 31
+    },
+    {
+      "day": 5,
+      "checks": {
+        "regrantA": {
+          "id": "rgrant_ea5acdd2-9e13-4a0b-a5e3-f1e8f317efae",
+          "ok": true
+        },
+        "A": {
+          "run": {
+            "attemptId": "att_6124a949-2148-4141-bdac-68d29b293e4a",
+            "status": "completed",
+            "resultStatus": "completed",
+            "reason": null
+          },
+          "expected": "writes",
+          "audit": {
+            "source": "standing_grant:rgrant_ea5acdd2-9e13-4a0b-a5e3-f1e8f317efae",
+            "uses": [
+              {
+                "path": "D:\\PandeshRecoveryEval\\gate5-grant-1\\ws\\a\\reports\\date.txt",
+                "readbackMatched": 1,
+                "finalCheck": "match"
+              }
+            ],
+            "events": [
+              "file_write_authorized",
+              "routine_run_verified"
+            ]
+          },
+          "ok": true,
+          "why": "file=\"2026-11-14\" source=standing_grant:rgrant_ea5acdd2-9e13-4a0b-a5e3-f1e8f317efae uses=1 verified=true"
+        },
+        "B": {
+          "run": {
+            "attemptId": "att_af6100ab-4729-4b91-9af6-6cdd2ed022c1",
+            "status": "failed",
+            "resultStatus": "failed",
+            "reason": "the requested work did not happen: write_file reported that it could not do it"
+          },
+          "expected": "asks",
+          "audit": {
+            "source": "host:jarvis",
+            "uses": [],
+            "events": [
+              "standing_grant_not_applied"
+            ]
+          },
+          "ok": true,
+          "why": "file=\"\" result=failed source=host:jarvis notified=1 notApplied=true"
+        },
+        "cardsRejected": 1
+      },
+      "ok": true,
+      "seconds": 28
+    }
+  ],
+  "allDaysOk": true
+}

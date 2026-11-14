@@ -107,7 +107,7 @@ export function Board({ overview, narrow, onOpenPalette, onOpenConversation }: {
                         {t.conversationId && <button type="button" className="btn small" onClick={() => onOpenConversation(t.conversationId!)}>{c.id === 'needs' ? 'Review in chat' : 'Open chat'}</button>}
                         {t.cancellable && !t.cancelRequestedAt && <button type="button" className="btn small" onClick={() => void stop(t)}>Stop</button>}
                         {t.cancelRequestedAt && c.id !== 'failed' && <span className="meta">Stop requested {timeOf(t.cancelRequestedAt)}</span>}
-                        {(t.status === 'recovery_required' || t.interrupted) && <button type="button" className="btn small" onClick={() => void resume(t)}>Resume</button>}
+                        {(t.resumable || t.status === 'recovery_required' || t.interrupted) && <button type="button" className="btn small" onClick={() => void resume(t)}>Resume</button>}
                       </div>
                     </article>
                   ))}

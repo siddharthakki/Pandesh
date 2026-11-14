@@ -39,3 +39,14 @@ describe('the turn verdict reads what a tool says about itself, not words in its
     expect(evaluateTurnOutcome([call('gmail_create_draft', 'Gmail is not connected, so no draft was created.')] as never).refused).toEqual(['gmail_create_draft']);
   });
 });
+
+describe('a write that found the file already current (routine run, 2nd day)', () => {
+  it('is performed, not refused: "nothing was written" because it was already as requested', () => {
+    const r = evaluateTurnOutcome([
+      { tool: 'write_file', status: 'running' },
+      { tool: 'write_file', status: 'completed', result: { content: [{ type: 'text', text: 'UNCHANGED: date.txt already contains exactly this text, so nothing was written. Do not write it again.' }] } },
+    ] as never);
+    expect(r.verdict).not.toBe('refused');
+    expect(r.performed).toContain('write_file');
+  });
+});

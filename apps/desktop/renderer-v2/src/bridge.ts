@@ -106,6 +106,7 @@ export interface TaskRow {
   provider: string | null; model: string | null; worker: string; activity: string; createdAt: string; startedAt: string | null;
   completedAt: string | null; elapsedMs: number; lastEventAt: string | null; lastEventType: string | null; cancelRequestedAt: string | null;
   failureReason: string | null; cancellable: boolean; live: boolean; leaseExpiresAt: string | null; interrupted: boolean;
+  resultStatus?: string; resumable?: boolean;
 }
 export interface QueuedCommand { id: string; instruction?: string; title?: string; state?: string; [k: string]: unknown }
 export interface BriefAction { kind: string; label: string; approvalId?: string; attemptId?: string; conversationId?: string; artifactId?: string }

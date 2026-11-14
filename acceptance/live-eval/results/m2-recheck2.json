@@ -1,0 +1,237 @@
+{
+  "summary": {
+    "label": "m2-recheck2",
+    "commit": "b4bffe1",
+    "at": "2026-11-13T13:08:56.389Z",
+    "scenarios": 8,
+    "pass": 8,
+    "falseCompletion": 0,
+    "statusContradiction": 0,
+    "honestFail": 0,
+    "harnessError": 0,
+    "verifiedCompletionRate": 1,
+    "falseCompletionRate": 0,
+    "totalApprovalsGranted": 8,
+    "medianMs": 27274
+  },
+  "results": [
+    {
+      "id": "F02#1",
+      "cat": "file",
+      "title": "Six deliverables (audit S21)",
+      "verdict": "PASS",
+      "ok": true,
+      "attemptStatus": "completed",
+      "taskOutcomeStatus": "satisfied",
+      "ms": 13921,
+      "toolCalls": 16,
+      "approvalsGranted": 1,
+      "approvalsRefused": 0,
+      "models": [
+        "gemma4:26b-a4b-it-qat"
+      ],
+      "notes": "all seven present",
+      "replyHead": "All seven files have been created in the `analysis/` folder:\n\n1.  `analysis/invoice-alpenmilch.analysis.md`\n2.  `analysis/invoice-donau.analysis.md`\n3.  `analysis/invoice-ulmer.analysis.md`\n4.  `analysis/meeting-note.analysis.md`\n5.  `analy",
+      "reply": "All seven files have been created in the `analysis/` folder:\n\n1.  `analysis/invoice-alpenmilch.analysis.md`\n2.  `analysis/invoice-donau.analysis.md`\n3.  `analysis/invoice-ulmer.analysis.md`\n4.  `analysis/meeting-note.analysis.md`\n5.  `analysis/plan.analysis.md`\n6.  `analysis/readme.analysis.md`\n7.  `analysis/index.md` (Index linking all the above)",
+      "replyAdmits": false,
+      "resultReason": null,
+      "toolNames": [
+        "get_system_info",
+        "list_directory",
+        "request_tools",
+        "read_file",
+        "write_file"
+      ]
+    },
+    {
+      "id": "F02#2",
+      "cat": "file",
+      "title": "Six deliverables (audit S21)",
+      "verdict": "PASS",
+      "ok": true,
+      "attemptStatus": "completed",
+      "taskOutcomeStatus": "satisfied",
+      "ms": 19261,
+      "toolCalls": 17,
+      "approvalsGranted": 1,
+      "approvalsRefused": 0,
+      "models": [
+        "gemma4:26b-a4b-it-qat"
+      ],
+      "notes": "all seven present",
+      "replyHead": "All seven files exist in the `analysis/` folder: the six individual analysis files and the `index.md` file that links them.",
+      "reply": "All seven files exist in the `analysis/` folder: the six individual analysis files and the `index.md` file that links them.",
+      "replyAdmits": false,
+      "resultReason": null,
+      "toolNames": [
+        "get_system_info",
+        "list_directory",
+        "update_task_outcome",
+        "write_file",
+        "read_file"
+      ]
+    },
+    {
+      "id": "I03#1",
+      "cat": "recovery",
+      "title": "Core killed after the first write, restarted, task resumed: finishes with no duplicate writes (M2)",
+      "verdict": "PASS",
+      "ok": true,
+      "attemptStatus": "completed",
+      "taskOutcomeStatus": "satisfied",
+      "ms": 129839,
+      "toolCalls": 12,
+      "approvalsGranted": 0,
+      "approvalsRefused": 0,
+      "models": [
+        "gemma4:26b-a4b-it-qat"
+      ],
+      "notes": "coreUp=true interrupted=interrupted resumedResult=completed missing=- duplicateWrites=0",
+      "replyHead": "All seven files now exist:\n\n1.  `analysis/invoice-alpenmilch.analysis.md`\n2.  `analysis/invoice-donau.analysis.md`\n3.  `analysis/invoice-ulmer.analysis.md`\n4.  `analysis/meeting-note.analysis.md`\n5.  `analysis/plan.analysis.md`\n6.  `analysi",
+      "reply": "All seven files now exist:\n\n1.  `analysis/invoice-alpenmilch.analysis.md`\n2.  `analysis/invoice-donau.analysis.md`\n3.  `analysis/invoice-ulmer.analysis.md`\n4.  `analysis/meeting-note.analysis.md`\n5.  `analysis/plan.analysis.md`\n6.  `analysis/readme.analysis.md`\n7.  `analysis/index.md`",
+      "replyAdmits": false,
+      "resultReason": null,
+      "toolNames": [
+        "update_task_outcome",
+        "list_directory",
+        "read_file",
+        "write_file"
+      ]
+    },
+    {
+      "id": "I03#2",
+      "cat": "recovery",
+      "title": "Core killed after the first write, restarted, task resumed: finishes with no duplicate writes (M2)",
+      "verdict": "PASS",
+      "ok": true,
+      "attemptStatus": "completed",
+      "taskOutcomeStatus": "satisfied",
+      "ms": 33169,
+      "toolCalls": 12,
+      "approvalsGranted": 0,
+      "approvalsRefused": 0,
+      "models": [
+        "gemma4:26b-a4b-it-qat"
+      ],
+      "notes": "coreUp=true interrupted=interrupted resumedResult=completed missing=- duplicateWrites=0",
+      "replyHead": "I have completed the analysis of all six files in the inbox. All seven required files now exist in the `analysis/` folder.\n\nThe following files have been created:\n1.  `analysis/invoice-alpenmilch.analysis.md` (already existing)\n2.  `analysi",
+      "reply": "I have completed the analysis of all six files in the inbox. All seven required files now exist in the `analysis/` folder.\n\nThe following files have been created:\n1.  `analysis/invoice-alpenmilch.analysis.md` (already existing)\n2.  `analysis/invoice-donau.analysis.md`\n3.  `analysis/invoice-ulmer.analysis.md`\n4.  `analysis/meeting-note.analysis.md`\n5.  `analysis/plan.analysis.md`\n6.  `analysis/readme.analysis.md`\n7.  `analysis/index.md` (Index file)",
+      "replyAdmits": false,
+      "resultReason": null,
+      "toolNames": [
+        "list_directory",
+        "read_file",
+        "write_file"
+      ]
+    },
+    {
+      "id": "C01#1",
+      "cat": "code",
+      "title": "Fix a bug and verify with the tests (audit S04)",
+      "verdict": "PASS",
+      "ok": true,
+      "attemptStatus": "completed",
+      "taskOutcomeStatus": "satisfied",
+      "ms": 10231,
+      "toolCalls": 5,
+      "approvalsGranted": 3,
+      "approvalsRefused": 0,
+      "models": [
+        "gemma4:26b-a4b-it-qat"
+      ],
+      "notes": "independent `node --test`",
+      "replyHead": "The tests in the `bugfix` folder were failing because `stats.js` was dividing the sum of the array by `a.length + 1` instead of `a.length`. \n\nI have fixed the bug by removing the `+ 1` from the divisor. After the change, the tests passed:\n\n",
+      "reply": "The tests in the `bugfix` folder were failing because `stats.js` was dividing the sum of the array by `a.length + 1` instead of `a.length`. \n\nI have fixed the bug by removing the `+ 1` from the divisor. After the change, the tests passed:\n\n**Test Results:**\n- `mean of three`: Pass\n- `mean of one`: Pass\n\n**File changed:** `bugfix/stats.js`",
+      "replyAdmits": false,
+      "resultReason": null,
+      "toolNames": [
+        "list_directory",
+        "run_checks",
+        "read_file",
+        "write_file"
+      ]
+    },
+    {
+      "id": "C01#2",
+      "cat": "code",
+      "title": "Fix a bug and verify with the tests (audit S04)",
+      "verdict": "PASS",
+      "ok": true,
+      "attemptStatus": "completed",
+      "taskOutcomeStatus": "satisfied",
+      "ms": 9974,
+      "toolCalls": 7,
+      "approvalsGranted": 3,
+      "approvalsRefused": 0,
+      "models": [
+        "gemma4:26b-a4b-it-qat"
+      ],
+      "notes": "independent `node --test`",
+      "replyHead": "The tests in the `bugfix` folder failed because `stats.js` was incorrectly dividing the sum by `a.length + 1` instead of `a.length`. \n\nI have fixed it by removing the `+ 1`. Here is the result of running the tests again:\n\n**Tests Result:**\n",
+      "reply": "The tests in the `bugfix` folder failed because `stats.js` was incorrectly dividing the sum by `a.length + 1` instead of `a.length`. \n\nI have fixed it by removing the `+ 1`. Here is the result of running the tests again:\n\n**Tests Result:**\n- `mean of three`: Passed\n- `mean of one`: Passed\n\n**Total:** 2 passed, 0 failed.\n\n**File changed:** `bugfix/stats.js`",
+      "replyAdmits": true,
+      "resultReason": null,
+      "toolNames": [
+        "update_task_outcome",
+        "list_directory",
+        "run_checks",
+        "read_file",
+        "write_file"
+      ]
+    },
+    {
+      "id": "I04#1",
+      "cat": "interrupt",
+      "title": "Kill at the first tool call, owner resumes (M2)",
+      "verdict": "PASS",
+      "ok": true,
+      "attemptStatus": "completed",
+      "taskOutcomeStatus": "satisfied",
+      "ms": 27274,
+      "toolCalls": 16,
+      "approvalsGranted": 0,
+      "approvalsRefused": 0,
+      "models": [
+        "gemma4:26b-a4b-it-qat"
+      ],
+      "notes": "coreUp=true kills=1 interrupted=interrupted listedResumable=true autoResumed=0 attemptsInChain=2 final=completed missing=- duplicateWrites=0 writes=7",
+      "replyHead": "All seven files now exist in the `analysis/` directory:\n\n- `analysis/invoice-alpenmilch.analysis.md`\n- `analysis/invoice-donau.analysis.md`\n- `analysis/invoice-ulmer.analysis.md`\n- `analysis/meeting-note.analysis.md`\n- `analysis/plan.analys",
+      "reply": "All seven files now exist in the `analysis/` directory:\n\n- `analysis/invoice-alpenmilch.analysis.md`\n- `analysis/invoice-donau.analysis.md`\n- `analysis/invoice-ulmer.analysis.md`\n- `analysis/meeting-note.analysis.md`\n- `analysis/plan.analysis.md`\n- `analysis/readme.analysis.md`\n- `analysis/index.md` (this file contains the index and links to the others)",
+      "replyAdmits": false,
+      "resultReason": null,
+      "toolNames": [
+        "update_task_outcome",
+        "list_directory",
+        "read_file",
+        "write_file"
+      ]
+    },
+    {
+      "id": "I04#2",
+      "cat": "interrupt",
+      "title": "Kill at the first tool call, owner resumes (M2)",
+      "verdict": "PASS",
+      "ok": true,
+      "attemptStatus": "completed",
+      "taskOutcomeStatus": "satisfied",
+      "ms": 29550,
+      "toolCalls": 16,
+      "approvalsGranted": 0,
+      "approvalsRefused": 0,
+      "models": [
+        "gemma4:26b-a4b-it-qat"
+      ],
+      "notes": "coreUp=true kills=1 interrupted=interrupted listedResumable=true autoResumed=0 attemptsInChain=2 final=completed missing=- duplicateWrites=0 writes=7",
+      "replyHead": "All seven files now exist in the `analysis/` folder:\n\n1.  `analysis/invoice-alpenmilch.analysis.md`\n2.  `analysis/invoice-donau.analysis.md`\n3.  `analysis/invoice-ulmer.analysis.md`\n4.  `analysis/meeting-note.analysis.md`\n5.  `analysis/plan",
+      "reply": "All seven files now exist in the `analysis/` folder:\n\n1.  `analysis/invoice-alpenmilch.analysis.md`\n2.  `analysis/invoice-donau.analysis.md`\n3.  `analysis/invoice-ulmer.analysis.md`\n4.  `analysis/meeting-note.analysis.md`\n5.  `analysis/plan.analysis.md`\n6.  `analysis/readme.analysis.md`\n7.  `analysis/index.md` (containing the list and links to the others)",
+      "replyAdmits": false,
+      "resultReason": null,
+      "toolNames": [
+        "update_task_outcome",
+        "list_directory",
+        "read_file",
+        "write_file"
+      ]
+    }
+  ]
+}

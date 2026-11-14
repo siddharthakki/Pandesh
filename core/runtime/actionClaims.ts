@@ -405,6 +405,9 @@ export interface LeadStatusInput {
 export function leadStatusLine(input: LeadStatusInput): string | null {
   const opening = input.reply.split(/\n\s*\n/).find((p) => p.trim()) ?? '';
   const readsAsSuccess = OPENING_SUCCESS.test(opening) && !OPENING_NEGATED.test(opening);
+  if (input.verdict === 'partial') {
+    return `**PARTLY DONE** (checked by Pandesh Core): ${input.reason}.${readsAsSuccess ? ' The model\'s draft below says it is finished; it is not.' : ''}`;
+  }
   if (input.verdict === 'unverified') {
     return `**NOT DONE** (checked by Pandesh Core): ${input.reason}.${readsAsSuccess ? ' The model\'s draft below says otherwise; it is wrong where it claims success.' : ''}`;
   }

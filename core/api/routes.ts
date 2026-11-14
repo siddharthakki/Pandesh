@@ -19,6 +19,7 @@ import { registerSoftwareRoutes } from './softwareRoutes';
 import { registerRevenueRoutes } from './revenueRoutes';
 import { registerWorkshopRoutes } from './workshopRoutes';
 import { registerAgentRoutes } from './agentRoutes';
+import { registerRoutineGrantRoutes } from './routineGrantRoutes';
 import { registerToolHubRoutes } from './toolHubRoutes';
 import { registerSecondBrainRoutes } from './secondBrainRoutes';
 import { registerProcessRoutes } from './processRoutes';
@@ -58,6 +59,8 @@ import * as attachments from '../domain/attachments';
 import * as artifacts from '../domain/artifacts';
 import * as requests from '../domain/requests';
 import * as attempts from '../domain/attempts';
+import { deriveResultStatus } from '../domain/resultStatus';
+import { resumeInterruptedAttempt } from '../runtime/resumeAttempt';
 import { listTaskOverview } from '../domain/taskOverview';
 import * as modelInvocations from '../domain/modelInvocations';
 import * as toolInvocations from '../domain/toolInvocations';
@@ -544,6 +547,7 @@ export function buildRouter(
   if (bridge) registerWorkshopRoutes(router, { dataDir: bridge.dataDir, broadcaster });
   // --- Specialist agents: definitions, status, history, delegation (core/api/agentRoutes.ts) ---
   registerAgentRoutes(router, { executor });
+  registerRoutineGrantRoutes(router);
   // --- Tools, Skills & MCP hub (core/api/toolHubRoutes.ts) ---
   registerToolHubRoutes(router, { registry: capabilities, connectors, dataDir: bridge?.dataDir ?? null });
   // --- Second Brain: search, inspector, timeline, graph, correct/forget (core/api/secondBrainRoutes.ts) ---
@@ -931,6 +935,7 @@ export function buildRouter(
     const role = requireString(body, 'role') as MessageRole;
     const content = requireString(body, 'content');
     const modelInvocationId = typeof body.modelInvocationId === 'string' ? body.modelInvocationId : null;
+    // The origin check for modelInvocationId is in conversations.appendMessage (client-originated calls carry clientId).
     return withRuntimeBroadcast(ctx, broadcaster, () => ({
       status: 201,
       body: conversations.appendMessage(ctx.db, match.params.id, {
@@ -1100,22 +1105,8 @@ export function buildRouter(
     }));
   });
 
-  router.post('/v1/conversations/:id/messages', (ctx, match) => {
-    const key = requireIdempotencyKey(ctx);
-    const body = asRecord(ctx.body);
-    return withIdempotency(ctx.db, { key, clientId: ctx.clientId, routeId: `conversations.message:${match.params.id}` }, ctx.body, () =>
-      withRuntimeBroadcast(ctx, broadcaster, () => ({
-        status: 201,
-        body: conversations.appendMessage(ctx.db, match.params.id, {
-          role: requireString(body, 'role') as MessageRole,
-          content: requireString(body, 'content'),
-          modelInvocationId: (body.modelInvocationId as string) ?? null,
-          actor: ctx.actor,
-          clientId: ctx.clientId,
-        }),
-      })),
-    );
-  });
+  // (A second, unreachable registration of POST /v1/conversations/:id/messages used to sit here and passed modelInvocationId
+  // through unchecked; removed. The ownership check now lives in conversations.appendMessage, so no route can skip it.)
 
   // --- M32: Auto-mode routing (server-owned, deterministic, current-request-only) ---
   router.post('/v1/routing/classify', (ctx) => {
@@ -1313,7 +1304,13 @@ export function buildRouter(
     return { status: 200, body: { attempts: attempts.listAttempts(ctx.db, { requestId, status, activeOnly, limit, offset }) } };
   });
 
-  router.get('/v1/attempts/:id', (ctx, match) => ({ status: 200, body: attempts.getAttempt(ctx.db, match.params.id) }));
+  // `resultStatus` is the work's result (completed | partial | blocked | failed | cancelled | interrupted | running), derived from
+  // what Core recorded; `status` stays the attempt's lifecycle state. Consumers that show "did it work" read resultStatus.
+  router.get('/v1/attempts/:id', (ctx, match) => {
+    const attempt = attempts.getAttempt(ctx.db, match.params.id);
+    const result = deriveResultStatus(ctx.db, match.params.id);
+    return { status: 200, body: { ...attempt, resultStatus: result.status, resultReason: result.reason } };
+  });
   router.get('/v1/attempts/:id/context', (ctx, match) => ({ status: 200, body: getAttemptContext(ctx.db, match.params.id) }));
 
   // --- M32 Priority 1: Core-owned execution ---
@@ -1509,6 +1506,20 @@ export function buildRouter(
     status: 200,
     body: attemptRetryEligibility(ctx.db, match.params.id),
   }));
+
+  // M2: resume an interrupted (or failed, not cancelled) task as a successor of the same request. The successor is told what
+  // the journal says was already done, and the replay guard refuses an identical repeat of a consequential call.
+  router.post('/v1/attempts/:id/resume', (ctx, match) => {
+    const key = requireIdempotencyKey(ctx);
+    return withIdempotency(ctx.db, { key, clientId: ctx.clientId, routeId: `attempts.resume:${match.params.id}` }, ctx.body, () =>
+      withRuntimeBroadcast(ctx, broadcaster, () => {
+        const successor = resumeInterruptedAttempt(ctx.db, match.params.id, ctx.actor);
+        if (!executor) throw new CoreError('internal_error', 'no runtime executor is configured on this Core');
+        void executor.execute(successor.id).catch(() => { /* terminal failure is durably recorded */ });
+        return { status: 202, body: { attempt: successor, resumedFrom: match.params.id } };
+      }),
+    );
+  });
 
   router.post('/v1/attempts/:id/claim', (ctx, match) => {
     const key = requireIdempotencyKey(ctx);

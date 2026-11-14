@@ -35,6 +35,8 @@ export type TurnOutcomeVerdict =
   | 'unverified'
   /** A consequential action ran and returned a failure result. */
   | 'attempted_failed'
+  /** Some of what the request asked for exists and some does not (deliverable ledger, M1). */
+  | 'partial'
   /** The turn only read, or only talked. Nothing to verify. */
   | 'conversational';
 
@@ -120,7 +122,7 @@ export function isConsequentialTool(toolName: string): boolean {
  * Every governed tool reports refusal in these terms, so the check needs no
  * per-tool special case.
  */
-const REFUSED_PATTERN =
+export const REFUSED_PATTERN =
   /\b(NOT DONE|NOT AVAILABLE|declined|denied|rejected|refused|not granted|has not been granted|not connected|is not connected|nothing was done|nothing was written|no action was taken|was not sent|did not happen|did not approve|approval is still|awaiting approval)\b|^Not run:/im;
 
 interface ToolResultShape {
@@ -172,7 +174,7 @@ export function evaluateTurnOutcome(calls: readonly TurnToolCall[]): TurnOutcome
     // own success is performed.
     const declaredSuccess = !errored && (call.result as { details?: { success?: unknown } } | undefined)?.details?.success === true;
     const text = tool === 'delegate_to_agent' || !errored ? full.split('\n')[0] : full;
-    if (!declaredSuccess && REFUSED_PATTERN.test(text)) {
+    if (!declaredSuccess && !(tool === 'write_file' && /^UNCHANGED:/i.test(text.trim())) && REFUSED_PATTERN.test(text)) {
       if (!refused.includes(tool)) refused.push(tool);
     } else if (errored) {
       if (!failed.includes(tool)) failed.push(tool);

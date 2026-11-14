@@ -170,3 +170,16 @@ describe('the Workshop (3D models)', () => {
     expect(offered('Open the dashboard').has('workshop_edit')).toBe(false);
   });
 });
+
+describe('"inbox" as a folder is not mail (M2/M3 live runs: the inbox folder request drifted to Gmail tools)', () => {
+  it('the inbox folder does not select the email group; the inbox (mail) still does', () => {
+    expect(groupsForText('Analyze each of the six files in the inbox folder.').has('email')).toBe(false);
+    expect(groupsForText('Count the files in the inbox directory and write the number.').has('email')).toBe(false);
+    expect(groupsForText('Write only that number into reports/inbox-count.txt in this folder.').has('email')).toBe(false);
+    expect(groupsForText('Check my inbox for new mail.').has('email')).toBe(true);
+    expect(groupsForText("Count the files in the 'inbox' folder and write the number.").has('email')).toBe(false);
+    expect(groupsForText('Count the files in the folder "inbox" and write the number.').has('email')).toBe(false);
+    expect(groupsForText('Summarize my inbox.').has('email')).toBe(true);
+    expect(groupsForText('Draft a reply to the newsletter.').has('email')).toBe(true);
+  });
+});

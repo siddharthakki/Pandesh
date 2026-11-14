@@ -773,7 +773,14 @@ export function createPcOrganizerAdapter(deps: { db: CoreDatabase; env?: NodeJS.
             includeUnits: args.includeUnits === true, archiveDuplicates: args.archiveDuplicates === true, saveRules: args.saveRules === true,
             batchSize: Number(args.batchSize) > 0 ? Number(args.batchSize) : undefined,
           });
-          return { ...okResult(renderApplyReport(report), report.failedNow.length ? 'organization_partially_applied' : 'organization_applied'), status: report.failedNow.length && !report.verifiedNow ? 'failed' : 'succeeded' };
+          // F03: an apply that moved nothing (the category filter matched no move, or nothing was left to do) read as
+          // "applied" and the turn ended satisfied while every file was still where it started. Only a plan that was
+          // already fully applied is success with zero moves now.
+          if (report.verifiedNow === 0 && report.failedNow.length === 0 && !(report.counts.verified > 0 && report.remaining === 0)) {
+            const why = report.skippedNow.length ? `every move was skipped (${report.skippedNow.slice(0, 3).map((s) => `${path.basename(s.path)} — ${s.why}`).join('; ')})` : report.remaining === 0 ? 'no planned move matched this apply (check the categories filter, includeUnits and archiveDuplicates)' : 'no move could be started';
+            return failResult(`NOT DONE (nothing_moved): no file was moved. ${why}. Plan ${report.plan.id} is still ${report.plan.status}; ${report.counts.planned ?? 0} move(s) are planned. Do not report the folder as organized.`, 'organization_nothing_moved');
+          }
+          return { ...okResult(renderApplyReport(report),report.failedNow.length ? 'organization_partially_applied' : 'organization_applied'), status: report.failedNow.length && !report.verifiedNow ? 'failed' : 'succeeded' };
         }
         if (call.name === 'pc_organize_undo') {
           const r = await undoOrganizationPlan(db, String(args.planId ?? ''));

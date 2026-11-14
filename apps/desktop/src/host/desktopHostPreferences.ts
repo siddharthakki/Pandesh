@@ -2,6 +2,7 @@
  * Durable Desktop host preferences (non-secret) under the Desktop data dir.
  */
 import * as fs from 'node:fs';
+import * as os from 'node:os';
 import * as path from 'node:path';
 
 export interface DesktopHostPreferences {
@@ -38,6 +39,19 @@ export function resolveUiVariant(prefs: Pick<DesktopHostPreferences, 'uiVariant'
   if (flag === '1' || flag === 'true') return 'v2';
   if (flag === '0' || flag === 'false') return 'classic';
   return prefs.uiVariant === 'v2' ? 'v2' : 'classic';
+}
+
+/**
+ * The real desktop profile, from the operating system's own record of the user's profile folder (os.userInfo), NOT from
+ * LOCALAPPDATA or USERPROFILE. A test copy that redirected LOCALAPPDATA used to compute "the real profile" as its own
+ * folder, so it was treated as the real Pandesh: no TEST COPY title, Google sign-in allowed, start-at-login entry
+ * writable (audit 2026-11-12, step 0).
+ */
+export function realDesktopDataDirFromOs(): string {
+  const home = os.userInfo().homedir;
+  return process.platform === 'win32'
+    ? path.join(home, 'AppData', 'Local', 'KarkeDikha', 'desktop')
+    : path.join(home, '.local', 'share', 'karkedikha', 'desktop');
 }
 
 /**

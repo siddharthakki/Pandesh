@@ -1,0 +1,288 @@
+{
+  "label": "gate4-grant-run6",
+  "commit": "f3e1efa",
+  "at": "2026-11-13T15:43:23.037Z",
+  "note": "days are simulated by making each routine due; scheduler, executor, grants, approvals and notifications are real; the approval pump rejects every card",
+  "setup": [
+    {
+      "routine": "A",
+      "created": true,
+      "result": "completed"
+    },
+    {
+      "routine": "B",
+      "created": true,
+      "result": "completed"
+    }
+  ],
+  "ordinaryClientGrantStatus": 403,
+  "noCardOnGrantedDays": true,
+  "cardsRejectedTotal": 2,
+  "cardTools": [
+    "authorize_mission",
+    "authorize_mission"
+  ],
+  "grantHistory": [
+    [
+      {
+        "id": "rgrant_0f0c9886-5aac-4570-9bae-f9747ede5b67",
+        "status": "revoked",
+        "revokedBy": "host:host:jarvis",
+        "revokeReason": "revoked by the owner"
+      },
+      {
+        "id": "rgrant_0fe1e820-76c6-47e4-8085-8a5160627287",
+        "status": "active",
+        "revokedBy": null,
+        "revokeReason": null
+      }
+    ],
+    [
+      {
+        "id": "rgrant_069616ff-a01f-4721-9447-45b373464a97",
+        "status": "active",
+        "revokedBy": null,
+        "revokeReason": null
+      }
+    ]
+  ],
+  "days": [
+    {
+      "day": 1,
+      "checks": {
+        "A": {
+          "run": {
+            "attemptId": "att_0e8f50b5-7721-4039-b02f-ca9b1cef8f1d",
+            "status": "completed",
+            "resultStatus": "completed",
+            "reason": null
+          },
+          "expected": "writes",
+          "audit": {
+            "source": "standing_grant:rgrant_0f0c9886-5aac-4570-9bae-f9747ede5b67",
+            "uses": [
+              {
+                "path": "D:\\PandeshRecoveryEval\\gate4-grant-run6\\ws\\a\\reports\\date.txt",
+                "readbackMatched": 1,
+                "finalCheck": "match"
+              }
+            ],
+            "events": [
+              "file_write_authorized",
+              "routine_run_verified"
+            ]
+          },
+          "ok": true,
+          "why": "file=\"2026-11-13\" source=standing_grant:rgrant_0f0c9886-5aac-4570-9bae-f9747ede5b67 uses=1 verified=true"
+        },
+        "B": {
+          "run": {
+            "attemptId": "att_60e57904-0d1f-40fb-a151-0ca16d5f0b6a",
+            "status": "completed",
+            "resultStatus": "partial",
+            "reason": "update_task_outcome ran and reported a failure result; the turn reports what actually happened"
+          },
+          "expected": "writes",
+          "audit": {
+            "source": null,
+            "uses": [],
+            "events": []
+          },
+          "ok": false,
+          "why": "file=\"\" source=null uses=0 verified=false"
+        },
+        "cardsRejected": 0
+      },
+      "ok": false,
+      "seconds": 36
+    },
+    {
+      "day": 2,
+      "checks": {
+        "A": {
+          "run": {
+            "attemptId": "att_cd9fd1c6-5251-4282-b185-eff42533b737",
+            "status": "completed",
+            "resultStatus": "completed",
+            "reason": null
+          },
+          "expected": "writes",
+          "audit": {
+            "source": "standing_grant:rgrant_0f0c9886-5aac-4570-9bae-f9747ede5b67",
+            "uses": [
+              {
+                "path": "D:\\PandeshRecoveryEval\\gate4-grant-run6\\ws\\a\\reports\\date.txt",
+                "readbackMatched": 1,
+                "finalCheck": "match"
+              }
+            ],
+            "events": [
+              "file_write_authorized",
+              "routine_run_verified"
+            ]
+          },
+          "ok": true,
+          "why": "file=\"2026-11-13\" source=standing_grant:rgrant_0f0c9886-5aac-4570-9bae-f9747ede5b67 uses=1 verified=true"
+        },
+        "B": {
+          "run": {
+            "attemptId": "att_74b71506-7669-40d7-9789-be7b9eea6fc7",
+            "status": "completed",
+            "resultStatus": "partial",
+            "reason": "nothing was built — no file was written or changed"
+          },
+          "expected": "writes",
+          "audit": {
+            "source": null,
+            "uses": [],
+            "events": []
+          },
+          "ok": false,
+          "why": "file=\"\" source=null uses=0 verified=false"
+        },
+        "cardsRejected": 0
+      },
+      "ok": false,
+      "seconds": 31
+    },
+    {
+      "day": 3,
+      "checks": {
+        "revokeA": {
+          "revoked": 1,
+          "state": null,
+          "ok": true
+        },
+        "A": {
+          "run": {
+            "attemptId": "att_ee810876-c5f1-4bf6-ba18-e5e3e724cc54",
+            "status": "failed",
+            "resultStatus": "failed",
+            "reason": "the requested work did not happen: write_file reported that it could not do it"
+          },
+          "expected": "asks",
+          "audit": {
+            "source": "host:jarvis",
+            "uses": [],
+            "events": []
+          },
+          "ok": true,
+          "why": "file=\"\" result=failed source=host:jarvis notified=1 notApplied=false"
+        },
+        "B": {
+          "run": {
+            "attemptId": "att_869daaec-f879-4128-8c47-9f2ee8f68095",
+            "status": "completed",
+            "resultStatus": "partial",
+            "reason": "nothing was built — no file was written or changed"
+          },
+          "expected": "writes",
+          "audit": {
+            "source": null,
+            "uses": [],
+            "events": []
+          },
+          "ok": false,
+          "why": "file=\"\" source=null uses=0 verified=false"
+        },
+        "cardsRejected": 1
+      },
+      "ok": false,
+      "seconds": 33
+    },
+    {
+      "day": 4,
+      "checks": {
+        "A": {
+          "run": {
+            "attemptId": "att_b50f3a98-714c-44e8-888e-b2d684380a80",
+            "status": "failed",
+            "resultStatus": "failed",
+            "reason": "the requested work did not happen: write_file reported that it could not do it"
+          },
+          "expected": "asks",
+          "audit": {
+            "source": "host:jarvis",
+            "uses": [],
+            "events": []
+          },
+          "ok": true,
+          "why": "file=\"\" result=failed source=host:jarvis notified=1 notApplied=false"
+        },
+        "B": {
+          "run": {
+            "attemptId": "att_65256e2a-7217-47d6-846c-f8b182fa0e39",
+            "status": "completed",
+            "resultStatus": "partial",
+            "reason": "nothing was built — no file was written or changed"
+          },
+          "expected": "asks",
+          "audit": {
+            "source": null,
+            "uses": [],
+            "events": []
+          },
+          "ok": true,
+          "why": "file=\"\" result=partial source=null notified=1 notApplied=false"
+        },
+        "cardsRejected": 1
+      },
+      "ok": true,
+      "seconds": 31
+    },
+    {
+      "day": 5,
+      "checks": {
+        "regrantA": {
+          "id": "rgrant_0fe1e820-76c6-47e4-8085-8a5160627287",
+          "ok": true
+        },
+        "A": {
+          "run": {
+            "attemptId": "att_e9b6e615-02bc-4e0c-a5b0-cb613bcd7efe",
+            "status": "completed",
+            "resultStatus": "completed",
+            "reason": null
+          },
+          "expected": "writes",
+          "audit": {
+            "source": "standing_grant:rgrant_0fe1e820-76c6-47e4-8085-8a5160627287",
+            "uses": [
+              {
+                "path": "D:\\PandeshRecoveryEval\\gate4-grant-run6\\ws\\a\\reports\\date.txt",
+                "readbackMatched": 1,
+                "finalCheck": "match"
+              }
+            ],
+            "events": [
+              "file_write_authorized",
+              "routine_run_verified"
+            ]
+          },
+          "ok": true,
+          "why": "file=\"2026-11-13\" source=standing_grant:rgrant_0fe1e820-76c6-47e4-8085-8a5160627287 uses=1 verified=true"
+        },
+        "B": {
+          "run": {
+            "attemptId": "att_c70b86b6-f8a8-4c69-a417-343f02a96642",
+            "status": "completed",
+            "resultStatus": "partial",
+            "reason": "nothing was built — no file was written or changed"
+          },
+          "expected": "asks",
+          "audit": {
+            "source": null,
+            "uses": [],
+            "events": []
+          },
+          "ok": true,
+          "why": "file=\"\" result=partial source=null notified=1 notApplied=false"
+        },
+        "cardsRejected": 0
+      },
+      "ok": true,
+      "seconds": 26
+    }
+  ],
+  "allDaysOk": false
+}

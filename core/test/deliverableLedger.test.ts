@@ -1,0 +1,196 @@
+/**
+ * M1: the deliverable ledger decides what is missing from the request and the file system, never from the model's reply.
+ * The cases are the audit's S21 (six analyses + index that links to the missing ones) and its neighbours.
+ */
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import * as fs from 'node:fs';
+import * as os from 'node:os';
+import * as path from 'node:path';
+import { deliverableLedger, localLinkTargets, namedOutputFiles, perInputRequirement } from '../runtime/deliverableLedger';
+
+let ws: string; let start: number;
+const put = (rel: string, text = 'x') => { const f = path.join(ws, rel); fs.mkdirSync(path.dirname(f), { recursive: true }); fs.writeFileSync(f, text); return f; };
+beforeEach(() => { ws = fs.mkdtempSync(path.join(os.tmpdir(), 'pandesh-ledger-')); start = Date.now(); });
+afterEach(() => fs.rmSync(ws, { recursive: true, force: true }));
+
+const S21 = 'Analyze each of the six files in the inbox folder. For every source file write analysis/<source name>.analysis.md (3 to 5 lines), and also write analysis/index.md that lists and links all six analyses.';
+
+describe('named output files', () => {
+  it('takes files after an output verb and ignores inputs', () => {
+    expect(namedOutputFiles('Read the three invoice files in the invoices folder and create invoices-summary.md in this folder')).toEqual(['invoices-summary.md']);
+    expect(namedOutputFiles('Create notes/hello.txt containing exactly: hi')).toEqual(['notes/hello.txt']);
+    expect(namedOutputFiles('Summarize meeting-note.txt for me.')).toEqual([]);
+    expect(namedOutputFiles('Write a summary of report.pdf into summary.md')).toEqual([]); // conservative: an 'of' clause is dropped
+    expect(namedOutputFiles('Generate a file from data.csv using template.html')).toEqual([]);
+    expect(namedOutputFiles('Save it as https://example.com/a.txt')).toEqual([]);
+  });
+  it('skips templated names and finds the index in the S21 prompt', () => {
+    expect(namedOutputFiles(S21)).toEqual(['analysis/index.md']);
+  });
+});
+
+describe('one output per input', () => {
+  it('counts the files of the named folder', () => {
+    put('inbox/a.txt'); put('inbox/b.txt'); put('inbox/c.txt');
+    expect(perInputRequirement(S21, ws)).toEqual({ folder: 'inbox', count: 3 });
+    expect(perInputRequirement('Write one summary for every file in inbox', ws)).toEqual({ folder: 'inbox', count: 3 });
+    expect(perInputRequirement('Write a summary', ws)).toBeNull();
+    expect(perInputRequirement('Write a summary for each file in ../elsewhere', ws)).toBeNull();
+  });
+});
+
+describe('links', () => {
+  it('finds local link targets only', () => {
+    expect(localLinkTargets('[a](a.md) [b](https://x.y/b) [c](#top) <a href="d.html">d</a> [e](sub/e.md#h)')).toEqual(['a.md', 'd.html', 'sub/e.md']);
+  });
+});
+
+describe('ledger on the S21 shape', () => {
+  const setup = (analyses: string[]) => {
+    for (const n of ['a', 'b', 'c', 'd', 'e', 'f']) put(`inbox/${n}.txt`);
+    const written = analyses.map((n) => put(`analysis/${n}.analysis.md`, `analysis of ${n}`));
+    written.push(put('analysis/index.md', analyses.map((n) => `- [${n}](${n}.analysis.md)`).concat(['- [f](f.analysis.md)']).join('\n')));
+    return written;
+  };
+  it('reports the missing sixth analysis: the count and the dangling index link', () => {
+    const written = setup(['a', 'b', 'c', 'd', 'e']);
+    const r = deliverableLedger({ requestText: S21, workspace: ws, writtenFiles: written, turnStartMs: start });
+    expect(r.missing).toEqual(['analysis/index.md links to f.analysis.md']);
+    expect(r.present).toContain('analysis/index.md');
+  });
+  it('flags too few outputs even when nothing links to them', () => {
+    for (const n of ['a', 'b', 'c', 'd', 'e', 'f']) put(`inbox/${n}.txt`);
+    const w = ['a', 'b', 'c'].map((n) => put(`analysis/${n}.analysis.md`)); w.push(put('analysis/index.md', 'no links'));
+    const r = deliverableLedger({ requestText: S21, workspace: ws, writtenFiles: w, turnStartMs: start });
+    expect(r.missing[0]).toBe('6 output files, one for each file in inbox'); // and the index that names none of the three is flagged too
+    expect(r.missing.length).toBe(4);
+  });
+  it('is satisfied when everything exists', () => {
+    const written = setup(['a', 'b', 'c', 'd', 'e', 'f']);
+    const r = deliverableLedger({ requestText: S21, workspace: ws, writtenFiles: written, turnStartMs: start });
+    expect(r.missing).toEqual([]);
+    expect(r.expected.length).toBeGreaterThanOrEqual(3);
+  });
+});
+
+describe('presence rules', () => {
+  it('an empty or stale file is not a deliverable', () => {
+    put('empty.md', '');
+    const stale = put('old.md', 'old'); fs.utimesSync(stale, new Date(start - 3_600_000), new Date(start - 3_600_000));
+    expect(deliverableLedger({ requestText: 'Create empty.md', workspace: ws, writtenFiles: [], turnStartMs: start }).missing).toEqual(['empty.md']);
+    expect(deliverableLedger({ requestText: 'Create old.md', workspace: ws, writtenFiles: [], turnStartMs: start }).missing).toEqual(['old.md']);
+  });
+  it('a bare name may be satisfied in a folder the model chose, a path may not', () => {
+    const f = put('invoices/invoices-summary.md', 'x');
+    expect(deliverableLedger({ requestText: 'Create invoices-summary.md', workspace: ws, writtenFiles: [f], turnStartMs: start }).missing).toEqual([]);
+    expect(deliverableLedger({ requestText: 'Create out/invoices-summary.md', workspace: ws, writtenFiles: [f], turnStartMs: start }).missing).toEqual(['out/invoices-summary.md']);
+  });
+  it('a request that names no output has an empty ledger', () => {
+    const r = deliverableLedger({ requestText: 'What is in notes.txt?', workspace: ws, writtenFiles: [], turnStartMs: start });
+    expect(r).toEqual({ expected: [], missing: [], present: [] });
+  });
+});
+
+import { unbackedWorkingClaim } from '../runtime/deliverableLedger';
+describe('verification claims (audit S16)', () => {
+  const failed = { tool: 'run_checks', status: 'completed', result: { isError: true, content: [{ text: 'Error: Working directory "undefined" is outside the authorized scope.' }] } };
+  const ok = { tool: 'run_checks', status: 'completed', result: { content: [{ text: 'git version 2.45.1' }] } };
+  it('flags "works" after the only check failed', () => {
+    expect(unbackedWorkingClaim('Git 2.45.1 is installed and works correctly.', [failed])).toMatch(/successful check .*the check failed: Error: Working directory/);
+  });
+  it('does not flag an honest report, a later success, or no check at all', () => {
+    expect(unbackedWorkingClaim('Git is installed, but I could not verify that it works.', [failed])).toBeNull();
+    expect(unbackedWorkingClaim('Git works.', [failed, ok])).toBeNull();
+    expect(unbackedWorkingClaim('Git works.', [])).toBeNull();
+    expect(unbackedWorkingClaim('Git works.', [ok])).toBeNull();
+  });
+});
+
+import { missingTaskDates } from '../runtime/deliverableLedger';
+describe('stated task dates (audit S20)', () => {
+  const add = (dueAt?: string) => ({ tool: 'add_task', status: 'completed', args: { title: 't', ...(dueAt ? { dueAt } : {}) }, result: { content: [{ text: 'Added' }] } });
+  const req = 'Add three tasks: "Buy wood" due 2026-12-01; "Build frame" due 2026-12-10; "Paint" due 2026-12-20.';
+  it('flags a stated date that was not stored', () => {
+    expect(missingTaskDates(req, [add('2026-12-01'), add(), add('2026-12-20T09:00:00.000Z')])).toEqual(['a task due 2026-12-10 stored (the date you gave)']);
+    expect(missingTaskDates(req, [])).toEqual([]); // no task was written: not judged here
+  });
+  it('is quiet when all dates were stored or the request is not about tasks', () => {
+    expect(missingTaskDates(req, [add('2026-12-01'), add('2026-12-10'), add('2026-12-20')])).toEqual([]);
+    expect(missingTaskDates('The meeting on 2026-12-01 was long.', [])).toEqual([]);
+  });
+});
+
+import { missingTaskDependency } from '../runtime/deliverableLedger';
+describe('stated task dependency (audit S20)', () => {
+  const req = 'Create a project. Add tasks: "Buy wood" due 2026-12-01; "Build frame" due 2026-12-10, after buying wood; "Paint shed" due 2026-12-20.';
+  const call = (blockedBy?: string) => ({ tool: 'add_task', status: 'completed', args: { title: 'x', ...(blockedBy ? { blockedBy } : {}) }, result: { content: [{ text: 'ok' }] } });
+  it('flags a dependency that was not stored and accepts one that was', () => {
+    expect(missingTaskDependency(req, [call(), call(), call()])).toEqual([expect.stringContaining('after buying wood')]);
+    expect(missingTaskDependency(req, [call(), call('Buy wood'), call()])).toEqual([]);
+  });
+  it('says nothing without a stated dependency or without task calls', () => {
+    expect(missingTaskDependency('Add tasks: "Buy wood" due 2026-12-01.', [call()])).toEqual([]);
+    expect(missingTaskDependency(req, [])).toEqual([]);
+  });
+});
+
+import { missingTaskPriorities } from '../runtime/deliverableLedger';
+describe('stated task priorities (audit S20)', () => {
+  const add = (title: string, priority?: string) => ({ tool: 'add_task', status: 'completed', args: { title, ...(priority ? { priority } : {}) }, result: { content: [{ text: 'ok' }] } });
+  const req = 'Add tasks: "Buy wood" priority high; "Build frame" priority medium; "Paint shed" priority low.';
+  it('flags missing priorities and accepts all of them (medium is stored as normal)', () => {
+    expect(missingTaskPriorities(req, [add('a', 'high'), add('b'), add('c', 'low')])).toEqual(['1 of 3 priorities you stated stored (priority high / normal / low)']);
+    expect(missingTaskPriorities(req, [add('a', 'high'), add('b', 'normal'), add('c', 'low')])).toEqual([]);
+    expect(missingTaskPriorities('Summarize priority high items', [])).toEqual([]);
+  });
+});
+
+describe('review findings: inputs and negations are not deliverables', () => {
+  it('does not take inputs, unchanged files or negated requests as outputs', () => {
+    expect(namedOutputFiles('Write a script that reads data.csv and writes totals.csv')).toEqual(['totals.csv']);
+    expect(namedOutputFiles('Make sure notes.txt is not changed. Create summary.md.')).toEqual(['summary.md']);
+    expect(namedOutputFiles('Create a report about the Q3 numbers in sales.xlsx')).toEqual([]);
+    expect(namedOutputFiles('Generate a report for server.log in report.md')).toEqual([]);
+    expect(namedOutputFiles('Please do not create output.txt, just explain')).toEqual([]);
+    expect(namedOutputFiles('Read a.txt and create b.md and write c.md')).toEqual(['b.md', 'c.md']);
+  });
+});
+
+describe('review findings: task checks only judge task writes', () => {
+  const add = (a: object) => ({ tool: 'add_task', status: 'completed', args: a, result: { content: [{ text: 'ok' }] } });
+  it('questions and reminders about dates or priorities are never partial', () => {
+    expect(missingTaskDates('Which tasks are due before 2026-12-01?', [{ tool: 'list_tasks', status: 'completed', args: {} }])).toEqual([]);
+    expect(missingTaskDates('Remind me about the project deadline on 2026-12-01', [{ tool: 'create_reminder', status: 'completed', args: {} }])).toEqual([]);
+    expect(missingTaskPriorities('List my tasks with priority high', [])).toEqual([]);
+  });
+  it('create_project with task objects counts as storing their dates and priorities', () => {
+    const call = { tool: 'create_project', status: 'completed', args: { name: 'p', tasks: [{ title: 'a', dueAt: '2026-12-01', priority: 'high' }, { title: 'b', dueAt: '2026-12-10', priority: 'low' }] }, result: { content: [{ text: 'ok' }] } };
+    expect(missingTaskDates('Create a project with tasks due 2026-12-01 and 2026-12-10', [call])).toEqual([]);
+    expect(missingTaskPriorities('Create project tasks: a priority high; b priority low', [call])).toEqual([]);
+  });
+  it('time words are not dependencies', () => {
+    expect(missingTaskDependency('Add a task to call Sam once I am home', [add({ title: 'Call Sam' })])).toEqual([]);
+    expect(missingTaskDependency('Add the tasks "Send invoice" after lunch and "Call Sam" tomorrow', [add({ title: 'x' })])).toEqual([]);
+  });
+});
+describe('review findings: "working directory" is not a claim that something works', () => {
+  it('does not flag an honest reply that merely says working directory', () => {
+    const failed = { tool: 'run_checks', status: 'completed', result: { isError: true, content: [{ text: 'Error' }] } };
+    expect(unbackedWorkingClaim('I could not run it. Run npm install in the working directory first.', [failed])).toBeNull();
+  });
+});
+
+describe('index that must list the outputs (M2 gate)', () => {
+  it('an index.md that mentions no sibling is missing them; one that names them is complete', () => {
+    const ws = fs.mkdtempSync(path.join(os.tmpdir(), 'ledger-index-'));
+    fs.mkdirSync(path.join(ws, 'analysis'));
+    const f = (n: string, t: string) => { fs.writeFileSync(path.join(ws, 'analysis', n), t); return path.join(ws, 'analysis', n); };
+    const a = f('a.analysis.md', 'a'); const b = f('b.analysis.md', 'b');
+    const req = 'Write analysis/<name>.analysis.md for each file and also analysis/index.md that lists and links all of them.';
+    const bad = f('index.md', '# Index\nnothing here');
+    expect(deliverableLedger({ requestText: req, workspace: ws, writtenFiles: [a, b, bad], turnStartMs: Date.now() - 60_000 }).missing.join('|')).toMatch(/mentions a\.analysis\.md[\s\S]*mentions b\.analysis\.md|mentions a\.analysis\.md/);
+    const good = f('index.md', '- [a](a.analysis.md)\n- [b](b.analysis.md)');
+    expect(deliverableLedger({ requestText: req, workspace: ws, writtenFiles: [a, b, good], turnStartMs: Date.now() - 60_000 }).missing).toEqual([]);
+    fs.rmSync(ws, { recursive: true, force: true });
+  });
+});

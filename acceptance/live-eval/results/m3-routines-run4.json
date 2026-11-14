@@ -1,0 +1,631 @@
+{
+  "approvalsPressed": 12,
+  "label": "m3-routines-run4",
+  "commit": "c424572",
+  "at": "2026-11-13T11:33:10.702Z",
+  "note": "days are simulated by making each routine due; the scheduler, executor, scope and notifications are real",
+  "setup": [
+    {
+      "routine": "A",
+      "created": true,
+      "scopeFrozen": true,
+      "scope": {
+        "workspaceRoot": "D:\\PandeshRecoveryEval\\m3-routines-run4\\ws\\a",
+        "workspaceAccess": "read_write",
+        "createdFromAttempt": "att_eba0d261-0a12-4cf4-8e36-09067884567e"
+      },
+      "resultStatus": "completed"
+    },
+    {
+      "routine": "B",
+      "created": true,
+      "scopeFrozen": true,
+      "scope": {
+        "workspaceRoot": "D:\\PandeshRecoveryEval\\m3-routines-run4\\ws\\b",
+        "workspaceAccess": "read_write",
+        "createdFromAttempt": "att_d79984cf-f33f-4adc-9e67-aaefb26d615b"
+      },
+      "resultStatus": "completed"
+    },
+    {
+      "routine": "C",
+      "created": true,
+      "scopeFrozen": true,
+      "scope": {
+        "workspaceRoot": "D:\\PandeshRecoveryEval\\m3-routines-run4\\ws\\c",
+        "workspaceAccess": "read_write",
+        "createdFromAttempt": "att_9a6210a7-c8ea-4e86-b61d-edafb59646dd"
+      },
+      "resultStatus": "completed"
+    }
+  ],
+  "days": [
+    {
+      "day": 1,
+      "checks": {
+        "A": {
+          "run": {
+            "attemptId": "att_9ba93079-9c21-4d31-924c-c787649b4d02",
+            "status": "completed",
+            "resultStatus": "completed",
+            "reason": null
+          },
+          "ok": false,
+          "why": "date.txt=\"\""
+        },
+        "B": {
+          "run": {
+            "attemptId": "att_681406a5-364a-46ec-8934-1f782693f1b5",
+            "status": "completed",
+            "resultStatus": "completed",
+            "reason": null
+          },
+          "ok": false,
+          "why": "count=\"\" expected=3"
+        },
+        "C": {
+          "run": {
+            "attemptId": "att_5a52af7a-0bd3-48da-be43-6e0261f9acdb",
+            "status": "completed",
+            "resultStatus": "completed",
+            "reason": null
+          },
+          "ok": true,
+          "why": "status=\"ok 2026-11-13\""
+        },
+        "noStrayFiles": true,
+        "unexpectedNotices": 0,
+        "nextRunAdvanced": true
+      },
+      "ok": false,
+      "notes": [],
+      "seconds": 23,
+      "streak": 0
+    },
+    {
+      "day": 2,
+      "checks": {
+        "A": {
+          "run": {
+            "attemptId": "att_0685d49f-dc4f-41f7-9bd2-4e08ed86f870",
+            "status": "completed",
+            "resultStatus": "completed",
+            "reason": null
+          },
+          "ok": false,
+          "why": "date.txt=\"\""
+        },
+        "B": {
+          "run": {
+            "attemptId": "att_9476a56b-bf5a-4587-8a00-b63bc6c8e65c",
+            "status": "completed",
+            "resultStatus": "completed",
+            "reason": null
+          },
+          "ok": true,
+          "why": "count=\"4\" expected=4"
+        },
+        "C": {
+          "run": {
+            "attemptId": "att_f2509544-5b1b-49fc-b265-85a2b59b71d1",
+            "status": "completed",
+            "resultStatus": "completed",
+            "reason": null
+          },
+          "ok": true,
+          "why": "status=\"ok 2026-11-13\""
+        },
+        "noStrayFiles": true,
+        "unexpectedNotices": 0,
+        "nextRunAdvanced": true
+      },
+      "ok": false,
+      "notes": [],
+      "seconds": 118,
+      "streak": 0
+    },
+    {
+      "day": 3,
+      "checks": {
+        "A": {
+          "run": {
+            "attemptId": "att_74cdd261-1cbf-4c84-ac1e-3285f479563a",
+            "status": "completed",
+            "resultStatus": "completed",
+            "reason": null
+          },
+          "ok": false,
+          "why": "date.txt=\"\""
+        },
+        "B": {
+          "run": {
+            "attemptId": "att_1b62ff64-022c-4dac-bc0b-32c5f1bf6bae",
+            "status": "completed",
+            "resultStatus": "completed",
+            "reason": null
+          },
+          "ok": true,
+          "why": "count=\"5\" expected=5"
+        },
+        "C": {
+          "run": {
+            "attemptId": "att_e56d44c9-6067-436b-99bd-00ed463ba324",
+            "status": "completed",
+            "resultStatus": "completed",
+            "reason": null
+          },
+          "ok": true,
+          "why": "status=\"ok 2026-11-13\""
+        },
+        "noStrayFiles": true,
+        "unexpectedNotices": 0,
+        "nextRunAdvanced": true
+      },
+      "ok": false,
+      "notes": [],
+      "seconds": 28,
+      "streak": 0
+    },
+    {
+      "day": 4,
+      "checks": {
+        "A": {
+          "run": {
+            "attemptId": "att_89618e41-6e43-4ce1-8496-48f57f221fcb",
+            "status": "completed",
+            "resultStatus": "completed",
+            "reason": null
+          },
+          "ok": false,
+          "why": "date.txt=\"\""
+        },
+        "B": {
+          "run": {
+            "attemptId": "att_a48f029d-f97f-496e-a251-435fdf11817c",
+            "status": "completed",
+            "resultStatus": "completed",
+            "reason": null
+          },
+          "ok": true,
+          "why": "count=\"6\" expected=6"
+        },
+        "C": {
+          "ranDespiteMissingFolder": false,
+          "notified": true,
+          "notification": {
+            "kind": "task_failed",
+            "title": "Routine \"Daily Status Log\" did not run"
+          },
+          "ok": true
+        },
+        "noStrayFiles": true,
+        "unexpectedNotices": 0,
+        "nextRunAdvanced": true
+      },
+      "ok": false,
+      "notes": [],
+      "seconds": 65,
+      "streak": 0
+    },
+    {
+      "day": 5,
+      "checks": {
+        "A": {
+          "run": {
+            "attemptId": "att_c01e736b-8914-427a-b55f-1ecd7ebea49b",
+            "status": "completed",
+            "resultStatus": "completed",
+            "reason": null
+          },
+          "ok": false,
+          "why": "date.txt=\"\""
+        },
+        "B": {
+          "run": {
+            "attemptId": "att_a0eccc47-3501-4413-b172-58bfa7b3031f",
+            "status": "completed",
+            "resultStatus": "completed",
+            "reason": null
+          },
+          "ok": true,
+          "why": "count=\"7\" expected=7"
+        },
+        "C": {
+          "run": {
+            "attemptId": "att_fb3b0ab1-9d80-4ca5-8c1f-f175e7f42967",
+            "status": "completed",
+            "resultStatus": "completed",
+            "reason": null
+          },
+          "ok": true,
+          "why": "status=\"ok 2026-11-13\""
+        },
+        "noStrayFiles": true,
+        "unexpectedNotices": 0,
+        "nextRunAdvanced": true
+      },
+      "ok": false,
+      "notes": [],
+      "seconds": 25,
+      "streak": 0
+    },
+    {
+      "day": 6,
+      "checks": {
+        "restart": {
+          "coreUp": true,
+          "wasRunningAtKill": true,
+          "resultAfter": "interrupted",
+          "notified": true,
+          "autoSuccessors": 0,
+          "ok": true
+        },
+        "A": {
+          "run": {
+            "attemptId": "att_bde3729c-e3f2-41a5-a391-13c0f2a32c3a",
+            "status": "completed",
+            "resultStatus": "completed",
+            "reason": null
+          },
+          "ok": false,
+          "why": "date.txt=\"\""
+        },
+        "C": {
+          "run": {
+            "attemptId": "att_2094e2b3-ba2c-4961-916b-39d76724fd9d",
+            "status": "completed",
+            "resultStatus": "completed",
+            "reason": null
+          },
+          "ok": true,
+          "why": "status=\"ok 2026-11-13\""
+        },
+        "noStrayFiles": true,
+        "unexpectedNotices": 0,
+        "nextRunAdvanced": true
+      },
+      "ok": false,
+      "notes": [],
+      "seconds": 32,
+      "streak": 0
+    },
+    {
+      "day": 7,
+      "checks": {
+        "A": {
+          "run": {
+            "attemptId": "att_3872d07d-7377-4f28-bc24-62b14034d9c9",
+            "status": "completed",
+            "resultStatus": "completed",
+            "reason": null
+          },
+          "ok": false,
+          "why": "date.txt=\"\""
+        },
+        "B": {
+          "run": {
+            "attemptId": "att_014efc1c-ebca-44e9-95c5-b7c6273f8fb4",
+            "status": "completed",
+            "resultStatus": "completed",
+            "reason": null
+          },
+          "ok": true,
+          "why": "count=\"9\" expected=9"
+        },
+        "C": {
+          "run": {
+            "attemptId": "att_3dfb4645-2847-4d5d-af50-8b2023387fcd",
+            "status": "completed",
+            "resultStatus": "completed",
+            "reason": null
+          },
+          "ok": true,
+          "why": "status=\"ok 2026-11-13\""
+        },
+        "noStrayFiles": true,
+        "unexpectedNotices": 0,
+        "nextRunAdvanced": true
+      },
+      "ok": false,
+      "notes": [],
+      "seconds": 30,
+      "streak": 0
+    },
+    {
+      "day": 8,
+      "checks": {
+        "A": {
+          "run": {
+            "attemptId": "att_9c4ad181-5070-4dc1-aeb8-2ed7749a5654",
+            "status": "completed",
+            "resultStatus": "completed",
+            "reason": null
+          },
+          "ok": false,
+          "why": "date.txt=\"\""
+        },
+        "B": {
+          "run": {
+            "attemptId": "att_81415113-65a5-4793-af92-f36207305ac5",
+            "status": "completed",
+            "resultStatus": "completed",
+            "reason": null
+          },
+          "ok": true,
+          "why": "count=\"10\" expected=10"
+        },
+        "C": {
+          "run": {
+            "attemptId": "att_cdbd0ff6-3aa9-4e81-9dc1-0f6caadf56c7",
+            "status": "completed",
+            "resultStatus": "completed",
+            "reason": null
+          },
+          "ok": true,
+          "why": "status=\"ok 2026-11-13\""
+        },
+        "noStrayFiles": true,
+        "unexpectedNotices": 0,
+        "nextRunAdvanced": true
+      },
+      "ok": false,
+      "notes": [],
+      "seconds": 33,
+      "streak": 0
+    },
+    {
+      "day": 9,
+      "checks": {
+        "A": {
+          "run": {
+            "attemptId": "att_d5f8c3b6-4c85-411d-92ee-8d4bea7b1a88",
+            "status": "completed",
+            "resultStatus": "completed",
+            "reason": null
+          },
+          "ok": false,
+          "why": "date.txt=\"\""
+        },
+        "B": {
+          "run": {
+            "attemptId": "att_7cb301b3-1472-44e0-b56d-c9a9bbc03320",
+            "status": "completed",
+            "resultStatus": "completed",
+            "reason": null
+          },
+          "ok": true,
+          "why": "count=\"11\" expected=11"
+        },
+        "C": {
+          "run": {
+            "attemptId": "att_ae93d78f-4d27-426e-bcdd-662528f00f25",
+            "status": "completed",
+            "resultStatus": "completed",
+            "reason": null
+          },
+          "ok": true,
+          "why": "status=\"ok 2026-11-13\""
+        },
+        "noStrayFiles": true,
+        "unexpectedNotices": 0,
+        "nextRunAdvanced": true
+      },
+      "ok": false,
+      "notes": [],
+      "seconds": 28,
+      "streak": 0
+    },
+    {
+      "day": 10,
+      "checks": {
+        "A": {
+          "run": {
+            "attemptId": "att_ab7d6680-4bf1-4583-9f96-7fe1cb7c29da",
+            "status": "completed",
+            "resultStatus": "completed",
+            "reason": null
+          },
+          "ok": false,
+          "why": "date.txt=\"\""
+        },
+        "B": {
+          "run": {
+            "attemptId": "att_1b747ba9-88e1-4f77-9b82-de71606191f9",
+            "status": "completed",
+            "resultStatus": "completed",
+            "reason": null
+          },
+          "ok": true,
+          "why": "count=\"12\" expected=12"
+        },
+        "C": {
+          "run": {
+            "attemptId": "att_9a2ec0cd-30a2-4a9f-853d-21b0398b1ef8",
+            "status": "completed",
+            "resultStatus": "completed",
+            "reason": null
+          },
+          "ok": true,
+          "why": "status=\"ok 2026-11-13\""
+        },
+        "noStrayFiles": true,
+        "unexpectedNotices": 0,
+        "nextRunAdvanced": true
+      },
+      "ok": false,
+      "notes": [],
+      "seconds": 30,
+      "streak": 0
+    },
+    {
+      "day": 11,
+      "checks": {
+        "A": {
+          "run": {
+            "attemptId": "att_9024ffa2-0291-4275-bf23-09f6fc9e62bc",
+            "status": "completed",
+            "resultStatus": "completed",
+            "reason": null
+          },
+          "ok": false,
+          "why": "date.txt=\"\""
+        },
+        "B": {
+          "run": {
+            "attemptId": "att_6e3d93ff-82cb-43c7-8fa1-fd8266076de5",
+            "status": "completed",
+            "resultStatus": "completed",
+            "reason": null
+          },
+          "ok": true,
+          "why": "count=\"13\" expected=13"
+        },
+        "C": {
+          "run": {
+            "attemptId": "att_0d087bc4-df77-4e6b-9542-eaea73414191",
+            "status": "completed",
+            "resultStatus": "completed",
+            "reason": null
+          },
+          "ok": true,
+          "why": "status=\"ok 2026-11-13\""
+        },
+        "noStrayFiles": true,
+        "unexpectedNotices": 0,
+        "nextRunAdvanced": true
+      },
+      "ok": false,
+      "notes": [],
+      "seconds": 30,
+      "streak": 0
+    },
+    {
+      "day": 12,
+      "checks": {
+        "A": {
+          "run": {
+            "attemptId": "att_5e8fcb73-36d2-4e5e-858a-a9894f938ba7",
+            "status": "completed",
+            "resultStatus": "completed",
+            "reason": null
+          },
+          "ok": false,
+          "why": "date.txt=\"\""
+        },
+        "B": {
+          "run": {
+            "attemptId": "att_9dd91c84-99b6-4ea7-bb72-ce1018002877",
+            "status": "completed",
+            "resultStatus": "completed",
+            "reason": null
+          },
+          "ok": true,
+          "why": "count=\"14\" expected=14"
+        },
+        "C": {
+          "run": {
+            "attemptId": "att_a053f6f1-757d-413f-bb77-432c03a6da3e",
+            "status": "completed",
+            "resultStatus": "completed",
+            "reason": null
+          },
+          "ok": true,
+          "why": "status=\"ok 2026-11-13\""
+        },
+        "noStrayFiles": true,
+        "unexpectedNotices": 0,
+        "nextRunAdvanced": true
+      },
+      "ok": false,
+      "notes": [],
+      "seconds": 28,
+      "streak": 0
+    },
+    {
+      "day": 13,
+      "checks": {
+        "A": {
+          "run": {
+            "attemptId": "att_27d3d9cc-9200-4421-b8be-68aafcad82cc",
+            "status": "completed",
+            "resultStatus": "completed",
+            "reason": null
+          },
+          "ok": false,
+          "why": "date.txt=\"\""
+        },
+        "B": {
+          "run": {
+            "attemptId": "att_293044ed-8d25-4899-aabd-5d0cfd28774d",
+            "status": "completed",
+            "resultStatus": "completed",
+            "reason": null
+          },
+          "ok": true,
+          "why": "count=\"15\" expected=15"
+        },
+        "C": {
+          "run": {
+            "attemptId": "att_69d52f2b-d403-4ddf-8547-25b0307dde2d",
+            "status": "completed",
+            "resultStatus": "completed",
+            "reason": null
+          },
+          "ok": true,
+          "why": "status=\"ok 2026-11-13\""
+        },
+        "noStrayFiles": true,
+        "unexpectedNotices": 0,
+        "nextRunAdvanced": true
+      },
+      "ok": false,
+      "notes": [],
+      "seconds": 30,
+      "streak": 0
+    },
+    {
+      "day": 14,
+      "checks": {
+        "A": {
+          "run": {
+            "attemptId": "att_6dfdd5b9-2691-469f-9434-4f403187a111",
+            "status": "completed",
+            "resultStatus": "completed",
+            "reason": null
+          },
+          "ok": false,
+          "why": "date.txt=\"\""
+        },
+        "B": {
+          "run": {
+            "attemptId": "att_d9e44a54-02a0-4dc0-acb9-beb87b2d0427",
+            "status": "completed",
+            "resultStatus": "completed",
+            "reason": null
+          },
+          "ok": true,
+          "why": "count=\"16\" expected=16"
+        },
+        "C": {
+          "run": {
+            "attemptId": "att_e6714643-8558-4f24-a963-f695b1d9ada7",
+            "status": "completed",
+            "resultStatus": "completed",
+            "reason": null
+          },
+          "ok": true,
+          "why": "status=\"ok 2026-11-13\""
+        },
+        "noStrayFiles": true,
+        "unexpectedNotices": 0,
+        "nextRunAdvanced": true
+      },
+      "ok": false,
+      "notes": [],
+      "seconds": 33,
+      "streak": 0
+    }
+  ],
+  "bestStreak": 0,
+  "gateMet": false
+}

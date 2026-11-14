@@ -4,6 +4,8 @@ import { closeLoopContinuation, loadLoopContinuation } from './attemptLoopContin
 import { failAttempt, listAttempts, transitionAttempt } from './attempts';
 import { classifyAttemptRecovery, type RecoveryClassification } from './recovery';
 import { isBackgroundTaskAttempt } from './backgroundTasks';
+import { enqueueNotification } from './notificationOutbox';
+import { SCHEDULER_CLIENT_ID } from './processTerminationPolicy';
 
 const EXECUTOR_OWNER = /^core:executor:(\d+)$/;
 
@@ -95,9 +97,16 @@ export function failDeadExecutorAttemptsOnBoot(
       failAttempt(db, attempt.id, {
         fenceToken: attempt.fenceToken,
         actor,
-        failureReason: 'Interrupted: KarkeDikha restarted while this task was running. It was not replayed automatically; any actions already recorded remain as they are. Ask again to retry.',
+        failureReason: 'Interrupted: KarkeDikha restarted while this task was running. It was not replayed automatically; any actions already recorded remain as they are. Press Resume on the task to continue it, or ask again.',
       });
       settled.push({ attemptId: attempt.id, status: attempt.status, outcome: 'failed' });
+      // A scheduled routine that the restart cut short must reach the owner (its finish-hook died with the process).
+      try {
+        const origin = db.get<{ clientId: string; title: string }>('SELECT r.clientId AS clientId, substr(r.currentMessage, 1, 160) AS title FROM attempts a JOIN requests r ON r.id = a.requestId WHERE a.id = ?', [attempt.id]);
+        if (origin?.clientId === SCHEDULER_CLIENT_ID) {
+          enqueueNotification(db, { kind: 'task_failed', sourceId: `sched-run:${attempt.id}`, title: 'A scheduled routine was interrupted', body: `${(/^\[Scheduled task "([^"]+)"/.exec(origin.title)?.[1] ?? origin.title).slice(0, 80)} was cut short by a restart. It was not repeated; open Tasks to resume it.` });
+        }
+      } catch { /* best effort: the attempt record stays */ }
     }
   }
   return settled;
