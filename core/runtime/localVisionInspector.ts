@@ -7,6 +7,7 @@
  * is returned as a reason, never as a description.
  */
 import * as fs from 'node:fs';
+import { chooseModel, snapshotModels, type ModelChoice, type ModelSnapshot } from './modelAwareness';
 
 export type InspectResult =
   | { ok: true; model: string; text: string }
@@ -26,39 +27,7 @@ export function isLoopbackUrl(url: string): boolean {
   } catch { return false; }
 }
 
-const NOT_AUTO = /abliterat|uncensor|heretic|jailbr/i;
-
-async function localVisionModels(root: string, fetchFn: typeof fetch): Promise<string[]> {
-  const tags = await fetchFn(`${root}/api/tags`, { signal: AbortSignal.timeout(5_000) });
-  if (!tags.ok) return [];
-  const listed = ((await tags.json()) as { models?: Array<{ name?: string; size?: number }> }).models ?? [];
-  // Cheapest reader first unless one is already loaded: a model named for vision, then the smallest.
-  const names = listed
-    .filter((m) => m.name && !NOT_AUTO.test(String(m.name)))
-    .sort((x, y) => Number(/(?:^|[^a-z])(?:vl|vision|llava|minicpm-v)/i.test(String(y.name))) - Number(/(?:^|[^a-z])(?:vl|vision|llava|minicpm-v)/i.test(String(x.name))) || Number(x.size ?? Infinity) - Number(y.size ?? Infinity))
-    .map((m) => String(m.name));
-  const found: string[] = [];
-  for (const name of names.slice(0, 16)) {
-    try {
-      const res = await fetchFn(`${root}/api/show`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ model: name }), signal: AbortSignal.timeout(5_000) });
-      if (!res.ok) continue;
-      const caps = ((await res.json()) as { capabilities?: string[] }).capabilities ?? [];
-      if (caps.includes('vision')) found.push(name);
-    } catch { /* an unreadable model is not a vision model */ }
-  }
-  // A vision model that is already loaded (typically the chat model itself, e.g. gemma4) reads first: no second model
-  // is loaded and nothing is evicted from GPU memory.
-  try {
-    const ps = await fetchFn(`${root}/api/ps`, { signal: AbortSignal.timeout(3_000) });
-    if (ps.ok) {
-      const loaded = new Set(((await ps.json()) as { models?: Array<{ name?: string }> }).models?.map((m) => String(m.name ?? '')) ?? []);
-      found.sort((x, y) => Number(loaded.has(y)) - Number(loaded.has(x)));
-    }
-  } catch { /* unknown which are loaded: keep the cheapest-first order */ }
-  return found;
-}
-
-export function createLocalVisionInspector(options: { baseUrl?: string; fetchFn?: typeof fetch; timeoutMs?: number } = {}): ImageInspector {
+export function createLocalVisionInspector(options: { baseUrl?: string; fetchFn?: typeof fetch; timeoutMs?: number; snapshot?: () => Promise<ModelSnapshot> } = {}): ImageInspector {
   return async ({ path: imagePath, question }) => {
     const root = (options.baseUrl ?? process.env.KARKEDIKHA_OLLAMA_URL ?? 'http://127.0.0.1:11434').replace(/\/v1\/?$/, '').replace(/\/$/, '');
     if (!isLoopbackUrl(root)) return { ok: false, reason: `the model endpoint ${root} is not on this PC, and a private screenshot is never sent off this PC without separate consent` };
@@ -69,10 +38,11 @@ export function createLocalVisionInspector(options: { baseUrl?: string; fetchFn?
       if (stat.size > MAX_IMAGE_BYTES) return { ok: false, reason: `the capture is ${stat.size} bytes, over the ${MAX_IMAGE_BYTES}-byte limit for local analysis` };
       bytes = fs.readFileSync(imagePath);
     } catch (err) { return { ok: false, reason: `the capture could not be read: ${err instanceof Error ? err.message : String(err)}` }; }
-    let models: string[];
-    try { models = await localVisionModels(root, fetchFn); } catch (err) { return { ok: false, reason: `the local model server did not answer: ${err instanceof Error ? err.message : String(err)}` }; }
-    if (models.length === 0) return { ok: false, reason: 'no installed local model can read images (none reports the "vision" capability); install one, for example a vision model in Ollama, to analyze screenshots on this PC' };
-    const model = models[0];
+    // Which model reads is decided from the same live facts the rest of Pandesh uses (installed, loaded, selected, fits).
+    let choice: ModelChoice;
+    try { choice = chooseModel(await (options.snapshot ? options.snapshot() : snapshotModels({ baseUrl: root })), { vision: true }); } catch (err) { return { ok: false, reason: `the local model server did not answer: ${err instanceof Error ? err.message : String(err)}` }; }
+    if (choice.model === null) return { ok: false, reason: `${choice.why}; install or select one that can, for example a vision model in Ollama, to analyze screenshots on this PC` };
+    const model = choice.model;
     try {
       const res = await fetchFn(`${root}/api/chat`, {
         method: 'POST',
