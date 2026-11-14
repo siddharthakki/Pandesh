@@ -2,6 +2,8 @@ import React, { useEffect, useRef, useState } from 'react';
 import { api, errorText, onDesktopEvent, type ApprovalCard, type BriefAction, type BriefItem, type Snapshot, type TranscriptMessage } from './bridge';
 import { Icon, Mark, elapsed, timeOf } from './ui';
 import { ActivityAside } from './Activity';
+import { describePhase, newRun } from './runModel';
+import { runFor, useRuns } from './runStore';
 import { useWorkshop } from './workshop/useWorkshop';
 import { WorkshopPanel } from './workshop/WorkshopPanel';
 import { Markdown } from './markdown';
@@ -312,9 +314,17 @@ export function Chat({ snapshot, snapshotError, refresh, narrow, openConversatio
     });
   }, [activities.map((a) => `${a.id}:${a.state}`).join(','), convId]);
   // The aside opens by itself once per task, when that task first shows a viewable step; closed stays closed for that task.
-  const activeTaskKey = [...activities].reverse().find((a) => a.taskId)?.taskId ?? convId ?? 'none';
-  const viewable = activities.some((a) => a.preview || a.state === 'running');
-  const asideOpen = (forcedOpen || (viewable && closedFor !== activeTaskKey)) && activities.length > 0;
+  useRuns(); // re-render on every live-run change
+  const liveRun = runningHere && snapshot?.attemptId ? (runFor(snapshot.attemptId) ?? newRun(snapshot.attemptId, runStart.current?.at ?? now)) : null;
+  const lastTaskId = [...activities].reverse().find((a) => a.taskId)?.taskId ?? null;
+  const sameChat = (snapshot?.activeConversationId ?? null) === convId;
+  const shownRun = liveRun ?? (!runningHere ? ((lastTaskId ? runFor(lastTaskId) : null) ?? (sameChat ? runFor(snapshot?.attemptId) : null)) : null);
+  const activeTaskKey = (runningHere && snapshot?.attemptId) || lastTaskId || convId || 'none';
+  // A request that has run a while opens the panel by itself (a quick answer does not), so a long wait shows what it is made of.
+  const longRun = runningHere && runStart.current != null && now - runStart.current.at > 8000;
+  const viewable = activities.some((a) => a.preview || a.state === 'running' || (a.state === 'failed' && a.taskId === lastTaskId)) || longRun;
+  const failedRun = shownRun != null && (shownRun.outcome === 'failed' || shownRun.outcome === 'cancelled' || shownRun.outcome === 'interrupted');
+  const asideOpen = (forcedOpen || ((viewable || failedRun) && closedFor !== activeTaskKey)) && (activities.length > 0 || runningHere || shownRun != null);
   const step = [...activities].reverse().find((a) => a.state === 'running');
   const modelLabel = describeModel(snapshot);
   const isLocal = (snapshot?.provider ?? snapshot?.selectedInferenceProvider ?? 'ollama') === 'ollama';
@@ -441,7 +451,7 @@ export function Chat({ snapshot, snapshotError, refresh, narrow, openConversatio
             Workshop{workshop.list.length ? ` · ${workshop.list.length}` : ''}
           </button>
         )}
-        {activities.length > 0 && !asideOpen && <button type="button" className="btn small" title="Show what Pandesh did in this chat" onClick={() => { setClosedFor(null); setForcedOpen(true); }}>Activity · {activities.length}</button>}
+        {(activities.length > 0 || shownRun != null) && !asideOpen && <button type="button" className="btn small" title="Show what Pandesh did in this chat" onClick={() => { setClosedFor(null); setForcedOpen(true); }}>Activity{activities.length ? ` · ${activities.length}` : ''}</button>}
         <button type="button" className="ghost-icon" title="New chat" aria-label="New chat" onClick={() => { void api.newConversation().then(() => { setMessages([]); setLoadedFor(null); refresh(); }); }}><Icon name="plus" size={18} /></button>
         <button type="button" className="search-btn" title="Search everything (Ctrl K)" onClick={onOpenPalette}><Icon name="search" size={16} /><span>Search</span>{!narrow && <kbd>Ctrl K</kbd>}</button>
       </div>
@@ -512,11 +522,11 @@ export function Chat({ snapshot, snapshotError, refresh, narrow, openConversatio
                     <div className="thinking">
                       <div className="row">
                         <span className="dot" aria-hidden="true" />
-                        <span style={{ fontWeight: 500 }}>{snapshot?.awaitingApproval ? 'Waiting for your decision' : step ? step.title : live.text ? 'Writing' : 'Thinking'}</span>
+                        <span style={{ fontWeight: 500 }}>{snapshot?.awaitingApproval ? 'Waiting for your decision' : step ? step.title : liveRun ? describePhase(liveRun, now).label : live.text ? 'Writing' : 'Starting'}</span>
                         <span className="elapsed">{runStart.current ? elapsed(now - runStart.current.at) : ''}</span>
                         <button type="button" className="btn small" onClick={() => void stop()}>Stop</button>
                       </div>
-                      {step?.capability ? <span className="meta" style={{ fontFamily: 'var(--font-mono)', fontSize: 13, color: 'var(--muted)' }}>Step reported by Core · {String(step.capability)}</span> : null}
+                      {step?.capability ? <span className="meta" style={{ fontFamily: 'var(--font-mono)', fontSize: 13, color: 'var(--muted)' }}>Step reported by Core · {String(step.capability)}</span> : liveRun ? <span className="meta" style={{ fontSize: 13, color: 'var(--muted)' }}>{describePhase(liveRun, now).sub}</span> : null}
                     </div>
                   </div>
                 </div>
@@ -591,7 +601,7 @@ export function Chat({ snapshot, snapshotError, refresh, narrow, openConversatio
       </div>
     </div>
     {workshop.ui && !workshopFull && <WorkshopPanel conversationId={convId} workshop={workshop} narrow={narrow} />}
-    {asideOpen && <ActivityAside activities={activities} conversationId={convId} narrow={narrow} onClose={() => { setClosedFor(activeTaskKey); setForcedOpen(false); }} />}
+    {asideOpen && <ActivityAside activities={activities} conversationId={convId} narrow={narrow} run={shownRun} running={runningHere} now={now} currentTaskId={runningHere ? snapshot?.attemptId ?? null : lastTaskId} onClose={() => { setClosedFor(activeTaskKey); setForcedOpen(false); }} />}
     </div>
   );
 }

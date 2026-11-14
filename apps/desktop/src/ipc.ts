@@ -1161,6 +1161,11 @@ export interface DesktopActivityEvent {
     command?: string;
     exitCode?: number | null;
   };
+  /**
+   * Bounded, content-free facts of a live-activity event (pass number, phase name, counts, a clipped Core failure
+   * reason, the verification kind). Never model text, reasoning, tool arguments or file contents.
+   */
+  detail?: { pass?: number; phase?: string; toolCalls?: number; textChars?: number; reasoned?: boolean; ok?: boolean; durationMs?: number | null; reason?: string; kind?: string; to?: string };
   summary: string;
   text?: string;
   promptTokens?: number | null;
