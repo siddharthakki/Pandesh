@@ -164,3 +164,9 @@ M2 claim stays limited to verified operations: files, reminders, notes, promises
 Incident (mine): `git worktree remove --force` on two throwaway worktrees whose `node_modules` were junctions emptied the shared installs in D:\Projects\Pandesh and D:\Projects\Pandesh-freshcheck (untracked files only; production unaffected). Both restored with `npm ci` from their own lockfiles. `D:\Projects\Pandesh-audit\.tmp\rc-b164\node_modules` is empty and was not touched knowingly; it may need a reinstall if that worktree is used.
 
 Full suite at the final commit: 7439 passed, 2 failed (`delegationVerification`, `m12RetrievalIntegrationPackaging`), both failing identically at base f06035b. `coreInstanceIsolation` passed.
+
+## Update 5 (2026-11-14): merge and release-candidate smoke
+
+PR #82 merged to main as `b2aa041` (tree identical to reviewed head `a3a23d6`; CI green; admin bypass on the owner's explicit OK because the ruleset requires a review). Release-candidate smoke on that tree:
+- Real Electron host + v2 renderer, isolated profile (`rc-smoke-electron`): D01 file, D02 seven files, D03 reminder time, D04 declined write honest, D05 interrupted → owner resume (0 auto-resume, no duplicates), D06 real Windows toast delivered, D07 grant confirm/revoke. 7/7, production processes, Run key, port 3030 and production core unchanged.
+- Routine run (`rc-smoke-routines`): FAILED 3 of 5 days, and that is a real defect in the new semantic check: it recounted whatever folder the model listed last (here the workspace root) and reported the correct count 3/4/5 as wrong ("b holds 0 file(s)"). A false alarm (the safe direction), but wrong, and it was in the merged main. `gate5-grant-1` passed only because that model run listed the inbox last. Fix: the folder the instruction names decides; no named folder = unchecked. New test; live rerun `rc-smoke-routines-2` 5/5 days.

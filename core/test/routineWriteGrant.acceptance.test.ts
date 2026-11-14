@@ -203,6 +203,28 @@ describe('standing write permission for a scheduled routine', () => {
       expect(sem.checked).toBe(1);
       expect(sem.problems[0]).toMatch(/says 0 but inbox holds 3/);
     });
+    it('the folder the instruction names is recounted, whatever the model happened to list last (smoke finding)', async () => {
+      seedInbox(); createGrant(db, { taskId, grantedBy: 'host:test' });
+      const att = await routineRun([{ file: 'reports/inbox-count.txt', content: '3' }]);
+      db.run("INSERT INTO tool_invocations (id, attemptId, toolName, argsSummary, status, startedAt) VALUES (?, ?, 'list_directory', ?, 'succeeded', ?)", [`ti-${Date.now()}`, att.id, JSON.stringify({ dirPath: '.' }), new Date(Date.now() + 5000).toISOString()]);
+      expect(verifyRoutineSemantics(db, att.id, COUNT, ws)).toEqual({ checked: 1, problems: [] });
+      // no named folder and an ambiguous listing: not checked, never a false alarm
+      expect(verifyRoutineSemantics(db, att.id, 'Count the files and write the number into reports/inbox-count.txt.', ws)).toEqual({ checked: 0, problems: [] });
+    });
+    it('containment uses real paths: a folder inside the workspace is recounted, a junction/symlink out of it is not', async () => {
+      seedInbox(); createGrant(db, { taskId, grantedBy: 'host:test' });
+      const outside = path.join(tempDir, 'outside'); fs.mkdirSync(outside); for (const n of ['x', 'y']) fs.writeFileSync(path.join(outside, `${n}.txt`), n);
+      fs.symlinkSync(outside, path.join(ws, 'escape'), 'junction');
+      const att = await routineRun([{ file: 'reports/inbox-count.txt', content: '2' }]);
+      // a real in-workspace folder is checked (3 files, wrote 2: caught)
+      expect(verifyRoutineSemantics(db, att.id, COUNT, ws).problems[0]).toMatch(/says 2 but inbox holds 3/);
+      // the same routine pointed at the link that leaves the workspace: never recounted, nothing about the outside is disclosed
+      const out = verifyRoutineSemantics(db, att.id, 'Every day count the files in the escape folder and write only that number into reports/inbox-count.txt.', ws);
+      expect(out).toEqual({ checked: 0, problems: [] });
+      // a link that stays inside the workspace is fine
+      fs.symlinkSync(path.join(ws, 'inbox'), path.join(ws, 'alias'), 'junction');
+      expect(verifyRoutineSemantics(db, att.id, 'Every day count the files in the alias folder and write only that number into reports/inbox-count.txt.', ws).problems[0]).toMatch(/says 2 but \S+ holds 3/);
+    });
     it('the right count passes, and an instruction Core cannot recompute is reported as unchecked, not verified', async () => {
       seedInbox(); createGrant(db, { taskId, grantedBy: 'host:test' });
       const att = await routineRun([{ file: 'reports/inbox-count.txt', content: '3' }]);
