@@ -96,6 +96,7 @@ import { recordExecutionQuality } from '../domain/executionQuality';
 import { checkGrantForWrite, countDirectoryEntries, grantContentDigest, recordGrantUse, scheduledTaskOfAttempt } from '../domain/routineWriteGrants';
 import { AUTHORIZE_MISSION_TOOL,buildWorkspaceWriteEnvelope, createPendingMissionAuthorization, evaluateAuthorizedDispatch, evaluateMissionAction, getMissionAuthorization, markMissionAuthorized, markMissionRejected, protectedWriteReason, recordAuthorizedAction } from './missionAuthorization';
 import { NON_WORKSPACE_MARKERS } from '../domain/taskToolSurface';
+import { readSkill, selectSkillsForTurn } from '../platform/skills/skillService';
 import { announcesWorkStarting, asksAboutConversationTask, auditPromises, classifyStatusRequest, composeStatusAnswer, describeConversationTask, hasActiveWorker, hasRecentGmailWork, latestConversationTask, type StatusTopic } from './assistantStatus';
 import { notificationCapability } from '../domain/notificationOutbox';
 import { boundConversationContext, isExplicitResumeRequest, isSmallTalk, selectRelevantTask, LATEST_REQUEST_AUTHORITATIVE } from '../domain/conversationRelevance';
@@ -4907,6 +4908,29 @@ Report this to the user, saying the ${name} agent did the work. Do not add facts
       activeToolNames.add('recall_execution');
     }
 
+    // Skills the person installed in <data dir>/skills: a short extract of the ones that fit this request travels with the
+    // message, and read_skill returns the rest. Advisory text only: no tool, permission or network access comes with it.
+    let skillGuidance = '';
+    try {
+      const skillSel = await selectSkillsForTurn(ctx.dataDir, requestText, { workspaceOpen: Boolean(ctx.workspaceRoot) });
+      if (skillSel) {
+        skillGuidance = skillSel.guidance;
+        tools.push({
+          name: 'read_skill',
+          label: 'read_skill',
+          description: 'Read the full text of an installed skill selected for this request, or one of its reference files (a .md or .txt file inside the skill folder). Read-only; never reads outside a skill folder.',
+          parameters: { type: 'object', properties: { id: { type: 'string', description: 'The skill id.' }, file: { type: 'string', description: 'Optional reference file inside the skill folder, e.g. references/capabilities.md. Omit for the skill itself.' }, offset: { type: 'number', description: 'Character offset to continue a long file.' } }, required: ['id'] },
+          execute: async (_id: string, args: any) => {
+            const out = await readSkill(ctx.dataDir, String(args?.id ?? ''), args?.file ? String(args.file) : undefined, Number(args?.offset ?? 0));
+            return { content: [{ type: 'text', text: out.text }], ...(out.ok ? {} : { isError: true }) };
+          },
+        });
+        activeToolNames.add('read_skill');
+        safeRecordRuntimeEvent(db, broadcaster, attemptId, 'skills_selected', { ids: skillSel.ids, compiledTokens: skillSel.resolved.compiledTokens }, actor);
+      }
+    } catch (err: any) { console.warn('[piAgentEngine] skills unavailable:', err?.message); }
+
+
     // Questions about Pandesh itself (notifications, Gmail progress, running tasks, reminders) are answered from the
     // recorded state, with no model and no workspace: a model's prose is exactly where invented progress came from.
     // A follow-up about the task this chat was asked to do is answered from that task's record first: a bare "Status ?"
@@ -5264,6 +5288,7 @@ When the user asks to continue, resume, or check progress/updates, resume this w
 
     // P0: the journal travels with this message (it changes every turn, so it stays out of the cached system prompt).
     if (journalCtx?.section && !cloudTarget) addTurnFact(journalCtx.section);
+    addTurnFact(skillGuidance);
 
     // Load prior conversation turns for multi-turn continuity
     const priorMessages: any[] = [];
