@@ -3022,7 +3022,7 @@ export class PiAgentEngine implements EngineAdapter {
             const decision = await requestToolApproval({
               toolName: 'agent_reach',
               query: call.target,
-              cardText: `Pandesh wants to ${call.action} ${call.channel === 'web' ? 'a public web page' : `public ${call.channel} content`}: "${call.target.slice(0, 200)}". The ${checked.isSearch ? 'query' : 'link'} is sent to ${call.channel === 'web' ? 'a public page reader service and the site' : `${call.channel}`}. Nothing from your files, accounts or messages is sent.`,
+              cardText: `Pandesh wants to ${call.action} ${call.channel === 'web' ? 'a public web page' : `public ${call.channel} content`}: "${call.target.slice(0, 200)}". The ${checked.isSearch ? 'query' : 'link'} is sent to ${call.channel === 'web' ? 'a public page reader service (r.jina.ai, a third party) and the site' : `${call.channel}`}. Nothing from your files, accounts or messages is sent.`,
             });
             if (decision.outcome !== 'approved') return { content: [{ type: 'text', text: describeUnansweredApproval(decision) }], isError: true };
             agentReachApproved = true;
