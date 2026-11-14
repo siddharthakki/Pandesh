@@ -23,6 +23,7 @@ import type { GovernedCapabilityAdapter } from './governedCapability';
 import type { ModelToolCall } from './modelBackend';
 import type { ToolExecutionResult } from './toolRunner';
 import { runPowerShellScript } from './windowsShellExec';
+import type { ImageInspector } from './localVisionInspector';
 
 /** Tools that read the person's whole screen or every window title: never run without their OK. */
 export const SCREEN_READING_TOOLS: ReadonlySet<string> = new Set(['desktop_screenshot', 'desktop_windows_list']);
@@ -30,16 +31,22 @@ const MAX_OUTPUT_CHARS = 24_000;
 
 /**
  * What a screenshot is and is not, said with every capture. Capturing (saving the file), opening (showing it to the
- * user) and inspecting (reading what is on it) are different things, and this tool only captures. No model reads the
- * image in this build (an owner decision, for privacy), and the capture has no filter: a model once claimed it was
- * "programmed to exclude private messaging apps", which was never true.
+ * user) and inspecting (reading what is on it) are different things. The tool captures; it inspects only when the model
+ * passes the user's `question`, and then only with a vision model on THIS PC (localVisionInspector: loopback endpoint
+ * only, never a cloud provider; cloud turns do not get this tool at all, see cloudDataBoundary). The result says which
+ * happened. The capture has no filter: a model once claimed it was "programmed to exclude private messaging apps",
+ * which was never true, and Pandesh has no block on analyzing a screenshot of a messaging app the user asked about.
  */
-export const SCREENSHOT_CONTENTS_NOTE = 'Captured means saved, nothing more: the PNG was written on this PC and has been neither opened for anyone nor inspected. Pandesh cannot inspect it in this build (no model reads the image; only its path, size and hash are known), so do not describe, check or verify anything on the screen with it, and never say it shows, confirms or proves something. It records every visible window as it is; nothing is excluded, blurred or filtered. The user can open it at the path above; this tool sends it nowhere.';
+export const SCREENSHOT_CONTENTS_NOTE = 'Captured means saved: the PNG was written on this PC and has not been opened for anyone. It was read by a model only if this result says a local vision model read it. It records every visible window as it is; nothing is excluded, blurred or filtered. The user can open it at the path above; this tool sends it nowhere.';
+/** Said when no reading was asked for, or none happened: the model must not describe the screen. */
+export const NOT_INSPECTED_NOTE = 'Not inspected: no model has read this image, so nothing on the screen is known beyond the path, size and hash. Do not describe, check or verify anything on the screen from it, and never say it shows, confirms or proves something.';
 
 export interface ComputerUseCapabilityOptions {
   /** Core's data directory — where screen evidence is written. */
   dataDir?: string;
   runScript?: typeof runPowerShellScript;
+  /** Reads a capture with a vision model on this PC. Absent: captures are never inspected. */
+  inspectImage?: ImageInspector;
 }
 
 function failure(output: string, category: string): ToolExecutionResult {
@@ -139,12 +146,30 @@ try {
     }
     const bytes = fs.statSync(target).size;
     const digest = crypto.createHash('sha256').update(fs.readFileSync(target)).digest('hex');
+    const head = `Captured the Windows desktop: ${target} (${bytes} bytes, ${result.output.trim() || 'unknown size'}, sha256 ${digest}).`;
+    const question = typeof (call.arguments as Record<string, unknown> | undefined)?.question === 'string' ? String((call.arguments as Record<string, unknown>).question).trim().slice(0, 500) : '';
+    // Capturing and understanding are separate steps with separate receipts. The user asked for the second only when the
+    // model passed their question; the reading happens on this PC and its result is reported as it is, failure included.
+    let inspected: { model: string; text: string } | null = null;
+    let notInspected = 'the user did not ask what is on the screen, so no model read it';
+    if (question) {
+      if (!options.inspectImage) notInspected = 'this build has no image reader configured';
+      else {
+        const read = await options.inspectImage({ path: target, question });
+        if (read.ok) inspected = { model: read.model, text: read.text };
+        else notInspected = read.reason;
+      }
+    }
     return {
       status: 'succeeded',
       exitCode: 0,
-      output: `Captured the Windows desktop: ${target} (${bytes} bytes, ${result.output.trim() || 'unknown size'}, sha256 ${digest}). ${SCREENSHOT_CONTENTS_NOTE}`,
-      resultCategory: 'computer_desktop_captured',
-      normalizedArguments: { path: target, bytes, sha256: digest },
+      output: inspected
+        ? `${head} Read on this PC by the local vision model ${inspected.model} (nothing was sent off this PC). What it reports is visible on the screen:
+${inspected.text}
+${SCREENSHOT_CONTENTS_NOTE}`
+        : `${head} ${NOT_INSPECTED_NOTE} Reason: ${notInspected}. ${SCREENSHOT_CONTENTS_NOTE}`,
+      resultCategory: inspected ? 'computer_desktop_captured_and_inspected' : 'computer_desktop_captured',
+      normalizedArguments: { path: target, bytes, sha256: digest, inspected: Boolean(inspected), ...(inspected ? { inspectedBy: inspected.model } : {}) },
     };
   }
 
@@ -153,8 +178,8 @@ try {
     definitions: () => [
       {
         name: 'desktop_screenshot',
-        description: 'Capture the real Windows desktop (every visible window, nothing filtered) as a PNG on this PC and return its path, size and SHA-256. Pandesh cannot see what is in the image in this build. Changes nothing, but asks the user first every time. Only when the user asks for a screenshot of their screen; never to find out what Pandesh itself shows.',
-        parameters: { type: 'object', properties: {}, required: [] },
+        description: 'Capture the real Windows desktop (every visible window, nothing filtered) as a PNG on this PC and return its path, size and SHA-256. Pass `question` (their own ask, e.g. what is on their screen or to analyze it) and a vision model on this PC reads the capture and reports what it sees; without `question` the image is only saved and not read. Nothing is sent off this PC. Changes nothing, but asks the user first every time. Only when the user asks for a screenshot of their screen; never to find out what Pandesh itself shows.',
+        parameters: { type: 'object', properties: { question: { type: 'string', description: 'What the user wants to know about the screen. Set it only when they asked what is on the screen or to analyze it; it makes a vision model on this PC read the capture.' } }, required: [] },
       },
       {
         name: 'desktop_windows_list',

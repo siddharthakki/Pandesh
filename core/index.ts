@@ -28,6 +28,7 @@ import { createPortManagementCapabilityAdapter } from './runtime/portManagementC
 import { createIntelligenceScoutCapabilityAdapter } from './runtime/intelligenceScoutCapability';
 import { createIntelligenceScout, type IntelligenceScout } from './runtime/intelligenceScout';
 import { createComputerUseCapabilityAdapter } from './runtime/computerUseCapability';
+import { createLocalVisionInspector } from './runtime/localVisionInspector';
 import { createHermesSkillCapabilityAdapter } from './runtime/hermesSkillCapability';
 import { createPortProcessManager } from './runtime/portManager';
 import { acquireSingleton } from './singleton/acquireSingleton';
@@ -312,7 +313,7 @@ function buildCapabilityRegistry(dataDir: string, db: CoreDatabase, connectors: 
       outputDir: path.join(dataDir, 'comfyui-output'),
     }))
     .register(createBrowserCapabilityAdapter({ browserBin: resolveHostBrowserBin(), db, previewDir: path.join(dataDir, 'activity-previews', 'browser'), dataDir }))
-    .register(createComputerUseCapabilityAdapter({ dataDir }))
+    .register(createComputerUseCapabilityAdapter({ dataDir, inspectImage: createLocalVisionInspector() }))
     .register(createHermesSkillCapabilityAdapter())
     .register(createWeatherCapabilityAdapter())
     .register(createFilesystemCapabilityAdapter())
