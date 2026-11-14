@@ -7,6 +7,8 @@
  */
 import type { CoreDatabase } from '../db/connection';
 import { describeNotifications, notificationReport } from '../domain/notificationOutbox';
+import { pathTokens } from './fsMention';
+import { namedDiskTargets } from './diskObservation';
 import { progressOf, taskState, type GmailOrganizeTask } from './connectors/gmailTask';
 
 export type StatusTopic = 'notifications' | 'gmail' | 'tasks' | 'reminders';
@@ -25,10 +27,10 @@ const PROGRESS_WORDS = /\b(?:status|progress|update|how far|done yet|finished|co
  * A router may only decline here, never grant: declining sends the request to the model with the ordinary tools, whose
  * approvals, privacy checks and cloud-egress rules apply unchanged. This is not a security decision.
  */
-const FS_PATH_TOKEN = /(?:^|[\s"'`(])(?:[A-Za-z]:[\\/]|\\\\|~[\\/]|\.{1,2}[\\/])|(?:^|[\s"'`(])[\w.~-]*[A-Za-z][\w.~-]*[\\/][\w.\\/~-]*[A-Za-z]/;
-const FS_NOT_A_PATH = /\b(?:and\/or|w\/o|n\/a|he\/she|his\/her|yes\/no|either\/or|read\/write|input\/output)\b/gi;
 const FS_FILE_NAME = /\b[\w-]+\.(?:txt|csv|tsv|json|md|pdf|docx?|xlsx?|pptx?|log|ts|tsx|js|mjs|py|html?|zip|eml|msg|png|jpe?g|yaml|yml|xml|ini|bat|ps1)\b/i;
-const FS_NOUNS = /\b(?:files?|folders?|director(?:y|ies)|sub-?folders?|paths?|drives?|workspace|repo(?:sitory)?|disk|datei(?:en)?|ordner|verzeichnis\w*|pfad|laufwerk)\b/i;
+// Only nouns that name what is on a disk. "drive", "workspace", "repo", "path" and "disk" are left out: they appear in
+// genuine status questions ("Gmail drive cleanup", "tasks in the workspace") and would send those to the model.
+const FS_NOUNS = /\b(?:files?|folders?|director(?:y|ies)|dirs?|sub-?(?:folders?|director(?:y|ies))|datei(?:en)?|ordner|verzeichnis\w*)\b/i;
 
 /** Text inside quotation marks or code spans is mentioned, not asked about. */
 function withoutQuoted(text: string): string {
@@ -37,8 +39,8 @@ function withoutQuoted(text: string): string {
 
 /** True when the request is about files, folders, paths or code rather than about Pandesh's state. */
 export function isAboutFilesystem(text: string): boolean {
-  const t = String(text || '').replace(FS_NOT_A_PATH, ' ');
-  return FS_PATH_TOKEN.test(t) || FS_FILE_NAME.test(t) || FS_NOUNS.test(withoutQuoted(t));
+  const t = String(text || '');
+  return pathTokens(t).length > 0 || FS_FILE_NAME.test(t) || FS_NOUNS.test(withoutQuoted(t));
 }
 
 /**
@@ -47,40 +49,9 @@ export function isAboutFilesystem(text: string): boolean {
  */
 export function asksForDiskObservation(text: string): boolean {
   const t = String(text || '').trim();
-  if (!t || t.length > 300 || !isAboutFilesystem(t)) return false;
+  if (!t || t.length > 300 || !isAboutFilesystem(t) || namedDiskTargets(t).length === 0) return false;
   if (/\b(?:create|write|save|move|copy|delete|remove|rename|organi[sz]e|sort|clean|install|run|build|fix|edit|change|add|make|zip|upload)\b/i.test(withoutQuoted(t))) return false;
   return /\b(?:how\s+(?:many|big|large|much)|count|list|show|what(?:'s|\s+is|\s+are)|which|is\s+there|are\s+there|exists?|contains?|size|newest|oldest|largest|biggest|names?|wie\s+viele|welche|zeig\w*)\b|\?\s*$/i.test(withoutQuoted(t));
-}
-/**
- * The folders and files a disk question names ("rw/inbox", "C:\Temp", "notes.txt", "the Reports folder"). Empty when the
- * request names none, in which case no particular target can be demanded of the read.
- */
-export function requestedDiskTargets(text: string): string[] {
-  const t = withoutQuoted(String(text || '').replace(FS_NOT_A_PATH, ' '));
-  const out = new Set<string>();
-  const norm = (v: string) => v.replace(/\\/g, '/').replace(/^\.\//, '').replace(/\/+$/, '').toLowerCase();
-  for (const raw of t.split(/\s+/)) {
-    const tok = raw.replace(/^[("'`]+|[)"'`?!,;]+$/g, '').replace(/\.$/, '');
-    if (/[\\/]/.test(tok) || FS_FILE_NAME.test(tok)) { const n = norm(tok); if (n && !/^[a-z]:$/.test(n)) out.add(n); }
-  }
-  for (const m of t.matchAll(/\b(?:the|in|im|my)\s+([\w.-]+)\s+(?:folder|director(?:y|ies)|ordner)\b/gi)) {
-    const name = m[1].toLowerCase();
-    if (!/^(?:this|that|same|whole|entire|main|root|parent|current|a|an|the|my|that|these|those|other|new|old)$/.test(name)) out.add(name);
-  }
-  return [...out];
-}
-
-/** True when a successful read touched a target the request names (or the request names none). */
-export function readCoversRequestedTarget(text: string, readArgs: unknown[]): boolean {
-  const targets = requestedDiskTargets(text);
-  if (!targets.length) return true;
-  const strings: string[] = [];
-  const walk = (v: unknown, depth = 0) => {
-    if (typeof v === 'string') strings.push(v.replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase());
-    else if (depth < 3 && v && typeof v === 'object') for (const x of Object.values(v as Record<string, unknown>)) walk(x, depth + 1);
-  };
-  for (const a of readArgs) walk(a);
-  return targets.some((tg) => strings.some((s) => `/${s}/`.includes(`/${tg}/`)));
 }
 /** A command to do Gmail work is a task, never a status question, even when it mentions progress. */
 const IMPERATIVE = /^\s*(?:please\s+)?(?:move|archive|label|organi[sz]e|delete|apply|start|create|run|continue|proceed|go|do|make|send|process)\b/i;
