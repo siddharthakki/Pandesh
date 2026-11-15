@@ -60,8 +60,8 @@ export interface Snapshot {
   /** Free cloud providers (off by default); `selectedModel` is `<provider>::<model>`. */
   cloud?: {
     selectedModel?: string | null;
-    providers?: Array<{ id: string; displayName?: string; enabled?: boolean; configured?: boolean }>;
-    listings?: Record<string, { pool?: Array<{ id: string; displayName?: string }> }>;
+    providers?: Array<{ id: string; displayName?: string; enabled?: boolean; configured?: boolean; privacyWarning?: string | null }>;
+    listings?: Record<string, { pool?: Array<{ id: string; displayName?: string; vision?: boolean | 'unknown'; tools?: boolean | 'unknown' }> }>;
     [k: string]: unknown;
   } | null;
   /** The selected workspace folder, if any (Auto's workspace categories are bound to it). */
@@ -77,6 +77,8 @@ export interface Snapshot {
   /** Everyday Tools catalog: Calendar counts as connected only when Core verified it with a live read. */
   everydayTools?: { catalog?: Array<{ id: string; connectorState?: string; availability?: string }>; [k: string]: unknown };
   modelNote?: string | null;
+  /** Files waiting in the composer for the next message (host-staged; no paths). */
+  stagedAttachments?: Array<{ id: string; name: string; byteSize: number; kind: 'text' | 'image' | 'document' | 'audio'; mimeType?: string }>;
   /** openWakeWord readiness and the enable / mute preference (the host detects; the page feeds it microphone frames). */
   wakeWord?: WakeWordStatus;
   /** What the host's detector has received (frames, warm-up, capture errors). */
@@ -90,7 +92,7 @@ export interface WakeCaptureMeta { captureActive?: boolean; captureError?: strin
 /** Host voice events: wake_detected, wake_state, wake_score, speaking, speak_stopped, speak_finished, speak_failed. */
 export interface VoiceEvent { kind: string; score?: number; wakeDetectMs?: number | null; inferenceMs?: number; framesReceived?: number; enabled?: boolean; muted?: boolean; [k: string]: unknown }
 
-export interface TranscriptMessage { id: string; role: 'user' | 'assistant' | 'system'; content: string; createdAt: string; model?: string | null; provider?: string | null }
+export interface TranscriptMessage { id: string; role: 'user' | 'assistant' | 'system'; content: string; createdAt: string; model?: string | null; provider?: string | null; attachments?: Array<{ id: string; name: string; kind: 'text' | 'image' | 'document' | 'audio'; byteSize: number }> }
 export interface ConversationEntry { id: string; title: string | null; preview: string | null; state: string; updatedAt: string; archivedAt: string | null; pinnedAt: string | null }
 export interface ActivityEvent {
   kind: string; at: string; conversationId?: string; messageRole?: string; attemptId?: string; eventType?: string; toolName?: string; summary: string; text?: string;
@@ -163,6 +165,9 @@ export interface FreeModelsState {
   credentials: { backend: string; status: Record<string, { configured: boolean; source: string | null; hint: string | null }>; legacyOnly: string[] };
 }
 
+export interface AppMetadata { productName: string; version: string; buildNumber: number | null; buildKind: 'release' | 'development'; releaseChannel: string; commit: string | null; builtAt: string | null; coreVersion: string | null; coreVersionMismatch: boolean }
+export interface UpdateStatus { available: boolean; installedRevision: number | null; version: string; lastResult: { status: 'success' | 'rolled_back' | 'aborted' | 'rollback_failed'; at: string; acknowledged: boolean; reason?: string; revision?: number; attemptedRevision?: number } | null }
+
 export interface DesktopApi {
   getSnapshot(): Promise<Snapshot | null>;
   /** Phone pairing: the code and links, a new code, forget a phone, who may connect, resume paused pairing. */
@@ -173,6 +178,10 @@ export interface DesktopApi {
   resumeMobilePairing(): Promise<MobilePairing>;
   /** `voiceTurnId` marks a message that was spoken (the transcript of a voice turn). */
   submitTask(goal: string, worker?: string, voiceTurnId?: string): Promise<{ attemptId: string; requestId: string; model: string; routed?: string }>;
+  /** Composer attachments: the host opens the file dialog, stages dropped or pasted bytes, and removes a staged file. */
+  pickAttachments(): Promise<{ cancelled: boolean; errors: string[] }>;
+  stageAttachmentBytes(name: string, bytes: Uint8Array): Promise<{ ok: boolean; error?: string }>;
+  removeAttachment(id: string): Promise<void>;
   /** A local model name, `__auto__`, or `<provider>::<model>` for a free cloud model. */
   selectModel(model: string): Promise<Snapshot | null>;
   listModels(): Promise<string[]>;
@@ -234,6 +243,13 @@ export interface DesktopApi {
   saveWorkshopFile(artifactId: string): Promise<{ saved: boolean; path: string | null }>;
   /** A short-lived pandesh-preview: URL for a Design page (served from memory, sandboxed, no network). */
   designPreview(artifactId: string): Promise<{ url: string; nonce: string; expiresAt: string; warnings: string[] }>;
+  /** Settings → Diagnostics and Updates: the host's own reports (no credentials in either). */
+  getAppMetadata(): Promise<AppMetadata>;
+  getDiagnosticsReport(): Promise<string>;
+  getUpdateStatus(): Promise<UpdateStatus>;
+  /** Opens the host's file dialog for a Pandesh update package and verifies it before anything changes. */
+  startUpdate(): Promise<{ status: 'cancelled' | 'rejected' | 'blocked' | 'unavailable' | 'applying'; message: string }>;
+  acknowledgeUpdateResult(): Promise<void>;
   onEvent(listener: (event: ActivityEvent) => void): () => void;
   /** Free models and provider keys: keys go in, never come back out. */
   getFreeModels(): Promise<FreeModelsState>;

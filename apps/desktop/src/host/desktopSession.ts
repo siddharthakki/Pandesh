@@ -2924,6 +2924,7 @@ export class DesktopSession {
       softwareUpdates: { path: '/v1/software/updates' },
       softwareCheckUpdates: { path: '/v1/software/updates/check', method: 'POST', body: {} },
       toolHub: { path: '/v1/tools/hub' },
+      capabilityExplorer: { path: `/v1/tools/explorer?${new URLSearchParams({ ...(typeof args.model === 'string' && args.model ? { model: args.model } : {}), ...(args.cloud === true ? { cloud: '1' } : {}) }).toString()}` },
       processes: { path: '/v1/processes' },
       projects: { path: '/v1/projects' },
       project: { path: `/v1/projects/${id}` },
