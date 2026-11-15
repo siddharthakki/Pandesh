@@ -24,8 +24,8 @@ export interface PermissionState {
   activeTurnMode?: PermissionMode | null;
 }
 
-interface CloudProvider { id: string; displayName?: string; enabled?: boolean; configured?: boolean }
-interface CloudListing { pool?: Array<{ id: string; displayName?: string }> }
+interface CloudProvider { id: string; displayName?: string; enabled?: boolean; configured?: boolean; privacyWarning?: string | null }
+interface CloudListing { pool?: Array<{ id: string; displayName?: string; vision?: boolean | 'unknown'; tools?: boolean | 'unknown' }> }
 export interface ModelSnapshot {
   model: string | null;
   modelIsAuto: boolean;
@@ -80,6 +80,25 @@ export function modelMenu(s: ModelSnapshot | null): { options: ModelOption[]; se
     else options.splice(1, 0, { value: selected, label: `${selected} (not installed)`, group: 'local' });
   }
   return { options, selected };
+}
+
+export interface CloudChoice { value: string; label: string; providerName: string; vision: boolean | 'unknown'; tools: boolean | 'unknown' }
+
+/**
+ * The verified-free cloud models the person may choose in Settings: only providers that are enabled and have a key,
+ * and only models in the pool Core verified free. The value is `<provider>::<model>`, which selectModel routes to the
+ * host's cloud selection (the whole chat then runs on that model; Core's data boundary still applies).
+ */
+export function cloudChoices(s: ModelSnapshot | null): CloudChoice[] {
+  const cloud = s?.cloud ?? null;
+  const out: CloudChoice[] = [];
+  for (const p of cloud?.providers ?? []) {
+    if (!p.enabled || !p.configured) continue;
+    for (const m of cloud?.listings?.[p.id]?.pool ?? []) {
+      out.push({ value: `${p.id}::${m.id}`, label: m.displayName || m.id, providerName: p.displayName ?? p.id, vision: m.vision ?? 'unknown', tools: m.tools ?? 'unknown' });
+    }
+  }
+  return out;
 }
 
 /** What the route line says about the model: "Auto" is a choice, not a missing one. */
