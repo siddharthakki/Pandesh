@@ -17,6 +17,7 @@ import { correctWeekdayDates } from './dateConsistency';
 import { asksForSingleChoice, SINGLE_CHOICE_RULE } from './choiceConstraint';
 import { delegationChangedNothing, isGitRepository, renderDelegationReport, snapshotFiles, untrackedPaths, verifyDelegation } from './delegationVerification';
 import { explicitSpecialistRequest, handoffPreflight, SPECIALIST_NAMES } from './agentRouting';
+import { implicitSpecialistEnabled, implicitSpecialistRequest } from './specialistIntent';
 
 /** Facts a delegating turn got from Pandesh's own local tools, keyed by the child attempt that receives them. */
 const HANDOFF_FACTS = new Map<string, string>();
@@ -4748,8 +4749,12 @@ Report this to the user, saying the ${name} agent did the work. Do not add facts
     const requestReferencesLocalContent = referencesLocalContent(requestText);
     // Alpha e2e: a request addressed to a specialist ("Ask your Research specialist…") is handed to it by Core, before
     // the public-research route could strip delegate_to_agent away (T3) and without relying on the model choosing it.
-    const requestedSpecialist = tools.some((t) => t.name === 'delegate_to_agent') ? explicitSpecialistRequest(requestText) : null;
-    if (requestedSpecialist) safeRecordRuntimeEvent(db, broadcaster, attemptId, 'specialist_request_detected', { agent: requestedSpecialist }, actor);
+    const canDelegate = tools.some((t) => t.name === 'delegate_to_agent');
+    const explicitSpecialist = canDelegate ? explicitSpecialistRequest(requestText) : null;
+    // Pilot (off by default): an outcome described without naming a specialist, for read-only local work only.
+    const intentRoute = canDelegate && !explicitSpecialist && implicitSpecialistEnabled() ? implicitSpecialistRequest(requestText) : null;
+    const requestedSpecialist = explicitSpecialist ?? intentRoute?.agent ?? null;
+    if (requestedSpecialist) safeRecordRuntimeEvent(db, broadcaster, attemptId, 'specialist_request_detected', { agent: requestedSpecialist, via: explicitSpecialist ? 'explicit' : 'intent', ...(intentRoute ? { rule: intentRoute.rule } : {}) }, actor);
     // Web-only scoping keeps nothing but web_research. Inside an agent scope without it (Coding, Operations) that left the
     // model with zero tools, and it looped on calls to tools that did not exist (519 model calls, live demo 2026-11-09).
     const isPublicResearch = !requestedSpecialist && isPublicResearchTask(requestText) && !requestReferencesLocalContent
