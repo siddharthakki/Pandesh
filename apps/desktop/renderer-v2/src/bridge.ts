@@ -77,6 +77,8 @@ export interface Snapshot {
   /** Everyday Tools catalog: Calendar counts as connected only when Core verified it with a live read. */
   everydayTools?: { catalog?: Array<{ id: string; connectorState?: string; availability?: string }>; [k: string]: unknown };
   modelNote?: string | null;
+  /** Files waiting in the composer for the next message (host-staged; no paths). */
+  stagedAttachments?: Array<{ id: string; name: string; byteSize: number; kind: 'text' | 'image' | 'document' | 'audio'; mimeType?: string }>;
   /** openWakeWord readiness and the enable / mute preference (the host detects; the page feeds it microphone frames). */
   wakeWord?: WakeWordStatus;
   /** What the host's detector has received (frames, warm-up, capture errors). */
@@ -90,7 +92,7 @@ export interface WakeCaptureMeta { captureActive?: boolean; captureError?: strin
 /** Host voice events: wake_detected, wake_state, wake_score, speaking, speak_stopped, speak_finished, speak_failed. */
 export interface VoiceEvent { kind: string; score?: number; wakeDetectMs?: number | null; inferenceMs?: number; framesReceived?: number; enabled?: boolean; muted?: boolean; [k: string]: unknown }
 
-export interface TranscriptMessage { id: string; role: 'user' | 'assistant' | 'system'; content: string; createdAt: string; model?: string | null; provider?: string | null }
+export interface TranscriptMessage { id: string; role: 'user' | 'assistant' | 'system'; content: string; createdAt: string; model?: string | null; provider?: string | null; attachments?: Array<{ id: string; name: string; kind: 'text' | 'image' | 'document' | 'audio'; byteSize: number }> }
 export interface ConversationEntry { id: string; title: string | null; preview: string | null; state: string; updatedAt: string; archivedAt: string | null; pinnedAt: string | null }
 export interface ActivityEvent {
   kind: string; at: string; conversationId?: string; messageRole?: string; attemptId?: string; eventType?: string; toolName?: string; summary: string; text?: string;
@@ -173,6 +175,10 @@ export interface DesktopApi {
   resumeMobilePairing(): Promise<MobilePairing>;
   /** `voiceTurnId` marks a message that was spoken (the transcript of a voice turn). */
   submitTask(goal: string, worker?: string, voiceTurnId?: string): Promise<{ attemptId: string; requestId: string; model: string; routed?: string }>;
+  /** Composer attachments: the host opens the file dialog, stages dropped or pasted bytes, and removes a staged file. */
+  pickAttachments(): Promise<{ cancelled: boolean; errors: string[] }>;
+  stageAttachmentBytes(name: string, bytes: Uint8Array): Promise<{ ok: boolean; error?: string }>;
+  removeAttachment(id: string): Promise<void>;
   /** A local model name, `__auto__`, or `<provider>::<model>` for a free cloud model. */
   selectModel(model: string): Promise<Snapshot | null>;
   listModels(): Promise<string[]>;
