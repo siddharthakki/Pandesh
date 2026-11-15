@@ -89,6 +89,6 @@ export function useAttachments(opts: { snapshot: Snapshot | null; refresh: () =>
     <button type="button" className="icon-btn" aria-label="Attach files" title="Attach files, or drop or paste them here" disabled={disabled || busy} onClick={() => void pick()}><Icon name="attach" /></button>
   );
   const strip = <AttachmentChips items={staged} onRemove={remove} />;
-  const overlay = dragging ? <div className="drop-overlay" role="status" aria-live="polite">Drop files to attach them to your next message</div> : null;
+  const overlay = dragging ? <div className="drop-overlay" role="status" aria-live="polite"><span>Drop files to attach them to your next message</span></div> : null;
   return { staged, button, strip, overlay, onPaste, busy };
 }

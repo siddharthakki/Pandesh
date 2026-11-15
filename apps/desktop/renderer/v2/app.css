@@ -365,4 +365,5 @@ kbd { font-family: var(--font-mono); font-size: 12px; color: var(--muted); borde
 .attach-size { color: var(--muted); font-family: var(--font-mono); font-size: 12px; }
 .attach-x { width: 22px; height: 22px; padding: 0; border: 0; border-radius: 50%; background: transparent; color: var(--muted); font-size: 16px; line-height: 1; }
 .attach-x:hover { background: var(--line); color: var(--ink); }
-.drop-overlay { position: absolute; inset: 0; z-index: 30; display: flex; align-items: center; justify-content: center; border: 2px dashed var(--pulse); background: var(--scrim); color: var(--ink); font-size: 18px; pointer-events: none; }
+.drop-overlay { position: absolute; inset: 0; z-index: 30; display: flex; align-items: center; justify-content: center; border: 2px dashed var(--pulse); background: color-mix(in srgb, var(--canvas) 90%, transparent); backdrop-filter: blur(6px); color: var(--ink); font-size: 18px; pointer-events: none; }
+.drop-overlay span { padding: 12px 20px; border: 1px solid var(--line); border-radius: 12px; background: var(--raised); text-align: center; }
