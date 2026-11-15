@@ -57,7 +57,7 @@ export interface LiveEvent {
   invocationId?: string;
   invocationStatus?: string;
   summary?: string;
-  detail?: { pass?: number; phase?: string; toolCalls?: number; textChars?: number; reasoned?: boolean; ok?: boolean; durationMs?: number | null; reason?: string; kind?: string; to?: string };
+  detail?: { pass?: number; phase?: string; toolCalls?: number; textChars?: number; reasoned?: boolean; ok?: boolean; durationMs?: number | null; reason?: string; kind?: string; to?: string; decision?: 'approved' | 'denied' | 'standing_rule' };
 }
 
 const MAX_STEPS = 80;
@@ -120,8 +120,16 @@ export function applyEvent(current: RunState | null, e: LiveEvent): RunState | n
     const open = [...r.steps].reverse().find((s) => s.kind === 'approval' && s.state === 'running');
     if (open && (e.summary === 'approval_resolved' || e.summary === 'approval_superseded' || e.summary === 'approval_expired')) {
       open.endedAt = at;
-      open.state = e.summary === 'approval_expired' ? 'blocked' : 'ok';
-      open.facts.push(e.summary === 'approval_expired' ? 'expired without an answer — nothing approved' : e.summary === 'approval_superseded' ? 'superseded' : 'answered');
+      const decision = e.summary === 'approval_resolved' ? e.detail?.decision : undefined;
+      // A denial or an expiry means nothing ran: the step is blocked, never a success.
+      open.state = e.summary === 'approval_expired' || decision === 'denied' ? 'blocked' : 'ok';
+      const who = e.toolName ?? open.toolName;
+      if (who) open.toolName = who;
+      if (decision === 'approved') { open.label = `You approved${who ? `: ${who.replace(/_/g, ' ')}` : ''}`; open.facts.push('approved by you'); }
+      else if (decision === 'denied') { open.label = `You denied${who ? `: ${who.replace(/_/g, ' ')}` : ''}; it did not run`; open.facts.push('denied by you — nothing ran'); }
+      else if (decision === 'standing_rule') { open.label = `Allowed by your Auto rule${who ? `: ${who.replace(/_/g, ' ')}` : ''}`; open.facts.push('authorized by a standing rule'); }
+      else open.facts.push(e.summary === 'approval_expired' ? 'expired without an answer — nothing approved' : e.summary === 'approval_superseded' ? 'superseded' : 'answered');
+      if (e.summary === 'approval_expired') open.label = `Approval expired${who ? `: ${who.replace(/_/g, ' ')}` : ''}; nothing was approved`;
       settleToModel(r, at);
     }
     return r;
