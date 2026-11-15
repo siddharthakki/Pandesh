@@ -21,6 +21,8 @@ interface Props {
   openConversationId: string | null;
   onOpenPalette: () => void;
   onOpenBoard: () => void;
+  /** Opens Settings (models, permissions, diagnostics). */
+  onOpenSettings?: () => void;
   /** Text to place in the composer (from a workspace's "Ask Pandesh"). */
   draft?: string | null;
   onDraftUsed?: () => void;
@@ -95,7 +97,7 @@ function pendingDecision(s: Snapshot | null): null | { kind: 'tool' | 'image' | 
   return null;
 }
 
-export function Chat({ snapshot, snapshotError, refresh, narrow, openConversationId, onOpenPalette, onOpenBoard, draft, onDraftUsed, wake, wakeTurn, onWakeTurnTaken, onVoiceBusy }: Props) {
+export function Chat({ snapshot, snapshotError, refresh, narrow, openConversationId, onOpenPalette, onOpenBoard, onOpenSettings, draft, onDraftUsed, wake, wakeTurn, onWakeTurnTaken, onVoiceBusy }: Props) {
   const [messages, setMessages] = useState<TranscriptMessage[]>([]);
   const [loadedFor, setLoadedFor] = useState<string | null | undefined>(undefined);
   const [live, setLive] = useState<{ attemptId: string | null; text: string }>({ attemptId: null, text: '' });
@@ -404,6 +406,7 @@ export function Chat({ snapshot, snapshotError, refresh, narrow, openConversatio
         <div className="popover" role="dialog" aria-label="How this chat is routed" style={{ bottom: 34, right: 0, width: 360 }}>
           <div className="kv"><span className="k">Provider</span><span>{isLocal ? 'Local · Ollama on this PC' : `Cloud · ${snapshot?.provider}`} (in use now)</span></div>
           <div className="kv"><span className="k">Model</span><span>{modelLabel}</span></div>
+          {onOpenSettings && <div className="kv"><span className="k">Change</span><span><button type="button" className="btn small" onClick={() => { setRouteOpen(false); onOpenSettings(); }}>Model and permission settings</button></span></div>}
           <div className="kv"><span className="k">Context</span><span>{snapshot?.contextEnvelope ? `${Math.round(snapshot.contextEnvelope / 1024)}K tokens` : 'Not reported'}</span></div>
           <div className="kv"><span className="k">Model server</span><span>{snapshot?.modelServerReachable === false ? 'Not answering' : snapshot?.modelServerReachable ? 'Answering' : 'Unknown'}</span></div>
           <div className="kv"><span className="k">Outward actions</span><span>{snapshot?.permission?.mode === 'plan' ? 'None: Plan only changes nothing' : snapshot?.permission?.mode === 'auto' ? 'Ask you first, except what Auto covers' : 'Ask you first (approval rules)'}</span></div>
