@@ -41,6 +41,15 @@ describe('workspace activity log', () => {
     expect(item.preview).toMatchObject({ url: 'https://example.org/a', artifactIds: ['artifact_1'] });
   });
 
+  it('never puts a password, key or token from a command into the step title or its preview', () => {
+    const log = new WorkspaceActivityLog();
+    log.observe(started('tinv_s', 'run_command', { command: 'curl -H "Authorization: Bearer abcdef1234567890abcdefXYZ" https://x.test' }), 'conv_1');
+    log.observe(finished('tinv_s', 'run_command', 'succeeded', { activity: { kind: 'code', command: 'API_KEY=sk-abcdefghijklmnopqrstuvwxyz123456 npm test', excerpt: 'token: ghp_abcdefghijklmnopqrstuvwxyz0123456789' } }), 'conv_1');
+    const [item] = log.list('conv_1');
+    expect(JSON.stringify(item)).not.toMatch(/abcdef1234567890abcdefXYZ|sk-abcdefghijkl|ghp_abcdefghij/);
+    expect(item.title).toContain('••••');
+  });
+
   it('completes a step from Core completion events that carry no tool name', () => {
     // Core's tool_invocation_completed names only the invocation; the host maps the tool as unknown_tool.
     const log = new WorkspaceActivityLog();
