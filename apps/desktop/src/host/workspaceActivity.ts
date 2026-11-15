@@ -14,6 +14,7 @@
  */
 import * as fs from 'node:fs';
 import * as path from 'node:path';
+import { maskSecrets } from '../../../../core/shared/secretMask';
 import { sanitizeToolActivity, type ToolActivity, type ToolActivityKind } from '../../../../core/shared/toolActivity';
 import type { DesktopActivityEvent, DesktopWorkspaceActivity, WorkspaceActivityState } from '../ipc';
 import { browserStep } from './missionCockpit';
@@ -50,7 +51,7 @@ function hostOf(value: unknown): string {
 }
 
 function clip(value: unknown, max: number): string {
-  const text = String(value ?? '').replace(/\s+/g, ' ').trim();
+  const text = maskSecrets(String(value ?? '')).text.replace(/\s+/g, ' ').trim();
   return text.length > max ? `${text.slice(0, max)}…` : text;
 }
 

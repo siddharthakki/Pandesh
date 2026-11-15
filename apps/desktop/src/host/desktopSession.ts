@@ -5259,10 +5259,17 @@ export class DesktopSession {
     if (event.domain === 'approval' && (event.eventType === 'approval_requested' || event.eventType === 'approval_resolved' || event.eventType === 'approval_superseded' || event.eventType === 'approval_expired')) {
       // A pending approval changed somewhere (this turn or another surface).
       // Home must re-read Core so the card appears and disappears truthfully.
+      // Who decided is a fact Core already recorded on the event; show it instead of "answered".
+      const meta = (event.metadata ?? {}) as Record<string, unknown>;
+      const decision = event.eventType !== 'approval_resolved' ? undefined
+        : meta.policyDecision === 'auto_authorize' ? 'standing_rule' as const
+        : meta.resolution === 'approved' || meta.policyDecision === 'approved' ? 'approved' as const : 'denied' as const;
       this.emit({
         kind: 'assistant_approval_changed',
         at: event.createdAt,
         summary: event.eventType,
+        ...(typeof meta.toolName === 'string' ? { toolName: meta.toolName } : {}),
+        ...(decision ? { detail: { decision } } : {}),
       });
       // The turn that is running here still has to update its own card below:
       // an expired request must stop being actionable on screen too, and the

@@ -13,6 +13,8 @@
  * previews are referenced by Core artifact id.
  */
 
+import { maskSecrets } from './secretMask';
+
 export type ToolActivityKind = 'browser' | 'code' | 'document' | 'image' | 'video' | 'workshop' | 'tool';
 
 export interface ToolActivity {
@@ -94,7 +96,7 @@ function text(value: unknown, max: number): string | undefined {
   if (typeof value !== 'string') return undefined;
   // Control characters (other than newline and tab) never reach a renderer.
   // eslint-disable-next-line no-control-regex
-  const clean = value.replace(/[\u0000-\u0008\u000b-\u001f\u007f]/g, '').trim();
+  const clean = maskSecrets(value.replace(/[\u0000-\u0008\u000b-\u001f\u007f]/g, '')).text.trim();
   if (!clean) return undefined;
   return clean.length > max ? `${clean.slice(0, max)}…` : clean;
 }
@@ -106,7 +108,7 @@ function webUrl(value: unknown): string | undefined {
     const url = new URL(value);
     if (url.protocol !== 'http:' && url.protocol !== 'https:') return undefined;
     if (url.username || url.password) return undefined;
-    return url.toString();
+    return maskSecrets(url.toString()).text;
   } catch {
     return undefined;
   }
