@@ -3,13 +3,14 @@ import { explorerAgentReach, explorerModels, explorerSkill } from '../runtime/ca
 import type { ModelSnapshot } from '../runtime/modelAwareness';
 import type { SkillManifest } from '../platform/skills/skillRuntime';
 
+const GiB = 2 ** 30;
 const snap: ModelSnapshot = {
-  at: '2026-11-15T00:00:00Z', available: true, gpu: { name: 'RTX', totalVramMb: 24576, freeVramMb: 20000 }, selected: 'gemma4:12b', selectedKind: 'local',
+  at: '2026-11-15T00:00:00Z', available: true, budgetBytes: 22.5 * GiB, gpu: { name: 'RTX', totalVramMb: 24576, freeVramMb: 20000 }, selected: 'gemma4:12b', selectedKind: 'local',
   models: [
     { name: 'gemma4:12b', capabilities: ['completion', 'tools'], canSee: false, canUseTools: true, isEmbedding: false, loaded: true, selected: true, fitsGpu: true, autoEligible: true },
     { name: 'qwen2.5vl:7b', capabilities: ['vision'], canSee: true, canUseTools: false, isEmbedding: false, loaded: false, selected: false, fitsGpu: true, autoEligible: true },
     { name: 'nomic-embed-text', capabilities: ['embedding'], canSee: false, canUseTools: false, isEmbedding: true, loaded: false, selected: false, fitsGpu: true, autoEligible: true },
-    { name: 'huge:200b', capabilities: [], canSee: false, canUseTools: false, isEmbedding: false, loaded: false, selected: false, fitsGpu: false, autoEligible: true },
+    { name: 'huge:200b', capabilities: [], canSee: false, canUseTools: false, isEmbedding: false, loaded: false, selected: false, fitsGpu: false, autoEligible: true, memory: { weightsBytes: 120 * GiB, basis: 'architecture', kvByCtx: [{ ctx: 4096, bytes: 2 * GiB }, { ctx: 8192, bytes: 4 * GiB }, { ctx: 16384, bytes: 8 * GiB }, { ctx: 32768, bytes: 16 * GiB }] } },
     { name: 'x-uncensored', capabilities: [], canSee: false, canUseTools: false, isEmbedding: false, loaded: false, selected: false, fitsGpu: null, autoEligible: false },
   ],
 };
@@ -25,7 +26,8 @@ describe('capability explorer: models', () => {
     expect(by('nomic-embed-text')).toMatchObject({ usable: false });
     expect(by('nomic-embed-text').note).toMatch(/search, not for chat/);
     expect(by('huge:200b')).toMatchObject({ usable: false });
-    expect(by('huge:200b').note).toMatch(/graphics memory/);
+    expect(by('huge:200b').fit).toMatchObject({ state: 'too_large' });
+    expect(by('huge:200b').fit.summary).toMatch(/budget/);
   });
   it('flags hand-pick-only models and keeps an unknown fit usable', () => {
     expect(by('x-uncensored')).toMatchObject({ manualOnly: true, usable: true, fitsGpu: null });

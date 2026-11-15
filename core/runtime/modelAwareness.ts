@@ -35,6 +35,10 @@ export interface ModelFact {
   loaded: boolean;
   /** Bytes of GPU memory it occupies right now (loaded models only). */
   vramBytes?: number;
+  /** Ollama's measured total size and context for a loaded model (not an estimate). */
+  loadedInfo?: { sizeBytes: number; vramBytes: number; contextLength?: number };
+  /** Its memory need in parts, for the fit report. */
+  memory?: InstalledModel['memory'];
   selected: boolean;
   /** True/false when its size and the GPU budget are known, null when not. */
   fitsGpu: boolean | null;
@@ -78,7 +82,9 @@ export function noteActiveModel(name: string | null | undefined, provider?: stri
 }
 export function clearModelAwarenessCache(): void { cache = null; lastActive = null; }
 
-function factOf(m: InstalledModel, loaded: Map<string, number>, selected: string | null, budget: number | undefined): ModelFact {
+interface LoadedEntry { sizeBytes: number; vramBytes: number; contextLength?: number }
+
+function factOf(m: InstalledModel, loaded: Map<string, LoadedEntry>, selected: string | null, budget: number | undefined): ModelFact {
   const caps = m.capabilities;
   const isEmbedding = caps.includes('embedding') || /embed|rerank/i.test(m.name);
   return {
@@ -90,7 +96,8 @@ function factOf(m: InstalledModel, loaded: Map<string, number>, selected: string
     isEmbedding,
     ...(m.estimatedBytes !== undefined ? { estimatedBytes: m.estimatedBytes } : {}),
     loaded: loaded.has(m.name),
-    ...(loaded.has(m.name) ? { vramBytes: loaded.get(m.name) } : {}),
+    ...(loaded.has(m.name) ? { vramBytes: loaded.get(m.name)!.vramBytes, loadedInfo: loaded.get(m.name)! } : {}),
+    ...(m.memory ? { memory: m.memory } : {}),
     selected: selected !== null && m.name === selected,
     fitsGpu: m.estimatedBytes !== undefined && budget !== undefined ? m.estimatedBytes <= budget : null,
     autoEligible: !NOT_AUTO.test(m.name) && !isEmbedding,
@@ -114,10 +121,12 @@ export async function snapshotModels(options: SnapshotOptions = {}): Promise<Mod
   if (!installed) {
     snapshot = { at: new Date(now).toISOString(), available: false, gpu, ...(budget !== undefined ? { budgetBytes: budget } : {}), selected: selectedName, selectedKind: kind, models: [] };
   } else {
-    const loaded = new Map<string, number>();
+    const loaded = new Map<string, LoadedEntry>();
     try {
       const res = await (options.fetchFn ?? fetch)(`${root}/api/ps`, { signal: AbortSignal.timeout(3_000) });
-      if (res.ok) for (const m of ((await res.json()) as { models?: Array<{ name?: string; size_vram?: number }> }).models ?? []) if (m.name) loaded.set(m.name, Number(m.size_vram ?? 0));
+      if (res.ok) for (const m of ((await res.json()) as { models?: Array<{ name?: string; size?: number; size_vram?: number; context_length?: number }> }).models ?? []) {
+        if (m.name) loaded.set(m.name, { sizeBytes: Number(m.size ?? 0), vramBytes: Number(m.size_vram ?? 0), ...(Number(m.context_length) > 0 ? { contextLength: Number(m.context_length) } : {}) });
+      }
     } catch { /* unknown what is loaded: every model reads as not loaded */ }
     const localSelected = kind === 'cloud' ? null : selectedName;
     snapshot = {

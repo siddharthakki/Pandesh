@@ -19,7 +19,7 @@ const head: React.CSSProperties = { ...cell, color: 'var(--muted)', fontWeight: 
 const mono: React.CSSProperties = { fontFamily: 'var(--font-mono)', fontSize: 13 };
 const STATUS_TONE: Record<string, string> = { working: 'var(--verified)', installed_unverified: 'var(--attention)', unreachable: 'var(--danger)', missing: 'var(--muted)', not_connected: 'var(--muted)' };
 
-export function ToolsHub({ narrow, initialTab }: { narrow: boolean; initialTab?: { tab: Tab; n: number } | null }) {
+export function ToolsHub({ narrow, initialTab, onOpenView }: { narrow: boolean; initialTab?: { tab: Tab; n: number } | null; onOpenView?: (view: 'connections') => void }) {
   const [hub, setHub] = useState<Hub | null>(null);
   const [tab, setTab] = useState<Tab>(initialTab?.tab ?? 'now');
   // Opened on a tab by navigate_to ("show my connected services").
@@ -65,7 +65,7 @@ export function ToolsHub({ narrow, initialTab }: { narrow: boolean; initialTab?:
             <button key={id} type="button" role="tab" aria-selected={tab === id} onClick={() => setTab(id)} style={{ height: 38, padding: '0 12px', border: 0, borderBottom: `2px solid ${tab === id ? 'var(--pulse)' : 'transparent'}`, background: 'transparent', color: tab === id ? 'var(--ink)' : 'var(--muted)', fontWeight: tab === id ? 600 : 400 }}>{label}</button>
           ))}
         </div>
-        {tab === 'now' && <CapabilityExplorer narrow={narrow} />}
+        {tab === 'now' && <CapabilityExplorer narrow={narrow} {...(onOpenView ? { onOpenView } : {})} />}
         {tab !== 'now' && !hub && !error && <div className="notice" role="status">Reading Core's registries…</div>}
 
         {hub && tab === 'tools' && (

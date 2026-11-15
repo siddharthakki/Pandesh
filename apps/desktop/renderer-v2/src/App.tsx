@@ -196,7 +196,7 @@ export function App() {
         {view === 'software' && <Software narrow={narrow} />}
         {view === 'radar' && <Radar onOpenChat={() => { setOpenConversationId(null); refresh(); go('chat'); }} />}
         {view === 'revenue' && <Revenue />}
-        {view === 'tools' && <ToolsHub narrow={narrow} initialTab={toolsTab} />}
+        {view === 'tools' && <ToolsHub narrow={narrow} initialTab={toolsTab} onOpenView={go} />}
         {view === 'connections' && <Connections snapshot={snapshot} refresh={refresh} />}
         {view === 'settings' && <Settings snapshot={snapshot} refresh={refresh} narrow={narrow} initialSection={settingsSection?.id} theme={theme} setTheme={applyTheme} labels={labels} setLabels={setLabelsTo}
           variantForced={variantForced} onUseClassic={() => void useClassic()} onGo={(v) => go(v)} />}
