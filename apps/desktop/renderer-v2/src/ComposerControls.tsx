@@ -98,19 +98,24 @@ export function useComposerControls(opts: { snapshot: Snapshot | null; refresh: 
     </section>
   ) : null;
 
-  const controls = (
+  const modeControl = (
     <>
       <label className="sr-only" htmlFor="v2-permission-mode">Permission mode</label>
       <select id="v2-permission-mode" className={`ctl-select mode-${granting ? 'auto' : mode}`} title={`Permission mode: what Pandesh may do without asking you (now: ${chip.label})`}
         value={granting ? 'auto' : mode} disabled={disabled || saving || !permission} onChange={(e) => chooseMode(e.target.value as PermissionMode)}>
         {(['ask', 'auto', 'plan'] as const).map((m) => <option key={m} value={m}>{m === mode && m === 'auto' && !granting ? chip.label : PERMISSION_LABELS[m]}</option>)}
       </select>
+    </>
+  );
+
+  const modelControl = (
+    <>
       <label className="sr-only" htmlFor="v2-model">Model for your next message</label>
       <select id="v2-model" className="ctl-select" title="Model for your next message. Auto lets Pandesh pick for each request; the reply shows which model answered."
         value={menu.selected} disabled={disabled || saving || !snapshot || Boolean(snapshot?.running)} onChange={(e) => chooseModel(e.target.value)}>
         {menu.options.filter((o) => o.group !== 'cloud').map((o) => <option key={o.value || 'none'} value={o.value} disabled={o.disabled}>{o.label}</option>)}
         {menu.options.some((o) => o.group === 'cloud') && (
-          <optgroup label="Cloud — the whole chat runs there (chosen in the Classic UI)">
+          <optgroup label="Cloud — the whole chat runs there (choose one in Settings)">
             {menu.options.filter((o) => o.group === 'cloud').map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
           </optgroup>
         )}
@@ -118,5 +123,7 @@ export function useComposerControls(opts: { snapshot: Snapshot | null; refresh: 
     </>
   );
 
-  return { panel, controls, granting, autoSelected: menu.selected === AUTO_MODEL };
+  const controls = <>{modeControl}{modelControl}</>;
+
+  return { panel, controls, modeControl, modelControl, granting, autoSelected: menu.selected === AUTO_MODEL };
 }

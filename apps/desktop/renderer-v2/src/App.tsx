@@ -13,10 +13,12 @@ import { SecondBrain } from './SecondBrain';
 import { Processes } from './Processes';
 import { Workspace, type SpaceId } from './Workspaces';
 import { Connections } from './Connections';
+import { Settings } from './Settings';
+import type { SettingsSection } from './settingsModel';
 import { useWakeWord } from './wake';
 import { startWorkshopIntake } from './workshop/useWorkshop';
 
-export type View = 'chat' | 'board' | 'team' | 'space' | 'system' | 'software' | 'tools' | 'brain' | 'processes' | 'workspace' | 'radar' | 'revenue' | 'connections';
+export type View = 'chat' | 'board' | 'team' | 'space' | 'system' | 'software' | 'tools' | 'brain' | 'processes' | 'workspace' | 'radar' | 'revenue' | 'connections' | 'settings';
 
 interface PaletteEntry { group: string; label: string; run: () => void }
 
@@ -62,12 +64,15 @@ export function App() {
   });
 
   const toggleLabels = () => { const next = !labels; setLabels(next); try { localStorage.setItem('pandesh.v2.labels', next ? '1' : '0'); } catch { /* ignore */ } };
-  const cycleTheme = () => {
-    const next = theme === 'dark' ? 'light' : theme === 'light' ? 'system' : 'dark';
+  const applyTheme = (next: 'system' | 'light' | 'dark') => {
     setTheme(next);
     if (next === 'system') delete document.documentElement.dataset.theme; else document.documentElement.dataset.theme = next;
     try { if (next === 'system') localStorage.removeItem('pandesh.v2.theme'); else localStorage.setItem('pandesh.v2.theme', next); } catch { /* ignore */ }
   };
+  const cycleTheme = () => applyTheme(theme === 'dark' ? 'light' : theme === 'light' ? 'system' : 'dark');
+  const setLabelsTo = (on: boolean) => { setLabels(on); try { localStorage.setItem('pandesh.v2.labels', on ? '1' : '0'); } catch { /* ignore */ } };
+  const [settingsSection, setSettingsSection] = useState<{ id: SettingsSection; n: number } | null>(null);
+  const openSettings = (id: SettingsSection = 'models') => { setSettingsSection({ id, n: Date.now() }); go('settings'); };
   const showPlaceholder = (title: string, text: string) => { setPlaceholder({ title, text }); setView('space'); setPop(null); };
   const useClassic = async () => { try { await api.setUiVariant('classic'); } catch (err) { alert(errorText(err)); } };
 
@@ -90,16 +95,11 @@ export function App() {
     { name: 'Revenue', sub: 'Leads, offers, drafts awaiting you, verified results', run: () => go('revenue') },
   ];
   const system = [
-    variantForced
-      ? { name: 'Classic UI is locked off', sub: 'PANDESH_UI_V2=1 is set for this launch; start without it to switch', run: () => {} }
-      : { name: 'Use the Classic UI', sub: 'Reloads the window in the existing interface', run: () => void useClassic() },
-    { name: 'Connections', sub: 'Google (Gmail, Calendar): set up and connect', run: () => go('connections') },
-    { name: 'Phone', sub: 'Pair a phone with Pandesh (in Connections): QR code, secure link, paired phones', run: () => go('connections') },
+    { name: 'Settings', sub: 'Models, permissions, diagnostics, updates, appearance', run: () => openSettings() },
+    { name: 'Connections', sub: 'Google, phone pairing, free-model provider keys', run: () => go('connections') },
     { name: 'Tools & Skills', sub: 'Capabilities, agents × tools, skills, MCP, capability tests', run: () => go('tools') },
     { name: 'Processes', sub: 'What Pandesh started, checked against Windows now', run: () => go('processes') },
     { name: 'Software & Services', sub: 'Ports, installed tools, GitHub projects, updates (read-only)', run: () => go('software') },
-    { name: `Theme: ${theme}`, sub: 'Cycle dark → light → follow Windows', run: cycleTheme },
-    { name: labels ? 'Hide rail labels' : 'Show rail labels', sub: 'Names next to the navigation icons', run: toggleLabels },
   ];
 
   const [conversations, setConversations] = useState<ConversationEntry[]>([]);
@@ -152,12 +152,17 @@ export function App() {
     { group: 'GO TO', label: 'AI Radar', run: () => go('radar') },
     { group: 'GO TO', label: 'Team', run: () => go('team') },
     { group: 'GO TO', label: 'Tools & Skills', run: () => go('tools') },
-    { group: 'GO TO', label: 'Connections (Google, Gmail, Calendar)', run: () => go('connections') },
+    { group: 'GO TO', label: 'Settings', run: () => openSettings() },
+    { group: 'GO TO', label: 'Settings: Models and providers', run: () => openSettings('models') },
+    { group: 'GO TO', label: 'Settings: Permissions (Ask, Auto, Plan only)', run: () => openSettings('permissions') },
+    { group: 'GO TO', label: 'Settings: Diagnostics', run: () => openSettings('diagnostics') },
+    { group: 'GO TO', label: 'Settings: Updates', run: () => openSettings('updates') },
+    { group: 'GO TO', label: 'Connections (Google, phone, provider keys)', run: () => go('connections') },
     { group: 'GO TO', label: 'Second Brain', run: () => go('brain') },
     { group: 'GO TO', label: 'Processes', run: () => go('processes') },
     { group: 'ACTIONS', label: 'New chat', run: () => { void api.newConversation().then(refresh); setOpenConversationId(null); go('chat'); } },
-    { group: 'ACTIONS', label: 'Use the Classic UI', run: () => void useClassic() },
     { group: 'ACTIONS', label: 'Change theme', run: cycleTheme },
+    { group: 'ACTIONS', label: labels ? 'Hide navigation labels' : 'Show navigation labels', run: toggleLabels },
     ...conversations.slice(0, 12).map((c) => ({ group: 'RECENT CHATS', label: c.title || c.preview || 'Untitled chat', run: () => { setOpenConversationId(c.id); go('chat'); } })),
   ], [conversations, theme, labels]);
 
@@ -178,17 +183,14 @@ export function App() {
             <Icon name="spaces" />{labels && <span className="label">Spaces</span>}
           </button>
           <div className="spacer" />
-          <button type="button" className="rail-btn" title="System — Classic UI, theme, labels" aria-label="System" aria-expanded={pop === 'system'} onClick={() => openPop('system')}>
+          <button type="button" className="rail-btn" title="System — Settings, Connections, Tools & Skills" aria-label="System" aria-expanded={pop === 'system'} aria-current={['settings', 'connections', 'tools', 'processes', 'software'].includes(view) ? 'page' : undefined} onClick={() => openPop('system')}>
             <Icon name="system" />{labels && <span className="label">System</span>}
-          </button>
-          <button type="button" className="rail-btn" title={labels ? 'Hide labels' : 'Show labels'} aria-label={labels ? 'Hide labels' : 'Show labels'} aria-pressed={labels} onClick={toggleLabels}>
-            <Icon name={labels ? 'collapse' : 'expand'} size={18} />{labels && <span className="label">Hide labels</span>}
           </button>
         </nav>
       )}
 
       <div className="main" data-view={view}>
-        {view === 'chat' && <Chat snapshot={snapshot} snapshotError={error} refresh={refresh} narrow={narrow} openConversationId={openConversationId} onOpenPalette={() => openPop('palette')} onOpenBoard={() => go('board')} draft={draft} onDraftUsed={() => setDraft(null)}
+        {view === 'chat' && <Chat snapshot={snapshot} snapshotError={error} refresh={refresh} narrow={narrow} openConversationId={openConversationId} onOpenPalette={() => openPop('palette')} onOpenBoard={() => go('board')} onOpenSettings={() => openSettings()} draft={draft} onDraftUsed={() => setDraft(null)}
           wake={wake} wakeTurn={wakeTurn} onWakeTurnTaken={() => setWakeTurn(null)} onVoiceBusy={setVoiceBusy} />}
         {view === 'board' && <Board overview={overview} narrow={narrow} onOpenPalette={() => openPop('palette')} onOpenConversation={(id) => { setOpenConversationId(id); go('chat'); }} />}
         {view === 'software' && <Software narrow={narrow} />}
@@ -196,6 +198,8 @@ export function App() {
         {view === 'revenue' && <Revenue />}
         {view === 'tools' && <ToolsHub narrow={narrow} initialTab={toolsTab} onOpenView={go} />}
         {view === 'connections' && <Connections snapshot={snapshot} refresh={refresh} />}
+        {view === 'settings' && <Settings snapshot={snapshot} refresh={refresh} narrow={narrow} initialSection={settingsSection?.id} theme={theme} setTheme={applyTheme} labels={labels} setLabels={setLabelsTo}
+          variantForced={variantForced} onUseClassic={() => void useClassic()} onGo={(v) => go(v)} />}
         {view === 'brain' && <SecondBrain narrow={narrow} />}
         {view === 'processes' && <Processes narrow={narrow} />}
         {view === 'workspace' && <Workspace space={space} narrow={narrow} onAskPandesh={(t) => { setDraft(t); go('chat'); }} />}
