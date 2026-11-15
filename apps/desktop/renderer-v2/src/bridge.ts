@@ -60,8 +60,8 @@ export interface Snapshot {
   /** Free cloud providers (off by default); `selectedModel` is `<provider>::<model>`. */
   cloud?: {
     selectedModel?: string | null;
-    providers?: Array<{ id: string; displayName?: string; enabled?: boolean; configured?: boolean }>;
-    listings?: Record<string, { pool?: Array<{ id: string; displayName?: string }> }>;
+    providers?: Array<{ id: string; displayName?: string; enabled?: boolean; configured?: boolean; privacyWarning?: string | null }>;
+    listings?: Record<string, { pool?: Array<{ id: string; displayName?: string; vision?: boolean | 'unknown'; tools?: boolean | 'unknown' }> }>;
     [k: string]: unknown;
   } | null;
   /** The selected workspace folder, if any (Auto's workspace categories are bound to it). */
@@ -165,6 +165,9 @@ export interface FreeModelsState {
   credentials: { backend: string; status: Record<string, { configured: boolean; source: string | null; hint: string | null }>; legacyOnly: string[] };
 }
 
+export interface AppMetadata { productName: string; version: string; buildNumber: number | null; buildKind: 'release' | 'development'; releaseChannel: string; commit: string | null; builtAt: string | null; coreVersion: string | null; coreVersionMismatch: boolean }
+export interface UpdateStatus { available: boolean; installedRevision: number | null; version: string; lastResult: { status: 'success' | 'rolled_back' | 'aborted' | 'rollback_failed'; at: string; acknowledged: boolean; reason?: string; revision?: number; attemptedRevision?: number } | null }
+
 export interface DesktopApi {
   getSnapshot(): Promise<Snapshot | null>;
   /** Phone pairing: the code and links, a new code, forget a phone, who may connect, resume paused pairing. */
@@ -240,6 +243,13 @@ export interface DesktopApi {
   saveWorkshopFile(artifactId: string): Promise<{ saved: boolean; path: string | null }>;
   /** A short-lived pandesh-preview: URL for a Design page (served from memory, sandboxed, no network). */
   designPreview(artifactId: string): Promise<{ url: string; nonce: string; expiresAt: string; warnings: string[] }>;
+  /** Settings → Diagnostics and Updates: the host's own reports (no credentials in either). */
+  getAppMetadata(): Promise<AppMetadata>;
+  getDiagnosticsReport(): Promise<string>;
+  getUpdateStatus(): Promise<UpdateStatus>;
+  /** Opens the host's file dialog for a Pandesh update package and verifies it before anything changes. */
+  startUpdate(): Promise<{ status: 'cancelled' | 'rejected' | 'blocked' | 'unavailable' | 'applying'; message: string }>;
+  acknowledgeUpdateResult(): Promise<void>;
   onEvent(listener: (event: ActivityEvent) => void): () => void;
   /** Free models and provider keys: keys go in, never come back out. */
   getFreeModels(): Promise<FreeModelsState>;
