@@ -27,7 +27,7 @@ import { providerDeclaresNoChat } from '../domain/empiricalRouting';
 import { cloudProviderLabel } from './attemptModelBackend';
 import type { PreferredCloudModel } from './cloudCredentials';
 import { detectGpu } from './hardwareCapacity';
-import { estimateModelBytes, gpuBudgetBytes, showModel } from './ollamaModelInfo';
+import { estimateModelBytes, gpuBudgetBytes, modelMemoryProfile, showModel, type ModelMemoryProfile } from './ollamaModelInfo';
 
 /** The context size Pandesh runs local models at (piAgentEngine PI_CONTEXT_WINDOW). */
 const ESCALATION_NUM_CTX = 32_768;
@@ -46,6 +46,8 @@ export interface InstalledModel {
   capabilities: string[];
   /** GPU memory it needs at Pandesh's context size (weights + KV cache + buffers); undefined when unknown. */
   estimatedBytes?: number;
+  /** The same estimate in its parts (weights, context cache at several sizes), for the capability explorer. */
+  memory?: ModelMemoryProfile;
 }
 
 export type EscalationPlan =
@@ -125,6 +127,7 @@ export async function localInstalledModels(baseUrl = process.env.KARKEDIKHA_OLLA
         // Unknown capabilities: the model is simply not a candidate.
         capabilities: shown?.capabilities ?? [],
         estimatedBytes: estimateModelBytes(m.size, shown?.modelInfo, ESCALATION_NUM_CTX),
+        memory: modelMemoryProfile(m.size, shown?.modelInfo),
       };
     }));
   } catch {

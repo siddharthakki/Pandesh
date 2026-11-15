@@ -51,6 +51,25 @@ export function estimateModelBytes(fileBytes: number | undefined, info: ModelInf
   return fileBytes + (kv ?? fileBytes * 0.25) + 2 ** 30;
 }
 
+/** Context sizes the fit report estimates at (Pandesh's agent engine runs at the largest). */
+export const FIT_CONTEXTS = [4096, 8192, 16384, 32768];
+
+export interface ModelMemoryProfile {
+  weightsBytes: number;
+  /** Context cache at each size, f16. */
+  kvByCtx: Array<{ ctx: number; bytes: number }>;
+  /** 'architecture' when computed from the model's reported layout; 'rule_of_thumb' when that was not reported. */
+  basis: 'architecture' | 'rule_of_thumb';
+}
+
+/** The pieces of a model's memory need, kept apart. Undefined when the file size is unknown. */
+export function modelMemoryProfile(fileBytes: number | undefined, info: ModelInfo | undefined): ModelMemoryProfile | undefined {
+  if (!fileBytes || fileBytes <= 0) return undefined;
+  const exact = FIT_CONTEXTS.map((ctx) => (info ? estimateKvCacheBytes(info, ctx) : undefined));
+  if (exact.every((v) => v !== undefined)) return { weightsBytes: fileBytes, kvByCtx: FIT_CONTEXTS.map((ctx, i) => ({ ctx, bytes: exact[i]! })), basis: 'architecture' };
+  return { weightsBytes: fileBytes, kvByCtx: FIT_CONTEXTS.map((ctx) => ({ ctx, bytes: fileBytes * 0.25 * (ctx / 32768) })), basis: 'rule_of_thumb' };
+}
+
 /** The GPU budget for one model: total VRAM less 1.5 GiB for the desktop and other programs. */
 export function gpuBudgetBytes(totalVramMb: number | undefined): number | undefined {
   if (!totalVramMb || totalVramMb <= 0) return undefined;

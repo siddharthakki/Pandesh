@@ -12,6 +12,7 @@
  * from its own config file. This module only classifies; the route supplies the inputs.
  */
 import type { ModelSnapshot } from './modelAwareness';
+import { assessFit, type ModelFitReport } from './modelFit';
 import type { SkillManifest } from '../platform/skills/skillRuntime';
 
 export interface ExplorerModel {
@@ -22,8 +23,10 @@ export interface ExplorerModel {
   vision: boolean;
   tools: boolean;
   embedding: boolean;
-  /** Fits the graphics memory budget; null when its size or the GPU is unknown. */
+  /** Fits the graphics memory budget at Pandesh's context size; null when its size or the GPU is unknown. */
   fitsGpu: boolean | null;
+  /** Capacity, estimate, availability and readiness kept apart; a loaded model's is measured by Ollama. */
+  fit: ModelFitReport;
   /** Models only the owner may pick by hand (modified variants). */
   manualOnly: boolean;
   /** Plain words: what it is good for here, and why not when it is not usable. */
@@ -35,24 +38,27 @@ export interface ExplorerModels {
   serverAnswering: boolean;
   selected: string | null;
   selectedKind: 'local' | 'cloud' | 'unknown';
-  gpu: { name: string; totalVramMb: number } | null;
+  gpu: { name: string; totalVramMb: number; freeVramMb: number } | null;
   models: ExplorerModel[];
 }
 
 export function explorerModels(snap: ModelSnapshot): ExplorerModels {
-  const gpu = snap.gpu ? { name: snap.gpu.name, totalVramMb: snap.gpu.totalVramMb } : null;
+  const gpu = snap.gpu ? { name: snap.gpu.name, totalVramMb: snap.gpu.totalVramMb, freeVramMb: snap.gpu.freeVramMb } : null;
+  const fitGpu = snap.gpu ? { totalBytes: snap.gpu.totalVramMb * 1024 * 1024, freeBytes: snap.gpu.freeVramMb * 1024 * 1024 } : null;
   return {
     serverAnswering: snap.available,
     selected: snap.selected,
     selectedKind: snap.selectedKind,
     gpu,
     models: snap.models.map((m) => {
-      const usable = !m.isEmbedding && m.fitsGpu !== false;
+      const fit = assessFit({ ...(m.memory ? { profile: m.memory } : {}), gpu: fitGpu, ...(snap.budgetBytes !== undefined ? { budgetBytes: snap.budgetBytes } : {}), ...(m.loadedInfo ? { loaded: m.loadedInfo } : {}), embedding: m.isEmbedding });
+      // Usable for chat: not an embedding model and not hopeless on this GPU. A model that spills to the CPU still
+      // works (slowly), and a model the owner selected is never called unusable on an estimate.
+      const usable = !m.isEmbedding && (m.selected || fit.state !== 'too_large');
       const abilities = [m.canSee ? 'sees images' : null, m.canUseTools ? 'calls tools' : null].filter(Boolean).join(', ');
       const note = m.isEmbedding ? 'Embedding model: used for search, not for chat.'
-        : m.fitsGpu === false ? 'Too large for this PC\'s graphics memory at Pandesh\'s context size.'
         : abilities ? `Chat model that ${abilities}.` : 'Chat model (text only; it reports no image or tool ability).';
-      return { name: m.name, installed: true as const, loaded: m.loaded, selected: m.selected, vision: m.canSee, tools: m.canUseTools, embedding: m.isEmbedding, fitsGpu: m.fitsGpu, manualOnly: !m.autoEligible, usable, note };
+      return { name: m.name, installed: true as const, loaded: m.loaded, selected: m.selected, vision: m.canSee, tools: m.canUseTools, embedding: m.isEmbedding, fitsGpu: m.fitsGpu, fit, manualOnly: !m.autoEligible, usable, note };
     }),
   };
 }
