@@ -77,6 +77,11 @@ export const AUTHORITATIVE_PROCESS_SPAWN_ALLOWLIST: ReadonlySet<string> = new Se
   // document path the caller already had to be authorized for.
   'core/runtime/documentOcr.ts',
 
+  // Runs the Agent Reach command-line tool the person installed (<data dir>/tools/agent-reach.json) for read-only public
+  // lookups: the program starts directly with a fixed argv (no shell), only (channel, action) pairs on a login-free
+  // allowlist, an isolated home folder, a 90 s timeout, and a capped, untrusted-labelled result. Consent is asked by the caller.
+  'core/runtime/agentReachTool.ts',
+
   // Core external engine and agent runtimes
   'core/runtime/hermesEngine.ts',
   'core/runtime/opencodeEngine.ts',
