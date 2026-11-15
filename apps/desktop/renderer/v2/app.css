@@ -376,3 +376,14 @@ kbd { font-family: var(--font-mono); font-size: 12px; color: var(--muted); borde
 .settings-choice { display: flex; align-items: flex-start; gap: 8px; }
 .settings-check { display: flex; align-items: center; gap: 8px; font-size: 14px; }
 .settings-report { margin: 6px 0 0; max-height: 320px; overflow: auto; padding: 10px 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--canvas); font: 12.5px/1.5 var(--font-mono); white-space: pre-wrap; overflow-wrap: anywhere; }
+/* Composer attachments: chips above the composer, a drop overlay while files are dragged over the window */
+.attach-list { list-style: none; margin: 0 0 8px; padding: 0; display: flex; flex-wrap: wrap; gap: 6px; }
+.attach-list.sent { margin: 8px 0 0; }
+.attach-chip { display: inline-flex; align-items: center; gap: 8px; max-width: 100%; padding: 4px 6px 4px 10px; border: 1px solid var(--line); border-radius: 999px; background: var(--raised); color: var(--ink); font-size: 13px; }
+.attach-kind { color: var(--muted); font-size: 12px; }
+.attach-name { min-width: 0; max-width: 260px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.attach-size { color: var(--muted); font-family: var(--font-mono); font-size: 12px; }
+.attach-x { width: 22px; height: 22px; padding: 0; border: 0; border-radius: 50%; background: transparent; color: var(--muted); font-size: 16px; line-height: 1; }
+.attach-x:hover { background: var(--line); color: var(--ink); }
+.drop-overlay { position: absolute; inset: 0; z-index: 30; display: flex; align-items: center; justify-content: center; border: 2px dashed var(--pulse); background: color-mix(in srgb, var(--canvas) 90%, transparent); backdrop-filter: blur(6px); color: var(--ink); font-size: 18px; pointer-events: none; }
+.drop-overlay span { padding: 12px 20px; border: 1px solid var(--line); border-radius: 12px; background: var(--raised); text-align: center; }

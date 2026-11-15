@@ -10,6 +10,8 @@ import { Markdown } from './markdown';
 import { useVoice } from './voice';
 import type { WakeWord } from './wake';
 import { useComposerControls } from './ComposerControls';
+import { AttachmentChips, useAttachments } from './Attachments';
+import { canSend, goalFor } from './attachmentModel';
 import { useFolderControl } from './FolderControl';
 import { modelLabel as describeModel } from './composerModel';
 
@@ -102,6 +104,8 @@ export function Chat({ snapshot, snapshotError, refresh, narrow, openConversatio
   const [loadedFor, setLoadedFor] = useState<string | null | undefined>(undefined);
   const [live, setLive] = useState<{ attemptId: string | null; text: string }>({ attemptId: null, text: '' });
   const [pendingUser, setPendingUser] = useState<string | null>(null);
+  /** Files that go with the message being sent (the host clears its staging once Core has them). */
+  const [pendingFiles, setPendingFiles] = useState<NonNullable<Snapshot['stagedAttachments']>>([]);
   const [notice, setNotice] = useState<{ text: string; error?: boolean } | null>(null);
   const [text, setText] = useState('');
   const [busy, setBusy] = useState(false);
@@ -190,7 +194,8 @@ export function Chat({ snapshot, snapshotError, refresh, narrow, openConversatio
   /** The transcript last put in the composer for review, with its voice turn: sent unchanged, it is still speech. */
   const heldTranscript = useRef<{ text: string; voiceTurnId: string } | null>(null);
   const send = async (spoken?: string, voiceTurnId?: string) => {
-    const goal = (spoken ?? text).trim();
+    const stagedNow = snapshot?.stagedAttachments ?? [];
+    const goal = spoken !== undefined ? spoken.trim() : goalFor(text, stagedNow);
     if (!goal || busy || folder.asking) return;
     const held = heldTranscript.current;
     heldTranscript.current = null;
@@ -218,6 +223,7 @@ export function Chat({ snapshot, snapshotError, refresh, narrow, openConversatio
     setNotice(null);
     setDeclined(false);
     setPendingUser(goal);
+    setPendingFiles(snapshot?.stagedAttachments ?? []);
     setText('');
     if (textarea.current) textarea.current.style.height = 'auto';
     try {
@@ -334,6 +340,7 @@ export function Chat({ snapshot, snapshotError, refresh, narrow, openConversatio
   const coreDown = snapshot && snapshot.coreState !== 'connected' && snapshot.coreState !== 'ready';
   const needs = brief?.length ?? 0;
   const [controlNotice, setControlNotice] = useState<{ text: string; error?: boolean } | null>(null);
+  const attach = useAttachments({ snapshot, refresh, onNotice: setControlNotice, disabled: Boolean(coreDown) || !snapshot });
   const controls = useComposerControls({ snapshot, refresh, onNotice: setControlNotice, disabled: Boolean(coreDown) || !snapshot });
   const folder = useFolderControl({
     snapshot, refresh, onNotice: setControlNotice, disabled: Boolean(coreDown) || !snapshot,
@@ -385,14 +392,15 @@ export function Chat({ snapshot, snapshotError, refresh, narrow, openConversatio
   const wakeAction = (work: () => Promise<void>) => { void work().catch((err) => setControlNotice({ text: `Wake word: ${errorText(err)}`, error: true })); };
 
   const composer = (
-    <div className={`composer${text.trim() ? ' has-text' : ''}`}>
+    <div className={`composer${canSend(text, attach.staged) ? ' has-text' : ''}`} onPaste={attach.onPaste}>
+      {attach.button}
       <label className="sr-only" htmlFor="v2-ask">Message Pandesh</label>
-      <textarea id="v2-ask" ref={textarea} rows={1} value={text} placeholder={wakeStatus?.kind === 'listening' ? `Ask Pandesh… or say “${wakeStatus.phrase}”` : 'Ask Pandesh…'} disabled={Boolean(coreDown)}
+      <textarea id="v2-ask" ref={textarea} rows={1} value={text} placeholder={attach.staged.length ? 'Add a message about your file (optional)…' : wakeStatus?.kind === 'listening' ? `Ask Pandesh… or say “${wakeStatus.phrase}”` : 'Ask Pandesh…'} disabled={Boolean(coreDown)}
         onChange={(e) => { setText(e.target.value); e.target.style.height = 'auto'; e.target.style.height = `${Math.min(e.target.scrollHeight, 200)}px`; }}
         onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) { e.preventDefault(); void send(); } }} />
       <button type="button" className="icon-btn" aria-label="Talk to Pandesh" title={speechReady ? 'Talk to Pandesh (local speech recognition)' : speechBlocker} disabled={!speechReady || Boolean(coreDown)} onClick={() => void voice.listen()}><Icon name="mic" /></button>
       {runningHere && <button type="button" className="icon-btn" title="Stop the running task" aria-label="Stop the running task" onClick={() => void stop()}><Icon name="stop" /></button>}
-      <button type="button" className={`icon-btn send-btn${text.trim() && !folder.asking ? ' ready' : ''}`} title={folder.asking ? 'Answer the folder question first' : 'Send (Enter)'} aria-label="Send" disabled={!text.trim() || busy || folder.asking} onClick={() => void send()}><Icon name="send" /></button>
+      <button type="button" className={`icon-btn send-btn${canSend(text, attach.staged) && !folder.asking ? ' ready' : ''}`} title={folder.asking ? 'Answer the folder question first' : 'Send (Enter)'} aria-label="Send" disabled={!canSend(text, attach.staged) || busy || folder.asking} onClick={() => void send()}><Icon name="send" /></button>
     </div>
   );
 
@@ -506,7 +514,7 @@ export function Chat({ snapshot, snapshotError, refresh, narrow, openConversatio
             <div className="transcript-inner">
               <div />
               {messages.map((m) => m.role === 'user'
-                ? <div key={m.id} className="msg-user">{m.content}</div>
+                ? <div key={m.id} className="msg-user">{m.content}{m.attachments?.length ? <AttachmentChips items={m.attachments} /> : null}</div>
                 : (
                   <div key={m.id} className="msg-assistant">
                     <Mark />
@@ -516,7 +524,7 @@ export function Chat({ snapshot, snapshotError, refresh, narrow, openConversatio
                     </div>
                   </div>
                 ))}
-              {pendingUser && <div className="msg-user" aria-label="Sending">{pendingUser}</div>}
+              {pendingUser && <div className="msg-user" aria-label="Sending">{pendingUser}{pendingFiles.length ? <AttachmentChips items={pendingFiles} /> : null}</div>}
               {runningHere && (
                 <div className="msg-assistant" aria-live="polite">
                   <Mark />
@@ -587,6 +595,7 @@ export function Chat({ snapshot, snapshotError, refresh, narrow, openConversatio
                 {voice.state === 'interrupted' && <div role="status" style={{ alignSelf: 'flex-start', display: 'flex', alignItems: 'center', gap: 8, padding: '4px 12px', borderRadius: 999, background: 'var(--raised)', fontSize: 14 }}>Stopped speaking. <button type="button" className="btn link" style={{ minHeight: 0, padding: 0 }} onClick={() => voice.clear()}>OK</button></div>}
                 {voice.state === 'error' && <div role="alert" className="notice error" style={{ margin: 0 }}>{voice.detail} <button type="button" className="btn link" style={{ minHeight: 0, padding: 0 }} onClick={() => voice.clear()}>OK</button></div>}
                 {voice.state === 'idle' && voice.detail && <div role="status" style={{ fontSize: 14, color: 'var(--muted)' }}>{voice.detail}</div>}
+                {attach.strip}
                 {composer}
               </>
             )}
@@ -603,6 +612,7 @@ export function Chat({ snapshot, snapshotError, refresh, narrow, openConversatio
         <div className="spacer-v" />
       </div>
     </div>
+    {attach.overlay}
     {workshop.ui && !workshopFull && <WorkshopPanel conversationId={convId} workshop={workshop} narrow={narrow} />}
     {asideOpen && <ActivityAside activities={activities} conversationId={convId} narrow={narrow} run={shownRun} running={runningHere} now={now} currentTaskId={runningHere ? snapshot?.attemptId ?? null : lastTaskId} onClose={() => { setClosedFor(activeTaskKey); setForcedOpen(false); }} />}
     </div>
