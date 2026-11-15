@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { api, errorText } from './bridge';
 import { timeOf } from './ui';
+import { CapabilityExplorer } from './CapabilityExplorer';
 
 interface Tool { name: string; description: string; capabilityId: string; risk: string; executor: 'governed' | 'native'; group?: string; usage: { total: number; byStatus: Record<string, number>; last: string } | null }
 interface Capability { id: string; health: { state: string; reason?: string }; tools: string[] }
@@ -11,8 +12,8 @@ interface Hub { generatedAt: string; tools: Tool[]; capabilities: Capability[]; 
 interface InvItem { id: string; label: string; status: string; detail: string; version?: string; driver?: string; category: string }
 interface Connector { id: string; label?: string; state?: string; status?: string; detail?: string; reason?: string | null; [k: string]: unknown }
 
-type Tab = 'tools' | 'agents' | 'skills' | 'mcp' | 'tests' | 'connectors';
-const TABS: Array<[Tab, string]> = [['tools', 'Tools'], ['agents', 'Agents × Tools'], ['skills', 'Skills'], ['mcp', 'MCP servers'], ['tests', 'Capability tests'], ['connectors', 'Connectors']];
+type Tab = 'now' | 'tools' | 'agents' | 'mcp' | 'tests' | 'connectors';
+const TABS: Array<[Tab, string]> = [['now', 'Can do now'], ['tools', 'Tools'], ['agents', 'Agents × Tools'], ['mcp', 'MCP servers'], ['tests', 'Capability tests'], ['connectors', 'Connectors']];
 const cell: React.CSSProperties = { padding: '8px 10px', borderBottom: '1px solid var(--line)', textAlign: 'left', verticalAlign: 'top', fontSize: 14 };
 const head: React.CSSProperties = { ...cell, color: 'var(--muted)', fontWeight: 600, fontSize: 12.5, position: 'sticky', top: 0, background: 'var(--canvas)' };
 const mono: React.CSSProperties = { fontFamily: 'var(--font-mono)', fontSize: 13 };
@@ -20,7 +21,7 @@ const STATUS_TONE: Record<string, string> = { working: 'var(--verified)', instal
 
 export function ToolsHub({ narrow, initialTab }: { narrow: boolean; initialTab?: { tab: Tab; n: number } | null }) {
   const [hub, setHub] = useState<Hub | null>(null);
-  const [tab, setTab] = useState<Tab>(initialTab?.tab ?? 'tools');
+  const [tab, setTab] = useState<Tab>(initialTab?.tab ?? 'now');
   // Opened on a tab by navigate_to ("show my connected services").
   useEffect(() => { if (initialTab) setTab(initialTab.tab); }, [initialTab?.n]);
   const [q, setQ] = useState('');
@@ -64,7 +65,8 @@ export function ToolsHub({ narrow, initialTab }: { narrow: boolean; initialTab?:
             <button key={id} type="button" role="tab" aria-selected={tab === id} onClick={() => setTab(id)} style={{ height: 38, padding: '0 12px', border: 0, borderBottom: `2px solid ${tab === id ? 'var(--pulse)' : 'transparent'}`, background: 'transparent', color: tab === id ? 'var(--ink)' : 'var(--muted)', fontWeight: tab === id ? 600 : 400 }}>{label}</button>
           ))}
         </div>
-        {!hub && !error && <div className="notice" role="status">Reading Core's registries…</div>}
+        {tab === 'now' && <CapabilityExplorer narrow={narrow} />}
+        {tab !== 'now' && !hub && !error && <div className="notice" role="status">Reading Core's registries…</div>}
 
         {hub && tab === 'tools' && (
           <>
@@ -108,13 +110,6 @@ export function ToolsHub({ narrow, initialTab }: { narrow: boolean; initialTab?:
               </div>
             )}
           </>
-        )}
-
-        {hub && tab === 'skills' && (
-          <div style={{ display: 'grid', gap: 10, gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))' }}>
-            {hub.skills.map((s) => <div key={s.id} className="card"><span className="title">{s.name}</span><span className="meta">{s.kind} · {s.source} · {s.trust} · v{s.version}</span><span style={{ fontSize: 14 }}>{s.description}</span></div>)}
-            {hub.skills.length === 0 && <div className="notice">No skills are installed.</div>}
-          </div>
         )}
 
         {hub && tab === 'mcp' && <div className="notice" style={{ maxWidth: 'none', margin: 0 }}>{hub.mcp.note}</div>}

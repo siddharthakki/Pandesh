@@ -23,6 +23,10 @@ import { BASE_TOOLS, NATIVE_GROUP } from '../runtime/chatToolSelection';
 import { ALWAYS_ALLOWED, deriveScope, isToolAllowed, listAgentDefinitions } from '../domain/agents';
 import { BUILTIN_SKILLS } from '../platform/skills/builtinSkills';
 import { probeCapabilityInventory, type InventoryProbeDeps } from '../runtime/capabilityInventory';
+import { snapshotModels, skillModelContext } from '../runtime/modelAwareness';
+import { loadUserSkills } from '../platform/skills/skillService';
+import { AGENT_REACH_ALLOWED, readAgentReachConfig } from '../runtime/agentReachTool';
+import { explorerAgentReach, explorerModels, explorerSkill } from '../runtime/capabilityExplorer';
 
 function requireHost(ctx: ApiContext): void {
   const p = ctx.principal;
@@ -77,6 +81,28 @@ export function registerToolHubRoutes(router: Router<ApiContext, ApiResult>, opt
       skills: BUILTIN_SKILLS.map((s) => ({ id: s.id, name: s.name, description: s.description, kind: s.kind, source: s.source, trust: s.trust, version: s.version, requires: s.requires })),
       mcp: { servers: [], note: 'No MCP servers are registered with Core. A Core-side MCP registry is not part of this build; nothing is connected.' },
       testHistory: readHistory(options.dataDir),
+    });
+  });
+
+  /**
+   * The capability explorer: installed models (loaded, vision, tools), skills with what they need and their trust, and
+   * Agent Reach. Read-only; installed, usable and authorized are kept apart (core/runtime/capabilityExplorer.ts).
+   * `?model=` names the model the user selected so the explorer can mark it; the cloud case is `?cloud=1`.
+   */
+  router.get('/v1/tools/explorer', async (ctx) => {
+    requireHost(ctx);
+    const cloud = ctx.query.get('cloud') === '1';
+    const snap = await snapshotModels({ selectedModel: ctx.query.get('model'), ...(cloud ? { provider: 'cloud' } : {}) });
+    const abilities = skillModelContext(snap);
+    const user = await loadUserSkills(options.dataDir ?? undefined);
+    const skills = [...BUILTIN_SKILLS, ...(user?.registry.list() ?? [])].map((s) => explorerSkill(s, abilities));
+    return ok({
+      generatedAt: new Date().toISOString(),
+      models: explorerModels(snap),
+      skills,
+      rejectedSkills: user?.report.rejected ?? [],
+      skillsFolder: options.dataDir ? path.join(options.dataDir, 'skills') : null,
+      agentReach: explorerAgentReach(readAgentReachConfig(options.dataDir ?? undefined) !== null, AGENT_REACH_ALLOWED),
     });
   });
 
