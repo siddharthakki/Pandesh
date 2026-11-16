@@ -185,6 +185,7 @@ describe('delegated reports that cite tool calls', () => {
     const { claimsToolCalls } = await import('../runtime/piAgentEngine');
     expect(claimsToolCalls('Evidence: find_skill(task="review an invoice") returned a match')).toBe(true);
     expect(claimsToolCalls('The agent called read_skill and then summarised it.')).toBe(true);
+    expect(claimsToolCalls('Checked the interaction between `find_skill` and `read_skill`. Verified.')).toBe(true);
     expect(claimsToolCalls('Verdict: ready. The prices match the supplier list.')).toBe(false);
   });
 });

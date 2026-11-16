@@ -658,7 +658,7 @@ export function isModelComparisonOrAnalysisRequest(text: string): boolean {
  */
 /** The report cites tool calls ("find_skill(task=...)", "I called read_file") as what it did or as its evidence. */
 export function claimsToolCalls(text: string): boolean {
-  return /\b[a-z]+(?:_[a-z]+)+\s*\(/.test(text) || /\b(?:called|ran|used|invoked|executed)\s+(?:the\s+)?[`'"]?[a-z]+(?:_[a-z]+)+/i.test(text);
+  return /`[a-z]+(?:_[a-z]+)+`/.test(text) || /\b[a-z]+(?:_[a-z]+)+\s*\(/.test(text) || /\b(?:called|ran|used|invoked|executed)\s+(?:the\s+)?[`'"]?[a-z]+(?:_[a-z]+)+/i.test(text);
 }
 
 export function isModelListingRequest(text: string): boolean {
