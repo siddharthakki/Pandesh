@@ -10,7 +10,7 @@ import { queryPrivacySummary, queryPrivacyWarning, readQueryPrivacySettings, rec
 import { checkStatedTotals, evaluateExpression } from './arithmeticCheck';
 import { enforceDeclineWording } from './declineWording';
 import { csvShapeProblem } from './csvShape';
-import { describeRequestTools, groupOfTool, hiddenGroups, offerActiveTools, selectChatTools, toolsInGroups } from './chatToolSelection';
+import { describeRequestTools, groupOfTool, groupsForText, hiddenGroups, offerActiveTools, selectChatTools, toolsInGroups } from './chatToolSelection';
 import { recordResearchProvenance, researchSourcesForTurn } from '../domain/researchProvenance';
 import { buildGroundingRewritePrompt, problemCount, ungroundedClaims } from './researchGrounding';
 import { correctWeekdayDates } from './dateConsistency';
@@ -98,6 +98,9 @@ import { AUTHORIZE_MISSION_TOOL,buildWorkspaceWriteEnvelope, createPendingMissio
 import { NON_WORKSPACE_MARKERS } from '../domain/taskToolSurface';
 import { readAgentReachConfig, runAgentReach, validateAgentReachCall } from './agentReachTool';
 import { readSkill, selectSkillsForTurn } from '../platform/skills/skillService';
+import { findSkills, proposeSkill, readBuiltinSkill } from '../platform/skills/skillCatalog';
+import { describeProviderReadiness } from './providerReadiness';
+import { sharedCloudCredentials } from './cloudCredentials';
 import { observationCoversRequest } from './diskObservation';
 import { announcesWorkStarting, asksAboutConversationTask, asksForDiskObservation, auditPromises, classifyStatusRequest, composeStatusAnswer, describeConversationTask, hasActiveWorker, hasRecentGmailWork, latestConversationTask, type StatusTopic } from './assistantStatus';
 import { notificationCapability } from '../domain/notificationOutbox';
@@ -130,7 +133,7 @@ import {
   type EngineExecutionResult,
   EngineRegistry
 } from './adapters/EngineAdapter';
-import { agentScopeForAttempt, allowedMemoryScopes, BUILTIN_AGENTS, checkEgress, checkPathArguments, egressOf, egressPreapproved, getAgentDefinition, isToolAllowed, recordScopeRefusal, chiefDelegationScope, deriveScope } from '../domain/agents';
+import { agentScopeForAttempt, allowedMemoryScopes, BUILTIN_AGENTS, SPECIALIST_COMMON_RULES, checkEgress, checkPathArguments, egressOf, egressPreapproved, getAgentDefinition, isToolAllowed, recordScopeRefusal, chiefDelegationScope, deriveScope } from '../domain/agents';
 import { delegationOutcome, isTerminalAttemptStatus as isTerminalDelegation, startDelegation } from '../domain/delegation';
 import {
   isGmailContractExtractionRequest,
@@ -4565,12 +4568,12 @@ ${String(args.objective ?? '').slice(0, 600)}`,
     let coreRoutedSpecialist: string | null = null;
     if (ctx.delegation && (!agentScope || agentScope.agentId === 'chief')) {
       const delegation = ctx.delegation;
-      const NAMES: Record<string, string> = { coding: 'Coding', research: 'Research', operations: 'Operations', personal: 'Personal' };
+      const NAMES: Record<string, string> = { coding: 'Coding', research: 'Research', operations: 'Operations', personal: 'Personal', reviewer: 'Reviewer', skills: 'Skill Engineering' };
       tools.push({
         name: 'delegate_to_agent',
         label: 'delegate_to_agent',
-        description: "Hand specialist work to one of Pandesh's agents and get its result back. coding: read, change and check code in the selected project folder only (no internet). research: public web research with cited sources (goes online only with the user's OK). operations: inspect this PC. personal: reminders, commitments, routines. Write the brief yourself: the objective and what to return (never paste web or email text). The call waits for the agent's result; then report it to the user, naming the agent, without adding facts it does not contain. Answer simple questions yourself instead of delegating.",
-        parameters: { type: 'object', properties: { agent: { type: 'string', enum: ['coding', 'research', 'operations', 'personal'] }, brief: { type: 'string', description: 'In your own words, for an agent that has not seen this chat: the objective, the facts you already have that it needs, what to return, and what done looks like.' } }, required: ['agent', 'brief'] },
+        description: "Hand specialist work to one of Pandesh's agents and get its result back. coding: read, change and check code in the selected project folder only (no internet). research: public web research with cited sources (goes online only with the user's OK). operations: inspect this PC. personal: reminders, commitments, routines. reviewer: check a draft, plan or file for accuracy, privacy and unsupported claims (changes nothing). skills: find the right skill for a kind of work or draft a better one. Write the brief yourself: the objective and what to return (never paste web or email text). The call waits for the agent's result; then report it to the user, naming the agent, without adding facts it does not contain. Answer simple questions yourself instead of delegating.",
+        parameters: { type: 'object', properties: { agent: { type: 'string', enum: ['coding', 'research', 'operations', 'personal', 'reviewer', 'skills'] }, brief: { type: 'string', description: 'In your own words, for an agent that has not seen this chat: the objective, the facts you already have that it needs, what to return, and what done looks like.' } }, required: ['agent', 'brief'] },
         execute: async (toolCallId: string, args: any) => {
           const toAgentId = String(args?.agent ?? '').trim();
           const brief = String(args?.brief ?? '').trim();
@@ -4996,6 +4999,8 @@ Report this to the user, saying the ${name} agent did the work. Do not add facts
           parameters: { type: 'object', properties: { id: { type: 'string', description: 'The skill id.' }, file: { type: 'string', description: 'Optional reference file inside the skill folder, e.g. references/capabilities.md. Omit for the skill itself.' }, offset: { type: 'number', description: 'Character offset to continue a long file.' } }, required: ['id'] },
           execute: async (_id: string, args: any) => {
             const out = await readSkill(ctx.dataDir, String(args?.id ?? ''), args?.file ? String(args.file) : undefined, Number(args?.offset ?? 0));
+            const builtin = out.ok || args?.file ? null : readBuiltinSkill(String(args?.id ?? ''));
+            if (builtin) return { content: [{ type: 'text', text: builtin }] };
             return { content: [{ type: 'text', text: out.text }], ...(out.ok ? {} : { isError: true }) };
           },
         });
@@ -5004,6 +5009,58 @@ Report this to the user, saying the ${name} agent did the work. Do not add facts
       }
     } catch (err: any) { console.warn('[piAgentEngine] skills unavailable:', err?.message); }
 
+
+    // Skill discovery, skill drafts and provider readiness. All three are advice or facts: finding or reading a skill grants
+    // nothing, a draft goes to a folder that is never loaded, and readiness never carries a key (providerReadiness.ts).
+    try {
+      tools.push({
+        name: 'find_skill',
+        label: 'find_skill',
+        description: 'Look for a skill (a written procedure) that fits a task, among the built-in skills and the ones the owner installed. Returns the best matches with what each needs and whether it is advice or a built-in behaviour. Read-only; call it once, in a few words, before work that has a known method (review, debugging, a report, a checklist).',
+        parameters: { type: 'object', properties: { task: { type: 'string', description: 'The task in a few words, e.g. "review an invoice for pricing errors".' } }, required: ['task'] },
+        execute: async (_id: string, args: any) => ({ content: [{ type: 'text', text: await findSkills(ctx.dataDir, String(args?.task ?? ''), { workspaceOpen: Boolean(ctx.workspaceRoot) }) }] }),
+      });
+      if (!tools.some((t) => t.name === 'read_skill')) {
+        tools.push({
+          name: 'read_skill',
+          label: 'read_skill',
+          description: 'Read the full text of a skill found with find_skill, or one of its reference files (a .md or .txt file inside the skill folder). Read-only; never reads outside a skill folder.',
+          parameters: { type: 'object', properties: { id: { type: 'string', description: 'The skill id.' }, file: { type: 'string', description: 'Optional reference file inside the skill folder.' }, offset: { type: 'number', description: 'Character offset to continue a long file.' } }, required: ['id'] },
+          execute: async (_id: string, args: any) => {
+            const out = await readSkill(ctx.dataDir, String(args?.id ?? ''), args?.file ? String(args.file) : undefined, Number(args?.offset ?? 0));
+            const builtin = out.ok || args?.file ? null : readBuiltinSkill(String(args?.id ?? ''));
+            if (builtin) return { content: [{ type: 'text', text: builtin }] };
+            return { content: [{ type: 'text', text: out.text }], ...(out.ok ? {} : { isError: true }) };
+          },
+        });
+      }
+      tools.push({
+        name: 'propose_skill',
+        label: 'propose_skill',
+        description: 'Save a draft of a new or improved skill for the owner to review, after find_skill found nothing good enough or a procedure just worked and is worth keeping. The draft is NOT active and grants nothing; never include secrets, personal data or steps that skip approvals. One draft per request.',
+        parameters: { type: 'object', properties: { id: { type: 'string', description: 'lower-case-with-hyphens, e.g. check-invoice-totals' }, name: { type: 'string' }, description: { type: 'string', description: 'When to use it, one or two sentences.' }, body: { type: 'string', description: 'Numbered steps, the check that proves it worked, and when not to use it.' }, evidence: { type: 'string', description: 'What actually worked (tool results), if this comes from a finished task.' }, source: { type: 'string', description: 'Where the method comes from (a documentation URL or "this task").' } }, required: ['id', 'name', 'description', 'body'] },
+        execute: async (_id: string, args: any) => {
+          const out = proposeSkill(ctx.dataDir, { id: String(args?.id ?? ''), name: String(args?.name ?? ''), description: String(args?.description ?? ''), body: String(args?.body ?? ''), evidence: args?.evidence ? String(args.evidence) : undefined, source: args?.source ? String(args.source) : undefined });
+          return { content: [{ type: 'text', text: out.text }], ...(out.ok ? {} : { isError: true }) };
+        },
+      });
+      tools.push({
+        name: 'provider_readiness',
+        label: 'provider_readiness',
+        description: 'Say which model providers are configured and usable right now (the local Ollama runtime and any cloud provider keys the owner added), and the rules for using them. Never returns a key. Read-only.',
+        parameters: { type: 'object', properties: {} },
+        execute: async () => {
+          let reachable: boolean | null = null; let installed: number | null = null;
+          try { const snap = await snapshotModels({ baseUrl: apiBase, selectedModel: selectedModel }); reachable = snap.available; installed = snap.models.length; } catch { /* reported as not checked */ }
+          return { content: [{ type: 'text', text: describeProviderReadiness({ credentials: sharedCloudCredentials, local: { apiBase, activeModel: selectedModel, reachable, installedModels: installed } }) }] };
+        },
+      });
+      // These are defined after the task-aware selection ran, so they are offered here by the same rule: when the request
+      // points at skills or providers, and always to a specialist (whose tool list already limits what it can call).
+      const pointed = groupsForText(requestText);
+      if (agentScope || pointed.has('skills')) for (const name of ['find_skill', 'read_skill', 'propose_skill']) activeToolNames.add(name);
+      if (agentScope || pointed.has('providers')) activeToolNames.add('provider_readiness');
+    } catch (err: any) { console.warn('[piAgentEngine] skill tools unavailable:', err?.message); }
 
     // Questions about Pandesh itself (notifications, Gmail progress, running tasks, reminders) are answered from the
     // recorded state, with no model and no workspace: a model's prose is exactly where invented progress came from.
@@ -5282,6 +5339,14 @@ ${TURN_STATE_PROMPT_RULE}
 
 ${LATEST_REQUEST_AUTHORITATIVE}
 
+HOW YOU DECIDE (keep it simple):
+1. Answer directly when you already know it and nothing on this PC, the web or the user's own data is needed (chat, explaining, writing, advice). A greeting needs no tool.
+2. Use one of your own tools when a single call settles it (the time, a file, one fact about this PC).
+3. Hand work to a specialist with delegate_to_agent when it takes several steps or tools you do not have: coding, research, operations, personal, reviewer (checks a draft), skills (finds or drafts a procedure). Delegate once, then report its result and name it.
+4. Unsure what you can do: request_tools or pc_capability_inventory. A kind of work with a known method (checklist, review, report): find_skill. Providers and keys: provider_readiness; never ask for, show or store a key.
+5. Say something is done only when a tool result shows it. When a tool fails, read the error, change the call once, then tell the user plainly what failed and what you tried.
+6. Private content stays on local models; cloud use only with the user's yes. While work runs, keep answering the newest message.
+
 NAVIGATION & WORKFLOW (STRICT RULES):
 - There is NO "Artifacts tab" in the interface. Never instruct the user to check an "Artifacts tab".
 - Approvals, artifacts, and execution progress appear directly inside "Conversations" or in "Tasks & Missions".
@@ -5409,6 +5474,7 @@ When the user asks to continue, resume, or check progress/updates, resume this w
       // The specialist's working method, definition of done and report (agents.ts workingRules), and for a hand-off a
       // report the delegating agent can relay as it is: it sees only this agent's final answer.
       if (agentDef?.workingRules) systemPrompt += `\n${agentDef.workingRules}`;
+      systemPrompt += `\n${SPECIALIST_COMMON_RULES}`;
       if (agentScope.depth > 0) systemPrompt += '\nYour final answer goes back to the agent that handed you this task, which sees nothing else of your work: end with what you did, the evidence (files with full paths, commands with exit codes, sources), and what is not done.';
       const handedFacts = HANDOFF_FACTS.get(attemptId);
       if (handedFacts) {

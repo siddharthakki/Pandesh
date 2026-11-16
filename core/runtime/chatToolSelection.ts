@@ -111,8 +111,16 @@ export const TOOL_GROUPS: Record<string, ToolGroup> = {
     purpose: 'put a file on the paired phone',
     pattern: /\b(?:phone|mobile|smartphone|android|iphone)\b/i,
   },
+  skills: {
+    purpose: 'skills: find a written procedure for a kind of work, read it, or save a draft of a better one for the owner to review',
+    pattern: /\b(?:skills?|playbooks?|procedures?|checklists?|work ?flows?|best practices?|step[- ]by[- ]step (?:method|guide)|how (?:do|should) (?:we|i|you) usually|template for)\b/i,
+  },
+  providers: {
+    purpose: 'which model providers and API keys are configured and usable (never shows a key): local Ollama, cloud providers, the free cloud model',
+    pattern: /\b(?:api[- ]?keys?|providers?|cloud (?:model|provider|fallback|key)s?|openrouter|orcarouter|credentials?|endpoint|connections?|which (?:models?|keys?) (?:are|is) (?:set up|configured|connected))\b/i,
+  },
   agents: {
-    purpose: "hand work to Pandesh's specialist agents (Coding, Research, Operations, Personal) and get their result",
+    purpose: "hand work to Pandesh's specialist agents (Coding, Research, Operations, Personal, Reviewer, Skill Engineering) and get their result",
     pattern: /\b(?:delegate|hand (?:it|this|that) (?:off|over)|agents?|specialists?|(?:research|coding|operations|personal) (?:agent|team)|my team|ask (?:the )?(?:research|coding|operations)|have (?:the )?(?:research|coding|operations))\b/i,
   },
   workshop: {
@@ -159,6 +167,8 @@ export const NATIVE_GROUP: Record<string, string> = {
   list_printers: 'printing', print_test_page: 'printing',
   send_to_phone: 'phone',
   delegate_to_agent: 'agents',
+  find_skill: 'skills', read_skill: 'skills', propose_skill: 'skills',
+  provider_readiness: 'providers',
   software_updates: 'pc', listening_ports: 'pc', find_installed_app: 'pc',
   create_project: 'projects', list_projects: 'projects',
   add_task: 'projects', update_task: 'projects', list_tasks: 'projects',
