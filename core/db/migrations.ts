@@ -2066,6 +2066,16 @@ export function runMigrations(db: CoreDatabase): { applied: number[] } {
       + 'Nothing was changed. Restore the database backup that belongs to this build, or install the newer build again.',
     );
   }
+  // A brand-new database (nothing recorded) takes every migration in ONE transaction: all or nothing, and one commit
+  // instead of one per migration. An existing database keeps a transaction per migration, exactly as before.
+  // Why: each commit syncs the journal to disk. With 53 migrations a new database cost 53 syncs; on the CI runner,
+  // where every test creates its own database, those syncs stalled past the 10 s hook limit in a different suite on
+  // every run of PR #118 (three runs, also at two workers), while the same files passed alone.
+  if (recorded === 0) return db.transaction(() => applyMigrations(db));
+  return applyMigrations(db);
+}
+
+function applyMigrations(db: CoreDatabase): { applied: number[] } {
   db.exec(MIGRATION_1_BOOTSTRAP);
   const first = MIGRATIONS[0];
   const firstChecksum = checksumOf(first.sql);
