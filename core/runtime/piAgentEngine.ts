@@ -654,6 +654,11 @@ export function isModelComparisonOrAnalysisRequest(text: string): boolean {
  * is not installed?" and "Which tools can this model invoke?" all got the inventory instead of an answer. A question
  * about one model, or about a property of models, is not a request for the list.
  */
+/** The report cites tool calls ("find_skill(task=...)", "I called read_file") as what it did or as its evidence. */
+export function claimsToolCalls(text: string): boolean {
+  return /\b[a-z]+(?:_[a-z]+)+\s*\(/.test(text) || /\b(?:called|ran|used|invoked|executed)\s+(?:the\s+)?[`'"]?[a-z]+(?:_[a-z]+)+/i.test(text);
+}
+
 export function isModelListingRequest(text: string): boolean {
   if (isModelComparisonOrAnalysisRequest(text)) return false;
   if (asksProviderReadiness(text)) return false;
@@ -4680,8 +4685,13 @@ ${String(args.objective ?? '').slice(0, 600)}`,
                   details: { handoffId: started.handoff.id, childAttemptId, agentId: toAgentId, activity: { kind: 'document', title: `${name} agent: ${missing.join(', ')} not created`, excerpt: out.answer.slice(0, 1200) } } };
               }
             }
+            // Receipts: a report that lists tool calls the agent never made (found on Build 173: the Reviewer made no calls and
+            // listed find_skill/read_skill as its evidence) is passed on as unverified, never as evidence.
+            const childToolCalls = db.all<{ toolName: string }>('SELECT toolName FROM tool_invocations WHERE attemptId = ?', [childAttemptId]).length;
+            const unobserved = childToolCalls === 0 && claimsToolCalls(out.answer);
+            if (unobserved) safeRecordRuntimeEvent(db, broadcaster, attemptId, 'handoff_unobserved_evidence', { agent: toAgentId, childToolCalls }, actor);
             return {
-              content: [{ type: 'text', text: `RESULT FROM THE ${name.toUpperCase()} AGENT (completed in ${secs}s; its task runs in its own conversation "${name} · ${brief.slice(0, 60)}"):
+              content: [{ type: 'text', text: `${unobserved ? `CORE CHECK: the ${name} agent made NO tool calls in this task, so the actions and evidence its report lists were not observed. Tell the user that plainly; do not present them as evidence or as checked.` + String.fromCharCode(10) + String.fromCharCode(10) : ''}RESULT FROM THE ${name.toUpperCase()} AGENT (completed in ${secs}s; its task runs in its own conversation "${name} · ${brief.slice(0, 60)}"):
 
 ${out.answer.slice(0, 6000)}
 
