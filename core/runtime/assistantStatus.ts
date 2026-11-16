@@ -50,6 +50,8 @@ export function isAboutFilesystem(text: string): boolean {
 export function asksForDiskObservation(text: string): boolean {
   const t = String(text || '').trim();
   if (!t || t.length > 300 || !isAboutFilesystem(t) || namedDiskTargets(t).length === 0) return false;
+  // A question about which models or providers can be used for a folder task is about configuration, not about the disk.
+  if (/\b(?:providers?|api[- ]?keys?|models?)\b/i.test(t) && /\b(?:can you use|configured|verified|authori[sz]ed|available to you)\b/i.test(t)) return false;
   if (/\b(?:create|write|save|move|copy|delete|remove|rename|organi[sz]e|sort|clean|install|run|build|fix|edit|change|add|make|zip|upload)\b/i.test(withoutQuoted(t))) return false;
   return /\b(?:how\s+(?:many|big|large|much)|count|list|show|what(?:'s|\s+is|\s+are)|which|is\s+there|are\s+there|exists?|contains?|size|newest|oldest|largest|biggest|names?|wie\s+viele|welche|zeig\w*)\b|\?\s*$/i.test(withoutQuoted(t));
 }

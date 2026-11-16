@@ -30,6 +30,12 @@ const KNOWN_CLOUD: Array<{ id: string; label: string }> = [
   { id: 'hermes', label: 'Hermes agent profile' },
 ];
 
+/** A question about which providers or models may be used, and what is configured, verified or authorized. */
+export function asksProviderReadiness(text: string): boolean {
+  const t = String(text ?? '');
+  return /\b(?:providers?|api[- ]?keys?|credentials?|connections?)\b/i.test(t) && /\b(?:configured|verified|authori[sz]ed|available|usable|can you use|set up|connected|ready)\b/i.test(t);
+}
+
 /** Host name only: a base URL can carry a path or an account hint that is nobody's business. */
 export function hostOf(url: string | undefined): string {
   try { return url ? new URL(url).host : 'unknown host'; } catch { return 'unknown host'; }

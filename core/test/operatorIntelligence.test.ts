@@ -160,3 +160,22 @@ describe('outbound queries and the owner skills (Core boundary)', () => {
     expect(checkPublicQuery('Mueller pricing sheet template', { owner: ownerSkillPrivateTexts(undefined) }).ok).toBe(true);
   });
 });
+
+describe('provider questions and skill answers (found testing Build 173)', () => {
+  it('a provider question is answered from provider_readiness, not a model list or a disk-read correction', async () => {
+    const q = 'Which models and providers can you use for a private local-folder task? Explain what is configured, verified, and authorized.';
+    const { asksProviderReadiness } = await import('../runtime/providerReadiness');
+    const { asksForDiskObservation } = await import('../runtime/assistantStatus');
+    const { isModelListingRequest } = await import('../runtime/piAgentEngine');
+    expect(asksProviderReadiness(q)).toBe(true);
+    expect(asksForDiskObservation(q)).toBe(false);
+    expect(isModelListingRequest(q)).toBe(false);
+    expect(isModelListingRequest('Which models are installed?')).toBe(true);
+    expect(asksProviderReadiness('Which models are installed?')).toBe(false);
+  });
+
+  it('says a skill is optional when none fits, and asks for the candidate details in the answer', async () => {
+    expect(await findSkills(dir, 'plan a birthday party menu')).toMatch(/A skill is optional/);
+    expect(SPECIALIST_COMMON_RULES).toMatch(/A skill is optional/);
+  });
+});
