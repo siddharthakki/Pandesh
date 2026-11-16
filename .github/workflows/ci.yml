@@ -41,7 +41,10 @@ jobs:
           npm ci
           npm ci --prefix apps/desktop
       - name: Typecheck
+        # bash with -e: on a Windows runner the default shell let an earlier failing tsc pass when the last one succeeded.
+        shell: bash
         run: |
+          set -e
           npx tsc -p tsconfig.core.json --noEmit
           npx tsc -p ./ --noEmit
           npx tsc -p apps/desktop/renderer-v2/tsconfig.json --noEmit
