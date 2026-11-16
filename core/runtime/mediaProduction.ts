@@ -16,7 +16,9 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import type { GovernedCapabilityAdapter } from './governedCapability';
 import type { ModelToolCall } from './modelBackend';
-import type { ToolExecutionResult } from './toolRunner';
+import type { ToolExecutionContext, ToolExecutionResult } from './toolRunner';
+import type { ImageInspector } from './localVisionInspector';
+import { inspectMedia, produceNarratedVideo, renderNarratedVideoResult, slugify, type NarratedVideoDeps, type SceneInput } from './narratedVideo';
 import { DEFAULT_OLLAMA_URL } from './modelBackend';
 import { probeCapabilityInventory, workingExecutable, type InventoryProbeDeps } from './capabilityInventory';
 import { nowIso } from '../domain/ids';
@@ -252,11 +254,66 @@ export function defaultVideoOutput(images: string[]): string {
   return path.join(dir, `promo-${nowIso().slice(0, 19).replace(/[:T]/g, '-')}.mp4`);
 }
 
-export function createMediaProductionAdapter(deps: InventoryProbeDeps = {}): GovernedCapabilityAdapter {
+export interface MediaProductionDeps extends NarratedVideoDeps {
+  /** A vision model on this PC that can look at a frame (localVisionInspector). Absent: frames are decoded, not read. */
+  inspectImage?: ImageInspector;
+  /** Where video packages go when the turn has no folder of its own. */
+  outputRoot?: string;
+}
+
+/** The folder a narrated video package is created in: the task's own folder when it has one, else Videos/Pandesh. */
+export function narratedOutputDir(title: string, cwd: string | undefined, outputRoot?: string): string {
+  const base = cwd && path.resolve(cwd) !== path.resolve(process.cwd()) ? path.resolve(cwd) : (outputRoot ?? path.join(os.homedir(), 'Videos', 'Pandesh'));
+  const stamp = nowIso().slice(0, 16).replace(/[:T]/g, '-');
+  let dir = path.join(base, `${slugify(title)}-${stamp}`);
+  for (let i = 2; fs.existsSync(dir) && i < 50; i += 1) dir = path.join(base, `${slugify(title)}-${stamp}-${i}`);
+  return dir;
+}
+
+function scenesFrom(value: unknown): SceneInput[] {
+  if (!Array.isArray(value)) return [];
+  return value.map((v) => {
+    const o = (v && typeof v === 'object' ? v : {}) as Record<string, unknown>;
+    return { narration: String(o.narration ?? o.text ?? ''), visual: String(o.visual ?? o.image ?? o.picture ?? '') };
+  }).filter((s) => s.narration.trim().length > 0);
+}
+
+function targetFrom(a: Record<string, unknown>): [number, number] | undefined {
+  const min = Number(a.minSeconds);
+  const max = Number(a.maxSeconds);
+  return Number.isFinite(min) && Number.isFinite(max) && min > 0 && max >= min ? [min, max] : undefined;
+}
+
+export function createMediaProductionAdapter(deps: MediaProductionDeps = {}): GovernedCapabilityAdapter {
   const list = (v: unknown): string[] => Array.isArray(v) ? v.map(String) : typeof v === 'string' && v.trim() ? [v] : [];
   return {
     id: 'media-production',
     definitions: () => [{
+      name: 'media_produce_video',
+      description: 'Produce a finished narrated video package from a script you wrote: for each scene, a local voice (Piper) speaks the narration, a picture is made from the scene\'s visual prompt (the ComfyUI installed on this PC with models already there, started if needed; otherwise a plain drawn backdrop), and FFmpeg assembles moving pictures, burned-in subtitles timed to the voice, a quiet synthesized music bed and normalised sound. Writes ONE new folder holding the MP4, the .srt, a thumbnail, the script, a YouTube upload sheet and every source asset, then checks the finished file (streams, length, audible sound, a frame, subtitle timing) and reports each tool that ran. Works for any subject: stories, explainers, promos. Speech runs at about 2.3 words per second: 150-190 words of narration give 60-90 seconds. Nothing is uploaded or published. Needs approval (it uses this PC\'s CPU/GPU and creates files).',
+      parameters: {
+        type: 'object',
+        properties: {
+          title: { type: 'string' },
+          scenes: {
+            type: 'array', minItems: 1, maxItems: 16,
+            items: { type: 'object', properties: { narration: { type: 'string', description: 'What the voice says in this scene: one to three plain sentences.' }, visual: { type: 'string', description: 'What the picture shows, as an image prompt: subject, setting, light, mood.' } }, required: ['narration', 'visual'] },
+          },
+          style: { type: 'string', description: 'One visual style for every picture, for example "soft watercolour children\'s book illustration, warm colours".' },
+          music: { type: 'boolean', description: 'A quiet ambient bed under the voice (default true).' },
+          subtitles: { type: 'boolean', description: 'Burned-in subtitles plus an .srt (default true).' },
+          orientation: { type: 'string', enum: ['landscape', 'portrait'] },
+          minSeconds: { type: 'number', description: 'Shortest acceptable length, when the user gave a range.' },
+          maxSeconds: { type: 'number', description: 'Longest acceptable length, when the user gave a range.' },
+          youtubeTitle: { type: 'string' }, youtubeDescription: { type: 'string' }, youtubeTags: { type: 'array', items: { type: 'string' } },
+        },
+        required: ['title', 'scenes'],
+      },
+    }, {
+      name: 'media_inspect',
+      description: 'Check a finished video, audio or image file on this PC without changing it: FFprobe reports the real streams, size and length; FFmpeg measures loudness, long silences and black stretches and decodes frames at even intervals. With a "question", a vision model on this PC looks at up to three of those frames and its reading is returned (nothing leaves the PC). Use it to review media instead of trusting the maker\'s report.',
+      parameters: { type: 'object', properties: { path: { type: 'string', description: 'The media file.' }, question: { type: 'string', description: 'What to look for in the frames, for example "is this suitable for small children and is the subtitle text readable?"' } }, required: ['path'] },
+    }, {
       name: 'media_create_video',
       description: 'Create a promotional video from pictures: checks the installed tools, inspects the pictures (FFprobe), captions each one with a local vision model (pictures never leave the PC), renders a title card and captioned segments (FFmpeg), and verifies the result (codec, resolution, duration, a real frame, SHA-256). Writes one new .mp4 (never overwrites); needs approval showing the output path.',
       parameters: {
@@ -271,15 +328,79 @@ export function createMediaProductionAdapter(deps: InventoryProbeDeps = {}): Gov
         required: ['images'],
       },
     }],
-    classify: () => 'consequential',
+    classify: (toolName) => toolName === 'media_inspect' ? 'read_only' : 'consequential',
     health: () => ({ state: 'available', checkedAt: nowIso() }),
-    async prepare(_toolName, args) {
+    async prepare(toolName, args) {
+      if (toolName === 'media_inspect') return args;
+      if (toolName === 'media_produce_video') {
+        const scenes = scenesFrom(args.scenes);
+        const words = scenes.reduce((n, s) => n + s.narration.split(/\s+/).filter(Boolean).length, 0);
+        return {
+          ...args,
+          sceneCount: scenes.length, narrationWords: words, estimatedSeconds: Math.round(words / 2.3 + scenes.length * 1.2),
+          writes: 'one new folder (video, subtitles, thumbnail, script, YouTube sheet, assets)', published: 'nothing is uploaded or published',
+          voice: 'Piper, on this PC', pictures: 'ComfyUI on this PC with models already installed (started if it is not running; it then stays running), otherwise drawn backdrops',
+        };
+      }
       const images = resolveImages(list(args.images));
       const output = typeof args.output === 'string' && args.output.trim() ? path.resolve(args.output) : defaultVideoOutput(images);
       return { ...args, output, pictures: images.length, firstPictures: images.slice(0, 4).map((i) => path.basename(i)), captions: args.captions ?? 'auto', localOnly: 'pictures are processed on this PC only' };
     },
-    async run(call: ModelToolCall): Promise<ToolExecutionResult> {
+    async run(call: ModelToolCall, ctx: ToolExecutionContext): Promise<ToolExecutionResult> {
       const a = call.arguments ?? {};
+      if (call.name === 'media_inspect') {
+        const file = typeof a.path === 'string' ? path.resolve(ctx?.cwd ?? process.cwd(), a.path) : '';
+        if (!file || !fs.existsSync(file) || !fs.statSync(file).isFile()) return { status: 'failed', exitCode: null, output: `There is no file at ${file || '(no path given)'}.`, resultCategory: 'media_no_inputs' };
+        try {
+          const question = typeof a.question === 'string' ? a.question.trim() : '';
+          const framesDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pandesh-inspect-'));
+          const r = await inspectMedia(file, deps, { frames: 3, framesDir });
+          const readings: string[] = [];
+          const targets = r.kind === 'image' ? [file] : r.frames;
+          if (question && deps.inspectImage) {
+            for (const [i, frame] of targets.slice(0, 3).entries()) {
+              const label = r.kind === 'image' ? 'the image' : `frame ${i + 1}`;
+              try {
+                const seen = await deps.inspectImage({ path: frame, question });
+                readings.push(seen.ok ? `- ${label} (read by ${seen.model}, on this PC): ${seen.text.replace(/\s+/g, ' ').slice(0, 500)}` : `- ${label}: not read (${seen.reason})`);
+              } catch (err) {
+                readings.push(`- ${label}: not read (${err instanceof Error ? err.message : String(err)})`);
+              }
+            }
+          }
+          try { fs.rmSync(framesDir, { recursive: true, force: true }); } catch { /* temp */ }
+          const out = [
+            `Inspected ${file} (read-only).`, 'Measured by FFprobe/FFmpeg:', ...r.facts.map((f) => `- ${f}`),
+            r.problems.length ? 'Problems found:' : 'No technical problem found by these checks.', ...r.problems.map((p) => `- ${p}`),
+            ...(readings.length ? ['What a local vision model saw in the frames (its reading, not a measurement):', ...readings] : question ? ['The frames were decoded but not read: no local vision model is available to this tool.'] : []),
+          ].join('\n');
+          return { status: 'succeeded', exitCode: 0, output: out, resultCategory: r.problems.length ? 'media_inspected_with_problems' : 'media_inspected' };
+        } catch (err) {
+          return { status: 'failed', exitCode: null, output: err instanceof Error ? err.message : String(err), resultCategory: 'media_failed' };
+        }
+      }
+      if (call.name === 'media_produce_video') {
+        const scenes = scenesFrom(a.scenes);
+        if (!scenes.length) return { status: 'failed', exitCode: null, output: 'No scene with narration was given. Pass scenes as [{ narration, visual }, …].', resultCategory: 'media_no_inputs' };
+        const title = String(a.title ?? '').trim() || 'Untitled';
+        const target = targetFrom(a);
+        const outputDir = narratedOutputDir(title, ctx?.cwd, deps.outputRoot);
+        try {
+          const r = await produceNarratedVideo({
+            title, scenes, style: typeof a.style === 'string' ? a.style : undefined, music: a.music !== false, subtitles: a.subtitles !== false,
+            orientation: a.orientation === 'portrait' ? 'portrait' : 'landscape', outputDir, targetSeconds: target, signal: ctx?.signal,
+            youtube: { title: typeof a.youtubeTitle === 'string' ? a.youtubeTitle : undefined, description: typeof a.youtubeDescription === 'string' ? a.youtubeDescription : undefined, tags: Array.isArray(a.youtubeTags) ? a.youtubeTags.map(String) : undefined },
+          }, deps);
+          const ok = r.verified && r.withinTarget !== false;
+          return {
+            status: r.verified ? 'succeeded' : 'failed', exitCode: r.verified ? 0 : 1, output: renderNarratedVideoResult(r, target),
+            resultCategory: ok ? 'media_video_verified' : r.verified ? 'media_video_outside_target' : 'media_video_unverified',
+            activity: { kind: 'video', title: `${title} (${r.durationSec.toFixed(0)} s)`, excerpt: r.video },
+          };
+        } catch (err) {
+          return { status: 'failed', exitCode: null, output: err instanceof Error ? err.message : String(err), resultCategory: ctx?.signal?.aborted ? 'cancelled' : 'media_failed' };
+        }
+      }
       const images = resolveImages(list(a.images));
       if (!images.length) return { status: 'failed', exitCode: null, output: 'No pictures found at the given paths.', resultCategory: 'media_no_inputs' };
       const output = typeof a.output === 'string' && a.output.trim() ? path.resolve(a.output) : defaultVideoOutput(images);

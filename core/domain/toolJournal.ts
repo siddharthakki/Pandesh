@@ -479,10 +479,25 @@ export function resolveReference(message: string, entries: JournalEntry[], forei
     // The newest record wins over older ones of the same kind, unless the older ones carry the same label (two
     // similarly named items): then Core asks.
     const sameLabel = latest[0].label ? pool.filter((i) => i !== latest[0] && i.label && i.label.toLowerCase() === latest[0].label!.toLowerCase()) : [];
-    if (sameLabel.length) return { status: 'ambiguous', cue, candidates: [latest[0], ...sameLabel].slice(0, 6), action };
+    const others = sameLabel.filter((i) => !sameFileId(i.id, latest[0].id));
+    if (others.length) return { status: 'ambiguous', cue, candidates: [latest[0], ...others].slice(0, 6), action };
     return { status: 'resolved', cue, item: latest[0], reason: 'the most recent one recorded' };
   }
-  return { status: 'ambiguous', cue, candidates: latest.slice(0, 6), action };
+  // One file recorded under two spellings (a full path and the same path relative to the folder) is one item.
+  const distinct = latest.filter((i, n) => !latest.slice(0, n).some((j) => sameFileId(i.id, j.id)));
+  if (distinct.length === 1) return { status: 'resolved', cue, item: distinct[0], reason: 'the most recent one recorded' };
+  return { status: 'ambiguous', cue, candidates: distinct.slice(0, 6), action };
+}
+
+/** True when two recorded ids are the same file written two ways: equal after normalising, or one is the tail of the other at a folder boundary. */
+export function sameFileId(a: string, b: string): boolean {
+  const norm = (s: string) => s.replace(/\\/g, '/').replace(/^\.\//, '').toLowerCase();
+  const x = norm(a);
+  const y = norm(b);
+  if (x === y) return true;
+  if (!x.includes('/') && !y.includes('/')) return false;
+  const [long, short] = x.length >= y.length ? [x, y] : [y, x];
+  return short.includes('.') && long.endsWith(`/${short}`);
 }
 
 /** Ids the user typed that exist in Core's journal but outside this conversation/agent: they must not be used. */

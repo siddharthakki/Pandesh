@@ -1,4 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
+import { MissionDock } from './Missions';
 import { api, errorText, onDesktopEvent, type ApprovalCard, type BriefAction, type BriefItem, type Snapshot, type TranscriptMessage } from './bridge';
 import { Icon, Mark, elapsed, timeOf } from './ui';
 import { ActivityAside } from './Activity';
@@ -566,6 +567,7 @@ export function Chat({ snapshot, snapshotError, refresh, narrow, openConversatio
 
         <div className="footer">
           <div className="footer-inner">
+            <MissionDock conversationId={convId} narrow={narrow} onReport={() => { void loadTranscript(convId); }} />
             {!showDecisionBar && controls.panel}
             {!showDecisionBar && folder.card}
             {/* On the home screen there is no transcript to hold a send error, so it shows here. */}

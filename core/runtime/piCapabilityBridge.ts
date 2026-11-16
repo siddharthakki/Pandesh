@@ -107,6 +107,11 @@ export function selectCapabilitiesForIntent(requestText?: string): readonly stri
     caps.add('workshop');
   }
 
+  // Media production: narrated videos, slideshows, checking a media file (core/runtime/mediaProduction.ts).
+  if (/\b(?:videos?|narrat\w*|voice-?overs?|subtitles?|thumbnails?|youtube|shorts?|reels?|clips?|mp4|media_\w+|faceless|bedtime stor(?:y|ies)|audio file|soundtrack)\b/i.test(text)) {
+    caps.add('media-production');
+  }
+
   // Weather intent
   if (/\b(?:weather|forecast|temperature|rain|snow|degrees|celsius|umbrella|climate)\b/i.test(text)) {
     caps.add('weather');
@@ -209,7 +214,7 @@ export interface BuildPiCapabilityBridgeOptions {
 }
 
 /** Chat capabilities the intent selection can add beyond the bounded set. */
-export const CHAT_EXPANDABLE_CAPABILITY_IDS = [...CHAT_CAPABILITY_IDS, 'system-management', 'port-management', 'computer-use', 'pc-organizer', 'revenue', 'workshop'] as const;
+export const CHAT_EXPANDABLE_CAPABILITY_IDS = [...CHAT_CAPABILITY_IDS, 'system-management', 'port-management', 'computer-use', 'pc-organizer', 'revenue', 'workshop', 'media-production'] as const;
 
 /**
  * Builds the bridge, or returns undefined when this build's registry owns none

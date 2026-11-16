@@ -77,6 +77,7 @@ import { createCapabilityInventoryAdapter } from './runtime/capabilityInventory'
 import { createPcOrganizerAdapter } from './runtime/pcOrganizer';
 import { createHouseholdCapabilityAdapter } from './runtime/householdCapability';
 import { createMediaProductionAdapter } from './runtime/mediaProduction';
+import { interruptRunningMissionsOnBoot } from './domain/missions';
 import { createWorkshopCapabilityAdapter } from './runtime/workshopCapability';
 import { activeCompanionDeviceCount } from './domain/companionSync';
 import { listHouseholdRoutines } from './domain/householdRoutines';
@@ -331,7 +332,7 @@ function buildCapabilityRegistry(dataDir: string, db: CoreDatabase, connectors: 
     .register(createDocumentToolsAdapter({ downloadsDir: path.join(dataDir, 'downloads') }))
     .register(createRevenueCapabilityAdapter({ dataDir }))
     .register(createOllamaManagementAdapter({ db }))
-    .register(createMediaProductionAdapter({}))
+    .register(createMediaProductionAdapter({ inspectImage: createLocalVisionInspector() }))
     // The Workshop: versions are Core artifacts; a view command must reach the window while the tool waits for its answer.
     .register(createWorkshopCapabilityAdapter({ db, dataDir, publish: broadcaster ? (event) => broadcaster.publishRuntime(event) : undefined }));
   // The plan capability reads the registry it is registered in (it checks a
@@ -419,6 +420,8 @@ async function main(): Promise<void> {
     redactedLog(`research provenance: retention purge failed: ${err instanceof Error ? err.message : String(err)}`);
   }
   const bootReconciliation = scanOrphanedAttemptsOnBoot(db);
+  // A mission that was running when Core stopped has no runner now: mark it interrupted (it can be continued).
+  try { const stopped = interruptRunningMissionsOnBoot(db); if (stopped.length) redactedLog(`boot reconciliation: ${stopped.length} mission(s) were running at shutdown and are now marked interrupted`); } catch { /* a database from before missions */ }
   if (bootReconciliation.orphaned.length > 0) {
     redactedLog(
       `boot reconciliation: ${bootReconciliation.orphaned.length} orphaned attempt(s) require reconciliation `

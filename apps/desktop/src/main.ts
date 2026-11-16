@@ -1516,6 +1516,18 @@ function registerIpc(): void {
   });
   ipcMain.handle(DESKTOP_CHANNELS.household, async (_event, action: string, args?: Record<string, unknown>) => {
     if (!session) throw new Error('desktop session is not started');
+    // Open a file a mission left on disk, or its working folder. The window names the mission and a path; only a path
+    // Core recorded for that mission (or the mission's own folder) is ever opened.
+    if (action === 'missionOpen') {
+      const detail = await session.household('mission', { id: String(args?.id ?? '') }) as { mission?: { workspaceRoot?: string | null; steps?: Array<{ artifacts?: Array<{ path: string }> }> } };
+      const recorded = new Set((detail.mission?.steps ?? []).flatMap((s) => s.artifacts ?? []).map((a) => path.resolve(a.path).toLowerCase()));
+      const folder = detail.mission?.workspaceRoot ? path.resolve(detail.mission.workspaceRoot) : null;
+      const wanted = typeof args?.path === 'string' && args.path ? path.resolve(args.path) : folder;
+      if (!wanted || !(recorded.has(wanted.toLowerCase()) || (folder && wanted.toLowerCase() === folder.toLowerCase())) || !fs.existsSync(wanted)) throw new Error('That file is not part of this mission, or it no longer exists.');
+      if (args?.reveal === true || wanted === folder) { const failed = await shell.openPath(fs.statSync(wanted).isDirectory() ? wanted : path.dirname(wanted)); if (failed) throw new Error(failed); }
+      else { const failed = await shell.openPath(wanted); if (failed) throw new Error(failed); }
+      return { opened: true };
+    }
     return session.household(String(action ?? ''), args && typeof args === 'object' ? args : {});
   });
   ipcMain.handle(DESKTOP_CHANNELS.listRoutineWriteGrants, async () => {

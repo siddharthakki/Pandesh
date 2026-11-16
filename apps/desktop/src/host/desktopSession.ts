@@ -87,6 +87,7 @@ import {
   selectImageCheckpoint,
   detectImageFollowUp,
   detectVideoGenerationIntent,
+  isVideoProductionRequest,
   extractVideoPrompt,
   composeEditPrompt,
   extractWeatherLocation,
@@ -2946,6 +2947,11 @@ export class DesktopSession {
       connectors: { path: '/v1/connectors' },
       toolTest: { path: '/v1/tools/test', method: 'POST', body: {} },
       agents: { path: '/v1/agents' },
+      // Missions: background objectives with specialist steps (core/api/missionRoutes.ts).
+      missions: { path: '/v1/missions?limit=12' },
+      mission: { path: `/v1/missions/${id}` },
+      missionCancel: { path: `/v1/missions/${id}/cancel`, method: 'POST', body: {} },
+      missionContinue: { path: `/v1/missions/${id}/continue`, method: 'POST', body: {} },
       agent: { path: `/v1/agents/${id}` },
       agentUpdate: { path: `/v1/agents/${id}/update`, method: 'POST', body: { enabled: args.enabled, modelPolicy: args.modelPolicy, toolDenylist: args.toolDenylist, alwaysAsk: args.alwaysAsk } },
       agentDelegate: { path: '/v1/agents/delegate', method: 'POST', body: { parentAttemptId: args.parentAttemptId, toAgentId: args.toAgentId, brief: args.brief, grant: args.grant, workspaceRoot: this.folder ?? null } },
@@ -4760,6 +4766,8 @@ export class DesktopSession {
    * or variations of the conversation's latest image, a text-to-video clip,
    * or animating the latest image. */
   private async planMediaRequest(text: string, staged: StagedForSend[] = []): Promise<MediaPlan | null> {
+    // A video to be produced (script, narration, subtitles, music, a platform package) is the lead's work, not one render.
+    if (isVideoProductionRequest(text) && /\b(?:videos?|clips?|movies?|films?|shorts?|reels?)\b/i.test(text)) return null;
     const followUp = detectImageFollowUp(text);
     const videoAsk = detectVideoGenerationIntent(text);
     const attachedImage = staged.find((item) => item.kind === 'image');
