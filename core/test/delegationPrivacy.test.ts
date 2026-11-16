@@ -150,7 +150,7 @@ describe('delegation keeps private memory from a specialist that may not read it
     }
     expect(child[0].system).toContain('answers are short and cite sources');
     // The specialist gets its working method and, as a hand-off, the report its parent will relay (agents.ts workingRules).
-    expect(child[0].system).toContain('start with a short, broad search, then narrow down');
+    expect(child[0].system).toContain('one short, broad search, then narrow');
     expect(child[0].system).toContain('Your final answer goes back to the agent that handed you this task');
     expect(parent[0].system).not.toContain('Your final answer goes back to the agent that handed you this task');
   }, 60_000);
