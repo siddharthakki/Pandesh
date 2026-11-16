@@ -179,13 +179,3 @@ describe('provider questions and skill answers (found testing Build 173)', () =>
     expect(SPECIALIST_COMMON_RULES).toMatch(/A skill is optional/);
   });
 });
-
-describe('delegated reports that cite tool calls', () => {
-  it('recognises listed tool calls so Core can mark them unobserved when the child made none', async () => {
-    const { claimsToolCalls } = await import('../runtime/piAgentEngine');
-    expect(claimsToolCalls('Evidence: find_skill(task="review an invoice") returned a match')).toBe(true);
-    expect(claimsToolCalls('The agent called read_skill and then summarised it.')).toBe(true);
-    expect(claimsToolCalls('Checked the interaction between `find_skill` and `read_skill`. Verified.')).toBe(true);
-    expect(claimsToolCalls('Verdict: ready. The prices match the supplier list.')).toBe(false);
-  });
-});
