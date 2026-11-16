@@ -69,7 +69,7 @@ export async function findSkills(dataDir: string | undefined, task: string, opts
   }
   const blocked = resolved.decisions.filter((d) => d.status === 'skipped' && d.reason !== 'incompatible_task' && d.reason !== 'not_selected_budget' && d.reason !== 'incompatible_model');
   for (const d of blocked.slice(0, 3)) {
-    lines.push(`- ${d.id} looked related but cannot be used: ${d.detail}`);
+    lines.push(`- ${d.id} looked related but cannot be used: ${"detail" in d ? d.detail : d.reason}`);
   }
   const drafts = (localModel ? listDrafts(dataDir) : []).filter((d) => query.toLowerCase().split(/\W+/).some((w) => w.length > 3 && d.id.includes(w)));
   for (const d of drafts.slice(0, 2)) lines.push(`- ${d.id} is a DRAFT proposed earlier (not active; the owner has to review it and move it into the skills folder).`);
