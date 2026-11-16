@@ -81,16 +81,18 @@ describe('the media adapter', () => {
 });
 
 describe('a technical check is not a look at the content', () => {
-  const base = { folder: 'D:\\x', video: 'D:\\x\\a.mp4', subtitles: null, thumbnail: 't', script: 's', metadata: 'm', record: 'r', durationSec: 68, width: 1920, height: 1080, bytes: 1e6, sha256: 'a'.repeat(64), scenes: [], voice: 'Piper', music: null, visualsBy: { comfyui: 7, backdrop_card: 0, checkpoint: 'x', note: '' }, steps: [], verified: true, verification: ['PASS length'], withinTarget: true };
-  it('the production result says what it did not look at and what is missing from the package', () => {
-    const text = renderNarratedVideoResult({ ...base, incomplete: ['the upload sheet has no description (none was given)', 'the upload sheet has no tags (none were given)'] });
-    expect(text).toMatch(/^INCOMPLETE: the upload sheet has no description/m);
-    expect(text).toMatch(/^INCOMPLETE: the upload sheet has no tags/m);
-    expect(text.split('\n')).toContain('NOT VERIFIED: what the pictures show (technical checks only).');
-    // Core keeps only the start of a result: the lines it reads back must be there.
-    expect(text.indexOf('NOT VERIFIED:')).toBeLessThan(300);
-    expect(text.indexOf('INCOMPLETE:')).toBeLessThan(200);
+  const scenes = [1, 2, 3].map((n) => ({ index: n, narration: 'x', visual: 'y', seconds: 5, narrationFile: `D:\\x\\assets\\narration-0${n}.wav`, imageFile: `D:\\x\\assets\\scene-0${n}.png`, imageSource: 'comfyui' as const }));
+  const base = { folder: 'D:\\x', video: 'D:\\x\\a.mp4', subtitles: null, thumbnail: 't', script: 's', metadata: 'm', record: 'r', durationSec: 68, width: 1920, height: 1080, bytes: 1e6, sha256: 'a'.repeat(64), scenes, voice: 'Piper', music: null, visualsBy: { comfyui: 3, backdrop_card: 0, checkpoint: 'x', note: '' }, steps: [], verified: true, verification: ['PASS length'], withinTarget: true };
+  it('the production result names every picture nobody has looked at, and what is missing, at the very start', () => {
+    const text = renderNarratedVideoResult({ ...base, incomplete: ['the upload sheet has no description', 'the upload sheet has no tags'] });
+    const lines = text.split('\n');
+    expect(lines[0]).toBe('NOT VERIFIED: what the pictures show (3 pictures: scene-01.png, scene-02.png, scene-03.png)');
+    expect(lines[1]).toBe('INCOMPLETE: the upload sheet has no description');
+    expect(lines[2]).toBe('INCOMPLETE: the upload sheet has no tags');
     expect(renderNarratedVideoResult({ ...base, incomplete: [] })).not.toMatch(/INCOMPLETE/);
+    // Core keeps only the start of a result as evidence: sixteen pictures must still fit before the cut.
+    const many = Array.from({ length: 16 }, (_, i) => ({ ...scenes[0], imageFile: `D:\\x\\assets\\scene-${String(i + 1).padStart(2, '0')}.png` }));
+    expect(renderNarratedVideoResult({ ...base, scenes: many, incomplete: [] }).split('\n')[0].length).toBeLessThan(330);
   });
 });
 

@@ -311,7 +311,7 @@ export function createMediaProductionAdapter(deps: MediaProductionDeps = {}): Go
       },
     }, {
       name: 'media_inspect',
-      description: 'Check a finished video, audio or image file on this PC without changing it: FFprobe reports the real streams, size and length; FFmpeg measures loudness, long silences and black stretches and decodes frames at even intervals. With a "question", a vision model on this PC looks at up to three of those frames and its reading is returned (nothing leaves the PC). Use it to review media instead of trusting the maker\'s report.',
+      description: 'Check a finished video, audio or image file on this PC without changing it: FFprobe reports the real streams, size and length; FFmpeg measures loudness, long silences and black stretches and decodes frames at even intervals. With a "question", a vision model on this PC looks at up to three of those frames (or at the one image) and its reading is returned (nothing leaves the PC). That is a sample: a few frames of a video do not show that every scene is right; to check each picture of a package, inspect each picture file. Use it to review media instead of trusting the maker\'s report.',
       parameters: { type: 'object', properties: { path: { type: 'string', description: 'The media file.' }, question: { type: 'string', description: 'What to look for in the frames, for example "is this suitable for small children and is the subtitle text readable?"' } }, required: ['path'] },
     }, {
       name: 'media_create_video',
@@ -374,7 +374,11 @@ export function createMediaProductionAdapter(deps: MediaProductionDeps = {}): Go
           const whyNot = !question ? 'no question was given, so no frame was looked at' : (/not read \(([^)]{0,90})/.exec(readings[0] ?? '')?.[1] ?? 'no local vision model read the frames');
           // The two lines Core reads back come first and stay short: only the start of a tool result is kept as evidence.
           const out = [
-            ...(hasPicture ? [read ? `LOOKED AT: what the pictures show (${read} frame(s) read by a local vision model; a sample).` : `NOT VERIFIED: what the pictures show (technical check only: ${whyNot}).`] : []),
+            // A reading is a SAMPLE of what was actually looked at: this one picture, or a few frames of a video. It never
+            // says "the pictures are fine"; Core decides whether everything that needed looking at was covered.
+            ...(hasPicture ? [read
+              ? `SAMPLED: what the pictures show (${r.kind === 'image' ? path.basename(file) : `${read} frames of ${path.basename(file)}`})`
+              : `NOT VERIFIED: what the pictures show (technical check only: ${whyNot}).`] : []),
             `Inspected ${file} (read-only).`, 'Measured by FFprobe/FFmpeg:', ...r.facts.map((f) => `- ${f}`),
             r.problems.length ? 'Problems found:' : 'No technical problem found by these checks.', ...r.problems.map((p) => `- ${p}`),
             ...(read ? ['What the vision model saw (its reading, not a measurement):', ...readings] : hasPicture ? ['Do not report the visual content, its consistency or its suitability as checked.', ...readings] : []),

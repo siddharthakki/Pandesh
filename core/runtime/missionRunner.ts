@@ -309,39 +309,90 @@ export class MissionRunner {
   }
 }
 
-/** The limits a tool states about its own result, in the two fixed forms tools use. One line each, bounded. */
+/** Names of things inside a tool's statement: anything written like a file (scene-01.png, totals.js, report.pdf). */
+function namedItems(text: string): string[] {
+  return [...new Set((text.match(/[\w][\w.-]*\.[A-Za-z0-9]{2,5}\b/g) ?? []).map((t) => t.toLowerCase()))];
+}
+const caveatSubject = (c: string) => c.replace(/^[^:]+:\s*/, '').split(/[.(]/)[0].trim().toLowerCase();
+
+/**
+ * What a tool states about the limits of its own result, read back from the start of its recorded output. Three forms,
+ * for any kind of artifact:
+ *   NOT VERIFIED: <subject> (<n> <things>: a, b, c)   it was produced or measured, nobody looked; optionally the units
+ *   SAMPLED: <subject> (<what was looked at>)          part of it was looked at: these named units, or "3 frames of x"
+ *   INCOMPLETE: <what is missing>                      something asked for was not delivered
+ * A technical check (streams, length, exit code) says none of these about content. One entry per subject and kind:
+ * the same statement from several calls is one caveat, and everything sampled for a subject is collected into one.
+ */
 export function toolCaveats(evidenceTexts: readonly string[]): string[] {
   const out = new Map<string, string>();
+  const sampled = new Map<string, { subject: string; items: Set<string>; other: Set<string> }>();
   for (const raw of evidenceTexts) {
     const text = raw.replace(/\\n/g, '\n').replace(/\\"/g, '"');
     // The line may open the stored result ({"output":"NOT VERIFIED: …), so a quote counts as a line start too.
-    for (const m of text.matchAll(/(?:^|\n|")\s*(NOT VERIFIED|INCOMPLETE|LOOKED AT):([^\n"]{4,240})(?=\n|"|$)/g)) {
-      const kind = m[1] === 'INCOMPLETE' ? 'Incomplete' : m[1] === 'LOOKED AT' ? 'Looked at' : 'Not verified';
-      // One entry per thing: the same statement from three calls (or cut at different lengths) is one caveat.
-      const subject = `${kind}: ${m[2].split(/[.(]/)[0].trim().toLowerCase()}`;
-      if (!out.has(subject)) out.set(subject, `${kind}: ${m[2].trim().replace(/\.$/, '')}`);
+    for (const m of text.matchAll(/(?:^|\n|")\s*(NOT VERIFIED|INCOMPLETE|SAMPLED): ([^\n"]{4,400})(?=\n|"|$)/g)) {
+      const body = m[2].trim().replace(/\.$/, '');
+      if (m[1] === 'SAMPLED') {
+        const subject = caveatSubject(`x: ${body}`);
+        const entry = sampled.get(subject) ?? { subject: body.split(/[.(]/)[0].trim(), items: new Set<string>(), other: new Set<string>() };
+        const detail = /\(([^)]*)\)?\s*$/.exec(body)?.[1]?.trim() ?? '';
+        // "3 frames of clip.mp4" is a sample OF that file, not a look at the whole file: it never counts as an item.
+        if (/\bof\b/.test(detail)) entry.other.add(detail); else for (const item of namedItems(detail)) entry.items.add(item);
+        sampled.set(subject, entry);
+        continue;
+      }
+      const kind = m[1] === 'INCOMPLETE' ? 'Incomplete' : 'Not verified';
+      const key = `${kind}: ${caveatSubject(`x: ${body}`)}`;
+      // Keep the statement that names the most units (a later, shorter repeat must not hide them).
+      if (!out.has(key) || namedItems(body).length > namedItems(out.get(key)!).length) out.set(key, `${kind}: ${body}`);
     }
   }
+  for (const e of sampled.values()) out.set(`Sampled: ${e.subject.toLowerCase()}`, `Sampled: ${e.subject} (${[...e.items, ...e.other].join(', ')})`);
   return [...out.values()].slice(0, 12);
 }
 
 /**
- * The caveats still standing at the end of a mission. "Incomplete" always stands. A "Not verified: X" is cleared only
- * by a tool that says it looked at the same thing ("LOOKED AT: X") in that step or a later one; a step that merely ran
- * other tools, or an agent saying it looked, clears nothing.
+ * What is still open at the end of a mission, from those statements. The rule is the same for every artifact:
+ *  - "Incomplete" always stands.
+ *  - "Not verified: S" that names its units (n of them) is settled only when every one of those units was sampled, in
+ *    that step or a later one. Some of them: "Partly checked: S — k of n looked at". A sample that names none of them
+ *    (a few frames, a spot check): "Partly checked: S — a sample only". Neither is "verified".
+ *  - "Not verified: S" that names no units cannot be settled by sampling at all.
+ *  - A sample with nothing declared before it is still only a sample.
+ * An agent saying it looked settles nothing.
  */
 export function openCaveats(steps: readonly MissionStep[]): string[] {
-  const subject = (c: string) => c.replace(/^[^:]+:\s*/, '').split(/[.(]/)[0].trim().toLowerCase();
   const out: string[] = [];
+  const add = (c: string) => { if (!out.includes(c)) out.push(c); };
+  const samplesFrom = (from: number, subject: string) => steps.slice(from).flatMap((s) => (s.evidence?.caveats ?? []).filter((c) => c.startsWith('Sampled') && caveatSubject(c) === subject));
+  const declared = new Set<string>();
   for (const [i, s] of steps.entries()) {
     for (const c of s.evidence?.caveats ?? []) {
-      if (c.startsWith('Looked at')) continue;
-      if (c.startsWith('Not verified')) {
-        const looked = steps.slice(i).some((later) => (later.evidence?.caveats ?? []).some((l) => l.startsWith('Looked at') && subject(l) === subject(c)));
-        if (looked) continue;
-      }
-      if (!out.includes(c)) out.push(c);
+      if (c.startsWith('Sampled')) continue;
+      if (!c.startsWith('Not verified')) { add(c); continue; }
+      const subject = caveatSubject(c);
+      // One line per subject: the first statement (the maker's, which names the units) speaks for it; a later tool
+      // repeating "not verified" about the same thing adds nothing.
+      if (declared.has(subject)) continue;
+      declared.add(subject);
+      const units = namedItems(c.replace(/^[^(]*/, ''));
+      const stated = Number(/\((\d+)\s/.exec(c)?.[1] ?? NaN);
+      const samples = samplesFrom(i, subject);
+      if (!samples.length) { add(c); continue; }
+      const looked = new Set(samples.flatMap((x) => namedItems(x.replace(/\b\d+ frames? of [^,)]+/g, ''))));
+      const covered = units.filter((u) => looked.has(u)).length;
+      // The list of units must be whole (not cut off) before "all of them" can be claimed.
+      const listWhole = units.length > 0 && (!Number.isFinite(stated) || units.length >= stated);
+      if (listWhole && covered === units.length) continue;
+      const total = Number.isFinite(stated) ? stated : units.length;
+      add(total > 0
+        ? `Partly checked: ${c.replace(/^[^:]+:\s*/, '').split('(')[0].trim()} — ${covered} of ${total} looked at; the rest is not verified`
+        : `Partly checked: ${c.replace(/^[^:]+:\s*/, '').split('(')[0].trim()} — a sample only (${samples.map((x) => /\(([^)]*)\)/.exec(x)?.[1] ?? '').filter(Boolean).join('; ').slice(0, 120)}); not verified as a whole`);
     }
+  }
+  // Samples of something no step declared: still only a sample of it.
+  for (const s of steps) for (const c of s.evidence?.caveats ?? []) {
+    if (c.startsWith('Sampled') && !declared.has(caveatSubject(c))) add(`Partly checked: ${c.replace(/^[^:]+:\s*/, '').split('(')[0].trim()} — a sample only (${(/\(([^)]*)\)/.exec(c)?.[1] ?? '').slice(0, 120)}); not verified as a whole`);
   }
   return out;
 }
@@ -404,8 +455,7 @@ export function renderMissionReport(mission: Mission, agentName: (id: string) =>
       tools ? `   - Tools that ran: ${tools}` : (s.status === 'succeeded' || s.status === 'unverified') ? '   - No tool call bearing on this step was recorded; its report is the agent\'s own text.' : null,
       ev?.failed.length ? `   - Tool calls that failed: ${ev.failed.join(', ')}` : null,
       ev?.unbacked.length ? `   - Named in its report but never run: ${ev.unbacked.join(', ')}` : null,
-      ...(ev?.caveats ?? []).filter((c) => !c.startsWith('Looked at')).map((c) => `   - ${c}`),
-      ...(ev?.caveats ?? []).filter((c) => c.startsWith('Looked at')).map((c) => `   - ${c}`),
+      ...(ev?.caveats ?? []).map((c) => `   - ${c}`),
       s.error ? `   - ${s.error}` : null,
     ].filter(Boolean) as string[];
     lines.push(...bits);
@@ -414,7 +464,7 @@ export function renderMissionReport(mission: Mission, agentName: (id: string) =>
   const unique = [...new Map(files.map((f) => [f.path.toLowerCase(), f])).values()];
   const open = openCaveats(mission.steps);
   if (open.length) {
-    lines.push('', '**Not verified or not delivered** (stated by the tools that ran; no later step established otherwise)');
+    lines.push('', '**Not verified, only partly checked, or not delivered** (from what the tools themselves stated; a sample is not a full check)');
     for (const c of open) lines.push(`- ${c}`);
   }
   if (unique.length) {

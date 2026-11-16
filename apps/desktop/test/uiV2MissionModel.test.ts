@@ -49,8 +49,10 @@ describe('mission card model', () => {
     const d = describeStep(step({ status: 'succeeded', evidence: ev }), mission({}), NOW);
     expect(d.mark).toBe('warn');
     expect(d.sub).toBe('ran media_inspect. Not verified: what the pictures show. Technical check only. (+1 more)');
-    const lookedOnly = describeStep(step({ status: 'succeeded', evidence: { ...ev, caveats: ['Looked at: what the pictures show (3 frames)'] } }), mission({}), NOW);
-    expect(lookedOnly.mark).toBe('done');
+    // A sample is a warning while the mission is open or ended with issues; once Core counted it as covering everything, it is not.
+    const sample = { ...ev, caveats: ['Sampled: what the pictures show (3 frames of a.mp4)'] };
+    expect(describeStep(step({ status: 'succeeded', evidence: sample }), mission({ status: 'completed_with_issues' }), NOW).mark).toBe('warn');
+    expect(describeStep(step({ status: 'succeeded', evidence: sample }), mission({ status: 'completed' }), NOW).mark).toBe('done');
     expect(missionHeadline(mission({ status: 'completed_with_issues', steps: [step({ status: 'succeeded', evidence: ev })] }))).toBe('Mission finished · not everything checked');
   });
 

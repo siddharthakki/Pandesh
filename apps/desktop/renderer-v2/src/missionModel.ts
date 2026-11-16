@@ -38,7 +38,7 @@ export function missionHeadline(m: MissionView): string {
     return `Mission · ${s.kind === 'review' ? 'reviewing' : 'working'} · ${m.agentNames[s.agentId] ?? s.agentId}`;
   }
   if (m.status === 'completed') return 'Mission complete · checked';
-  if (m.status === 'completed_with_issues') return m.steps.some((s) => (s.evidence?.caveats ?? []).some((c) => !c.startsWith('Looked at'))) ? 'Mission finished · not everything checked' : 'Mission finished · points to check';
+  if (m.status === 'completed_with_issues') return m.steps.some((s) => (s.evidence?.caveats ?? []).length > 0) ? 'Mission finished · not everything checked' : 'Mission finished · points to check';
   if (m.status === 'cancelled') return 'Mission cancelled';
   if (m.status === 'interrupted') return 'Mission interrupted';
   return 'Mission stopped';
@@ -71,7 +71,8 @@ export function describeStep(step: StepView, mission: MissionView, now: number):
       return { agent, state: secondsWord(since), sub, mark: 'run' };
     }
     case 'succeeded': {
-      const caveats = (step.evidence?.caveats ?? []).filter((c) => !c.startsWith('Looked at'));
+      // A sample that Core counted as covering everything (the mission ended clean) is no longer a warning on the step.
+      const caveats = (step.evidence?.caveats ?? []).filter((c) => !(c.startsWith('Sampled') && mission.status === 'completed'));
       const state = step.evidence?.seconds ? secondsWord(step.evidence.seconds) : 'done';
       // The step ran, and its own tools say what they did not establish or deliver: that is shown, not a plain tick.
       if (caveats.length) return { agent, state, sub: `${tools ? `ran ${tools}. ` : ''}${caveats[0]}${caveats.length > 1 ? ` (+${caveats.length - 1} more)` : ''}`, mark: 'warn' };

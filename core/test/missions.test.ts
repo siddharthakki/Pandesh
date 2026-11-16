@@ -296,49 +296,93 @@ describe('mission runner', () => {
   });
 });
 
-describe('what the tools themselves say they did not establish', () => {
-  const produced = 'Video package created and checked: D:\\x\nINCOMPLETE: the upload sheet has no description\nNOT VERIFIED: what the pictures show (technical checks only).\nVideo: D:\\x\\a.mp4';
+describe('technical check, sampled inspection, complete verification', () => {
+  const names = (n: number) => Array.from({ length: n }, (_, i) => `scene-${String(i + 1).padStart(2, '0')}.png`);
+  const produced = (n = 7, incomplete = true) => `NOT VERIFIED: what the pictures show (${n} pictures: ${names(n).join(', ')})\n${incomplete ? 'INCOMPLETE: the upload sheet has no description\n' : ''}Video package created and checked: D:\\x\nVideo: D:\\x\\a.mp4`;
   const measuredOnly = 'NOT VERIFIED: what the pictures show (technical check only: no question was given, so no frame was looked at).\nInspected D:\\x\\a.mp4';
-  const looked = 'LOOKED AT: what the pictures show (3 frame(s) read by a local vision model; a sample).\nInspected D:\\x\\a.mp4\n- frame 1 (read by qwen2.5vl:7b, on this PC): a rabbit in a meadow';
+  const frames = 'SAMPLED: what the pictures show (3 frames of a.mp4)\nInspected D:\\x\\a.mp4\n- frame 1 (read by a local model): a rabbit in a meadow';
+  const picture = (name: string) => `SAMPLED: what the pictures show (${name})\nInspected D:\\x\\assets\\${name}\n- the image (read by a local model): a forest`;
+  const ev = (...outputs: string[]) => outputs.map((output) => JSON.stringify({ output }));
+  const step = (kind: 'work' | 'review', caveats: string[]) => ({ kind, status: 'succeeded', evidence: { verified: [{ tool: 't', count: 1 }], unrelated: [], failed: [], unbacked: [], totalCalls: 1, caveats } }) as never;
 
-  it('reads the fixed lines out of tool evidence, however it was stored', () => {
-    expect(toolCaveats([JSON.stringify({ output: produced })])).toEqual([
+  it('reads the three forms from the start of a result; repeats are one caveat, samples add up', () => {
+    expect(toolCaveats(ev(produced(3)))).toEqual([
+      'Not verified: what the pictures show (3 pictures: scene-01.png, scene-02.png, scene-03.png)',
       'Incomplete: the upload sheet has no description',
-      'Not verified: what the pictures show (technical checks only)',
     ]);
-    // Said three times, or cut off by the evidence bound, it is still one caveat; a sheet that states its own gap counts too.
-    expect(toolCaveats([JSON.stringify({ output: measuredOnly }), JSON.stringify({ output: measuredOnly.slice(0, 70) }), JSON.stringify({ output: produced })])).toHaveLength(2);
-    expect(toolCaveats([JSON.stringify({ output: '# Upload sheet\n**Description:**\n\nINCOMPLETE: no description was written for this upload sheet\n' })])).toEqual(['Incomplete: no description was written for this upload sheet']);
+    expect(toolCaveats(ev(measuredOnly, measuredOnly.slice(0, 70), measuredOnly))).toHaveLength(1);
+    expect(toolCaveats(ev(picture('scene-01.png'), picture('scene-02.png'), frames))).toEqual(['Sampled: what the pictures show (scene-01.png, scene-02.png, 3 frames of a.mp4)']);
+    expect(toolCaveats(ev('# Upload sheet\n**Description:**\n\nINCOMPLETE: no description was written for this upload sheet\n'))).toEqual(['Incomplete: no description was written for this upload sheet']);
     expect(toolCaveats(['all fine', '{}'])).toEqual([]);
   });
 
-  const run = async (reviewEvidence: string, reviewAnswer = 'Verdict: ready. The visuals are consistent and child-friendly.') => {
-    const m = mission([{ agentId: 'studio', title: 'Make the video', brief: 'Write and produce the narrated video.' }, { agentId: 'reviewer', kind: 'review', brief: 'Inspect the produced video file and its package.' }], 'Produce a narrated video about tides with a description and tags');
+  it('a technical check leaves the content not verified', () => {
+    const open = openCaveats([step('work', toolCaveats(ev(produced(7, false)))), step('review', toolCaveats(ev(measuredOnly)))]);
+    expect(open).toHaveLength(1);
+    expect(open[0]).toMatch(/^Not verified: what the pictures show/);
+  });
+
+  it('three frames of the video do not verify seven scenes', () => {
+    const open = openCaveats([step('work', toolCaveats(ev(produced(7, false)))), step('review', toolCaveats(ev(frames)))]);
+    expect(open).toEqual(['Partly checked: what the pictures show — 0 of 7 looked at; the rest is not verified']);
+  });
+
+  it('looking at three of seven pictures says three of seven', () => {
+    const open = openCaveats([step('work', toolCaveats(ev(produced(7, false)))), step('review', toolCaveats(ev(picture('scene-01.png'), picture('scene-04.png'), picture('scene-07.png'), frames)))]);
+    expect(open).toEqual(['Partly checked: what the pictures show — 3 of 7 looked at; the rest is not verified']);
+  });
+
+  it('only looking at every named unit settles it; a missing deliverable still stands', () => {
+    const all = names(7).map(picture);
+    expect(openCaveats([step('work', toolCaveats(ev(produced(7, false)))), step('review', toolCaveats(ev(...all)))])).toEqual([]);
+    expect(openCaveats([step('work', toolCaveats(ev(produced(7, true)))), step('review', toolCaveats(ev(...all)))])).toEqual(['Incomplete: the upload sheet has no description']);
+  });
+
+  it('a list of units that was cut off cannot be called fully covered', () => {
+    const cut = 'Not verified: what the pictures show (7 pictures: scene-01.png, scene-02.png';
+    const open = openCaveats([step('work', [cut]), step('review', toolCaveats(ev(picture('scene-01.png'), picture('scene-02.png'))))]);
+    expect(open).toEqual(['Partly checked: what the pictures show — 2 of 7 looked at; the rest is not verified']);
+  });
+
+  it('a sample of something nobody declared is still only a sample', () => {
+    expect(openCaveats([step('review', toolCaveats(ev(frames)))])).toEqual(['Partly checked: what the pictures show — a sample only (3 frames of a.mp4); not verified as a whole']);
+  });
+
+  it('the same rule holds for any artifact, not only pictures', () => {
+    const made = 'NOT VERIFIED: that the generated pages render (3 pages: index.html, pricing.html, contact.html)\nSite written to D:\\site';
+    const opened = (n: string) => `SAMPLED: that the generated pages render (${n})\nOpened ${n}`;
+    expect(openCaveats([step('work', toolCaveats(ev(made))), step('review', toolCaveats(ev(opened('index.html'))))])).toEqual(['Partly checked: that the generated pages render — 1 of 3 looked at; the rest is not verified']);
+    expect(openCaveats([step('work', toolCaveats(ev(made))), step('review', toolCaveats(ev(opened('index.html'), opened('pricing.html'), opened('contact.html'))))])).toEqual([]);
+  });
+
+  const run = async (reviewOutputs: string[], reviewAnswer = 'Verdict: ready. The visuals are consistent and child-friendly.') => {
+    const m = mission([{ agentId: 'studio', title: 'Make the video', brief: 'Write and produce the narrated video.' }, { agentId: 'reviewer', kind: 'review', brief: 'Inspect the produced video file and its package.' }], 'Produce a narrated video about tides');
+    const saved: string[] = [];
     const { r } = runner(({ agentId }) => agentId === 'studio'
-      ? { answer: 'Done: the video is ready.', tools: [{ name: 'media_produce_video', evidence: JSON.stringify({ output: produced }) }] }
-      : { answer: reviewAnswer, tools: [{ name: 'media_inspect', evidence: JSON.stringify({ output: reviewEvidence }) }] });
+      ? { answer: 'Done: the video is ready.', tools: [{ name: 'media_produce_video', evidence: JSON.stringify({ output: produced(7, false) }) }] }
+      : { answer: reviewAnswer, tools: reviewOutputs.map((output) => ({ name: 'media_inspect', evidence: JSON.stringify({ output }) })) },
+    { recordExperience: (mm) => { const d = missionProcedure(mm, (id) => id); if (d) saved.push(d.id); } });
     r.start(m.id);
-    return settle(r, m.id);
+    return { done: await settle(r, m.id), saved };
   };
 
-  it('a review that only measured the file leaves the pictures unverified, whatever its report says', async () => {
-    const done = await run(measuredOnly);
+  it('a mission whose review only sampled is not complete, says so, and leaves no skill draft, whatever the review says', async () => {
+    const { done, saved } = await run([frames]);
     expect(done.status).toBe('completed_with_issues');
-    expect(done.resultSummary).toMatch(/not everything was checked or delivered/);
-    const open = openCaveats(done.steps);
-    expect(open.some((c) => c.startsWith('Not verified: what the pictures show'))).toBe(true);
-    expect(open).toContain('Incomplete: the upload sheet has no description');
+    expect(done.resultSummary).toMatch(/Partly checked: what the pictures show — 0 of 7 looked at/);
     const report = listMessages(db, done.conversationId, { limit: 10 }).pop()!.content;
     expect(report).toMatch(/Mission finished, with points to check/);
-    expect(report).toMatch(/\*\*Not verified or not delivered\*\*/);
-    expect(report).toMatch(/Not verified: what the pictures show/);
+    expect(report).toMatch(/only partly checked/);
+    expect(report).toMatch(/0 of 7 looked at; the rest is not verified/);
+    expect(saved).toEqual([]);
     expect(missionProcedure(done, (id) => id)).toBeNull();
   });
 
-  it('a review whose tool looked at the pictures clears that, but a missing deliverable still stands', async () => {
-    const done = await run(looked);
-    expect(openCaveats(done.steps)).toEqual(['Incomplete: the upload sheet has no description']);
-    expect(done.status).toBe('completed_with_issues');
+  it('a mission whose review looked at every picture is complete and may be kept as a procedure', async () => {
+    const { done, saved } = await run(names(7).map(picture));
+    expect(openCaveats(done.steps)).toEqual([]);
+    expect(done.status).toBe('completed');
+    expect(saved).toHaveLength(1);
   });
 
   it('nothing declared, nothing invented', () => {

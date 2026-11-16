@@ -525,10 +525,11 @@ export async function produceNarratedVideo(input: NarratedVideoInput, deps: Narr
 
 export function renderNarratedVideoResult(r: NarratedVideoResult, target?: [number, number]): string {
   return [
-    `${r.verified ? 'Video package created and checked' : 'Video package created but NOT fully verified'}: ${r.folder}`,
-    // Read back by Core (missionRunner.toolCaveats): first and short, because only the start of a result is kept as evidence.
+    // Read back by Core (missionRunner.toolCaveats): first and short, because only the start of a result is kept as
+    // evidence. The pictures are named one by one: only looking at every one of them settles what they show.
+    `NOT VERIFIED: what the pictures show (${r.scenes.length} pictures: ${r.scenes.map((s) => path.basename(s.imageFile)).join(', ')})`,
     ...r.incomplete.map((line) => `INCOMPLETE: ${line}`),
-    'NOT VERIFIED: what the pictures show (technical checks only).',
+    `${r.verified ? 'Video package created and checked' : 'Video package created but NOT fully verified'}: ${r.folder}`,
     `Video: ${r.video} (${r.width}x${r.height}, ${r.durationSec.toFixed(1)} s, ${(r.bytes / 1e6).toFixed(1)} MB, SHA-256 ${r.sha256.slice(0, 16)}…)`,
     target ? `Length against the brief (${target[0]}-${target[1]} s): ${r.withinTarget ? 'inside the range' : `OUTSIDE the range (${r.durationSec.toFixed(1)} s); change the narration length and produce it again in a new folder`}` : null,
     r.subtitles ? `Subtitles: ${r.subtitles} (also burned in)` : 'Subtitles: none',
