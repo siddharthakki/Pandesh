@@ -17,7 +17,7 @@ export function registerBuiltinSkills(registry: SkillRegistry): void {
   for (const skill of BUILTIN_SKILLS) registry.add(skill);
 }
 
-async function findSkillFiles(root: string): Promise<string[]> {
+export async function findSkillFiles(root: string): Promise<string[]> {
   const found: string[] = [];
   const walk = async (dir: string, depth: number): Promise<void> => {
     if (found.length >= MAX_SKILLS_PER_SOURCE || depth > MAX_DEPTH) return;

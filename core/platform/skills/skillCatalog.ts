@@ -8,7 +8,9 @@
  */
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import { SkillRegistry, resolveSkills, type SkillManifest } from './skillRuntime';
+import * as os from 'node:os';
+import { SkillRegistry, resolveSkills, scanSkillText, type SkillManifest } from './skillRuntime';
+import { searchRepositories, formatAssessment } from './skillCandidates';
 import { registerBuiltinSkills } from './skillSources';
 import { loadUserSkills, skillsDir } from './skillService';
 import { maskSecrets } from '../../shared/secretMask';
@@ -24,25 +26,33 @@ function kindLabel(s: SkillManifest): string {
   return 'procedure (advice you read and follow; it is not a tool and grants nothing)';
 }
 
-async function mergedRegistry(dataDir: string | undefined): Promise<{ registry: SkillRegistry; userCount: number; rejected: number }> {
+async function mergedRegistry(dataDir: string | undefined, includeUser = true): Promise<{ registry: SkillRegistry; userCount: number; rejected: number }> {
   const registry = new SkillRegistry();
   const all = new SkillRegistry();
   registerBuiltinSkills(all);
   // Built-in behaviours (cloud budget, evidence checks) run by themselves; they are not procedures to find or read.
   for (const s of all.list()) if (s.kind !== 'host-hook') registry.add(s);
-  const user = await loadUserSkills(dataDir);
+  const user = includeUser ? await loadUserSkills(dataDir) : null;
   let userCount = 0;
   for (const s of user?.registry.list() ?? []) { registry.add(s); userCount++; }
   return { registry, userCount, rejected: user?.report.rejected.length ?? 0 };
 }
 
-export interface FindSkillOptions { workspaceOpen?: boolean; max?: number }
+export interface FindSkillOptions {
+  workspaceOpen?: boolean; max?: number;
+  /**
+   * False on a cloud or `:cloud` model turn: the owner's own skills, drafts and repositories are private instructions and
+   * stay out of what an external model can read. Only the built-in skills are searched then.
+   */
+  localModel?: boolean;
+}
 
 /** Ranked skills for a task, with the reason a close match was left out. Returns plain text for the model. */
 export async function findSkills(dataDir: string | undefined, task: string, opts: FindSkillOptions = {}): Promise<string> {
   const query = String(task ?? '').trim();
   if (!query) return 'Say what the task is, in a few words, and I will look for a skill that fits.';
-  const { registry, userCount, rejected } = await mergedRegistry(dataDir);
+  const localModel = opts.localModel !== false;
+  const { registry, userCount, rejected } = await mergedRegistry(dataDir, localModel);
   // Discovery only: capabilities are listed as "Needs", not enforced here (reading a skill grants nothing, and the
   // tools the skill mentions stay governed by Core when they are called).
   const declared = new Set(registry.list().flatMap((s) => s.requires.capabilities));
@@ -61,15 +71,24 @@ export async function findSkills(dataDir: string | undefined, task: string, opts
   for (const d of blocked.slice(0, 3)) {
     lines.push(`- ${d.id} looked related but cannot be used: ${d.detail}`);
   }
-  const drafts = listDrafts(dataDir).filter((d) => query.toLowerCase().split(/\W+/).some((w) => w.length > 3 && d.id.includes(w)));
+  const drafts = (localModel ? listDrafts(dataDir) : []).filter((d) => query.toLowerCase().split(/\W+/).some((w) => w.length > 3 && d.id.includes(w)));
   for (const d of drafts.slice(0, 2)) lines.push(`- ${d.id} is a DRAFT proposed earlier (not active; the owner has to review it and move it into the skills folder).`);
-  const scope = `Searched ${registry.size - userCount} built-in and ${userCount} installed skill(s)${rejected ? `, ${rejected} installed file(s) were rejected` : ''}.`;
+  const scope = `Searched ${registry.size - userCount} built-in and ${userCount} installed skill(s)${rejected ? `, ${rejected} installed file(s) were rejected` : ''}${localModel ? '' : '; the owner\'s own skills are not searched on a cloud model'}.`;
+  // Beyond what is installed: approved local repositories (read-only), only when nothing installed fits, so the common
+  // case adds no work. Public sources are reached with web_research and judged with assess_skill_candidate.
+  let external = '';
+  if (localModel && resolved.selected.length === 0) {
+    const repo = await searchRepositories(dataDir, query, 3);
+    if (repo.found.length) external = `\nNot installed, found in ${repo.repos} approved repositor${repo.repos === 1 ? 'y' : 'ies'} (${repo.scanned} skill files read, nothing loaded or run):\n${repo.found.map(formatAssessment).join('\n')}`;
+    else if (repo.repos === 0) external = '\nNo approved skill repositories are set up (the owner lists folders in skill-repositories.json). For public candidates use web_research on the maker\'s documentation, then assess_skill_candidate on the text you read.';
+    else external = `\nNo match in ${repo.repos} approved repositor${repo.repos === 1 ? 'y' : 'ies'} either (${repo.scanned} skill files read).`;
+  }
   if (lines.length === 0) {
-    return `No skill fits "${query.slice(0, 80)}". ${scope}\nWork from the tools you have. If this is a procedure worth keeping, finish the task first, then propose_skill with what actually worked. Do not download or install a skill from the internet.`;
+    return `No skill fits "${query.slice(0, 80)}". ${scope}\nWork from the tools you have. If this is a procedure worth keeping, finish the task first, then propose_skill with what actually worked. Do not download or install a skill from the internet.${external}`;
   }
   const combine = resolved.selected.length >= 2 && resolved.selected.every((s) => s.kind !== 'host-hook')
     ? '\nSeveral fit: read the best one first; use a second only for a step the first does not cover.' : '';
-  return `${lines.join('\n')}${combine}\n${scope} Read one with read_skill (id). A skill never grants a tool or permission: if you lack a tool it mentions, say so or use request_tools.`;
+  return `${lines.join('\n')}${combine}\n${scope} Read one with read_skill (id). A skill never grants a tool or permission: if you lack a tool it mentions, say so or use request_tools.${external}`;
 }
 
 /** The text of a built-in skill (its procedure), for read_skill. Null when the id is not built in. */
@@ -91,7 +110,23 @@ function listDrafts(dataDir: string | undefined): Array<{ id: string }> {
   } catch { return []; }
 }
 
-const SKILL_ID = /^[a-z][a-z0-9-]{2,48}$/;
+function scrub(text: unknown): string {
+  let t = maskSecrets(String(text ?? '')).text;
+  const home = os.homedir();
+  if (home.length > 3) for (const v of new Set([home, home.replace(/\\/g, '/')])) t = t.split(v).join('~');
+  return t.replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f​-‏⁠﻿]/g, '').replace(/[\w.+-]+@[\w-]+\.[\w.-]+/g, '[address]');
+}
+/** One line: no newlines and no header markers. */
+function clean(text: unknown, max: number): string { return scrub(text).replace(/\s+/g, ' ').replace(/^-{3,}\s*|\s*-{3,}$/g, '').trim().slice(0, max); }
+/** Several lines: a line that is only `---` would end the header early, so it is neutralised. */
+function cleanBlock(text: unknown, max: number): string { return scrub(text).replace(/^\s*-{3,}\s*$/gm, '- - -').trim().slice(0, max); }
+/** A source is a place, not a secret: no credentials, query string or fragment. */
+function cleanSource(text: unknown): string {
+  const raw = String(text ?? '').trim();
+  try { const u = new URL(raw); return clean(`${u.protocol}//${u.host}${u.pathname}`, 200); } catch { return clean(raw, 200); }
+}
+
+const SKILL_ID =/^[a-z][a-z0-9-]{2,48}$/;
 
 export interface SkillProposal { id: string; name: string; description: string; body: string; evidence?: string; source?: string }
 
@@ -104,22 +139,25 @@ export function proposeSkill(dataDir: string | undefined, p: SkillProposal): { o
   if (!dataDir) return { ok: false, text: 'No Pandesh data folder is available, so the draft was not saved.' };
   const id = String(p.id ?? '').trim().toLowerCase();
   if (!SKILL_ID.test(id)) return { ok: false, text: 'The id must be 3-49 characters: lower-case letters, digits and hyphens, starting with a letter (e.g. check-invoice-totals).' };
-  const name = String(p.name ?? '').replace(/\s+/g, ' ').trim().slice(0, 100);
-  const description = String(p.description ?? '').replace(/\s+/g, ' ').trim().slice(0, 300);
-  const body = String(p.body ?? '').trim();
+  // Every field that reaches the file is cleaned the same way: secrets masked, the home folder and email addresses
+  // shortened, control characters and header markers removed, so no field can carry a secret, a second header or a directive.
+  const name = clean(p.name, 100);
+  const description = clean(p.description, 300);
+  const body = cleanBlock(p.body, MAX_DRAFT_CHARS);
   if (!name || description.length < 20) return { ok: false, text: 'A skill needs a name and a description of at least 20 characters saying when to use it.' };
   if (body.length < 80) return { ok: false, text: 'The body is too short to be a procedure: give the steps, the check that proves it worked, and when not to use it.' };
-  if (/\b(?:ignore|disregard|override)\b[^.\n]{0,40}\b(?:instructions?|rules?|polic(?:y|ies)|approval)/i.test(body) || /\b(?:without|skip|bypass)\b[^.\n]{0,20}\b(?:approval|asking|permission)/i.test(body)) {
+  const all = `${name}\n${description}\n${body}\n${p.evidence ?? ''}\n${p.source ?? ''}`;
+  if (scanSkillText(all).some((f) => f.severity === 'block') || /\b(?:ignore|disregard|override)\b[^.\n]{0,40}\b(?:instructions?|rules?|polic(?:y|ies)|approval)/i.test(all) || /\b(?:without|skip|bypass)\b[^.\n]{0,20}\b(?:approval|asking|permission)/i.test(all)) {
     return { ok: false, text: 'Refused: a skill cannot tell Pandesh to skip approvals or ignore its rules. Rewrite the steps so every consequential action still asks.' };
   }
   const dir = path.join(draftsDir(dataDir), id);
   if (fs.existsSync(dir) || fs.existsSync(path.join(skillsDir(dataDir), id))) return { ok: false, text: `A skill or draft named "${id}" already exists. Choose another id (for an improvement, add a suffix such as ${id}-v2).` };
-  const masked = maskSecrets(body.slice(0, MAX_DRAFT_CHARS));
+  const masked = { text: body, masked: body !== String(p.body ?? '').trim() };
   const front = [
-    '---', `name: ${name}`, `description: ${description}`, 'version: 0.1.0', 'kind: procedure', 'trust: draft — proposed by Pandesh, not reviewed',
-    ...(p.source ? [`source: ${String(p.source).replace(/\s+/g, ' ').slice(0, 200)}`] : []), '---', '',
+    '---', `name: ${name}`, `description: ${description}`, 'version: 0.1.0', 'kind: procedure', 'trust: draft — proposed by Pandesh, not reviewed', 'status: draft', 'active: false',
+    ...(p.source ? [`source: ${cleanSource(p.source)}`] : []), '---', '',
   ].join('\n');
-  const evidence = p.evidence ? `\n\n## Evidence this worked\n${maskSecrets(String(p.evidence).slice(0, 1_500)).text}\n` : '';
+  const evidence = p.evidence ? `\n\n## Evidence this worked\n${cleanBlock(p.evidence, 1_500)}\n` : '';
   fs.mkdirSync(dir, { recursive: true });
   fs.writeFileSync(path.join(dir, 'SKILL.md'), `${front}${masked.text}${evidence}`, 'utf8');
   return { ok: true, text: `Draft saved as "${id}" in the skill-proposals folder${masked.masked ? ' (secret-looking text was masked)' : ''}. It is NOT active: the owner reviews it and, if it is good, moves the folder into the skills folder. Tell the user it exists and what it covers; do not call it installed.` };

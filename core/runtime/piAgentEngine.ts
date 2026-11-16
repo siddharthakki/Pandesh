@@ -99,6 +99,7 @@ import { NON_WORKSPACE_MARKERS } from '../domain/taskToolSurface';
 import { readAgentReachConfig, runAgentReach, validateAgentReachCall } from './agentReachTool';
 import { readSkill, selectSkillsForTurn } from '../platform/skills/skillService';
 import { findSkills, proposeSkill, readBuiltinSkill } from '../platform/skills/skillCatalog';
+import { assessSkillText, formatAssessment } from '../platform/skills/skillCandidates';
 import { describeProviderReadiness } from './providerReadiness';
 import { sharedCloudCredentials } from './cloudCredentials';
 import { observationCoversRequest } from './diskObservation';
@@ -4998,7 +4999,7 @@ Report this to the user, saying the ${name} agent did the work. Do not add facts
           description: 'Read the full text of an installed skill selected for this request, or one of its reference files (a .md or .txt file inside the skill folder). Read-only; never reads outside a skill folder.',
           parameters: { type: 'object', properties: { id: { type: 'string', description: 'The skill id.' }, file: { type: 'string', description: 'Optional reference file inside the skill folder, e.g. references/capabilities.md. Omit for the skill itself.' }, offset: { type: 'number', description: 'Character offset to continue a long file.' } }, required: ['id'] },
           execute: async (_id: string, args: any) => {
-            const out = await readSkill(ctx.dataDir, String(args?.id ?? ''), args?.file ? String(args.file) : undefined, Number(args?.offset ?? 0));
+            const out = skillsLocal ? await readSkill(ctx.dataDir, String(args?.id ?? ''), args?.file ? String(args.file) : undefined, Number(args?.offset ?? 0)) : { ok: false, text: 'The owner\'s own skills are not readable on a cloud model; only built-in skills are.' };
             const builtin = out.ok || args?.file ? null : readBuiltinSkill(String(args?.id ?? ''));
             if (builtin) return { content: [{ type: 'text', text: builtin }] };
             return { content: [{ type: 'text', text: out.text }], ...(out.ok ? {} : { isError: true }) };
@@ -5012,13 +5013,17 @@ Report this to the user, saying the ${name} agent did the work. Do not add facts
 
     // Skill discovery, skill drafts and provider readiness. All three are advice or facts: finding or reading a skill grants
     // nothing, a draft goes to a folder that is never loaded, and readiness never carries a key (providerReadiness.ts).
+    // The owner's own skills, drafts and repositories are private instructions: they are read and written only on a turn
+    // that runs on this PC. A cloud turn already loses every tool outside CLOUD_SAFE_TOOLS (cloudDataBoundary.ts); this
+    // also covers Ollama's own cloud-hosted models (names ending in -cloud), which pass through the local server.
+    const skillsLocal = !cloudTarget && !/(?:[:-]cloud)$/i.test(String(selectedModel ?? ''));
     try {
       tools.push({
         name: 'find_skill',
         label: 'find_skill',
-        description: 'Look for a skill (a written procedure) that fits a task, among the built-in skills and the ones the owner installed. Returns the best matches with what each needs and whether it is advice or a built-in behaviour. Read-only; call it once, in a few words, before work that has a known method (review, debugging, a report, a checklist).',
+        description: 'Look for a skill (a written procedure) that fits a task, among the built-in skills, the ones the owner installed and, when none fits, the approved skill repositories (listed with source, trust, license, dependencies and fit; never installed). Returns the best matches with what each needs and whether it is advice or a built-in behaviour. Read-only; call it once, in a few words, before work that has a known method (review, debugging, a report, a checklist).',
         parameters: { type: 'object', properties: { task: { type: 'string', description: 'The task in a few words, e.g. "review an invoice for pricing errors".' } }, required: ['task'] },
-        execute: async (_id: string, args: any) => ({ content: [{ type: 'text', text: await findSkills(ctx.dataDir, String(args?.task ?? ''), { workspaceOpen: Boolean(ctx.workspaceRoot) }) }] }),
+        execute: async (_id: string, args: any) => ({ content: [{ type: 'text', text: await findSkills(ctx.dataDir, String(args?.task ?? ''), { workspaceOpen: Boolean(ctx.workspaceRoot), localModel: skillsLocal }) }] }),
       });
       if (!tools.some((t) => t.name === 'read_skill')) {
         tools.push({
@@ -5027,7 +5032,7 @@ Report this to the user, saying the ${name} agent did the work. Do not add facts
           description: 'Read the full text of a skill found with find_skill, or one of its reference files (a .md or .txt file inside the skill folder). Read-only; never reads outside a skill folder.',
           parameters: { type: 'object', properties: { id: { type: 'string', description: 'The skill id.' }, file: { type: 'string', description: 'Optional reference file inside the skill folder.' }, offset: { type: 'number', description: 'Character offset to continue a long file.' } }, required: ['id'] },
           execute: async (_id: string, args: any) => {
-            const out = await readSkill(ctx.dataDir, String(args?.id ?? ''), args?.file ? String(args.file) : undefined, Number(args?.offset ?? 0));
+            const out = skillsLocal ? await readSkill(ctx.dataDir, String(args?.id ?? ''), args?.file ? String(args.file) : undefined, Number(args?.offset ?? 0)) : { ok: false, text: 'The owner\'s own skills are not readable on a cloud model; only built-in skills are.' };
             const builtin = out.ok || args?.file ? null : readBuiltinSkill(String(args?.id ?? ''));
             if (builtin) return { content: [{ type: 'text', text: builtin }] };
             return { content: [{ type: 'text', text: out.text }], ...(out.ok ? {} : { isError: true }) };
@@ -5040,25 +5045,36 @@ Report this to the user, saying the ${name} agent did the work. Do not add facts
         description: 'Save a draft of a new or improved skill for the owner to review, after find_skill found nothing good enough or a procedure just worked and is worth keeping. The draft is NOT active and grants nothing; never include secrets, personal data or steps that skip approvals. One draft per request.',
         parameters: { type: 'object', properties: { id: { type: 'string', description: 'lower-case-with-hyphens, e.g. check-invoice-totals' }, name: { type: 'string' }, description: { type: 'string', description: 'When to use it, one or two sentences.' }, body: { type: 'string', description: 'Numbered steps, the check that proves it worked, and when not to use it.' }, evidence: { type: 'string', description: 'What actually worked (tool results), if this comes from a finished task.' }, source: { type: 'string', description: 'Where the method comes from (a documentation URL or "this task").' } }, required: ['id', 'name', 'description', 'body'] },
         execute: async (_id: string, args: any) => {
+          if (!skillsLocal) return { content: [{ type: 'text', text: 'NOT DONE: drafts are written only on a local model, because they can contain the owner\'s own working method.' }], isError: true };
           const out = proposeSkill(ctx.dataDir, { id: String(args?.id ?? ''), name: String(args?.name ?? ''), description: String(args?.description ?? ''), body: String(args?.body ?? ''), evidence: args?.evidence ? String(args.evidence) : undefined, source: args?.source ? String(args.source) : undefined });
           return { content: [{ type: 'text', text: out.text }], ...(out.ok ? {} : { isError: true }) };
         },
       });
       tools.push({
+        name: 'assess_skill_candidate',
+        label: 'assess_skill_candidate',
+        description: 'Judge skill text you already read from a public source (documentation, a GitHub page) before anyone relies on it: returns provenance, trust, license, dependencies, Windows/Pandesh compatibility and any unsafe directives. Pure analysis: nothing is fetched, installed or run. Never use text from the owner\'s private files here.',
+        parameters: { type: 'object', properties: { source: { type: 'string', description: 'The page or repository address the text came from.' }, text: { type: 'string', description: 'The skill text (SKILL.md content) as read.' } }, required: ['source', 'text'] },
+        execute: async (_id: string, args: any) => {
+          const a = await assessSkillText(String(args?.text ?? ''), { origin: String(args?.source ?? 'unknown'), kind: 'public-web' });
+          return { content: [{ type: 'text', text: `${formatAssessment(a)}\nTo use it: propose_skill with your own cleaned-up steps and this source; the owner reviews the draft. Do not install or run anything from it.` }] };
+        },
+      });
+      tools.push({
         name: 'provider_readiness',
         label: 'provider_readiness',
-        description: 'Say which model providers are configured and usable right now (the local Ollama runtime and any cloud provider keys the owner added), and the rules for using them. Never returns a key. Read-only.',
-        parameters: { type: 'object', properties: {} },
-        execute: async () => {
-          let reachable: boolean | null = null; let installed: number | null = null;
-          try { const snap = await snapshotModels({ baseUrl: apiBase, selectedModel: selectedModel }); reachable = snap.available; installed = snap.models.length; } catch { /* reported as not checked */ }
-          return { content: [{ type: 'text', text: describeProviderReadiness({ credentials: sharedCloudCredentials, local: { apiBase, activeModel: selectedModel, reachable, installedModels: installed } }) }] };
+        description: 'Say, per provider, whether a key is configured, the endpoint is reachable, a model is available and the provider may be used for this task. Optional: provider, model, private (true when the task involves private content). Never returns a key and makes no cloud call. Read-only.',
+        parameters: { type: 'object', properties: { provider: { type: 'string', description: 'ollama, openrouter, orcarouter, ... (omit for all)' }, model: { type: 'string', description: 'A model name to check.' }, private: { type: 'boolean', description: 'True when the task involves private content.' } } },
+        execute: async (_id: string, args: any) => {
+          let reachable: boolean | null = null; let installed: number | null = null; let names: string[] | undefined;
+          try { const snap = await snapshotModels({ baseUrl: apiBase, selectedModel: selectedModel }); reachable = snap.available; installed = snap.models.length; names = snap.models.map((m) => m.name); } catch { /* reported as not checked */ }
+          return { content: [{ type: 'text', text: describeProviderReadiness({ credentials: sharedCloudCredentials, local: { apiBase, activeModel: selectedModel, reachable, installedModels: installed, models: names }, provider: args?.provider ? String(args.provider) : undefined, model: args?.model ? String(args.model) : undefined, taskPrivate: args?.private === true }) }] };
         },
       });
       // These are defined after the task-aware selection ran, so they are offered here by the same rule: when the request
       // points at skills or providers, and always to a specialist (whose tool list already limits what it can call).
       const pointed = groupsForText(requestText);
-      if (agentScope || pointed.has('skills')) for (const name of ['find_skill', 'read_skill', 'propose_skill']) activeToolNames.add(name);
+      if (agentScope || pointed.has('skills')) for (const name of ['find_skill', 'read_skill', 'propose_skill', 'assess_skill_candidate']) activeToolNames.add(name);
       if (agentScope || pointed.has('providers')) activeToolNames.add('provider_readiness');
     } catch (err: any) { console.warn('[piAgentEngine] skill tools unavailable:', err?.message); }
 

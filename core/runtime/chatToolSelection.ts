@@ -167,7 +167,7 @@ export const NATIVE_GROUP: Record<string, string> = {
   list_printers: 'printing', print_test_page: 'printing',
   send_to_phone: 'phone',
   delegate_to_agent: 'agents',
-  find_skill: 'skills', read_skill: 'skills', propose_skill: 'skills',
+  find_skill: 'skills', read_skill: 'skills', propose_skill: 'skills', assess_skill_candidate: 'skills',
   provider_readiness: 'providers',
   software_updates: 'pc', listening_ports: 'pc', find_installed_app: 'pc',
   create_project: 'projects', list_projects: 'projects',
