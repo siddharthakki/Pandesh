@@ -30,6 +30,8 @@ jobs:
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: actions/setup-node@v4
         with:
           node-version: 24
@@ -39,7 +41,10 @@ jobs:
           npm ci
           npm ci --prefix apps/desktop
       - name: Typecheck
+        # bash with -e: on a Windows runner the default shell let an earlier failing tsc pass when the last one succeeded.
+        shell: bash
         run: |
+          set -e
           npx tsc -p tsconfig.core.json --noEmit
           npx tsc -p ./ --noEmit
           npx tsc -p apps/desktop/renderer-v2/tsconfig.json --noEmit
@@ -47,18 +52,16 @@ jobs:
         run: |
           node esbuild.core.js
           node apps/desktop/esbuild.mjs
-      - name: Core tests (all but the timing-sensitive files)
+      # The full Core and Desktop suites take ~25 minutes on a hosted runner. CI runs the unit tier only: the tests that import
+      # a file this change touched (scripts/test-tiers.mjs unit). The full sweep, regression and acceptance tiers run locally
+      # before a release (npm run test:full, test:regression, test:acceptance).
+      - name: Unit tests (tests impacted by this change)
         shell: bash
         run: |
-          excludes=""; for f in $TIMING_SENSITIVE; do excludes="$excludes --exclude $f"; done
-          npx vitest run core/test $excludes --testTimeout=120000 --hookTimeout=120000
-      - name: Desktop tests
-        # Desktop tests that check "is the selected model installed?" need an Ollama /api/tags endpoint; the runner has
-        # no Ollama, so a stub that lists two model names (and serves nothing else) stands in.
-        shell: bash
-        run: |
+          base="origin/main"
+          if [ "${{ github.event_name }}" = "push" ]; then base="HEAD^"; fi
           node scripts/ci/ollama-tags-stub.mjs &
-          npx vitest run apps/desktop/test --testTimeout=120000 --hookTimeout=120000
+          node scripts/test-tiers.mjs unit --base "$base"
 
   timing-sensitive:
     runs-on: windows-latest
