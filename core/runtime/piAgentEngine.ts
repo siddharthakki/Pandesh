@@ -24,6 +24,8 @@ import { explicitSpecialistRequest, handoffPreflight, SPECIALIST_NAMES } from '.
 const HANDOFF_FACTS = new Map<string, string>();
 /** The private part of those facts (memory, reminders): the child's public web query must not repeat it. */
 const HANDOFF_PRIVATE_FACTS = new Map<string, string[]>();
+/** Delegating attempt id -> names of agents whose report cited tool calls they never made (Core appends the correction to the final reply). */
+const UNOBSERVED_DELEGATIONS = new Map<string, string[]>();
 /** Tools whose arguments are the assistant's own output: never evidence for the values in that output (F13f). */
 const OWN_OUTPUT_TOOLS = /^(?:write_file|propose_file_change|propose_text_edit|update_task_outcome)$/;
 /** Wall-clock budget for one OpenCode delegation (Core then verifies whatever it changed). */
@@ -4689,7 +4691,10 @@ ${String(args.objective ?? '').slice(0, 600)}`,
             // listed find_skill/read_skill as its evidence) is passed on as unverified, never as evidence.
             const childToolCalls = db.all<{ toolName: string }>('SELECT toolName FROM tool_invocations WHERE attemptId = ?', [childAttemptId]).length;
             const unobserved = childToolCalls === 0 && claimsToolCalls(out.answer);
-            if (unobserved) safeRecordRuntimeEvent(db, broadcaster, attemptId, 'handoff_unobserved_evidence', { agent: toAgentId, childToolCalls }, actor);
+            if (unobserved) {
+              safeRecordRuntimeEvent(db, broadcaster, attemptId, 'handoff_unobserved_evidence', { agent: toAgentId, childToolCalls }, actor);
+              UNOBSERVED_DELEGATIONS.set(attemptId, [...(UNOBSERVED_DELEGATIONS.get(attemptId) ?? []), name]);
+            }
             return {
               content: [{ type: 'text', text: `${unobserved ? `CORE CHECK: the ${name} agent made NO tool calls in this task, so the actions and evidence its report lists were not observed. Tell the user that plainly; do not present them as evidence or as checked.` + String.fromCharCode(10) + String.fromCharCode(10) : ''}RESULT FROM THE ${name.toUpperCase()} AGENT (completed in ${secs}s; its task runs in its own conversation "${name} · ${brief.slice(0, 60)}"):
 
@@ -6940,6 +6945,17 @@ When the user asks to continue, resume, or check progress/updates, resume this w
         deliverables.expected.push(unbacked); deliverables.missing.push(unbacked);
         safeRecordRuntimeEvent(db, broadcaster, attemptId, 'unbacked_working_claim', { detail: unbacked }, actor);
       }
+    }
+
+    // A delegated agent that made no tool calls but listed them as its evidence: the lead may drop the note it was given, so
+    // Core states the correction in the reply itself.
+    const unobservedAgents = UNOBSERVED_DELEGATIONS.get(attemptId);
+    UNOBSERVED_DELEGATIONS.delete(attemptId);
+    if (!signal?.aborted && finalReply && unobservedAgents?.length) {
+      const note = `the ${[...new Set(unobservedAgents)].join(' and ')} agent made no tool calls in this task, so the actions and evidence its report lists were not observed and must not be treated as checked`;
+      finalReply += `\n\nCorrection (checked by Pandesh Core): ${note}.`;
+      deliverables = deliverables ?? { expected: [], missing: [], present: [] };
+      deliverables.expected.push(note); deliverables.missing.push(note);
     }
 
     // An answer that exists only on the disk ("how many files are in rw/inbox") is an observation. If no read of the disk
