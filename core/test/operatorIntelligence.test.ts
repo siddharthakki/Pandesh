@@ -7,6 +7,8 @@ import { assessSkillText } from '../platform/skills/skillCandidates';
 import { resetSkillCache } from '../platform/skills/skillService';
 import { describeProviderReadiness } from '../runtime/providerReadiness';
 import { CloudCredentialStore } from '../runtime/cloudCredentials';
+import { ownerSkillPrivateTexts, resetOwnerSkillCache } from '../platform/skills/skillEgress';
+import { checkPublicQuery } from '../runtime/publicQueryGuard';
 import { BUILTIN_AGENTS, SPECIALIST_COMMON_RULES } from '../domain/agents';
 
 let dir = '';
@@ -142,5 +144,38 @@ describe('specialists', () => {
     expect(skills.tools).not.toContain('run_checks');
     expect(BUILTIN_AGENTS.find((a) => a.id === 'reviewer')!.workingRules).toMatch(/Report back:/);
     expect(SPECIALIST_COMMON_RULES.length).toBeLessThan(1500);
+  });
+});
+
+describe('outbound queries and the owner skills (Core boundary)', () => {
+  it('refuses a query that repeats an owner skill name or wording, without the model having read it', () => {
+    resetOwnerSkillCache();
+    fs.mkdirSync(path.join(dir, 'skills', 'mueller-pricing-sheet'), { recursive: true });
+    fs.writeFileSync(path.join(dir, 'skills', 'mueller-pricing-sheet', 'SKILL.md'), ['---', 'name: Mueller pricing sheet', 'description: Prepare the quarterly pricing sheet for the Mueller account.', '---', 'Always discount Mueller by eleven percent before sending.'].join(String.fromCharCode(10)), 'utf8');
+    const owner = ownerSkillPrivateTexts(dir);
+    expect(checkPublicQuery('Mueller pricing sheet template', { owner }).ok).toBe(false);
+    expect(checkPublicQuery('discount mueller by eleven percent', { owner }).ok).toBe(false);
+    expect(checkPublicQuery('quarterly pricing sheet for the mueller account', { owner }).ok).toBe(false);
+    expect(checkPublicQuery('faceless children storytelling video tools', { owner }).ok).toBe(true);
+    expect(checkPublicQuery('Mueller pricing sheet template', { owner: ownerSkillPrivateTexts(undefined) }).ok).toBe(true);
+  });
+});
+
+describe('provider questions and skill answers (found testing Build 173)', () => {
+  it('a provider question is answered from provider_readiness, not a model list or a disk-read correction', async () => {
+    const q = 'Which models and providers can you use for a private local-folder task? Explain what is configured, verified, and authorized.';
+    const { asksProviderReadiness } = await import('../runtime/providerReadiness');
+    const { asksForDiskObservation } = await import('../runtime/assistantStatus');
+    const { isModelListingRequest } = await import('../runtime/piAgentEngine');
+    expect(asksProviderReadiness(q)).toBe(true);
+    expect(asksForDiskObservation(q)).toBe(false);
+    expect(isModelListingRequest(q)).toBe(false);
+    expect(isModelListingRequest('Which models are installed?')).toBe(true);
+    expect(asksProviderReadiness('Which models are installed?')).toBe(false);
+  });
+
+  it('says a skill is optional when none fits, and asks for the candidate details in the answer', async () => {
+    expect(await findSkills(dir, 'plan a birthday party menu')).toMatch(/A skill is optional/);
+    expect(SPECIALIST_COMMON_RULES).toMatch(/A skill is optional/);
   });
 });

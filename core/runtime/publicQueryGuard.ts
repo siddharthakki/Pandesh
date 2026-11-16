@@ -56,7 +56,7 @@ function shingles(text: string, size = 4): Set<string> {
  * text read from the user's files this turn (`privateTexts`), or is (most of) the user's own message rather than a
  * search query.
  */
-export function checkPublicQuery(query: string, options: { userMessage?: string | null; privateTexts?: readonly string[] } = {}): PublicQueryCheck {
+export function checkPublicQuery(query: string, options: { userMessage?: string | null; privateTexts?: readonly string[]; owner?: { texts: readonly string[]; names: readonly string[] } } = {}): PublicQueryCheck {
   const q = query.replace(/\s+/g, ' ').trim();
   if (!q) return { ok: false, reason: 'empty query' };
   if (EMAIL.test(q)) return { ok: false, reason: 'the query contains an email address' };
@@ -77,6 +77,23 @@ export function checkPublicQuery(query: string, options: { userMessage?: string 
     const privateShingles = shingles(text);
     for (const shingle of shingles(q)) {
       if (privateShingles.has(shingle)) return { ok: false, reason: 'the query repeats text read from the user\'s private files' };
+    }
+  }
+  // The owner's own skills (names, descriptions, wording) are private instructions: Core refuses a query that repeats
+  // them, even when the model never read them this turn (skillEgress.ts supplies the texts from disk).
+  if (options.owner) {
+    const ql = ` ${q.toLowerCase().replace(/[^\p{L}\p{N}\s]/gu, ' ').replace(/\s+/g, ' ')} `;
+    for (const name of options.owner.names) {
+      const n = name.toLowerCase().replace(/[^\p{L}\p{N}\s]/gu, ' ').replace(/\s+/g, ' ').trim();
+      if (n.length >= 6 && ql.includes(` ${n} `)) return { ok: false, reason: 'the query names one of the owner\'s private skills' };
+    }
+    const qs = shingles(q, 3);
+    for (const text of options.owner.texts) {
+      if (!text) continue;
+      const own = shingles(text, 3);
+      for (const s of qs) {
+        if (s.length >= 14 && own.has(s)) return { ok: false, reason: 'the query repeats wording from the owner\'s private skills' };
+      }
     }
   }
   return { ok: true, query: q };

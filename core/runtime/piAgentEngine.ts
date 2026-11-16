@@ -4,6 +4,8 @@ import { listEarlierReads, renderEarlierReadsSection } from '../domain/earlierRe
 import { listOpenGmailPlans, renderOpenGmailPlansSection } from '../domain/openGmailPlans';
 import { homeLocationFact, readHomeLocation } from '../domain/homeLocation';
 import { cloudBoundaryFact, cloudVisibleHistory, isCloudProvider, isCloudSafeTool, partitionCloudTools, scrubLocalPaths } from './cloudDataBoundary';
+import { asksProviderReadiness } from './providerReadiness';
+import { ownerSkillPrivateTexts } from '../platform/skills/skillEgress';
 import { checkPublicQuery, derivePublicQuery, explicitlyRequestsWebSearch, referencesLocalContent } from './publicQueryGuard';
 import { commandOpinionWarnings, readCommandReviewSettings, recordCommandReview, reviewCommand, warmCommandReview, type CommandOpinion, type CommandReviewOutcome } from './commandSecondOpinion';
 import { queryPrivacySummary, queryPrivacyWarning, readQueryPrivacySettings, recordQueryPrivacyReview, reviewQueryPrivacy, warmQueryPrivacy, type QueryPrivacyOpinion } from './queryPrivacySecondOpinion';
@@ -654,6 +656,7 @@ export function isModelComparisonOrAnalysisRequest(text: string): boolean {
  */
 export function isModelListingRequest(text: string): boolean {
   if (isModelComparisonOrAnalysisRequest(text)) return false;
+  if (asksProviderReadiness(text)) return false;
   if (/\b(?:context|length|window|tokens?|vram|size|parameters?|quanti[sz]\w*|tools?|capabilit\w*|reasoning|thinking|licen[cs]e|trained|speed|answer(?:ed|s)?)\b/i.test(text)) return false;
   return /\b(?:list|show(?:\s+me)?|which|what)\b[^.?!]{0,30}\bmodels\b|\bmodels\b[^.?!]{0,30}\b(?:available|installed|loaded|running)\b|\bollama\s+list\b|\bmodel\s+(?:inventory|list)\b/i.test(text);
 }
@@ -2952,7 +2955,7 @@ export class PiAgentEngine implements EngineAdapter {
               .map((t) => extractToolResultText(t.result)),
             ...(HANDOFF_PRIVATE_FACTS.get(attemptId) ?? []),
           ];
-          const queryCheck = checkPublicQuery(query, { userMessage: ctx.currentMessage ?? requestText, privateTexts });
+          const queryCheck = checkPublicQuery(query, { userMessage: ctx.currentMessage ?? requestText, privateTexts, owner: ownerSkillPrivateTexts(ctx.dataDir) });
           if (!queryCheck.ok) {
             safeRecordRuntimeEvent(db, broadcaster, attemptId, 'web_research_query_refused', { reason: queryCheck.reason, queryChars: query.length }, actor);
             return {
@@ -3038,7 +3041,7 @@ export class PiAgentEngine implements EngineAdapter {
               .map((t) => extractToolResultText(t.result)),
             ...(HANDOFF_PRIVATE_FACTS.get(attemptId) ?? []),
           ];
-          const queryCheck = checkPublicQuery(call.target, { userMessage: ctx.currentMessage ?? requestText, privateTexts });
+          const queryCheck = checkPublicQuery(call.target, { userMessage: ctx.currentMessage ?? requestText, privateTexts, owner: ownerSkillPrivateTexts(ctx.dataDir) });
           if (checked.isSearch && !queryCheck.ok) {
             safeRecordRuntimeEvent(db, broadcaster, attemptId, 'agent_reach_query_refused', { reason: queryCheck.reason, queryChars: call.target.length }, actor);
             return { content: [{ type: 'text', text: `NOT READ: ${queryCheck.reason}. Nothing was sent off this computer. Call agent_reach again with a short public query.` }], isError: true };
@@ -4475,7 +4478,7 @@ ${String(args.objective ?? '').slice(0, 600)}`,
             .map((t) => extractToolResultText(t.result)),
           ...(HANDOFF_PRIVATE_FACTS.get(attemptId) ?? []),
         ];
-        const queryCheck = checkPublicQuery(query, { userMessage: ctx.currentMessage ?? requestText, privateTexts });
+        const queryCheck = checkPublicQuery(query, { userMessage: ctx.currentMessage ?? requestText, privateTexts, owner: ownerSkillPrivateTexts(ctx.dataDir) });
         if (!queryCheck.ok) {
           safeRecordRuntimeEvent(db, broadcaster, attemptId, 'web_research_query_refused', { tool: toolName, reason: queryCheck.reason, queryChars: query.length }, actor);
           return connectorText(`NOT SEARCHED: ${queryCheck.reason}. Nothing was sent off this computer. If public research is needed, call governed_research again with a short public query (topic, role, place; at most 120 characters) that contains no personal details and no text from the user's files.`, true);
@@ -6260,6 +6263,23 @@ When the user asks to continue, resume, or check progress/updates, resume this w
         }
       } catch (err: any) {
         safeRecordRuntimeEvent(db, broadcaster, attemptId, 'diagnostics_fallback_failed', { error: err?.message ?? String(err) }, actor);
+      }
+    }
+
+    // Which providers/models may be used, and what is configured, verified and authorized: Core answers it from provider_readiness
+    // even when a small model did not call the tool (a read-only status; no key and no cloud call is involved).
+    if (toolCallsRecorded.length === 0 && asksProviderReadiness(ctx.currentMessage ?? prompt) && !signal?.aborted) {
+      const readiness = tools.find((t) => t.name === 'provider_readiness');
+      if (readiness) {
+        safeRecordRuntimeEvent(db, broadcaster, attemptId, 'provider_readiness_fallback_invoked', { reason: 'model produced no tool call for a provider question' }, actor);
+        try {
+          const res: any = await (readiness as any).execute('provider-readiness-fallback', { private: /\b(?:private|local[- ]folder|confidential|my (?:files?|documents?|folders?))\b/i.test(ctx.currentMessage ?? prompt) });
+          const out = extractToolResultText(res);
+          if (out && !res?.isError) {
+            toolCallsRecorded.push({ tool: 'provider_readiness', status: 'completed', result: out });
+            finalReply = out;
+          }
+        } catch (err: any) { safeRecordRuntimeEvent(db, broadcaster, attemptId, 'provider_readiness_fallback_failed', { error: err?.message ?? String(err) }, actor); }
       }
     }
 

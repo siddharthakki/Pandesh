@@ -69,7 +69,7 @@ export async function findSkills(dataDir: string | undefined, task: string, opts
   }
   const blocked = resolved.decisions.filter((d) => d.status === 'skipped' && d.reason !== 'incompatible_task' && d.reason !== 'not_selected_budget' && d.reason !== 'incompatible_model');
   for (const d of blocked.slice(0, 3)) {
-    lines.push(`- ${d.id} looked related but cannot be used: ${d.detail}`);
+    lines.push(`- ${d.id} looked related but cannot be used: ${"detail" in d ? d.detail : d.reason}`);
   }
   const drafts = (localModel ? listDrafts(dataDir) : []).filter((d) => query.toLowerCase().split(/\W+/).some((w) => w.length > 3 && d.id.includes(w)));
   for (const d of drafts.slice(0, 2)) lines.push(`- ${d.id} is a DRAFT proposed earlier (not active; the owner has to review it and move it into the skills folder).`);
@@ -79,12 +79,12 @@ export async function findSkills(dataDir: string | undefined, task: string, opts
   let external = '';
   if (localModel && resolved.selected.length === 0) {
     const repo = await searchRepositories(dataDir, query, 3);
-    if (repo.found.length) external = `\nNot installed, found in ${repo.repos} approved repositor${repo.repos === 1 ? 'y' : 'ies'} (${repo.scanned} skill files read, nothing loaded or run):\n${repo.found.map(formatAssessment).join('\n')}`;
+    if (repo.found.length) external = `\nNot installed, found in ${repo.repos} approved repositor${repo.repos === 1 ? 'y' : 'ies'} (${repo.scanned} skill files read, nothing loaded or run):\n${repo.found.map(formatAssessment).join('\n')}\nIn your answer give each candidate's source, license, dependencies and compatibility exactly as listed, and say they are unreviewed.`;
     else if (repo.repos === 0) external = '\nNo approved skill repositories are set up (the owner lists folders in skill-repositories.json). For public candidates use web_research on the maker\'s documentation, then assess_skill_candidate on the text you read.';
     else external = `\nNo match in ${repo.repos} approved repositor${repo.repos === 1 ? 'y' : 'ies'} either (${repo.scanned} skill files read).`;
   }
   if (lines.length === 0) {
-    return `No skill fits "${query.slice(0, 80)}". ${scope}\nWork from the tools you have. If this is a procedure worth keeping, finish the task first, then propose_skill with what actually worked. Do not download or install a skill from the internet.${external}`;
+    return `No skill fits "${query.slice(0, 80)}". ${scope}\nA skill is optional: carry on with the task using your own judgement and the tools you have; do not stop because none exists. If this is a procedure worth keeping, finish the task first, then propose_skill with what actually worked. Do not download or install a skill from the internet.${external}`;
   }
   const combine = resolved.selected.length >= 2 && resolved.selected.every((s) => s.kind !== 'host-hook')
     ? '\nSeveral fit: read the best one first; use a second only for a step the first does not cover.' : '';
