@@ -5,7 +5,7 @@
 import { describe, it, expect } from 'vitest';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { backdropFilter, cueTexts, paletteFor, renderSrt, sceneCues, slugify, speakable, twoLines } from '../runtime/narratedVideo';
+import { backdropFilter, cueTexts, paletteFor, renderNarratedVideoResult, renderSrt, sceneCues, slugify, speakable, twoLines } from '../runtime/narratedVideo';
 import { createMediaProductionAdapter, narratedOutputDir } from '../runtime/mediaProduction';
 import { BUILTIN_AGENTS, chiefDelegationScope, deriveScope, isToolAllowed } from '../domain/agents';
 
@@ -77,6 +77,20 @@ describe('the media adapter', () => {
     expect(none).toMatchObject({ status: 'failed', resultCategory: 'media_no_inputs' });
     const missing = await adapter.run({ id: '2', name: 'media_inspect', arguments: { path: path.join(os.tmpdir(), 'no-such-file.mp4') } }, { cwd: process.cwd() });
     expect(missing).toMatchObject({ status: 'failed', resultCategory: 'media_no_inputs' });
+  });
+});
+
+describe('a technical check is not a look at the content', () => {
+  const base = { folder: 'D:\\x', video: 'D:\\x\\a.mp4', subtitles: null, thumbnail: 't', script: 's', metadata: 'm', record: 'r', durationSec: 68, width: 1920, height: 1080, bytes: 1e6, sha256: 'a'.repeat(64), scenes: [], voice: 'Piper', music: null, visualsBy: { comfyui: 7, backdrop_card: 0, checkpoint: 'x', note: '' }, steps: [], verified: true, verification: ['PASS length'], withinTarget: true };
+  it('the production result says what it did not look at and what is missing from the package', () => {
+    const text = renderNarratedVideoResult({ ...base, incomplete: ['the upload sheet has no description (none was given)', 'the upload sheet has no tags (none were given)'] });
+    expect(text).toMatch(/^INCOMPLETE: the upload sheet has no description/m);
+    expect(text).toMatch(/^INCOMPLETE: the upload sheet has no tags/m);
+    expect(text.split('\n')).toContain('NOT VERIFIED: what the pictures show (technical checks only).');
+    // Core keeps only the start of a result: the lines it reads back must be there.
+    expect(text.indexOf('NOT VERIFIED:')).toBeLessThan(300);
+    expect(text.indexOf('INCOMPLETE:')).toBeLessThan(200);
+    expect(renderNarratedVideoResult({ ...base, incomplete: [] })).not.toMatch(/INCOMPLETE/);
   });
 });
 

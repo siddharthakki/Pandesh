@@ -195,7 +195,10 @@ export class MissionRunner {
     if (cancelled) { this.finish(mission, 'cancelled', 'Cancelled at your request. Steps that had already finished are kept.'); return; }
     if (stopReason) { this.finish(mission, 'failed', `Stopped: ${stopReason}. Later steps were not started.`); return; }
     const review = mission.steps.filter((s) => s.kind === 'review');
-    const issues = mission.steps.some((s) => s.status === 'unverified') || review.some((s) => reviewFoundProblems(s.resultText ?? ''));
+    // What a tool itself declared unverified or incomplete stands unless a later step's tools looked at it: a review whose
+    // own inspection carries no such line (it really looked) clears a "not verified"; nothing clears an "incomplete".
+    const open = openCaveats(mission.steps);
+    const issues = mission.steps.some((s) => s.status === 'unverified') || review.some((s) => reviewFoundProblems(s.resultText ?? '')) || open.length > 0;
     this.finish(mission, issues ? 'completed_with_issues' : 'completed', null);
   }
 
@@ -271,8 +274,9 @@ export class MissionRunner {
       const ledger = buildLedger(counted, out.answer, this.deps.knownToolNames?.() ?? [], null);
       ledger.unrelated = [...new Set(records.filter((rec) => !counted.includes(rec)).map((rec) => rec.toolName))].filter((t) => !ledger.verified.some((v) => v.tool === t));
       const requiresEvidence = step.kind === 'review' || taskNeedsEvidence(step.brief);
-      const evidence: MissionStepEvidence = { ...ledger, modelCalls, seconds };
       const toolText = records.filter((r) => r.status === 'succeeded').map((r) => `${r.args ?? ''}\n${r.evidence ?? ''}`).join('\n').replace(/\\\\/g, '\\');
+      const caveats = toolCaveats(records.filter((r) => r.status === 'succeeded').map((r) => r.evidence ?? ''));
+      const evidence: MissionStepEvidence = { ...ledger, modelCalls, seconds, ...(caveats.length ? { caveats } : {}) };
       const artifacts = existingPathsIn(`${out.answer}\n${toolText}`);
       const status = ledgerNeedsStatement(ledger, requiresEvidence) ? 'unverified' : 'succeeded';
       updateMissionStep(db, step.id, { status, resultText: out.answer.slice(0, 12_000), evidence, artifacts, completedAt: nowIso(), error: null });
@@ -296,12 +300,50 @@ export class MissionRunner {
     } catch (err) {
       this.deps.log?.(`mission ${mission.id}: report could not be written to the conversation: ${err instanceof Error ? err.message : String(err)}`);
     }
-    const summary = note ?? (status === 'completed' ? 'All steps finished and each is backed by recorded tool calls.' : 'Finished, with points that need your attention.');
+    const open = openCaveats(fresh.steps);
+    const summary = note ?? (status === 'completed' ? 'All steps finished and each is backed by recorded tool calls.' : open.length ? `Finished, but not everything was checked or delivered: ${open[0].slice(0, 200)}${open.length > 1 ? ` (and ${open.length - 1} more)` : ''}` : 'Finished, with points that need your attention.');
     const done = updateMission(db, mission.id, { status, resultSummary: summary, reportMessageId, completedAt: nowIso() });
     // A mission that finished clean is a procedure that worked: leave it as an inactive draft the owner can adopt.
     if (status === 'completed') { try { this.deps.recordExperience?.(done); } catch (err) { this.deps.log?.(`mission ${mission.id}: experience not recorded: ${err instanceof Error ? err.message : String(err)}`); } }
     this.event(done, 'mission_finished', { status, reportMessageId, summary: summary.slice(0, 300) });
   }
+}
+
+/** The limits a tool states about its own result, in the two fixed forms tools use. One line each, bounded. */
+export function toolCaveats(evidenceTexts: readonly string[]): string[] {
+  const out = new Map<string, string>();
+  for (const raw of evidenceTexts) {
+    const text = raw.replace(/\\n/g, '\n').replace(/\\"/g, '"');
+    // The line may open the stored result ({"output":"NOT VERIFIED: …), so a quote counts as a line start too.
+    for (const m of text.matchAll(/(?:^|\n|")\s*(NOT VERIFIED|INCOMPLETE|LOOKED AT):([^\n"]{4,240})(?=\n|"|$)/g)) {
+      const kind = m[1] === 'INCOMPLETE' ? 'Incomplete' : m[1] === 'LOOKED AT' ? 'Looked at' : 'Not verified';
+      // One entry per thing: the same statement from three calls (or cut at different lengths) is one caveat.
+      const subject = `${kind}: ${m[2].split(/[.(]/)[0].trim().toLowerCase()}`;
+      if (!out.has(subject)) out.set(subject, `${kind}: ${m[2].trim().replace(/\.$/, '')}`);
+    }
+  }
+  return [...out.values()].slice(0, 12);
+}
+
+/**
+ * The caveats still standing at the end of a mission. "Incomplete" always stands. A "Not verified: X" is cleared only
+ * by a tool that says it looked at the same thing ("LOOKED AT: X") in that step or a later one; a step that merely ran
+ * other tools, or an agent saying it looked, clears nothing.
+ */
+export function openCaveats(steps: readonly MissionStep[]): string[] {
+  const subject = (c: string) => c.replace(/^[^:]+:\s*/, '').split(/[.(]/)[0].trim().toLowerCase();
+  const out: string[] = [];
+  for (const [i, s] of steps.entries()) {
+    for (const c of s.evidence?.caveats ?? []) {
+      if (c.startsWith('Looked at')) continue;
+      if (c.startsWith('Not verified')) {
+        const looked = steps.slice(i).some((later) => (later.evidence?.caveats ?? []).some((l) => l.startsWith('Looked at') && subject(l) === subject(c)));
+        if (looked) continue;
+      }
+      if (!out.includes(c)) out.push(c);
+    }
+  }
+  return out;
 }
 
 /** Consecutive steps that run together: a step and the parallel steps right after it, at most three. */
@@ -322,6 +364,7 @@ export function stepBatches<T extends { parallel: boolean }>(steps: readonly T[]
  */
 export function missionProcedure(mission: Mission, agentName: (id: string) => string): { id: string; name: string; description: string; body: string; evidence: string } | null {
   const done = mission.steps.filter((s) => s.status === 'succeeded');
+  if (openCaveats(mission.steps).length) return null;
   if (done.length !== mission.steps.length || !done.some((s) => (s.evidence?.verified.length ?? 0) > 0)) return null;
   const words = mission.objective.toLowerCase().replace(/[^a-z0-9\s]/g, ' ').split(/\s+/).filter((w) => w.length >= 4 && !/^(?:this|that|with|from|have|into|about|them|they|their|then|what|which|should|would|could|please|before|after|while|make|sure|yes)$/.test(w)).slice(0, 5);
   if (words.length < 2) return null;
@@ -361,12 +404,19 @@ export function renderMissionReport(mission: Mission, agentName: (id: string) =>
       tools ? `   - Tools that ran: ${tools}` : (s.status === 'succeeded' || s.status === 'unverified') ? '   - No tool call bearing on this step was recorded; its report is the agent\'s own text.' : null,
       ev?.failed.length ? `   - Tool calls that failed: ${ev.failed.join(', ')}` : null,
       ev?.unbacked.length ? `   - Named in its report but never run: ${ev.unbacked.join(', ')}` : null,
+      ...(ev?.caveats ?? []).filter((c) => !c.startsWith('Looked at')).map((c) => `   - ${c}`),
+      ...(ev?.caveats ?? []).filter((c) => c.startsWith('Looked at')).map((c) => `   - ${c}`),
       s.error ? `   - ${s.error}` : null,
     ].filter(Boolean) as string[];
     lines.push(...bits);
   }
   const files = mission.steps.flatMap((s) => s.artifacts.filter((a) => a.exists));
   const unique = [...new Map(files.map((f) => [f.path.toLowerCase(), f])).values()];
+  const open = openCaveats(mission.steps);
+  if (open.length) {
+    lines.push('', '**Not verified or not delivered** (stated by the tools that ran; no later step established otherwise)');
+    for (const c of open) lines.push(`- ${c}`);
+  }
   if (unique.length) {
     lines.push('', '**Files on disk** (checked by Core)');
     for (const f of unique.slice(0, 20)) lines.push(`- \`${f.path}\` (${f.kind}${f.bytes !== null ? `, ${formatBytes(f.bytes)}` : ''})`);

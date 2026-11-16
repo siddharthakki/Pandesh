@@ -33,6 +33,8 @@ export interface MissionStepEvidence {
   totalCalls: number;
   modelCalls?: number;
   seconds?: number;
+  /** What the step's own tools said they did not establish or left out ("NOT VERIFIED: …", "INCOMPLETE: …"). */
+  caveats?: string[];
 }
 
 export interface MissionArtifact { path: string; bytes: number | null; kind: string; exists: boolean }

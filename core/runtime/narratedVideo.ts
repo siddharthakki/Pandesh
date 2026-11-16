@@ -69,6 +69,8 @@ export interface NarratedVideoResult {
   verified: boolean;
   verification: string[];
   withinTarget: boolean | null;
+  /** Parts of the package that were asked for by the tool's own contract and are missing. */
+  incomplete: string[];
 }
 
 export interface NarratedVideoDeps extends InventoryProbeDeps {
@@ -461,8 +463,8 @@ export async function produceNarratedVideo(input: NarratedVideoInput, deps: Narr
     fs.writeFileSync(metadata, [
       '# YouTube upload sheet (prepared, NOT published)', '',
       `**Title:** ${(yt.title ?? input.title).slice(0, 100)}`, '',
-      '**Description:**', '', (yt.description ?? '').trim() || '(none written)', '',
-      `**Tags:** ${tags.join(', ') || '(none)'}`, '',
+      '**Description:**', '', (yt.description ?? '').trim() || 'INCOMPLETE: no description was written for this upload sheet', '',
+      tags.length ? `**Tags:** ${tags.join(', ')}` : '**Tags:**\nINCOMPLETE: no tags were written for this upload sheet', '',
       `**Video file:** ${path.basename(videoFile)}`, `**Thumbnail:** thumbnail.png`, srtFile ? `**Subtitles:** ${path.basename(srtFile)} (also burned into the picture)` : '**Subtitles:** none', '',
       '**Before you upload, decide yourself:** audience setting ("made for kids" where it applies), visibility, and the AI/synthetic-content disclosure: the narration is a synthetic voice (Piper) and the pictures are ' + (pictures.some((p) => p.source === 'comfyui') ? 'AI-generated (ComfyUI)' : 'drawn backdrops (FFmpeg)') + '.', '',
       'Pandesh did not upload or publish anything.',
@@ -504,6 +506,11 @@ export async function produceNarratedVideo(input: NarratedVideoInput, deps: Narr
       voice: `Piper ${path.basename(piper.model, '.onnx')} (local, synthetic)`, music: musicNote,
       visualsBy: { comfyui: byComfy, backdrop_card: scenes.length - byComfy, checkpoint, note: comfyNote },
       steps, verified: check.checks.every((c) => c.ok), verification: check.checks.map((c) => `${c.ok ? 'PASS' : 'FAIL'} ${c.text}`), withinTarget,
+      incomplete: [
+        ...(!(yt.description ?? '').trim() ? ['the upload sheet has no description'] : []),
+        ...(!tags.length ? ['the upload sheet has no tags'] : []),
+        ...(byComfy < scenes.length ? [`${scenes.length - byComfy} of ${scenes.length} pictures are plain backdrops, not the scene`] : []),
+      ],
     };
     fs.writeFileSync(record, JSON.stringify({ title: input.title, createdAt: new Date().toISOString(), published: false, ...result }, null, 2), 'utf8');
     return result;
@@ -519,6 +526,9 @@ export async function produceNarratedVideo(input: NarratedVideoInput, deps: Narr
 export function renderNarratedVideoResult(r: NarratedVideoResult, target?: [number, number]): string {
   return [
     `${r.verified ? 'Video package created and checked' : 'Video package created but NOT fully verified'}: ${r.folder}`,
+    // Read back by Core (missionRunner.toolCaveats): first and short, because only the start of a result is kept as evidence.
+    ...r.incomplete.map((line) => `INCOMPLETE: ${line}`),
+    'NOT VERIFIED: what the pictures show (technical checks only).',
     `Video: ${r.video} (${r.width}x${r.height}, ${r.durationSec.toFixed(1)} s, ${(r.bytes / 1e6).toFixed(1)} MB, SHA-256 ${r.sha256.slice(0, 16)}…)`,
     target ? `Length against the brief (${target[0]}-${target[1]} s): ${r.withinTarget ? 'inside the range' : `OUTSIDE the range (${r.durationSec.toFixed(1)} s); change the narration length and produce it again in a new folder`}` : null,
     r.subtitles ? `Subtitles: ${r.subtitles} (also burned in)` : 'Subtitles: none',
@@ -529,6 +539,7 @@ export function renderNarratedVideoResult(r: NarratedVideoResult, target?: [numb
     'Tools that ran:',
     ...r.steps.map((s) => `- ${s.tool} — ${s.purpose}: ${s.ok ? 'ok' : 'FAILED'} (${(s.ms / 1000).toFixed(1)} s) — ${s.detail}`),
     'Checks on the finished file:', ...r.verification.map((v) => `- ${v}`),
+    'The checks are technical (streams, length, sound, timing): nobody has looked at whether each picture matches its scene.',
     'Nothing was uploaded or published.',
   ].filter(Boolean).join('\n');
 }

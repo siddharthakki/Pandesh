@@ -369,10 +369,15 @@ export function createMediaProductionAdapter(deps: MediaProductionDeps = {}): Go
             }
           }
           try { fs.rmSync(framesDir, { recursive: true, force: true }); } catch { /* temp */ }
+          const read = readings.filter((line) => line.includes('(read by ')).length;
+          const hasPicture = r.kind === 'video' || r.kind === 'image';
+          const whyNot = !question ? 'no question was given, so no frame was looked at' : (/not read \(([^)]{0,90})/.exec(readings[0] ?? '')?.[1] ?? 'no local vision model read the frames');
+          // The two lines Core reads back come first and stay short: only the start of a tool result is kept as evidence.
           const out = [
+            ...(hasPicture ? [read ? `LOOKED AT: what the pictures show (${read} frame(s) read by a local vision model; a sample).` : `NOT VERIFIED: what the pictures show (technical check only: ${whyNot}).`] : []),
             `Inspected ${file} (read-only).`, 'Measured by FFprobe/FFmpeg:', ...r.facts.map((f) => `- ${f}`),
             r.problems.length ? 'Problems found:' : 'No technical problem found by these checks.', ...r.problems.map((p) => `- ${p}`),
-            ...(readings.length ? ['What a local vision model saw in the frames (its reading, not a measurement):', ...readings] : question ? ['The frames were decoded but not read: no local vision model is available to this tool.'] : []),
+            ...(read ? ['What the vision model saw (its reading, not a measurement):', ...readings] : hasPicture ? ['Do not report the visual content, its consistency or its suitability as checked.', ...readings] : []),
           ].join('\n');
           return { status: 'succeeded', exitCode: 0, output: out, resultCategory: r.problems.length ? 'media_inspected_with_problems' : 'media_inspected' };
         } catch (err) {

@@ -2,7 +2,7 @@
  * What the mission card shows, derived from Core's mission record (core/api/missionRoutes.ts → MissionView). Pure, so
  * it is tested without a window.
  */
-export interface StepEvidence { verified: Array<{ tool: string; count: number }>; unrelated: string[]; failed: string[]; unbacked: string[]; totalCalls: number; modelCalls?: number; seconds?: number }
+export interface StepEvidence { verified: Array<{ tool: string; count: number }>; unrelated: string[]; failed: string[]; unbacked: string[]; totalCalls: number; modelCalls?: number; seconds?: number; caveats?: string[] }
 export interface MissionFile { path: string; bytes: number | null; kind: string; exists: boolean }
 export interface StepView {
   id: string; idx: number; agentId: string; kind: 'work' | 'review'; title: string; brief: string;
@@ -38,7 +38,7 @@ export function missionHeadline(m: MissionView): string {
     return `Mission · ${s.kind === 'review' ? 'reviewing' : 'working'} · ${m.agentNames[s.agentId] ?? s.agentId}`;
   }
   if (m.status === 'completed') return 'Mission complete · checked';
-  if (m.status === 'completed_with_issues') return 'Mission finished · points to check';
+  if (m.status === 'completed_with_issues') return m.steps.some((s) => (s.evidence?.caveats ?? []).some((c) => !c.startsWith('Looked at'))) ? 'Mission finished · not everything checked' : 'Mission finished · points to check';
   if (m.status === 'cancelled') return 'Mission cancelled';
   if (m.status === 'interrupted') return 'Mission interrupted';
   return 'Mission stopped';
@@ -70,8 +70,13 @@ export function describeStep(step: StepView, mission: MissionView, now: number):
       const sub = waiting ? 'paused until you decide' : live ? `${live.status === 'running' || live.status === 'pending' ? 'now' : 'last'}: ${toolWords(live.tool)}` : 'thinking about the brief';
       return { agent, state: secondsWord(since), sub, mark: 'run' };
     }
-    case 'succeeded':
-      return { agent, state: step.evidence?.seconds ? secondsWord(step.evidence.seconds) : 'done', sub: tools ? `ran ${tools}` : 'done', mark: 'done' };
+    case 'succeeded': {
+      const caveats = (step.evidence?.caveats ?? []).filter((c) => !c.startsWith('Looked at'));
+      const state = step.evidence?.seconds ? secondsWord(step.evidence.seconds) : 'done';
+      // The step ran, and its own tools say what they did not establish or deliver: that is shown, not a plain tick.
+      if (caveats.length) return { agent, state, sub: `${tools ? `ran ${tools}. ` : ''}${caveats[0]}${caveats.length > 1 ? ` (+${caveats.length - 1} more)` : ''}`, mark: 'warn' };
+      return { agent, state, sub: tools ? `ran ${tools}` : 'done', mark: 'done' };
+    }
     case 'unverified':
       return { agent, state: 'not verified', sub: tools ? `ran ${tools}; part of its report is not backed by a tool call` : 'no tool call backs its report: treat it as opinion', mark: 'warn' };
     case 'failed':

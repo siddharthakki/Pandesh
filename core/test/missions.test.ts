@@ -16,7 +16,7 @@ import {
   createMission, expireStepApprovals, getMission, interruptRunningMissionsOnBoot, listMissions, reopenMission, requestMissionCancel,
   similarFinishedMissions, updateMission, updateMissionStep, MAX_MISSION_STEPS,
 } from '../domain/missions';
-import { MissionRunner, existingPathsIn, missionProcedure, renderMissionReport, resultsForStep, reviewFoundProblems, stepBatches } from '../runtime/missionRunner';
+import { MissionRunner, existingPathsIn, missionProcedure, openCaveats, renderMissionReport, resultsForStep, reviewFoundProblems, stepBatches, toolCaveats } from '../runtime/missionRunner';
 import { buildMissionTools, describeMission, missionRoster, missionTurnFact } from '../runtime/missionTools';
 import { missionView, approvalLine } from '../api/missionRoutes';
 import { hasActiveWorker } from '../runtime/assistantStatus';
@@ -293,6 +293,57 @@ describe('mission runner', () => {
     expect(draft.body).not.toMatch(/without (?:approval|asking|permission)/i);
     const weak = { ...done, steps: done.steps.map((s) => ({ ...s, status: 'unverified' as const })) };
     expect(missionProcedure(weak, (id) => id)).toBeNull();
+  });
+});
+
+describe('what the tools themselves say they did not establish', () => {
+  const produced = 'Video package created and checked: D:\\x\nINCOMPLETE: the upload sheet has no description\nNOT VERIFIED: what the pictures show (technical checks only).\nVideo: D:\\x\\a.mp4';
+  const measuredOnly = 'NOT VERIFIED: what the pictures show (technical check only: no question was given, so no frame was looked at).\nInspected D:\\x\\a.mp4';
+  const looked = 'LOOKED AT: what the pictures show (3 frame(s) read by a local vision model; a sample).\nInspected D:\\x\\a.mp4\n- frame 1 (read by qwen2.5vl:7b, on this PC): a rabbit in a meadow';
+
+  it('reads the fixed lines out of tool evidence, however it was stored', () => {
+    expect(toolCaveats([JSON.stringify({ output: produced })])).toEqual([
+      'Incomplete: the upload sheet has no description',
+      'Not verified: what the pictures show (technical checks only)',
+    ]);
+    // Said three times, or cut off by the evidence bound, it is still one caveat; a sheet that states its own gap counts too.
+    expect(toolCaveats([JSON.stringify({ output: measuredOnly }), JSON.stringify({ output: measuredOnly.slice(0, 70) }), JSON.stringify({ output: produced })])).toHaveLength(2);
+    expect(toolCaveats([JSON.stringify({ output: '# Upload sheet\n**Description:**\n\nINCOMPLETE: no description was written for this upload sheet\n' })])).toEqual(['Incomplete: no description was written for this upload sheet']);
+    expect(toolCaveats(['all fine', '{}'])).toEqual([]);
+  });
+
+  const run = async (reviewEvidence: string, reviewAnswer = 'Verdict: ready. The visuals are consistent and child-friendly.') => {
+    const m = mission([{ agentId: 'studio', title: 'Make the video', brief: 'Write and produce the narrated video.' }, { agentId: 'reviewer', kind: 'review', brief: 'Inspect the produced video file and its package.' }], 'Produce a narrated video about tides with a description and tags');
+    const { r } = runner(({ agentId }) => agentId === 'studio'
+      ? { answer: 'Done: the video is ready.', tools: [{ name: 'media_produce_video', evidence: JSON.stringify({ output: produced }) }] }
+      : { answer: reviewAnswer, tools: [{ name: 'media_inspect', evidence: JSON.stringify({ output: reviewEvidence }) }] });
+    r.start(m.id);
+    return settle(r, m.id);
+  };
+
+  it('a review that only measured the file leaves the pictures unverified, whatever its report says', async () => {
+    const done = await run(measuredOnly);
+    expect(done.status).toBe('completed_with_issues');
+    expect(done.resultSummary).toMatch(/not everything was checked or delivered/);
+    const open = openCaveats(done.steps);
+    expect(open.some((c) => c.startsWith('Not verified: what the pictures show'))).toBe(true);
+    expect(open).toContain('Incomplete: the upload sheet has no description');
+    const report = listMessages(db, done.conversationId, { limit: 10 }).pop()!.content;
+    expect(report).toMatch(/Mission finished, with points to check/);
+    expect(report).toMatch(/\*\*Not verified or not delivered\*\*/);
+    expect(report).toMatch(/Not verified: what the pictures show/);
+    expect(missionProcedure(done, (id) => id)).toBeNull();
+  });
+
+  it('a review whose tool looked at the pictures clears that, but a missing deliverable still stands', async () => {
+    const done = await run(looked);
+    expect(openCaveats(done.steps)).toEqual(['Incomplete: the upload sheet has no description']);
+    expect(done.status).toBe('completed_with_issues');
+  });
+
+  it('nothing declared, nothing invented', () => {
+    const m = mission([{ agentId: 'operations' }]);
+    expect(openCaveats(m.steps)).toEqual([]);
   });
 });
 

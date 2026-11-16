@@ -43,6 +43,16 @@ describe('mission card model', () => {
     expect(describeStep(step({ status: 'failed', error: 'the Coding agent\'s task ended as "failed"' }), m, NOW)).toMatchObject({ mark: 'fail', sub: 'the Coding agent\'s task ended as "failed"' });
   });
 
+  it('a step whose own tools say something was not checked or delivered is not a plain tick', () => {
+    const ev = { verified: [{ tool: 'media_inspect', count: 1 }], unrelated: [], failed: [], unbacked: [], totalCalls: 1, seconds: 20, caveats: ['Not verified: what the pictures show. Technical check only.', 'Incomplete: the upload sheet has no tags'] };
+    const d = describeStep(step({ status: 'succeeded', evidence: ev }), mission({}), NOW);
+    expect(d.mark).toBe('warn');
+    expect(d.sub).toBe('ran media_inspect. Not verified: what the pictures show. Technical check only. (+1 more)');
+    const lookedOnly = describeStep(step({ status: 'succeeded', evidence: { ...ev, caveats: ['Looked at: what the pictures show (3 frames)'] } }), mission({}), NOW);
+    expect(lookedOnly.mark).toBe('done');
+    expect(missionHeadline(mission({ status: 'completed_with_issues', steps: [step({ status: 'succeeded', evidence: ev })] }))).toBe('Mission finished · not everything checked');
+  });
+
   it('shows running missions from any chat, and this chat\'s finished ones for a while', () => {
     const here = mission({ id: 'a', status: 'completed', completedAt: '2026-11-16T09:50:00.000Z' });
     const old = mission({ id: 'b', status: 'completed', completedAt: '2026-11-16T08:00:00.000Z' });
