@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { describeStep, missionHeadline, missionProgress, toolWords, visibleMissions, type MissionView, type StepView } from '../renderer-v2/src/missionModel';
 import { detectVideoGenerationIntent, isVideoProductionRequest } from '../src/host/desktopInteractionRouting';
+import { isLoadFailure, LOAD_FAILURE } from '../renderer-v2/src/composerModel';
 
 const step = (over: Partial<StepView>): StepView => ({ id: 's', idx: 0, agentId: 'operations', kind: 'work', title: 'Diagnostics', brief: 'b', status: 'pending', resultText: null, evidence: null, artifacts: [], error: null, startedAt: null, completedAt: null, ...over });
 const mission = (over: Partial<MissionView>): MissionView => ({
@@ -79,5 +80,14 @@ describe('a video that has to be produced goes to the lead, not to one text-to-v
   ])('one render: %s', (text) => {
     expect(isVideoProductionRequest(text)).toBe(false);
     expect(detectVideoGenerationIntent(text)).toBe(true);
+  });
+});
+
+describe('the "could not load this chat" notice', () => {
+  it('is recognised exactly, so a later successful load retires it and nothing else', () => {
+    expect(isLoadFailure(`${LOAD_FAILURE}Core is not connected`)).toBe(true);
+    expect(isLoadFailure('Not sent: Core is not connected')).toBe(false);
+    expect(isLoadFailure('Stop requested — waiting for the worker to confirm.')).toBe(false);
+    expect(isLoadFailure(null)).toBe(false);
   });
 });

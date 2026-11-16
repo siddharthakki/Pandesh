@@ -169,3 +169,11 @@ export function permissionStatus(p: PermissionState | null | undefined): StatusL
   }
   return lines;
 }
+
+/** The notice shown when a chat's messages could not be loaded (Core still starting, or restarting). */
+export const LOAD_FAILURE = 'Could not load this chat: ';
+
+/** True for that notice only, so a successful load can retire it without touching any other notice. */
+export function isLoadFailure(text: string | null | undefined): boolean {
+  return typeof text === 'string' && text.startsWith(LOAD_FAILURE);
+}
