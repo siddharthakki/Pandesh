@@ -201,14 +201,14 @@ describe('household obligations', () => {
   });
 
   it('a confirmed obligation becomes one Important Date; the phone resolving it applies exactly once', () => {
-    const src = { sourceType: 'gmail' as const, sourceRef: 'gmail:n1', label: 'Dein Netflix-Abo verlängert sich', from: 'Netflix <info@mailer.netflix.com>', observedAt: '2026-11-01T08:00:00Z', text: 'Dein Abonnement verlängert sich am 15.11.2026. Preis: 13,99 € monatlich. Mitgliedsnummer: NFX-20931' };
+    const src = { sourceType: 'gmail' as const, sourceRef: 'gmail:n1', label: 'Dein Netflix-Abo verlängert sich', from: 'Netflix <info@mailer.netflix.com>', observedAt: '2026-11-01T08:00:00Z', text: 'Dein Abonnement verlängert sich am 15.11.2027. Preis: 13,99 € monatlich. Mitgliedsnummer: NFX-20931' };
     const ob = recordObligationSource(db, src, extractObligation(src)!).obligation;
     expect(listCompanionChanges(db, 0)).toHaveLength(0);
     decideObligation(db, ob.id, { action: 'confirm', actor: 'test' });
     decideObligation(db, ob.id, { action: 'confirm', actor: 'test' });
     const changes = listCompanionChanges(db, 0);
     expect(changes).toHaveLength(1);
-    expect(changes[0]).toMatchObject({ recordId: `obligation:${ob.id}`, kind: 'important_date', payload: { type: 'SUBSCRIPTION', date: '2026-11-15' } });
+    expect(changes[0]).toMatchObject({ recordId: `obligation:${ob.id}`, kind: 'important_date', payload: { type: 'SUBSCRIPTION', date: '2027-11-15' } });
     const op = { opId: 'op-0000000001', recordId: `obligation:${ob.id}`, op: 'resolve' as const, resolution: 'paid' as const };
     expect(handleCompanionOps(db, 'phone-12345678', [op])[0].result).toBe('applied');
     expect(handleCompanionOps(db, 'phone-12345678', [op])[0].result).toBe('duplicate');
