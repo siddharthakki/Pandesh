@@ -5,6 +5,8 @@ import { listOpenGmailPlans, renderOpenGmailPlansSection } from '../domain/openG
 import { homeLocationFact, readHomeLocation } from '../domain/homeLocation';
 import { cloudBoundaryFact, cloudVisibleHistory, isCloudProvider, isCloudSafeTool, partitionCloudTools, scrubLocalPaths } from './cloudDataBoundary';
 import { asksProviderReadiness } from './providerReadiness';
+const safeJson = (v: unknown): string => { try { return JSON.stringify(v ?? '').slice(0, 800); } catch { return ''; } };
+import { buildLedger, cannotVerifyReply, evidenceRetryPrompt, ledgerForLead, ledgerNeedsStatement, ledgerStatement, taskNeedsEvidence, userWordsOf, type EvidenceLedger } from './delegationEvidence';
 import { ownerSkillPrivateTexts } from '../platform/skills/skillEgress';
 import { checkPublicQuery, derivePublicQuery, explicitlyRequestsWebSearch, referencesLocalContent } from './publicQueryGuard';
 import { commandOpinionWarnings, readCommandReviewSettings, recordCommandReview, reviewCommand, warmCommandReview, type CommandOpinion, type CommandReviewOutcome } from './commandSecondOpinion';
@@ -24,8 +26,8 @@ import { explicitSpecialistRequest, handoffPreflight, SPECIALIST_NAMES } from '.
 const HANDOFF_FACTS = new Map<string, string>();
 /** The private part of those facts (memory, reminders): the child's public web query must not repeat it. */
 const HANDOFF_PRIVATE_FACTS = new Map<string, string[]>();
-/** Delegating attempt id -> names of agents whose report cited tool calls they never made (Core appends the correction to the final reply). */
-const UNOBSERVED_DELEGATIONS = new Map<string, string[]>();
+/** Delegating attempt id -> what each delegated agent actually did (recorded tool calls); Core states the result in the final reply. */
+const DELEGATION_LEDGERS = new Map<string, Array<{ name: string; ledger: EvidenceLedger; requiresEvidence: boolean }>>();
 /** Tools whose arguments are the assistant's own output: never evidence for the values in that output (F13f). */
 const OWN_OUTPUT_TOOLS = /^(?:write_file|propose_file_change|propose_text_edit|update_task_outcome)$/;
 /** Wall-clock budget for one OpenCode delegation (Core then verifies whatever it changed). */
@@ -656,11 +658,6 @@ export function isModelComparisonOrAnalysisRequest(text: string): boolean {
  * is not installed?" and "Which tools can this model invoke?" all got the inventory instead of an answer. A question
  * about one model, or about a property of models, is not a request for the list.
  */
-/** The report cites tool calls ("find_skill(task=...)", "I called read_file") as what it did or as its evidence. */
-export function claimsToolCalls(text: string): boolean {
-  return /`[a-z]+(?:_[a-z]+)+`/.test(text) || /\b[a-z]+(?:_[a-z]+)+\s*\(/.test(text) || /\b(?:called|ran|used|invoked|executed)\s+(?:the\s+)?[`'"]?[a-z]+(?:_[a-z]+)+/i.test(text);
-}
-
 export function isModelListingRequest(text: string): boolean {
   if (isModelComparisonOrAnalysisRequest(text)) return false;
   if (asksProviderReadiness(text)) return false;
@@ -4687,16 +4684,16 @@ ${String(args.objective ?? '').slice(0, 600)}`,
                   details: { handoffId: started.handoff.id, childAttemptId, agentId: toAgentId, activity: { kind: 'document', title: `${name} agent: ${missing.join(', ')} not created`, excerpt: out.answer.slice(0, 1200) } } };
               }
             }
-            // Receipts: a report that lists tool calls the agent never made (found on Build 173: the Reviewer made no calls and
-            // listed find_skill/read_skill as its evidence) is passed on as unverified, never as evidence.
-            const childToolCalls = db.all<{ toolName: string }>('SELECT toolName FROM tool_invocations WHERE attemptId = ?', [childAttemptId]).length;
-            const unobserved = childToolCalls === 0 && claimsToolCalls(out.answer);
-            if (unobserved) {
-              safeRecordRuntimeEvent(db, broadcaster, attemptId, 'handoff_unobserved_evidence', { agent: toAgentId, childToolCalls }, actor);
-              UNOBSERVED_DELEGATIONS.set(attemptId, [...(UNOBSERVED_DELEGATIONS.get(attemptId) ?? []), name]);
-            }
+            // Receipts: the report is compared with the child's recorded tool invocations (Builds 173-177: the Reviewer ran no
+            // tool and listed find_skill/read_skill as its evidence). The lead gets the ledger first; the final reply states it.
+            const childRecords = db.all<{ toolName: string; status: string; args: string }>('SELECT toolName, status, argsSummary AS args FROM tool_invocations WHERE attemptId = ?', [childAttemptId]);
+            const askedFor = `${ctx.currentMessage ?? prompt} ${userWordsOf(brief)}`;
+            const ledger = buildLedger(childRecords, out.answer, tools.map((t) => t.name), askedFor);
+            const requiresEvidence = taskNeedsEvidence(ctx.currentMessage ?? prompt) || taskNeedsEvidence(userWordsOf(brief));
+            DELEGATION_LEDGERS.set(attemptId, [...(DELEGATION_LEDGERS.get(attemptId) ?? []), { name, ledger, requiresEvidence }]);
+            if (ledgerNeedsStatement(ledger, requiresEvidence)) safeRecordRuntimeEvent(db, broadcaster, attemptId, 'handoff_unverified_evidence', { agent: toAgentId, verified: ledger.verified.map((v) => v.tool), unbacked: ledger.unbacked, totalCalls: ledger.totalCalls }, actor);
             return {
-              content: [{ type: 'text', text: `${unobserved ? `CORE CHECK: the ${name} agent made NO tool calls in this task, so the actions and evidence its report lists were not observed. Tell the user that plainly; do not present them as evidence or as checked.` + String.fromCharCode(10) + String.fromCharCode(10) : ''}RESULT FROM THE ${name.toUpperCase()} AGENT (completed in ${secs}s; its task runs in its own conversation "${name} · ${brief.slice(0, 60)}"):
+              content: [{ type: 'text', text: `${ledgerForLead(name, ledger)}${String.fromCharCode(10)}${String.fromCharCode(10)}RESULT FROM THE ${name.toUpperCase()} AGENT (completed in ${secs}s; its task runs in its own conversation "${name} · ${brief.slice(0, 60)}"):
 
 ${out.answer.slice(0, 6000)}
 
@@ -6099,6 +6096,17 @@ When the user asks to continue, resume, or check progress/updates, resume this w
           await agent.waitForIdle();
         });
       }
+      // A delegated agent asked to check or evaluate something must get real evidence from its own tools. Tools were exposed
+      // to the Reviewer on Builds 173-177 and a local model still answered from memory; Core asks once, and what is
+      // still missing after that becomes "Cannot verify" (below), never a confident report.
+      if (agentScope && agentScope.depth >= 1 && !signal?.aborted && supersedeWith === null && taskNeedsEvidence(userWordsOf(String(ctx.currentMessage ?? prompt)))
+        && buildLedger(toolCallsRecorded.map((t) => ({ toolName: t.tool, status: t.status === 'completed' ? 'succeeded' : t.status, args: safeJson(t.args) })), '', [], userWordsOf(String(ctx.currentMessage ?? prompt))).verified.length === 0) {
+        safeRecordRuntimeEvent(db, broadcaster, attemptId, 'evidence_retry_requested', { agent: agentScope.agentId, toolCalls: toolCallsRecorded.length }, actor);
+        await tolerateSupersede(async () => {
+          await agent.prompt(evidenceRetryPrompt([...activeToolNames]));
+          await agent.waitForIdle();
+        });
+      }
       // CI flake (PR #75/#76, 2026-11-12): add_task succeeded, then the model call that should have answered failed at
       // the transport in 1 ms. Nothing re-asked the model, so the turn fell through to Core's fallbacks and showed the raw
       // tool receipt. A model call that fails right after tool results is sent once more from the same transcript: the
@@ -6155,6 +6163,12 @@ When the user asks to continue, resume, or check progress/updates, resume this w
     let finalReply = lastAssistantText();
     finalReply = finalReply.replace(/\[earlier message(?:s)? truncated\]/gi, '').trim();
     if (isTruncationArtifact(finalReply)) finalReply = '';
+    if (agentScope && agentScope.depth >= 1 && finalReply && taskNeedsEvidence(userWordsOf(String(ctx.currentMessage ?? prompt)))
+      && buildLedger(toolCallsRecorded.map((t) => ({ toolName: t.tool, status: t.status === 'completed' ? 'succeeded' : t.status, args: safeJson(t.args) })), '', [], userWordsOf(String(ctx.currentMessage ?? prompt))).verified.length === 0
+      && !/^\s*cannot verify:/i.test(finalReply)) {
+      safeRecordRuntimeEvent(db, broadcaster, attemptId, 'evidence_missing', { agent: agentScope.agentId }, actor);
+      finalReply = cannotVerifyReply(SPECIALIST_NAMES[agentScope.agentId as keyof typeof SPECIALIST_NAMES] ?? agentScope.agentId, finalReply);
+    }
 
     let isUnanswered = false;
 
@@ -6947,15 +6961,18 @@ When the user asks to continue, resume, or check progress/updates, resume this w
       }
     }
 
-    // A delegated agent that made no tool calls but listed them as its evidence: the lead may drop the note it was given, so
-    // Core states the correction in the reply itself.
-    const unobservedAgents = UNOBSERVED_DELEGATIONS.get(attemptId);
-    UNOBSERVED_DELEGATIONS.delete(attemptId);
-    if (!signal?.aborted && finalReply && unobservedAgents?.length) {
-      const note = `the ${[...new Set(unobservedAgents)].join(' and ')} agent made no tool calls in this task, so the actions and evidence its report lists were not observed and must not be treated as checked`;
-      finalReply += `\n\nCorrection (checked by Pandesh Core): ${note}.`;
-      deliverables = deliverables ?? { expected: [], missing: [], present: [] };
-      deliverables.expected.push(note); deliverables.missing.push(note);
+    // A delegated agent's report is the model's own text. The lead may drop what it was told about that, so Core states in
+    // the reply itself which of it is backed by recorded tool calls and which is unverified opinion.
+    const delegationLedgers = DELEGATION_LEDGERS.get(attemptId) ?? [];
+    DELEGATION_LEDGERS.delete(attemptId);
+    if (!signal?.aborted && finalReply) {
+      for (const d of delegationLedgers) {
+        if (!ledgerNeedsStatement(d.ledger, d.requiresEvidence)) continue;
+        const statement = ledgerStatement(d.name, d.ledger);
+        finalReply += `\n\nEvidence check (Pandesh Core): ${statement}`;
+        deliverables = deliverables ?? { expected: [], missing: [], present: [] };
+        deliverables.expected.push(statement); deliverables.missing.push(statement);
+      }
     }
 
     // An answer that exists only on the disk ("how many files are in rw/inbox") is an observation. If no read of the disk
