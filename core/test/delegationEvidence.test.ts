@@ -52,4 +52,23 @@ describe('delegation evidence ledger', () => {
     expect(evidenceRetryPrompt(['find_skill', 'update_task_outcome', 'read_file'])).toMatch(/find_skill, read_file/);
     expect(cannotVerifyReply('Reviewer', 'It looks fine.')).toMatch(/^Cannot verify: the Reviewer agent made no tool calls[\s\S]*Unverified opinion[\s\S]*It looks fine\./);
   });
+
+  it('does not accept an unrelated successful tool as evidence for the requested check', () => {
+    const ask = 'Ask your Reviewer to evaluate your skill-discovery approach and report the evidence.';
+    const unrelated = buildLedger([{ toolName: 'get_system_info', status: 'succeeded' }, { toolName: 'list_directory', status: 'succeeded', args: '{"path":"C:/tmp"}' }], 'Everything is verified.', KNOWN, ask);
+    expect(unrelated.verified).toEqual([]);
+    expect(unrelated.unrelated.sort()).toEqual(['get_system_info', 'list_directory']);
+    expect(ledgerNeedsStatement(unrelated, true)).toBe(true);
+    expect(ledgerStatement('Reviewer', unrelated)).toMatch(/^Cannot verify[\s\S]*unrelated to the request/);
+    const related = buildLedger([{ toolName: 'find_skill', status: 'succeeded' }], 'x', KNOWN, ask);
+    expect(related.verified).toEqual([{ tool: 'find_skill', count: 1 }]);
+  });
+
+  it('accepts a call that bears on the request through its subject or its arguments', () => {
+    const folder = 'Verify the supplier price list in this folder';
+    expect(buildLedger([{ toolName: 'read_file', status: 'succeeded' }], '', KNOWN, folder).verified.length).toBe(1);
+    expect(buildLedger([{ toolName: 'provider_readiness', status: 'succeeded' }], '', ['provider_readiness'], 'Check whether my provider settings are safe').verified.length).toBe(1);
+    expect(buildLedger([{ toolName: 'search_files', status: 'succeeded', args: '{"query":"invoice"}' }], '', ['search_files'], 'Verify the invoice totals').verified.length).toBe(1);
+    expect(buildLedger([{ toolName: 'calculate', status: 'succeeded', args: '{"expression":"1+1"}' }], '', ['calculate'], 'Verify the provider settings').verified).toEqual([]);
+  });
 });

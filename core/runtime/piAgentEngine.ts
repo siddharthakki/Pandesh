@@ -5,6 +5,7 @@ import { listOpenGmailPlans, renderOpenGmailPlansSection } from '../domain/openG
 import { homeLocationFact, readHomeLocation } from '../domain/homeLocation';
 import { cloudBoundaryFact, cloudVisibleHistory, isCloudProvider, isCloudSafeTool, partitionCloudTools, scrubLocalPaths } from './cloudDataBoundary';
 import { asksProviderReadiness } from './providerReadiness';
+const safeJson = (v: unknown): string => { try { return JSON.stringify(v ?? '').slice(0, 800); } catch { return ''; } };
 import { buildLedger, cannotVerifyReply, evidenceRetryPrompt, ledgerForLead, ledgerNeedsStatement, ledgerStatement, taskNeedsEvidence, userWordsOf, type EvidenceLedger } from './delegationEvidence';
 import { ownerSkillPrivateTexts } from '../platform/skills/skillEgress';
 import { checkPublicQuery, derivePublicQuery, explicitlyRequestsWebSearch, referencesLocalContent } from './publicQueryGuard';
@@ -4685,8 +4686,9 @@ ${String(args.objective ?? '').slice(0, 600)}`,
             }
             // Receipts: the report is compared with the child's recorded tool invocations (Builds 173-177: the Reviewer ran no
             // tool and listed find_skill/read_skill as its evidence). The lead gets the ledger first; the final reply states it.
-            const childRecords = db.all<{ toolName: string; status: string }>('SELECT toolName, status FROM tool_invocations WHERE attemptId = ?', [childAttemptId]);
-            const ledger = buildLedger(childRecords, out.answer, tools.map((t) => t.name));
+            const childRecords = db.all<{ toolName: string; status: string; args: string }>('SELECT toolName, status, argsSummary AS args FROM tool_invocations WHERE attemptId = ?', [childAttemptId]);
+            const askedFor = `${ctx.currentMessage ?? prompt} ${userWordsOf(brief)}`;
+            const ledger = buildLedger(childRecords, out.answer, tools.map((t) => t.name), askedFor);
             const requiresEvidence = taskNeedsEvidence(ctx.currentMessage ?? prompt) || taskNeedsEvidence(userWordsOf(brief));
             DELEGATION_LEDGERS.set(attemptId, [...(DELEGATION_LEDGERS.get(attemptId) ?? []), { name, ledger, requiresEvidence }]);
             if (ledgerNeedsStatement(ledger, requiresEvidence)) safeRecordRuntimeEvent(db, broadcaster, attemptId, 'handoff_unverified_evidence', { agent: toAgentId, verified: ledger.verified.map((v) => v.tool), unbacked: ledger.unbacked, totalCalls: ledger.totalCalls }, actor);
@@ -6098,7 +6100,7 @@ When the user asks to continue, resume, or check progress/updates, resume this w
       // to the Reviewer on Builds 173-177 and a local model still answered from memory; Core asks once, and what is
       // still missing after that becomes "Cannot verify" (below), never a confident report.
       if (agentScope && agentScope.depth >= 1 && !signal?.aborted && supersedeWith === null && taskNeedsEvidence(userWordsOf(String(ctx.currentMessage ?? prompt)))
-        && buildLedger(toolCallsRecorded.map((t) => ({ toolName: t.tool, status: t.status === 'completed' ? 'succeeded' : t.status })), '', []).verified.length === 0) {
+        && buildLedger(toolCallsRecorded.map((t) => ({ toolName: t.tool, status: t.status === 'completed' ? 'succeeded' : t.status, args: safeJson(t.args) })), '', [], userWordsOf(String(ctx.currentMessage ?? prompt))).verified.length === 0) {
         safeRecordRuntimeEvent(db, broadcaster, attemptId, 'evidence_retry_requested', { agent: agentScope.agentId, toolCalls: toolCallsRecorded.length }, actor);
         await tolerateSupersede(async () => {
           await agent.prompt(evidenceRetryPrompt([...activeToolNames]));
@@ -6162,7 +6164,7 @@ When the user asks to continue, resume, or check progress/updates, resume this w
     finalReply = finalReply.replace(/\[earlier message(?:s)? truncated\]/gi, '').trim();
     if (isTruncationArtifact(finalReply)) finalReply = '';
     if (agentScope && agentScope.depth >= 1 && finalReply && taskNeedsEvidence(userWordsOf(String(ctx.currentMessage ?? prompt)))
-      && buildLedger(toolCallsRecorded.map((t) => ({ toolName: t.tool, status: t.status === 'completed' ? 'succeeded' : t.status })), '', []).verified.length === 0
+      && buildLedger(toolCallsRecorded.map((t) => ({ toolName: t.tool, status: t.status === 'completed' ? 'succeeded' : t.status, args: safeJson(t.args) })), '', [], userWordsOf(String(ctx.currentMessage ?? prompt))).verified.length === 0
       && !/^\s*cannot verify:/i.test(finalReply)) {
       safeRecordRuntimeEvent(db, broadcaster, attemptId, 'evidence_missing', { agent: agentScope.agentId }, actor);
       finalReply = cannotVerifyReply(SPECIALIST_NAMES[agentScope.agentId as keyof typeof SPECIALIST_NAMES] ?? agentScope.agentId, finalReply);
