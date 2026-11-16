@@ -4,6 +4,7 @@ import { listEarlierReads, renderEarlierReadsSection } from '../domain/earlierRe
 import { listOpenGmailPlans, renderOpenGmailPlansSection } from '../domain/openGmailPlans';
 import { homeLocationFact, readHomeLocation } from '../domain/homeLocation';
 import { cloudBoundaryFact, cloudVisibleHistory, isCloudProvider, isCloudSafeTool, partitionCloudTools, scrubLocalPaths } from './cloudDataBoundary';
+import { ownerSkillPrivateTexts } from '../platform/skills/skillEgress';
 import { checkPublicQuery, derivePublicQuery, explicitlyRequestsWebSearch, referencesLocalContent } from './publicQueryGuard';
 import { commandOpinionWarnings, readCommandReviewSettings, recordCommandReview, reviewCommand, warmCommandReview, type CommandOpinion, type CommandReviewOutcome } from './commandSecondOpinion';
 import { queryPrivacySummary, queryPrivacyWarning, readQueryPrivacySettings, recordQueryPrivacyReview, reviewQueryPrivacy, warmQueryPrivacy, type QueryPrivacyOpinion } from './queryPrivacySecondOpinion';
@@ -2952,7 +2953,7 @@ export class PiAgentEngine implements EngineAdapter {
               .map((t) => extractToolResultText(t.result)),
             ...(HANDOFF_PRIVATE_FACTS.get(attemptId) ?? []),
           ];
-          const queryCheck = checkPublicQuery(query, { userMessage: ctx.currentMessage ?? requestText, privateTexts });
+          const queryCheck = checkPublicQuery(query, { userMessage: ctx.currentMessage ?? requestText, privateTexts, owner: ownerSkillPrivateTexts(ctx.dataDir) });
           if (!queryCheck.ok) {
             safeRecordRuntimeEvent(db, broadcaster, attemptId, 'web_research_query_refused', { reason: queryCheck.reason, queryChars: query.length }, actor);
             return {
@@ -3038,7 +3039,7 @@ export class PiAgentEngine implements EngineAdapter {
               .map((t) => extractToolResultText(t.result)),
             ...(HANDOFF_PRIVATE_FACTS.get(attemptId) ?? []),
           ];
-          const queryCheck = checkPublicQuery(call.target, { userMessage: ctx.currentMessage ?? requestText, privateTexts });
+          const queryCheck = checkPublicQuery(call.target, { userMessage: ctx.currentMessage ?? requestText, privateTexts, owner: ownerSkillPrivateTexts(ctx.dataDir) });
           if (checked.isSearch && !queryCheck.ok) {
             safeRecordRuntimeEvent(db, broadcaster, attemptId, 'agent_reach_query_refused', { reason: queryCheck.reason, queryChars: call.target.length }, actor);
             return { content: [{ type: 'text', text: `NOT READ: ${queryCheck.reason}. Nothing was sent off this computer. Call agent_reach again with a short public query.` }], isError: true };
@@ -4475,7 +4476,7 @@ ${String(args.objective ?? '').slice(0, 600)}`,
             .map((t) => extractToolResultText(t.result)),
           ...(HANDOFF_PRIVATE_FACTS.get(attemptId) ?? []),
         ];
-        const queryCheck = checkPublicQuery(query, { userMessage: ctx.currentMessage ?? requestText, privateTexts });
+        const queryCheck = checkPublicQuery(query, { userMessage: ctx.currentMessage ?? requestText, privateTexts, owner: ownerSkillPrivateTexts(ctx.dataDir) });
         if (!queryCheck.ok) {
           safeRecordRuntimeEvent(db, broadcaster, attemptId, 'web_research_query_refused', { tool: toolName, reason: queryCheck.reason, queryChars: query.length }, actor);
           return connectorText(`NOT SEARCHED: ${queryCheck.reason}. Nothing was sent off this computer. If public research is needed, call governed_research again with a short public query (topic, role, place; at most 120 characters) that contains no personal details and no text from the user's files.`, true);
