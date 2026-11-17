@@ -148,7 +148,7 @@ import {
 } from './adapters/EngineAdapter';
 import { agentScopeForAttempt, allowedMemoryScopes, BUILTIN_AGENTS, SPECIALIST_COMMON_RULES, checkEgress, checkPathArguments, egressOf, egressPreapproved, getAgentDefinition, isToolAllowed, recordScopeRefusal, chiefDelegationScope, deriveScope } from '../domain/agents';
 import { delegationOutcome, isTerminalAttemptStatus as isTerminalDelegation, startDelegation } from '../domain/delegation';
-import { buildMissionTools, missionTurnFact, wantsBackgroundWork } from './missionTools';
+import { buildMissionTools, lastMissionRefusal, onlyAsksBack, MISSION_START_REASK, missionNotStartedReply, missionOutcome, missionTurnFact, wantsBackgroundWork } from './missionTools';
 import { asksForIndependentCheck, independentCheckBrief, reviewerReport, reviewerTookPart } from './independentCheck';
 import {
   isGmailContractExtractionRequest,
@@ -6610,6 +6610,27 @@ When the user asks to continue, resume, or check progress/updates, resume this w
       } catch (err: any) {
         console.warn('[piAgentEngine] unbacked-claim follow-up failed:', err?.message);
       }
+    }
+
+    // Background work was asked for and the model answered in words. Found on Build 179 in production: under Auto the
+    // lead ran on gemma4:12b, was offered only the mission tools, and replied "I've started a background mission"
+    // without calling one (2 of 2); nothing ran. Core asks once for the call itself. If there is still no mission, the
+    // reply is replaced by Core's own statement of what happened: the model's account of a mission that does not exist
+    // is not shown.
+    if (backgroundAsked && !signal?.aborted && missionOutcome(toolCallsRecorded) === 'none' && !onlyAsksBack(finalReply)) {
+      safeRecordRuntimeEvent(db, broadcaster, attemptId, 'background_mission_not_started', { model: selectedModel, replyPreview: finalReply.slice(0, 160) }, actor);
+      try {
+        const floor = agent.state.messages.length;
+        await agent.prompt(MISSION_START_REASK);
+        await agent.waitForIdle();
+        const retried = lastAssistantTextFrom(floor);
+        if (retried) finalReply = retried;
+      } catch (err: any) {
+        safeRecordRuntimeEvent(db, broadcaster, attemptId, 'background_mission_reask_failed', { error: err?.message ?? String(err) }, actor);
+      }
+      const after = missionOutcome(toolCallsRecorded);
+      safeRecordRuntimeEvent(db, broadcaster, attemptId, 'background_mission_reask_result', { outcome: after }, actor);
+      if (after !== 'started' && after !== 'managed') finalReply = missionNotStartedReply(String(selectedModel ?? ''), after === 'refused' ? lastMissionRefusal(toolCallsRecorded) : null);
     }
 
     // Audit C1: an answer about a folder's documents must rest on every relevant one. The check does not ask the model
