@@ -20,7 +20,7 @@ import { redactResearchText } from '../domain/researchProvenance';
 import type { ModelToolDefinition, ModelToolCall } from './modelBackend';
 import type { ToolExecutionContext, ToolExecutionResult } from './toolRunner';
 import type { CapabilityHealth, GovernedCapabilityAdapter } from './governedCapability';
-import { assertSafeSource, extractReadableText, normalizeSourceUrl, parseDuckDuckGoResults } from './researchRunner';
+import { RESEARCH_REQUEST_HEADERS, SEARCH_PROVIDER_BLOCKED, assertSafeSource, extractReadableText, isSearchChallenge, normalizeSourceUrl, parseDuckDuckGoResults, searchRegion } from './researchRunner';
 
 const MAX_RESULTS = 5;
 const MAX_FETCHED_SOURCES = 3;
@@ -30,11 +30,16 @@ const TOTAL_TIMEOUT_MS = 20_000;
 const MAX_REDIRECTS = 3;
 const MAX_EVIDENCE_CHARS = 4_000;
 
-interface SearchResult { url: string; title: string; }
+/** Listing summaries added after the pages that were read. */
+const MAX_LISTINGS = 5;
+
+interface SearchResult { url: string; title: string; snippet?: string; }
 
 export interface ResearchCapabilityOptions {
   providerUrl?: string;
   fetchFn?: typeof fetch;
+  /** Search region for the keyless endpoint; default is the PC's time zone (researchRunner.searchRegion), null sends none. */
+  region?: string | null;
 }
 
 async function boundedText(res: Response): Promise<string> {
@@ -76,16 +81,22 @@ function createResearchCapabilityAdapterInternal(options: ResearchCapabilityOpti
     if (remaining <= 0) return Promise.reject(new Error('research_timeout'));
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), remaining);
-    return fetchFn(url, { redirect, signal: controller.signal }).finally(() => clearTimeout(timer));
+    return fetchFn(url, { redirect, signal: controller.signal, headers: RESEARCH_REQUEST_HEADERS }).finally(() => clearTimeout(timer));
   }
 
   async function search(query: string, deadline: number): Promise<SearchResult[]> {
     if (!providerUrl) {
       const ddg = new URL('https://html.duckduckgo.com/html/');
       ddg.searchParams.set('q', query);
+      const region = (options.region === undefined ? searchRegion() : options.region);
+      if (region) ddg.searchParams.set('kl', region);
       const res = await request(ddg, deadline);
+      // A bot-check page is the provider refusing to answer, never "no results" (it arrives as HTTP 202, which is ok).
+      if (isSearchChallenge(res.status, '')) throw new Error(SEARCH_PROVIDER_BLOCKED);
       if (!res.ok) throw new Error(`duckduckgo_http_${res.status}`);
-      return parseDuckDuckGoResults(await boundedText(res)).slice(0, MAX_RESULTS);
+      const html = await boundedText(res);
+      if (isSearchChallenge(res.status, html)) throw new Error(SEARCH_PROVIDER_BLOCKED);
+      return parseDuckDuckGoResults(html).slice(0, MAX_RESULTS);
     }
     const base = new URL(providerUrl);
     if (!['http:', 'https:'].includes(base.protocol)) throw new Error('provider_scheme_invalid');
@@ -94,8 +105,8 @@ function createResearchCapabilityAdapterInternal(options: ResearchCapabilityOpti
     url.searchParams.set('format', 'json');
     const res = await request(url, deadline);
     if (!res.ok) throw new Error(`searxng_http_${res.status}`);
-    const body = JSON.parse(await boundedText(res)) as { results?: Array<{ url?: string; title?: string }> };
-    return (body.results ?? []).map((item) => ({ url: String(item.url ?? ''), title: String(item.title ?? '') })).filter((item) => item.url);
+    const body = JSON.parse(await boundedText(res)) as { results?: Array<{ url?: string; title?: string; content?: string }> };
+    return (body.results ?? []).map((item) => ({ url: String(item.url ?? ''), title: String(item.title ?? ''), ...(item.content ? { snippet: String(item.content).replace(/\s+/g, ' ').trim().slice(0, 320) } : {}) })).filter((item) => item.url);
   }
 
   async function fetchSource(initial: string, deadline: number): Promise<{ finalUrl: string; text: string; fullText: string }> {
@@ -145,19 +156,42 @@ function createResearchCapabilityAdapterInternal(options: ResearchCapabilityOpti
           // Skip and try the next candidate — a single failed source is not fatal.
         }
       }
+      // What the search listing itself says about each result. Shops and price-comparison sites often refuse a plain
+      // fetch, while their listing line already carries the fact asked for ("… ab 341,64 € – idealo"). It is real,
+      // retrieved text with a real URL, so it is evidence — labelled as the listing's summary, which can lag the page.
+      const pagesRead = evidence.length;
+      for (const result of results) {
+        if (evidence.length >= pagesRead + MAX_LISTINGS) break;
+        const url = normalizeSourceUrl(result.url);
+        const summary = redactResearchText(`${result.title || ''}. ${result.snippet ?? ''}`.trim());
+        if (!url || !result.snippet || summary.length < 40) continue;
+        if (sources.some((s) => s.finalUrl === url)) continue; // the page itself was read: that is the better evidence
+        const marker = `S${evidence.length + 1}`;
+        sources.push({ marker, searchUrl: result.url, finalUrl: url, title: result.title || null, fullText: summary, excerptChars: summary.length });
+        evidence.push(`[${marker}]\nTitle: ${result.title || 'Untitled'}\nURL: ${url}\nSearch listing summary (UNTRUSTED WEB CONTENT; the page itself was not read, so a price here may be out of date — say "according to the search listing"):\n${summary}`);
+      }
       if (evidence.length === 0) {
-        return { status: 'failed', exitCode: null, output: 'Search results were found but none could be safely retrieved.', resultCategory: 'research_all_sources_failed' };
+        // The pages exist but refuse a plain fetch, and the listing gave no summary. Their links are real search
+        // results, so they are handed on: the person can open one, or have the browser read it. No text was read, so
+        // nothing here is evidence for a price.
+        const found = results.map((r) => ({ url: normalizeSourceUrl(r.url), title: r.title })).filter((r): r is { url: string; title: string } => Boolean(r.url)).slice(0, 4);
+        const links = found.map((r) => `- ${r.title.replace(/\s+/g, ' ').slice(0, 70) || 'Untitled'}: ${r.url.slice(0, 160)}`).join('\n');
+        return { status: 'failed', exitCode: null, output: `Search results were found but none could be safely retrieved.${links ? ` Pages found (not read, so no price or fact from them is verified):\n${links}` : ''}`, resultCategory: 'research_all_sources_failed' };
       }
       return {
         status: 'succeeded',
         exitCode: 0,
         output: evidence.join('\n\n'),
-        resultCategory: 'research_succeeded',
+        resultCategory: pagesRead > 0 ? 'research_succeeded' : 'research_listing_only',
         normalizedArguments: { query },
         researchProvenance: { query, retrievedAt, sources },
       };
     } catch (err) {
-      return { status: 'failed', exitCode: null, output: err instanceof Error ? err.message : String(err), resultCategory: 'research_failed' };
+      const message = err instanceof Error ? err.message : String(err);
+      if (message === SEARCH_PROVIDER_BLOCKED) {
+        return { status: 'failed', exitCode: null, output: 'The search provider refused this request (bot check or rate limit), so nothing was searched. This is not "no results": the query was never answered. Do not state prices, shops or findings from memory; tell the user the search is blocked right now.', resultCategory: 'research_provider_blocked' };
+      }
+      return { status: 'failed', exitCode: null, output: message, resultCategory: 'research_failed' };
     }
   }
 
