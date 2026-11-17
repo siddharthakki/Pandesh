@@ -194,7 +194,7 @@ function BotPage({ bot, data, busy, run, onOpenConversation, onAskPandesh, onRem
           <form className="bot-edit" aria-label={`Edit ${bot.name}`} onSubmit={(e) => { e.preventDefault(); void run('edit', async () => { await call('botUpdate', { id: bot.id, responsibility, instructions, ...(bot.kind === 'engineer' ? { repoPath: repoPath.trim() || null } : {}) }); setEditing(false); }, 'Saved.'); }}>
             <label className="bot-field">Responsibility<textarea value={responsibility} onChange={(e) => setResponsibility(e.target.value)} rows={2} maxLength={600} /></label>
             <label className="bot-field">Instructions (its Hermes SOUL.md)<textarea value={instructions} onChange={(e) => setInstructions(e.target.value)} rows={8} maxLength={4000} /></label>
-            {bot.kind === 'engineer' && <label className="bot-field">Folder of the Pandesh git repository<input value={repoPath} onChange={(e) => setRepoPath(e.target.value)} placeholder="e.g. D:\Projects\Pandesh" spellCheck={false} /></label>}
+            {bot.kind === 'engineer' && <label className="bot-field">Folder of the Pandesh git repository<input value={repoPath} onChange={(e) => setRepoPath(e.target.value)} placeholder="The folder you cloned Pandesh into" spellCheck={false} /></label>}
             <div className="actions"><button type="submit" className="btn small primary" disabled={Boolean(busy)}>Save</button></div>
           </form>
         )}
