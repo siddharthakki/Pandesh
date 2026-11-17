@@ -74,12 +74,16 @@ record doesn't show, and a failure is reported as a failure.
 
 | Demo | What happens |
 |---|---|
+| ▶️ [**Make a bedtime video**](docs/media/videos/demo-bedtime-video.mp4)<br><sub>68 s · the finished video</sub> | A background **mission**: the Studio specialist writes a 7-scene story, a local Piper voice narrates it, ComfyUI paints seven pictures and FFmpeg joins them with music and subtitles into a 1080p video. Everything runs on the PC; nothing is uploaded or published. |
+| ▶️ [**Work in the background**](docs/media/videos/demo-background-mission.mp4)<br><sub>32 s · 2.5×</sub> | *"In the background while I keep talking to you: check the disks, the memory-heavy processes and the listening ports, and have another specialist verify the numbers."* A mission card shows Operations working while you keep chatting, you stop it, continue it, and an independent Reviewer takes the next step. |
 | ▶️ [**Build an app**](docs/media/videos/demo-build-app.mp4)<br><sub>49 s · 1.5×</sub> | *"Ask the Coding specialist to build a tip calculator with unit tests, run them, then run it for €84.50 / 15% / 3 people."* It asks before writing files and before each command, fixes its own import error, the tests pass, and the program prints `32.39`. |
 | ▶️ [**Fix a broken program**](docs/media/videos/demo-coding-recovery.mp4)<br><sub>70 s · 1.5×</sub> | A pricing module with a discount bug. Coding runs the tests (`AssertionError: 19.0 != 26.1`), fixes the bug, re-runs them (`OK`) and shows before and after. |
 | ▶️ [**Research with consent**](docs/media/videos/demo-research.mp4)<br><sub>47 s · real time</sub> | *"Ask your Research specialist to find the latest stable Ollama release."* One internet-consent card, then the version, date and source. |
 | ▶️ [**Second Brain**](docs/media/videos/demo-second-brain.mp4)<br><sub>45 s · 2.5×</sub> | Remember a supplier, recall it in a **new** chat, correct the price, forget only the supplier's name, then search what is stored. |
 
 <sub>Recorded from the running app on an isolated demo profile with fictional data and local <code>gemma4:12b</code>. Nothing is mocked or animated. The build-an-app task succeeded in 2 of 3 attempts, and the failed attempt was reported as a failure. <a href="docs/media/README.md">How these were recorded</a>.</sub>
+
+<sub><b>Added 2026-11-17 (missions).</b> The background-mission video is a real screen recording of the v2 app on an isolated profile with local <code>gemma4:12b</code>, sped up 2.5×. The bedtime video is the real output of a mission run on 2026-11-16 with a local 9B lead model; the repo copy is re-encoded to 720p. Honest notes: the pictures are generated per scene and do not always show the story's rabbit, and Pandesh sampled the video rather than watching every frame. A third recording, a background coding mission with an independent Reviewer, was tried once and left out: the Coding step wrote working code and tests, but Core marked the Reviewer's reply <i>partly done</i> (it had not read the test file) and the mission stopped as <i>failed</i>.</sub>
 
 <table>
 <tr>
@@ -89,6 +93,13 @@ record doesn't show, and a failure is reported as a failure.
 <tr>
 <td width="50%"><img src="docs/media/screenshots/04-research-with-citation.png" alt="Research specialist result with version, date and source link"><br><sub><b>Research:</b> the latest Ollama release with its source (checked independently: correct).</sub></td>
 <td width="50%"><img src="docs/media/screenshots/05-second-brain-provenance.png" alt="Second Brain memory detail with source and history including forgotten values"><br><sub><b>Second Brain:</b> source, history and forgotten values, with correct and forget actions.</sub></td>
+</tr>
+</table>
+
+<table>
+<tr>
+<td width="50%"><img src="docs/media/screenshots/10-background-mission-live.png" alt="A mission card above the composer: Operations is reading hardware telemetry while the Reviewer waits; the chat above shows a stopped and continued mission"><br><sub><b>Missions:</b> a live card shows each specialist's step. Stop it, continue it, keep chatting. Core writes the report from recorded tool calls.</sub></td>
+<td width="50%"><img src="docs/media/screenshots/09-bedtime-video-scenes.jpg" alt="The seven pictures ComfyUI generated for the bedtime story video"><br><sub><b>Studio:</b> the seven scenes behind the bedtime video, generated locally by ComfyUI, narrated by Piper and joined by FFmpeg.</sub></td>
 </tr>
 </table>
 
@@ -150,6 +161,8 @@ Everything below runs in the current source build. Most of it is shown in the re
 | 💻 **Coding that checks its work** | Writes files, runs your tests after you approve the exact command, fixes failures and re-runs them. Core checks written files, attributes results and flags suggested commands that can't work. Aider runs as a local coding engine; OpenCode is optional. |
 | 🔎 **Research with sources** | Asks once for internet access, searches public sources and returns citations. Private text is stripped from the query before it leaves your PC. |
 | 🧠 **Second Brain** | Remember, recall in another chat, correct, and forget a single detail. Every fact keeps its source and history, and you can search it all in one place. |
+| 🎯 **Background missions** | Ask for work "in the background" and Pandesh starts a durable mission: Core runs the specialists step by step (up to three in parallel), you keep chatting, and you can stop or continue it. An independent Reviewer step checks the result, and Core writes the final report from the tool calls it recorded. A restart marks a running mission *interrupted* so it can be continued. |
+| 🎬 **Studio: narrated video** | The Studio specialist makes a short narrated video entirely on your PC: script, local Piper voice, ComfyUI pictures, FFmpeg render, subtitles, thumbnail and a draft upload sheet. It never publishes anything. |
 | 📋 **Board and live activity** | Task status from Core's records (needs you, running, completed, failed), plus a live panel with commands, exit codes and test output. |
 | 👥 **Team and permissions** | Each agent's tools, folders, network access and always-ask actions, read from the same rules Core enforces. |
 | 🧰 **Tools & Skills** | 169 tools and 25 governed capabilities, each with its risk level, the agents allowed to use it, and a capability self-test. |
@@ -222,6 +235,7 @@ node apps\desktop\launch.mjs
 
 - *"Ask the Coding specialist to build a tip calculator with unit tests, run them, then run it for €84.50 / 15% / 3 people."*
 - *"Ask your Research specialist to find the latest stable Ollama release."*
+- *"In the background while I keep talking to you: check how full my disks are and which processes use the most memory, and have another specialist verify the numbers."*
 - *"Remember that our flour supplier is Example Mills."* Then, in a new chat: *"Who is our flour supplier?"*
 
 **Hardware:** the demos ran on an RTX 3090 (24 GB). `gemma4:12b` needs about 10 GB of VRAM; `qwen3.8:27b` about 20 GB.
@@ -260,6 +274,8 @@ and the first results of the revenue pilot. **Later:** an MCP server registry an
 
 - **Customer Support** is still a placeholder agent. The revenue agents research and draft only; they can't send,
   publish or spend.
+- **Missions are new.** Plan quality depends on the model: `gemma4:12b` and the 9B model sometimes add a needless step, and Core can mark a Reviewer's reply <i>partly done</i> when its tool calls do not back its claims (the mission then stops as failed, honestly). Parallel steps are tested but were not exercised in the recorded runs.
+- **Video checks are sampled.** Pandesh inspects a sample of frames and says so; it does not claim a full visual review.
 - **Models vary from run to run.** In the recorded demos the build-an-app task succeeded in 2 of 3 attempts with
   `gemma4:12b` ([notes](docs/media/README.md)).
 
