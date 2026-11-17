@@ -165,7 +165,7 @@ export class MailIndex {
   }
   private toRow(r: DbMessage): MailRow {
     return { id: r.id, storeId: r.storeId, account: r.accountName ?? '', folder: r.folder, subject: r.subject, fromName: r.fromName, fromAddress: r.fromAddress, toText: r.toText, received: r.received, unread: Boolean(r.unread),
-      attachments: r.attachments, category: r.category, facts: JSON.parse(r.facts) as MailFacts, snippet: r.body.replace(/\s+/g, ' ').trim().slice(0, 220), duplicates: Math.max(0, (r.dupes ?? 1) - 1) };
+      attachments: r.attachments, category: r.category, facts: JSON.parse(r.facts) as MailFacts, snippet: r.body.replace(/<?https?:\/\/\S+>?/gi, ' ').replace(/[͏​-‏⁠﻿­]/g, '').replace(/\s+/g, ' ').trim().slice(0, 220), duplicates: Math.max(0, (r.dupes ?? 1) - 1) };
   }
 
   /** FTS query from free text: plain words only, so nothing a user (or an email) types can become query syntax. */

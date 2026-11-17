@@ -676,3 +676,5 @@ button.tl-row:hover { background: var(--raised); }
 .mh-timeline { border-left: 1px solid var(--line); margin-left: 5px; padding-left: 16px; }
 .mh-log { padding: 2px 0 16px; position: relative; }
 .mh-log::before { content: ""; position: absolute; left: -20px; top: 6px; width: 7px; height: 7px; background: var(--verified); border-radius: 50%; }
+.mh-table td { overflow-wrap: anywhere; }
+.mh-table td:nth-child(2) { max-width: 46vw; }
