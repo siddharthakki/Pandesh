@@ -181,6 +181,9 @@ export class BotService {
     let recurrence: Recurrence | null = null;
     if (Array.isArray(input.weekdays) && input.weekdays.length) recurrence = { kind: 'weekly', weekdays: input.weekdays };
     else if (input.everyDays && input.everyDays > 1) recurrence = { kind: 'interval_days', every: Math.floor(input.everyDays), anchor: new Date().toISOString().slice(0, 10) };
+    // One routine per Bot, time and rhythm: asking for the same slot again turns the existing one on, never adds a twin.
+    const same = this.routinesOf(bot.id).find((t) => t.dailyTime === input.dailyTime.trim() && JSON.stringify(t.recurrence ? { ...t.recurrence, anchor: undefined } : null) === JSON.stringify(recurrence ? { ...recurrence, anchor: undefined } : null));
+    if (same) return input.enabled === false || same.enabled ? same : setScheduledTaskEnabled(this.db, same.id, true);
     const reads = bot.sources.map((s) => BOT_SOURCES[s].label).join('; ') || 'nothing';
     const task = createScheduledTask(this.db, {
       title: cleanText(input.title, 120) || `${bot.name} routine`,

@@ -15,7 +15,7 @@ import { BOT_ROUTINE, actionClaims, buildBotPrompt, extractProposals, runBot } f
 import { BOT_TOOLSETS, HermesBotRuntime, botProcessEnv, botProfileConfig, botProfileName, readProfileRouting, type Exec } from '../runtime/bots/hermesBotRuntime';
 import { searchTerms, type BotEvidence } from '../runtime/bots/botSources';
 import { createBotCapabilityAdapter, parseDailyTime, permissionLines } from '../runtime/bots/botCapability';
-import { selectCapabilitiesForIntent } from '../runtime/piCapabilityBridge';
+import { isBotRequest, selectCapabilitiesForIntent } from '../runtime/piCapabilityBridge';
 import { groupsForText } from '../runtime/chatToolSelection';
 
 let dir: string; let home: string; let db: CoreDatabase;
@@ -271,6 +271,12 @@ describe('routines have one scheduler owner and a bounded scope', () => {
     const on = service.updateRoutine(created[0].routines[0].id, { enabled: true, dailyTime: '07:15' });
     expect(on).toMatchObject({ enabled: true, dailyTime: '07:15' });
     expect(permissionLines(['gmail_inbox']).join(' ')).toMatch(/Sending, replying, labelling, archiving or deleting mail/);
+    // Pressing "Add routine" again for the same time adds no twin (seen live: three 08:00 routines).
+    const again = service.addRoutine(created[0].id, { dailyTime: '07:15' });
+    expect(again.id).toBe(on.id);
+    service.addRoutine(created[0].id, { dailyTime: '08:00' });
+    service.addRoutine(created[0].id, { dailyTime: '08:00' });
+    expect(service.routinesOf(created[0].id).map((t) => t.dailyTime).sort()).toEqual(['07:15', '08:00']);
   });
 
   it('removes a Bot together with its routines and its Hermes profile', async () => {
@@ -289,6 +295,13 @@ describe('Bots from a conversation', () => {
       expect(selectCapabilitiesForIntent(text), text).toContain('bots');
       expect(groupsForText(text).has('bots'), text).toBe(true);
     }
+    // Recurring work in a Bot's area is not also offered as a household routine (the small model picked routine_create).
+    for (const text of ['Monitor installed software and tell me which updates are worth installing. Do it every day at 09:00.', 'Every morning check my email and tell me what\'s important.']) {
+      expect(isBotRequest(text), text).toBe(true);
+      expect(selectCapabilitiesForIntent(text), text).not.toContain('household');
+    }
+    // A household routine that is not a Bot's job still gets the household tools.
+    expect(selectCapabilitiesForIntent('Every week remind me to check my bills and warranties')).toContain('household');
     for (const text of ['What is the capital of France?', 'Write a haiku about autumn.', 'find me the cheapest deal for AOC cu34g4zca Monitor']) expect(selectCapabilitiesForIntent(text), text).not.toContain('bots');
   });
 

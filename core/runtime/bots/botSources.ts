@@ -294,16 +294,26 @@ async function engineering(bot: BotRecord, deps: BotSourceDeps, question: string
       for (const l of logLines) { lines.push(`- ${clip(l, 150)}`); refs.push(`commit ${l.split(' ')[0]}`); items.push({ id: `commit:${l.split(' ')[0]}`, text: l }); }
       const terms = question ? searchTerms(question) : [];
       if (terms.length) {
-        lines.push('', `SOURCE SEARCH for: ${terms.join(', ')}`);
+        // What a recent commit that names one of the words actually changed: the files are where the answer is.
+        const matching = logLines.filter((l) => terms.some((t) => l.toLowerCase().includes(t))).slice(0, 3);
+        for (const l of matching) {
+          const sha = l.split(' ')[0];
+          const stat = await git(repo, ['show', '--stat=120', '--format=', sha]);
+          const files = (stat.ok ? stat.out : '').split('\n').map((s) => s.trim()).filter((s) => s.includes('|')).slice(0, 8);
+          if (files.length) { lines.push('', `FILES CHANGED BY ${sha} (${clip(l.split(' ').slice(2).join(' '), 90)}):`); for (const f of files) lines.push(`- ${clip(f, 120)}`); }
+        }
+        lines.push('', `SOURCE SEARCH for: ${terms.join(', ')} (Core first, then the desktop app and docs)`);
         for (const term of terms) {
-          const found = await git(repo, ['grep', '-n', '-i', '-I', '--max-count=2', '-e', term, 'origin/main', '--', 'core/runtime', 'core/domain', 'core/api', 'apps/desktop/src', 'apps/desktop/renderer-v2/src', 'docs']);
-          const hits = (found.ok ? found.out : '').split('\n').filter(Boolean).slice(0, 6);
-          for (const h of hits) {
-            const m = /^origin\/main:([^:]+):(\d+):(.*)$/.exec(h);
-            if (!m) continue;
-            lines.push(`- ${m[1]}:${m[2]}: ${clip(m[3].trim(), 130)}`); refs.push(`${m[1]}:${m[2]}`);
+          let count = 0;
+          for (const [paths, max] of [[['core/runtime', 'core/domain', 'core/api'], 4], [['apps/desktop/src', 'apps/desktop/renderer-v2/src', 'docs'], 2]] as const) {
+            const found = await git(repo, ['grep', '-n', '-i', '-I', '--max-count=2', '-e', term, 'origin/main', '--', ...paths]);
+            for (const h of (found.ok ? found.out : '').split('\n').filter(Boolean).slice(0, max)) {
+              const m = /^origin\/main:([^:]+):(\d+):(.*)$/.exec(h);
+              if (!m) continue;
+              lines.push(`- ${m[1]}:${m[2]}: ${clip(m[3].trim(), 130)}`); refs.push(`${m[1]}:${m[2]}`); count++;
+            }
           }
-          if (hits.length === 0) lines.push(`- "${term}": no match`);
+          if (count === 0) lines.push(`- "${term}": no match`);
         }
       }
     }
