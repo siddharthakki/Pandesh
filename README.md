@@ -76,6 +76,8 @@ record doesn't show, and a failure is reported as a failure.
 |---|---|
 | ▶️ [**Make a bedtime video**](docs/media/videos/demo-bedtime-video.mp4)<br><sub>68 s · the finished video</sub> | A background **mission**: the Studio specialist writes a 7-scene story, a local Piper voice narrates it, ComfyUI paints seven pictures and FFmpeg joins them with music and subtitles into a 1080p video. Everything runs on the PC; nothing is uploaded or published. |
 | ▶️ [**Work in the background**](docs/media/videos/demo-background-mission.mp4)<br><sub>32 s · 2.5×</sub> | *"In the background while I keep talking to you: check the disks, the memory-heavy processes and the listening ports, and have another specialist verify the numbers."* A mission card shows Operations working while you keep chatting, you stop it, continue it, and an independent Reviewer takes the next step. |
+| ▶️ [**Two coding tasks in a row**](docs/media/videos/demo-coding-two-tasks.mp4)<br><sub>39 s · about 3×</sub> | On a small invoice project: *"Ask the Coding specialist to add a `formatEuro(cents)` function with a unit test, and run the tests."* Then: *"…make `invoiceTotals` throw a clear error on a negative quantity, add a test, run the tests again."* Each file change and each command waits for an approval card; the final run shows 5 of 5 tests passing (re-run by hand afterwards: 5 of 5). |
+| ▶️ [**Disk analysis**](docs/media/videos/demo-disk-analysis.mp4)<br><sub>17 s · about 1.4×</sub> | *"How full are the disks of this PC? Give me a short table…and tell me which drive to clean up first."* A table of each drive's size, free space and percent used, read from the PC (it matches what Windows reports) with a clear recommendation. |
 | ▶️ [**Build an app**](docs/media/videos/demo-build-app.mp4)<br><sub>49 s · 1.5×</sub> | *"Ask the Coding specialist to build a tip calculator with unit tests, run them, then run it for €84.50 / 15% / 3 people."* It asks before writing files and before each command, fixes its own import error, the tests pass, and the program prints `32.39`. |
 | ▶️ [**Fix a broken program**](docs/media/videos/demo-coding-recovery.mp4)<br><sub>70 s · 1.5×</sub> | A pricing module with a discount bug. Coding runs the tests (`AssertionError: 19.0 != 26.1`), fixes the bug, re-runs them (`OK`) and shows before and after. |
 | ▶️ [**Research with consent**](docs/media/videos/demo-research.mp4)<br><sub>47 s · real time</sub> | *"Ask your Research specialist to find the latest stable Ollama release."* One internet-consent card, then the version, date and source. |
@@ -83,7 +85,7 @@ record doesn't show, and a failure is reported as a failure.
 
 <sub>Recorded from the running app on an isolated demo profile with fictional data and local <code>gemma4:12b</code>. Nothing is mocked or animated. The build-an-app task succeeded in 2 of 3 attempts, and the failed attempt was reported as a failure. <a href="docs/media/README.md">How these were recorded</a>.</sub>
 
-<sub><b>Added 2026-11-17 (missions).</b> The background-mission video is a real screen recording of the v2 app on an isolated profile with local <code>gemma4:12b</code>, sped up 2.5×. The bedtime video is the real output of a mission run on 2026-11-16 with a local 9B lead model; the repo copy is re-encoded to 720p. Honest notes: the pictures are generated per scene and do not always show the story's rabbit, and Pandesh sampled the video rather than watching every frame. A third recording, a background coding mission with an independent Reviewer, was tried once and left out: the Coding step wrote working code and tests, but Core marked the Reviewer's reply <i>partly done</i> (it had not read the test file) and the mission stopped as <i>failed</i>.</sub>
+<sub><b>Added 2026-11-17 (missions).</b> The background-mission video is a real screen recording of the v2 app on an isolated profile with local <code>gemma4:12b</code>, sped up 2.5×. The bedtime video is the real output of a mission run on 2026-11-16 with a local 9B lead model; the repo copy is re-encoded to 720p. Honest notes: the pictures are generated per scene and do not always show the story's rabbit, and Pandesh sampled the video rather than watching every frame. Also recorded and left out: a Gmail workflow (it needs a real mailbox and the recording profile has none, so it is not shown) and a Wish-to-Reality run (the 12B model only listed options; the 9B model started a three-step mission that returned generic gig-work advice with a cut-off reviewer note). A third recording, a background coding mission with an independent Reviewer, was tried once and left out: the Coding step wrote working code and tests, but Core marked the Reviewer's reply <i>partly done</i> (it had not read the test file) and the mission stopped as <i>failed</i>.</sub>
 
 <table>
 <tr>
@@ -114,6 +116,18 @@ record doesn't show, and a failure is reported as a failure.
 <tr>
 <td width="50%"><img src="docs/media/screenshots/07-board-real-status.png" alt="Board with completed and failed tasks from Core records"><br><sub><b>Board:</b> real task status, failures included.</sub></td>
 <td width="50%"><img src="docs/media/screenshots/08-tools-and-skills.png" alt="Tools and Skills hub listing 169 tools and 25 governed capabilities with risk and allowed agents"><br><sub><b>Tools & Skills:</b> every tool's risk, who may use it, and how often it worked.</sub></td>
+</tr>
+<tr>
+<td width="50%"><img src="docs/media/screenshots/13-image-approval-card.png" alt="Approval card to generate an image locally with ComfyUI, showing the full prompt and the checkpoint"><br><sub><b>Images:</b> the exact prompt and model on the card; nothing runs until you choose. Core records the decision.</sub></td>
+<td width="50%"><img src="docs/media/screenshots/14-generated-bakery.jpg" alt="A watercolor bakery storefront at dawn, generated locally"><br><sub><b>The result</b> (1024×1024, about 20 s on the RTX 3090). Marked "Ran on this PC, no money spent".</sub></td>
+</tr>
+<tr>
+<td width="50%"><img src="docs/media/screenshots/11-disk-analysis.png" alt="Table of drives with size, free space and percent used, and a recommendation to clean up C: first"><br><sub><b>Disk analysis:</b> real numbers, a clear recommendation.</sub></td>
+<td width="50%"><img src="docs/media/screenshots/12-coding-second-task.png" alt="Coding agent made invoiceTotals throw on negative quantity; test output shows 5 passing tests"><br><sub><b>Coding:</b> the second task, with the real test output.</sub></td>
+</tr>
+<tr>
+<td width="50%"><img src="docs/media/screenshots/15-reminder-set.png" alt="Reminder set for one minute from now with the time and time zone"><br><sub><b>Reminders:</b> plain words in, a scheduled reminder out. Core's record shows this one marked notified 12 ms after it was due (the desktop toast itself is outside the recording).</sub></td>
+<td width="50%"></td>
 </tr>
 </table>
 </details>

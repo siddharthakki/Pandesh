@@ -15,6 +15,8 @@ operator recording the demo, one card at a time.
 |---|---|---|
 | [Make a bedtime video](videos/demo-bedtime-video.mp4) | 68 s (finished video) | Output of a background mission run on 2026-11-16 (local 9B lead model, Studio specialist): 7 scenes, Piper voice (58.7 s of speech), 7 ComfyUI pictures, FFmpeg render at 1920x1080 with ambient bed and burned-in subtitles. Re-encoded to 720p for this repository. The pictures do not always show the rabbit; nothing was published. |
 | [Work in the background](videos/demo-background-mission.mp4) | 32 s (2.5×) | Recorded 2026-11-17 on an isolated profile with local `gemma4:12b`: a mission starts, a side question is answered while it runs (Tokyo, 391), the mission is stopped and continued, and the Reviewer step begins. The recording stops before the final report because the report lists this PC's running programs. |
+| [Two coding tasks in a row](videos/demo-coding-two-tasks.mp4) | 39 s (about 3×) | Recorded 2026-11-17, local `gemma4:12b`, on a copy of a small invoice project: add `formatEuro` with a test, then make `invoiceTotals` reject negative quantities, each with the tests run. Four approval cards (file changes and commands) were allowed by the operator. Final result 5 of 5 tests; re-run by hand afterwards: 5 of 5. |
+| [Disk analysis](videos/demo-disk-analysis.mp4) | 17 s (about 1.4×) | Recorded 2026-11-17: a table of every drive with size, free space and percent used. Checked against `Get-Volume`: C: 110 GB free, D: 538 GB, E: 696 GB. |
 | [Build an app](videos/demo-build-app.mp4) | 49 s (1.5×) | "Ask the Coding specialist to build a tip calculator with unit tests, run them, then run it for €84.50 / 15% / 3 people." Pandesh asks before writing files and before each command, the agent fixes its own import error, the tests pass, and the program prints `32.39`. |
 | [Fix a broken program](videos/demo-coding-recovery.mp4) | 70 s (1.5×) | A pricing module with a discount bug. Coding runs the tests (`AssertionError: 19.0 != 26.1`), fixes the bug, re-runs them (`OK`) and shows before/after. |
 | [Research with consent](videos/demo-research.mp4) | 47 s (real time) | "Ask your Research specialist to find the latest stable Ollama release." One internet-consent card, then version, date and source. |
@@ -34,6 +36,14 @@ operator recording the demo, one card at a time.
 | | |
 |---|---|
 | ![](screenshots/10-background-mission-live.png) | ![](screenshots/09-bedtime-video-scenes.jpg) |
+
+| ![](screenshots/13-image-approval-card.png) | ![](screenshots/14-generated-bakery.jpg) |
+| ![](screenshots/11-disk-analysis.png) | ![](screenshots/12-coding-second-task.png) |
+| ![](screenshots/15-reminder-set.png) | |
+
+Also recorded on 2026-11-17 and not turned into videos: **images** (an approval card with the exact prompt, then a 1024×1024 ComfyUI picture in about 20 s) and a **reminder** set in plain words (due in one minute; Core marked it notified 12 ms after the due time; the OS toast is not visible to the recorder).
+
+Tried and **not published**: a **Gmail** workflow (needs a real mailbox, the recording profile has none, and a recording of a real inbox would not be fit to publish); a **Wish-to-Reality** run (twice: with `gemma4:12b` Pandesh only listed three options; with the 9B model it started a three-step mission whose report was generic gig-work advice, with a reviewer note cut off mid-sentence). The Wish-to-Reality pipeline itself is covered by Core tests, not by a recording.
 
 Also tried and not published: a background **coding** mission with an independent Reviewer on a copy of a small invoice project. The Coding step wrote `formatEuro` and a passing test (checked by running `node --test`: 4 of 4), but Core marked the Reviewer's reply *partly done* (it had not read the test file), so that step and the mission ended as failed. One attempt, not repeated.
 
