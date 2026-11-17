@@ -63,6 +63,7 @@ import * as attempts from '../domain/attempts';
 import { deriveResultStatus } from '../domain/resultStatus';
 import { resumeInterruptedAttempt } from '../runtime/resumeAttempt';
 import { listTaskOverview } from '../domain/taskOverview';
+import { createReadCache } from '../runtime/readCache';
 import * as modelInvocations from '../domain/modelInvocations';
 import * as toolInvocations from '../domain/toolInvocations';
 import * as approvals from '../domain/approvals';
@@ -1293,10 +1294,13 @@ export function buildRouter(
   });
 
   // Tasks screen: durable attempts with model, worker, current activity and last event.
-  router.get('/v1/tasks/overview', (ctx) => ({
-    status: 200,
-    body: { tasks: listTaskOverview(ctx.db, optionalNumber(ctx.query, 'limit') ?? 20) },
-  }));
+  // Heavy synchronous projection that the desktop requests many times while its window loads (Build 182 stalled Core
+  // for minutes on it): reused only while no event was recorded and for at most 2 s (runtime/readCache.ts).
+  const overviewCache = createReadCache(2_000);
+  router.get('/v1/tasks/overview', (ctx) => {
+    const limit = optionalNumber(ctx.query, 'limit') ?? 20;
+    return { status: 200, body: { tasks: overviewCache.get(`overview:${limit}`, String(latestSequence(ctx.db)), () => listTaskOverview(ctx.db, limit)) } };
+  });
 
   router.get('/v1/attempts', (ctx) => {
     const requestId = ctx.query.get('requestId') ?? undefined;
@@ -2042,12 +2046,15 @@ export function buildRouter(
   // through the very same connector adapters and read-permission grants the
   // agent loop uses; without it the brief is Core's own state only, which is
   // what a fast Home load wants.
+  const briefCache = createReadCache(3_000);
   router.get('/v1/assistant/brief', async (ctx) => {
     const external = ctx.query.get('external') === '1' || ctx.query.get('external') === 'true';
-    const brief = await buildAssistantBrief(ctx.db, {
+    const compute = () => buildAssistantBrief(ctx.db, {
       connectorRegistry: connectors,
       includeExternal: external,
     });
+    // The live calendar and mailbox read (external) is never cached; Core's own state is, under the same rule as the overview.
+    const brief = await (external ? compute() : briefCache.get('brief', String(latestSequence(ctx.db)), compute));
     return { status: 200, body: { brief, markdown: renderAssistantBriefMarkdown(brief) } };
   });
 
