@@ -1,4 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
+import { MissionDock } from './Missions';
 import { api, errorText, onDesktopEvent, type ApprovalCard, type BriefAction, type BriefItem, type Snapshot, type TranscriptMessage } from './bridge';
 import { Icon, Mark, elapsed, timeOf } from './ui';
 import { ActivityAside } from './Activity';
@@ -13,7 +14,7 @@ import { useComposerControls } from './ComposerControls';
 import { AttachmentChips, useAttachments } from './Attachments';
 import { canSend, goalFor } from './attachmentModel';
 import { useFolderControl } from './FolderControl';
-import { modelLabel as describeModel } from './composerModel';
+import { isLoadFailure, LOAD_FAILURE, modelLabel as describeModel } from './composerModel';
 
 interface Props {
   snapshot: Snapshot | null;
@@ -137,11 +138,19 @@ export function Chat({ snapshot, snapshotError, refresh, narrow, openConversatio
       const opened = await api.openConversation(id, false);
       setMessages(opened.messages.filter((m) => m.role !== 'system'));
       setLoadedFor(id);
+      loadFailed.current = false;
+      // The chat is on screen now: an earlier "Could not load this chat" no longer describes anything.
+      setNotice((cur) => (cur && isLoadFailure(cur.text) ? null : cur));
     } catch (err) {
-      setNotice({ text: `Could not load this chat: ${errorText(err)}`, error: true });
+      loadFailed.current = true;
+      setNotice({ text: `${LOAD_FAILURE}${errorText(err)}`, error: true });
     }
   };
+  const loadFailed = useRef(false);
   useEffect(() => { if (convId !== loadedFor) void loadTranscript(convId); }, [convId]);
+  // The window can ask for the chat before Core has connected (at start, after a restart). The failure used to stay
+  // on screen for good; once Core is connected the chat is loaded again and the notice goes with it.
+  useEffect(() => { if (snapshot?.coreState === 'connected' && loadFailed.current) void loadTranscript(convId); }, [snapshot?.coreState]);
 
   useEffect(() => onDesktopEvent((e) => {
     if (e.kind === 'token') {
@@ -566,6 +575,7 @@ export function Chat({ snapshot, snapshotError, refresh, narrow, openConversatio
 
         <div className="footer">
           <div className="footer-inner">
+            <MissionDock conversationId={convId} narrow={narrow} onReport={() => { void loadTranscript(convId); }} />
             {!showDecisionBar && controls.panel}
             {!showDecisionBar && folder.card}
             {/* On the home screen there is no transcript to hold a send error, so it shows here. */}

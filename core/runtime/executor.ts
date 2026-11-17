@@ -1,4 +1,7 @@
-import { piAgentEngine, type PiConnectorBridge, type PiMemoryBridge } from './piAgentEngine';
+import { piAgentEngine, setMissionHandoffFacts, type PiConnectorBridge, type PiMemoryBridge } from './piAgentEngine';
+import { MissionRunner, isMissionStepAttempt, missionProcedure } from './missionRunner';
+import { proposeSkill } from '../platform/skills/skillCatalog';
+import { getAgentDefinition as missionAgentDefinition } from '../domain/agents';
 import { OpenCodeEngine, openCodeCandidates } from './opencodeEngine';
 import { HermesEngine, hermesAutoRouteAllowed } from './hermesEngine';
 import { EngineRegistry } from './adapters/EngineAdapter';
@@ -390,6 +393,8 @@ const LOCAL_CORE_LEDGER_WINDOW = 12;
 export interface ExecuteOptions {
   /** Working directory Saath Kar tool processes run in. */
   workingDirectory?: string;
+  /** Force the lane. A mission step runs in the background lane so the person's own turns come first. */
+  lane?: 'interactive' | 'background';
 }
 
 export interface RuntimeExecutorOptions {
@@ -441,6 +446,25 @@ export interface RuntimeExecutorOptions {
 
 export class RuntimeExecutor {
   private readonly active = new Map<string, AbortController>();
+  private missionRunner: MissionRunner | undefined;
+
+  /** The background mission runner (core/runtime/missionRunner.ts): sequences delegated steps through this executor. */
+  missions(): MissionRunner {
+    this.missionRunner ??= new MissionRunner({
+      db: this.db, broadcaster: this.broadcaster,
+      executor: { execute: (id, options) => this.execute(id, options), cancel: (id) => this.cancel(id) },
+      setHandoffFacts: setMissionHandoffFacts,
+      knownToolNames: () => [...new Set([...this.allToolDefinitions().map((t) => t.name), ...(this.governedCapabilities?.definitions().map((d) => d.name) ?? [])])],
+      recordExperience: (mission) => {
+        const draft = missionProcedure(mission, (id) => { try { return missionAgentDefinition(this.db, id).name; } catch { return id; } });
+        if (!draft) return;
+        const saved = proposeSkill(this.dataDir, { ...draft, source: `mission:${mission.id}` });
+        console.log(`[karkedikha-core ${new Date().toISOString()}] mission ${mission.id}: ${saved.ok ? `procedure draft "${draft.id}" saved (inactive)` : `procedure draft not saved: ${saved.text.slice(0, 160)}`}`);
+      },
+      log: (line) => console.log(`[karkedikha-core ${new Date().toISOString()}] ${line}`),
+    });
+    return this.missionRunner;
+  }
   private readonly backend: ModelBackend;
   private readonly injectedBackend?: ModelBackend;
   private readonly cloudCredentials?: CloudCredentialStore;
@@ -680,7 +704,8 @@ export class RuntimeExecutor {
 
     const controller = new AbortController();
     this.active.set(attemptId, controller);
-    const releaseLane = classifyAttemptLane({ kind: attempt.kind, clientId: getRequest(this.db, attempt.requestId).clientId }) === 'interactive'
+    const lane = options.lane ?? (isMissionStepAttempt(this.db, attemptId) ? 'background' : classifyAttemptLane({ kind: attempt.kind, clientId: getRequest(this.db, attempt.requestId).clientId }));
+    const releaseLane = lane === 'interactive'
       ? interactiveLane.begin(attemptId)
       : undefined;
     const heartbeat = setInterval(() => {
@@ -5201,6 +5226,10 @@ export class RuntimeExecutor {
         defaults: { selectedProvider: context.selectedProvider, selectedModel: context.selectedModel },
         run: (childAttemptId: string) => this.execute(childAttemptId),
         cancel: (childAttemptId: string) => { this.active.get(childAttemptId)?.abort(); },
+        missions: {
+          start: (missionId: string) => this.missions().start(missionId), cancel: (missionId: string) => this.missions().cancel(missionId),
+          knownToolNames: () => [...new Set([...this.allToolDefinitions().map((t) => t.name), ...(this.governedCapabilities?.definitions().map((d) => d.name) ?? [])])],
+        },
       },
     });
   }

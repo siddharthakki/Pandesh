@@ -19,6 +19,7 @@ import { registerSoftwareRoutes } from './softwareRoutes';
 import { registerRevenueRoutes } from './revenueRoutes';
 import { registerWorkshopRoutes } from './workshopRoutes';
 import { registerAgentRoutes } from './agentRoutes';
+import { registerMissionRoutes } from './missionRoutes';
 import { registerRoutineGrantRoutes } from './routineGrantRoutes';
 import { registerToolHubRoutes } from './toolHubRoutes';
 import { registerSecondBrainRoutes } from './secondBrainRoutes';
@@ -547,6 +548,8 @@ export function buildRouter(
   if (bridge) registerWorkshopRoutes(router, { dataDir: bridge.dataDir, broadcaster });
   // --- Specialist agents: definitions, status, history, delegation (core/api/agentRoutes.ts) ---
   registerAgentRoutes(router, { executor });
+  // --- Missions: background objectives with specialist steps (core/api/missionRoutes.ts) ---
+  registerMissionRoutes(router, { runner: executor ? () => executor.missions() : undefined });
   registerRoutineGrantRoutes(router);
   // --- Tools, Skills & MCP hub (core/api/toolHubRoutes.ts) ---
   registerToolHubRoutes(router, { registry: capabilities, connectors, dataDir: bridge?.dataDir ?? null });

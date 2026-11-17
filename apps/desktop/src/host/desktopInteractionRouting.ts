@@ -111,9 +111,21 @@ export function detectImageFollowUp(text: string): MediaFollowUp | null {
   return null;
 }
 
+/**
+ * A video that has to be produced (written, narrated, subtitled, scored, packaged for a platform, or longer than a
+ * short clip) is not one text-to-video render. Found on the Jarvis pass: "create a 60-90 second faceless bedtime story
+ * video ... narrate it, add subtitles and music, prepare everything for YouTube" was taken here and answered with a
+ * four-second silent clip. Such a request goes to the lead, which plans it with its specialists.
+ */
+const VIDEO_PRODUCTION = /\b(?:narrat\w*|voice-?over|subtitles?|captions?|music|soundtrack|script|stor(?:y|ies)|faceless|youtube|tiktok|instagram|thumbnail|upload|publish\w*|episode|tutorial|explainer|documentary|scenes?)\b|\b(?:[2-9]\d|\d{3,})\s*(?:-|–|to)?\s*(?:\d+\s*)?(?:s|sec|secs|seconds?)\b|\b\d+(?:[.,]\d+)?\s*(?:-|–|to)?\s*(?:\d+\s*)?(?:min|mins|minutes?)\b/i;
+
+export function isVideoProductionRequest(text: string): boolean {
+  return VIDEO_PRODUCTION.test(text);
+}
+
 export function detectVideoGenerationIntent(text: string): boolean {
   const t = text.trim();
-  return !hasSoftwareBuildIntent(t) && VIDEO_REQUEST.test(t);
+  return !hasSoftwareBuildIntent(t) && VIDEO_REQUEST.test(t) && !isVideoProductionRequest(t);
 }
 
 /** "Generate a short cinematic clip of X" → "cinematic, X". */

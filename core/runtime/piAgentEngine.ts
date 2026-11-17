@@ -26,6 +26,12 @@ import { explicitSpecialistRequest, handoffPreflight, SPECIALIST_NAMES } from '.
 const HANDOFF_FACTS = new Map<string, string>();
 /** The private part of those facts (memory, reminders): the child's public web query must not repeat it. */
 const HANDOFF_PRIVATE_FACTS = new Map<string, string[]>();
+/** The mission runner's side of the same channel: what earlier mission steps produced, for the step that runs next. */
+export function setMissionHandoffFacts(attemptId: string, facts: { text: string; privateTexts: string[] } | null): void {
+  if (!facts) { HANDOFF_FACTS.delete(attemptId); HANDOFF_PRIVATE_FACTS.delete(attemptId); return; }
+  if (facts.text) HANDOFF_FACTS.set(attemptId, facts.text);
+  if (facts.privateTexts.length) HANDOFF_PRIVATE_FACTS.set(attemptId, facts.privateTexts);
+}
 /** Delegating attempt id -> what each delegated agent actually did (recorded tool calls); Core states the result in the final reply. */
 const DELEGATION_LEDGERS = new Map<string, Array<{ name: string; ledger: EvidenceLedger; requiresEvidence: boolean }>>();
 /** Tools whose arguments are the assistant's own output: never evidence for the values in that output (F13f). */
@@ -142,6 +148,8 @@ import {
 } from './adapters/EngineAdapter';
 import { agentScopeForAttempt, allowedMemoryScopes, BUILTIN_AGENTS, SPECIALIST_COMMON_RULES, checkEgress, checkPathArguments, egressOf, egressPreapproved, getAgentDefinition, isToolAllowed, recordScopeRefusal, chiefDelegationScope, deriveScope } from '../domain/agents';
 import { delegationOutcome, isTerminalAttemptStatus as isTerminalDelegation, startDelegation } from '../domain/delegation';
+import { buildMissionTools, missionTurnFact, wantsBackgroundWork } from './missionTools';
+import { asksForIndependentCheck, independentCheckBrief, reviewerReport, reviewerTookPart } from './independentCheck';
 import {
   isGmailContractExtractionRequest,
   isTaskStatusRequest,
@@ -913,7 +921,7 @@ export interface PiRunContext {
   /** Test seam: runs the fixed printing scripts. Production uses the real PowerShell runner. */
   powerShellRunner?: PowerShellRunner;
   /** Chief → specialist delegation (alpha closure): runs a child attempt Core already scoped. */
-  delegation?: { clientId: string; defaults: { selectedProvider?: string | null; selectedModel?: string | null }; run(attemptId: string): Promise<void>; cancel(attemptId: string): void };
+  delegation?: { clientId: string; defaults: { selectedProvider?: string | null; selectedModel?: string | null }; run(attemptId: string): Promise<void>; cancel(attemptId: string): void; missions?: { start(missionId: string): void; cancel(missionId: string): void; knownToolNames?(): string[] } };
 }
 
 /**
@@ -4553,7 +4561,13 @@ ${String(args.objective ?? '').slice(0, 600)}`,
       }
     }
 
+    // Production tools that take a whole plan (a script, every scene) belong to the specialist built for them. The
+    // lead plans and hands over; with the tool on its own menu it produced the video itself, with no script review, no
+    // visible mission and no independent check (Jarvis pass, 2026-11-16).
+    const SPECIALIST_ONLY_TOOLS = new Set(['media_produce_video', 'media_create_video']);
+    const leadTurn = !agentScopeForAttempt(db, attemptId);
     for (const def of ctx.capabilities?.definitions ?? []) {
+      if (leadTurn && SPECIALIST_ONLY_TOOLS.has(def.name)) continue;
       tools.push({
         name: def.name,
         label: def.name,
@@ -4574,14 +4588,16 @@ ${String(args.objective ?? '').slice(0, 600)}`,
     // dedupe, restated brief) and freezes the child's scope as (specialist ∩ this turn's authority ∩ grant).
     /** The specialist Core itself handed this request to (the user named it), once that hand-off ran. */
     let coreRoutedSpecialist: string | null = null;
+    /** A mission was started in this turn: its specialists do the work, so the lead's own turn must not do it again. */
+    let missionStartedThisTurn = false;
     if (ctx.delegation && (!agentScope || agentScope.agentId === 'chief')) {
       const delegation = ctx.delegation;
-      const NAMES: Record<string, string> = { coding: 'Coding', research: 'Research', operations: 'Operations', personal: 'Personal', reviewer: 'Reviewer', skills: 'Skill Engineering' };
+      const NAMES: Record<string, string> = { coding: 'Coding', research: 'Research', operations: 'Operations', personal: 'Personal', reviewer: 'Reviewer', skills: 'Skill Engineering', studio: 'Studio' };
       tools.push({
         name: 'delegate_to_agent',
         label: 'delegate_to_agent',
-        description: "Hand specialist work to one of Pandesh's agents and get its result back. coding: read, change and check code in the selected project folder only (no internet). research: public web research with cited sources (goes online only with the user's OK). operations: inspect this PC. personal: reminders, commitments, routines. reviewer: check a draft, plan or file for accuracy, privacy and unsupported claims (changes nothing). skills: find the right skill for a kind of work or draft a better one. Write the brief yourself: the objective and what to return (never paste web or email text). The call waits for the agent's result; then report it to the user, naming the agent, without adding facts it does not contain. Answer simple questions yourself instead of delegating.",
-        parameters: { type: 'object', properties: { agent: { type: 'string', enum: ['coding', 'research', 'operations', 'personal', 'reviewer', 'skills'] }, brief: { type: 'string', description: 'In your own words, for an agent that has not seen this chat: the objective, the facts you already have that it needs, what to return, and what done looks like.' } }, required: ['agent', 'brief'] },
+        description: "Hand specialist work to one of Pandesh's agents and get its result back. coding: read, change and check code in the selected project folder only (no internet). research: public web research with cited sources (goes online only with the user's OK). operations: inspect this PC. personal: reminders, commitments, routines. reviewer: check a draft, plan or file for accuracy, privacy and unsupported claims (changes nothing). skills: find the right skill for a kind of work or draft a better one. studio: write and produce media on this PC (story or script, narrated video, thumbnail, upload sheet; never publishes). Write the brief yourself: the objective and what to return (never paste web or email text). The call waits for the agent's result; then report it to the user, naming the agent, without adding facts it does not contain. Answer simple questions yourself instead of delegating.",
+        parameters: { type: 'object', properties: { agent: { type: 'string', enum: ['coding', 'research', 'operations', 'personal', 'reviewer', 'skills', 'studio'] }, brief: { type: 'string', description: 'In your own words, for an agent that has not seen this chat: the objective, the facts you already have that it needs, what to return, and what done looks like.' } }, required: ['agent', 'brief'] },
         execute: async (toolCallId: string, args: any) => {
           const toAgentId = String(args?.agent ?? '').trim();
           const brief = String(args?.brief ?? '').trim();
@@ -4707,6 +4723,47 @@ Report this to the user, saying the ${name} agent did the work. Do not add facts
           }
         },
       });
+
+      // Missions: the same hand-off, durable and in the background (core/runtime/missionTools.ts). Every step is checked
+      // here against what a direct hand-off is checked against, before Core stores the plan.
+      if (delegation.missions && !cloudTarget) {
+        tools.push(...buildMissionTools({
+          db, attemptId, conversationId: conversationId || null, clientId: delegation.clientId, workspaceRoot: selectedWorkspace || null,
+          defaults: delegation.defaults, runner: delegation.missions,
+          checkStep: (toAgentId, brief) => {
+            try {
+              const root = agentScope?.conversationRoot ?? (selectedWorkspace || null);
+              const childScope = deriveScope(getAgentDefinition(db, toAgentId), root, agentScope ?? chiefDelegationScope(root), null);
+              const readable = allowedMemoryScopes(childScope, 'read');
+              if (readable !== null) {
+                const repeated = withheldMemoryInBrief(brief, memoryOutsideScopes(db, readable), ctx.currentMessage ?? requestText);
+                if (repeated.length > 0) {
+                  const reason = `the brief repeats private memory that agent may not read (${repeated.slice(0, 3).join(', ')}); write it without that personal information`;
+                  recordScopeRefusal(db, attemptId, toAgentId, 'mission_start', reason);
+                  return reason;
+                }
+              }
+              const blocked = handoffPreflight(brief, childScope);
+              if (blocked) {
+                recordScopeRefusal(db, attemptId, toAgentId, blocked.tool, blocked.reason);
+                safeRecordRuntimeEvent(db, broadcaster, attemptId, 'agent_scope_refused', { agentId: toAgentId, tool: blocked.tool, target: blocked.target.slice(0, 200), reason: blocked.reason, stage: 'mission_preflight' }, actor);
+                return `${blocked.reason} (target: ${blocked.target})`;
+              }
+              return null;
+            } catch (err: any) {
+              return err?.message ?? String(err);
+            }
+          },
+          askInternet: async (cardText, agents) => {
+            const decision = await requestToolApproval({ toolName: 'mission_start', agents, cardText });
+            if (decision.outcome !== 'approved') return { ok: false, text: describeUnansweredApproval(decision) };
+            return { ok: true, approvalId: decision.approvalId ?? null };
+          },
+          record: (eventType, metadata) => { if (eventType === 'mission_created' || eventType === 'mission_continued') missionStartedThisTurn = true; safeRecordRuntimeEvent(db, broadcaster, attemptId, eventType, metadata, actor); },
+          knownToolNames: () => [...new Set([...tools.map((t) => t.name), ...(delegation.missions?.knownToolNames?.() ?? [])])],
+          forceReview: asksForIndependentCheck(ctx.currentMessage ?? requestText),
+        }));
+      }
     }
 
     if (agentScope) {
@@ -4764,6 +4821,15 @@ Report this to the user, saying the ${name} agent did the work. Do not add facts
 
     // A request about the user's own files (CV, price lists in this folder) is answered from those files first: research
     // scoping would remove every local tool, so the private file is never read (audit D2, M9).
+    // The user said how to work: in the background, while they keep talking. Only a mission does that, so this turn is
+    // offered the mission tools and nothing that would do the work inline (missionTools.wantsBackgroundWork).
+    const backgroundAsked = (!agentScope || agentScope.agentId === 'chief') && !cloudTarget && tools.some((t) => t.name === 'mission_start') && wantsBackgroundWork(ctx.currentMessage ?? requestText);
+    if (backgroundAsked) {
+      const kept = tools.filter((t) => t.name === 'mission_start' || t.name === 'mission_manage');
+      tools.length = 0;
+      tools.push(...kept);
+      safeRecordRuntimeEvent(db, broadcaster, attemptId, 'background_mode_requested', { offered: kept.map((t) => t.name) }, actor);
+    }
     const requestReferencesLocalContent = referencesLocalContent(requestText);
     // Alpha e2e: a request addressed to a specialist ("Ask your Research specialist…") is handed to it by Core, before
     // the public-research route could strip delegate_to_agent away (T3) and without relying on the model choosing it.
@@ -4972,7 +5038,9 @@ Report this to the user, saying the ${name} agent did the work. Do not add facts
         }, actor);
       }
     }
-    if (journalCtx?.resolution.status === 'ambiguous' && journalCtx.resolution.action) {
+    // A delegated specialist has nobody to ask: its brief was written by the agent that handed it the task, and a
+    // question would come back as its "result" (found live: a Reviewer's whole report was replaced by "Which one do you mean?").
+    if (journalCtx?.resolution.status === 'ambiguous' && journalCtx.resolution.action && !(agentScope && agentScope.depth > 0)) {
       const question = clarificationQuestion(journalCtx.resolution);
       let replyRecord: any = null;
       try { mutateWithBroadcast(db, broadcaster, () => { replyRecord = appendMessage(db, conversationId, { role: 'assistant', content: question, actor }); }); } catch {}
@@ -5374,6 +5442,7 @@ HOW YOU DECIDE (keep it simple):
 1. Answer directly when you already know it and nothing on this PC, the web or the user's own data is needed (chat, explaining, writing, advice). A greeting needs no tool.
 2. Use one of your own tools when a single call settles it (the time, a file, one fact about this PC).
 3. Hand work to a specialist with delegate_to_agent when it takes several steps or tools you do not have: coding, research, operations, personal, reviewer (checks a draft), skills (finds or drafts a procedure). Delegate once, then report its result and name it.
+3a. Bigger work goes to a mission (mission_start): anything that will take more than about a minute, has several parts, needs more than one specialist, or should be checked by a second one. You choose the specialists and write the plan; the user never has to name them. It runs in the background, you stay free to talk, and Core posts the verified report. Progress, stopping and continuing: mission_manage.
 4. Unsure what you can do: request_tools or pc_capability_inventory. A kind of work with a known method (checklist, review, report): find_skill. Providers and keys: provider_readiness; never ask for, show or store a key.
 5. Say something is done only when a tool result shows it. When a tool fails, read the error, change the call once, then tell the user plainly what failed and what you tried.
 6. Private content stays on local models; cloud use only with the user's yes. While work runs, keep answering the newest message.
@@ -5558,6 +5627,9 @@ When the user asks to continue, resume, or check progress/updates, resume this w
     // Micro-test cluster C6 (D-LOC-5): local searches went to Berlin (from the time zone) although the user stored
     // "I live in Ulm". The main assistant gets the stored home place; specialists keep receiving no user memory.
     if (!cloudTarget && (!agentScope || agentScope.agentId === 'chief')) addTurnFact(homeLocationFact(readHomeLocation(db), String(ctx.currentMessage ?? prompt ?? '')));
+    // Background missions: what is running or just finished, so the lead never guesses and knows a plan that worked before.
+    if (!cloudTarget && (!agentScope || agentScope.agentId === 'chief') && ctx.delegation?.missions) addTurnFact(missionTurnFact(db, conversationId || null, String(ctx.currentMessage ?? prompt ?? '')));
+    if (backgroundAsked) addTurnFact('BACKGROUND WORK REQUESTED: the user wants this done while they keep talking to you. Plan it now with mission_start (it is the only way to work in the background; your other tools are withheld for this turn so the conversation is not held up), then tell them what you started.');
     // Personal Context mission: what Core knows about the user (facts with their source, goals, ranked deadlines, failed
     // actions), chosen by relevance to this message, so the user never has to explain it again. Main assistant only;
     // a model that does not run on this PC gets a one-line notice instead of the content.
@@ -5799,6 +5871,13 @@ When the user asks to continue, resume, or check progress/updates, resume this w
           const joined = toolsInGroups(tools.map((t) => t.name), [groupOfTool(toolName, capabilityMarks.get(toolName)) ?? ''], capabilityMarks);
           for (const n of [toolName, ...joined]) activeToolNames.add(n);
           safeRecordRuntimeEvent(db, broadcaster, attemptId, 'hidden_tool_called', { toolName, added: joined }, actor);
+        }
+
+        // Found live: after mission_start the lead also called a production tool itself, so the same work was asked for
+        // twice and its own turn sat on an approval card while the mission ran. The hand-over is the turn's last action.
+        if (missionStartedThisTurn && !/^(?:mission_manage|update_task_outcome)$/.test(toolName)) {
+          safeRecordRuntimeEvent(db, broadcaster, attemptId, 'tool_after_mission_start_refused', { toolName }, actor);
+          return { block: true, reason: 'NOT DONE (refused by Pandesh Core): you started a mission in this turn and its specialists are doing this work in the background; doing it here too would do it twice. End your turn now: tell the user what you started, who does what, and that they can keep talking to you.' };
         }
 
         // M3: a scheduled run IS the routine; it must do the work, never create or change schedules (live run: the stored instruction
@@ -6781,7 +6860,11 @@ When the user asks to continue, resume, or check progress/updates, resume this w
     // the project is answered from the project's files.
     const asksToMakeSomething = /\b(?:build|create|make|write|generate|draft|fix|add|delete|install|organi[sz]e|save|open)\b/i.test(requestText);
     // Narrower: something that must exist outside the chat. "Write a haiku" is answered in the reply (makeIntent.ts).
-    const asksToBuildOutsideChat = asksToMakeOutsideChat(requestText);
+    // A delegated specialist that holds no tool that can make or change anything (the Reviewer) cannot "build": its
+    // brief describes someone else's work. Found live: a review brief that named the fix was judged as "nothing was
+    // built", escalated to a larger model and ended as NOT DONE, replacing the review.
+    const readOnlySpecialist = Boolean(agentScope && agentScope.depth > 0) && !tools.some((t) => /^(?:write_file|edit_file|apply_patch|delegate_to_opencode|delegate_to_coding_agent|media_produce_video|media_create_video|create_\w+|add_task|schedule_task|gmail_create_draft|calendar_draft_event|image_generate|video_generate)$|^propose_(?!skill$)|^revenue_record/.test(t.name));
+    const asksToBuildOutsideChat = asksToMakeOutsideChat(requestText) && !readOnlySpecialist;
     if (projectEvidence && !didRealWork && !asksToMakeSomething && !isReplyGroundedInProject(finalReply, projectEvidence)) {
       finalReply = composeEvidenceAnswer(projectEvidence, requestText);
       projectReplyReplaced = true;
@@ -7076,6 +7159,22 @@ ${screenCorrection}`;
             ? `**Check not re-run after the fix:** Pandesh asked to run \`${command}\` again, but it was not run (${rerun.text.replace(/^Not run:\s*/, '').slice(0, 160)}). The fix is unverified.`
             : `**Check re-run by Pandesh after the fix:** \`${command}\` → **FAILED** — the fix did not make it pass.\n\n\`\`\`text\n${tail}\n\`\`\``);
         safeRecordRuntimeEvent(db, broadcaster, attemptId, 'core_verify_after_fix', { command, passed: rerun.ok }, actor);
+      }
+    }
+    // An independent check the user asked for is done by a second agent, not by the one that did the work
+    // (independentCheck.ts). When the lead worked itself and no reviewer took part, Core hands the result over.
+    if (!signal?.aborted && finalReply && (!agentScope || agentScope.agentId === 'chief') && !cloudTarget && asksForIndependentCheck(ctx.currentMessage ?? requestText)) {
+      const done = finishedCalls();
+      const didWork = done.some((t) => t.status === 'completed' && (WRITE_TOOL.test(t.tool) || isRealCheck(t)));
+      if (didWork && !reviewerTookPart(done) && tools.some((t) => t.name === 'delegate_to_agent')) {
+        const review = await coreRunTool('delegate_to_agent', { agent: 'reviewer', brief: independentCheckBrief(String(ctx.currentMessage ?? requestText), done) }, 'core_independent_check');
+        safeRecordRuntimeEvent(db, broadcaster, attemptId, 'core_independent_check', { ok: review.ok }, actor);
+        if (review.ok) {
+          const r = reviewerReport(review.text);
+          coreNotes.push(`**Independent check** (Reviewer agent, started by Pandesh Core because you asked for one; any check described above was the lead's own)\n\n${r.ledger ? `${r.ledger}\n\n` : ''}${r.report.slice(0, 3_000)}`);
+        } else {
+          coreNotes.push(`**No independent check happened.** You asked for one; Pandesh Core handed the result to the Reviewer agent, and that did not complete (${review.text.replace(/\s+/g, ' ').slice(0, 240)}). Any check described above was done by the same agent that did the work.`);
+        }
       }
     }
     let testsVerified = false;

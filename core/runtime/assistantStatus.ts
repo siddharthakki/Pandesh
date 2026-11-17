@@ -150,7 +150,16 @@ function describeTasks(db: CoreDatabase, nowMs: number): string {
   for (const t of gmail) lines.push(`- Gmail organization ${t.taskId}: ${taskState(t, nowMs).state.replace('_', ' ')} (waiting for you, not running)`);
   const routines = db.all<{ title: string; dailyTime: string; nextRunAt: string | null }>(`SELECT title, dailyTime, nextRunAt FROM scheduled_tasks WHERE enabled = 1 ORDER BY nextRunAt LIMIT 5`);
   for (const r of routines) lines.push(`- Scheduled routine "${r.title}" at ${r.dailyTime}${r.nextRunAt ? `, next run ${r.nextRunAt}` : ''} (runs only while Pandesh is open)`);
-  if (bg.length + gmail.length + routines.length === 0) lines.push('- Nothing. No background task, Gmail task or routine is queued or running.');
+  let missions: Array<{ id: string; objective: string; done: number; total: number }> = [];
+  try {
+    missions = db.all<{ id: string; objective: string; done: number; total: number }>(
+      `SELECT m.id AS id, m.objective AS objective,
+              (SELECT COUNT(*) FROM mission_steps s WHERE s.missionId = m.id AND s.status IN ('succeeded','unverified')) AS done,
+              (SELECT COUNT(*) FROM mission_steps s WHERE s.missionId = m.id) AS total
+         FROM missions m WHERE m.status = 'running' ORDER BY m.createdAt DESC LIMIT 5`);
+  } catch { /* a database from before missions */ }
+  for (const m of missions) lines.push(`- Mission ${m.id.slice(0, 12)}: running, ${m.done} of ${m.total} steps done — ${m.objective.slice(0, 100)}`);
+  if (bg.length + gmail.length + routines.length + missions.length === 0) lines.push('- Nothing. No background task, mission, Gmail task or routine is queued or running.');
   lines.push('', 'Anything not listed above is not running, even if an earlier message in this chat said it was.');
   return lines.join('\n');
 }
@@ -348,6 +357,11 @@ export function hasActiveWorker(db: CoreDatabase, conversationId: string, exclud
   if (!conversationId) return false;
   const row = db.get<{ n: number }>("SELECT COUNT(*) AS n FROM background_tasks WHERE conversationId = ? AND status IN ('queued','in_progress')", [conversationId]);
   if (Number(row?.n ?? 0) > 0) return true;
+  // A mission started from this chat is real background work: Core runs its steps and posts the report here.
+  try {
+    const mission = db.get<{ n: number }>("SELECT COUNT(*) AS n FROM missions WHERE conversationId = ? AND status = 'running'", [conversationId]);
+    if (Number(mission?.n ?? 0) > 0) return true;
+  } catch { /* a database from before missions */ }
   // Challenge F14: while a Coding hand-off from this chat was still running, a quick question's reply got "nothing is
   // running in the background" appended. Another unfinished attempt in the same conversation is active work.
   if (!excludeAttemptId) return false;

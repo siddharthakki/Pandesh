@@ -150,8 +150,15 @@ async function tierUnit() {
   }
   let ok = true;
   if (selected.length > 0) {
+    // A change that touches the engine selects 100+ files, among them suites that start real Core and host processes.
+    // Four workers on the 4-vCPU CI runner then stall each other: PR #118 (121 files) failed twice with six timeouts in
+    // a different set of suites each time (10 s hooks that open a database, 15 s tests), while every one of those
+    // files ran at its usual speed in the same job and passes alone. Per-file times matched a 48-file run (x1.0-1.2),
+    // so nothing was slower; there were only too many heavy files at once. A large selection on CI therefore runs
+    // two at a time. Timeouts and assertions are unchanged, and KARKEDIKHA_UNIT_WORKERS still overrides.
+    const largeOnCi = Boolean(process.env.CI) && selected.length > 60;
     const result = await runVitest(repoRoot, selected, {
-      maxWorkers: Math.min(4, Number(process.env.KARKEDIKHA_UNIT_WORKERS ?? 4)),
+      maxWorkers: Math.min(4, Number(process.env.KARKEDIKHA_UNIT_WORKERS ?? (largeOnCi ? 2 : 4))),
       fileParallelism: true,
       label: `unit (${selected.length} files)`,
     });

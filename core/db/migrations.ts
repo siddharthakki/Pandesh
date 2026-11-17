@@ -1932,6 +1932,52 @@ CREATE INDEX IF NOT EXISTS idx_routine_write_grant_uses_attempt ON routine_write
 CREATE INDEX IF NOT EXISTS idx_routine_write_grant_uses_grant ON routine_write_grant_uses(grantId);
 `;
 
+const MIGRATION_53_MISSIONS = `
+CREATE TABLE IF NOT EXISTS missions (
+  id TEXT PRIMARY KEY,
+  conversationId TEXT NOT NULL,
+  parentAttemptId TEXT NOT NULL,
+  clientId TEXT NOT NULL,
+  objective TEXT NOT NULL,
+  status TEXT NOT NULL,
+  workspaceRoot TEXT,
+  selectedProvider TEXT,
+  selectedModel TEXT,
+  egressApprovalId TEXT,
+  reportMessageId TEXT,
+  resultSummary TEXT,
+  cancelRequestedAt TEXT,
+  createdAt TEXT NOT NULL,
+  updatedAt TEXT NOT NULL,
+  completedAt TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_missions_conversation ON missions(conversationId, createdAt);
+CREATE INDEX IF NOT EXISTS idx_missions_status ON missions(status);
+CREATE TABLE IF NOT EXISTS mission_steps (
+  id TEXT PRIMARY KEY,
+  missionId TEXT NOT NULL,
+  idx INTEGER NOT NULL,
+  agentId TEXT NOT NULL,
+  kind TEXT NOT NULL,
+  title TEXT NOT NULL,
+  brief TEXT NOT NULL,
+  parallel INTEGER NOT NULL DEFAULT 0,
+  status TEXT NOT NULL,
+  handoffId TEXT,
+  childAttemptId TEXT,
+  childConversationId TEXT,
+  resultText TEXT,
+  evidenceJson TEXT,
+  artifactsJson TEXT,
+  error TEXT,
+  startedAt TEXT,
+  completedAt TEXT,
+  UNIQUE(missionId, idx)
+);
+CREATE INDEX IF NOT EXISTS idx_mission_steps_mission ON mission_steps(missionId, idx);
+CREATE INDEX IF NOT EXISTS idx_mission_steps_attempt ON mission_steps(childAttemptId);
+`;
+
 export const MIGRATIONS: Migration[] = [
   { version: 1, description: 'bootstrap core_metadata and schema_migrations', sql: MIGRATION_1_BOOTSTRAP },
   { version: 2, description: 'M31 domain schema (projects/repositories/stories/events/etc.)', sql: MIGRATION_2_DOMAIN },
@@ -1985,6 +2031,7 @@ export const MIGRATIONS: Migration[] = [
   { version: 50, description: 'Social Studio drafts and the user decisions on them (no publishing)', sql: MIGRATION_50_SOCIAL_DRAFTS },
   { version: 51, description: 'Tool execution journal: structured, conversation- and agent-scoped record of every completed tool call (ids, paths, artifacts, status, bounded result)', sql: MIGRATION_51_TOOL_EXECUTION_JOURNAL },
   { version: 52, description: 'Standing write grants for unattended routines (per task, frozen folder and operations, revocable) and their audited uses', sql: MIGRATION_52_ROUTINE_WRITE_GRANTS },
+  { version: 53, description: 'Missions: a durable objective with ordered specialist steps, their evidence and artifacts, run in the background', sql: MIGRATION_53_MISSIONS },
 ];
 
 
@@ -2019,6 +2066,16 @@ export function runMigrations(db: CoreDatabase): { applied: number[] } {
       + 'Nothing was changed. Restore the database backup that belongs to this build, or install the newer build again.',
     );
   }
+  // A brand-new database (nothing recorded) takes every migration in ONE transaction: all or nothing, and one commit
+  // instead of one per migration. An existing database keeps a transaction per migration, exactly as before.
+  // Why: each commit syncs the journal to disk. With 53 migrations a new database cost 53 syncs; on the CI runner,
+  // where every test creates its own database, those syncs stalled past the 10 s hook limit in a different suite on
+  // every run of PR #118 (three runs, also at two workers), while the same files passed alone.
+  if (recorded === 0) return db.transaction(() => applyMigrations(db));
+  return applyMigrations(db);
+}
+
+function applyMigrations(db: CoreDatabase): { applied: number[] } {
   db.exec(MIGRATION_1_BOOTSTRAP);
   const first = MIGRATIONS[0];
   const firstChecksum = checksumOf(first.sql);

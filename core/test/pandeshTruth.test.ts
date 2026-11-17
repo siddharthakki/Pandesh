@@ -172,7 +172,7 @@ describe('status questions are answered from recorded state, without a workspace
 
   it('says plainly that nothing is running and no notification exists when the database is empty', () => {
     const tasks = composeStatusAnswer(db, ['tasks'], NOW);
-    expect(tasks).toMatch(/Nothing\. No background task, Gmail task or routine is queued or running/);
+    expect(tasks).toMatch(/Nothing\. No background task, mission, Gmail task or routine is queued or running/);
     const gmail = composeStatusAnswer(db, ['gmail'], NOW);
     expect(gmail).toMatch(/No persistent Gmail organization task exists/);
     expect(gmail).toMatch(/Nothing is running in the background for Gmail/);

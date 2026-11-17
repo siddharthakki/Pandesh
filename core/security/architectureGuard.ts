@@ -52,6 +52,9 @@ export const AUTHORITATIVE_PROCESS_SPAWN_ALLOWLIST: ReadonlySet<string> = new Se
   // Renders and inspects media with FFmpeg/FFprobe: a fixed argv, no shell,
   // a bounded timeout, and a verified output file.
   'core/runtime/mediaProduction.ts',
+  // The narrated-video pipeline: Piper, FFmpeg and FFprobe with fixed argv built by Core, no shell, bounded
+  // timeouts; the model supplies only narration and picture prompts, never a path or a command.
+  'core/runtime/narratedVideo.ts',
   // Launches the host browser (path from the host-pinned env var or fixed install paths, never model input)
   // with a fixed argv and no shell, and force-kills only the PIDs it recorded itself (taskkill, no shell).
   'core/runtime/browserSession.ts',

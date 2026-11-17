@@ -517,3 +517,52 @@ button.tl-row:hover { background: var(--raised); }
   .ex-tool { grid-template-columns: 1fr; gap: 2px; }
   .ex-dl > div { grid-template-columns: 1fr; gap: 0; }
 }
+
+/* Missions: background work shown in the conversation (renderer-v2/src/Missions.tsx). */
+.missions { display: flex; flex-direction: column; gap: 8px; }
+.mission { border: 1px solid var(--line); border-radius: 14px; background: var(--surface); overflow: hidden; }
+.mission.running { border-color: color-mix(in srgb, var(--pulse) 45%, var(--line)); }
+.mission-head { display: flex; align-items: center; gap: 10px; padding: 8px 10px 8px 6px; }
+.mission-toggle { flex: 1 1 auto; min-width: 0; display: flex; align-items: center; gap: 10px; padding: 4px 8px; border: 0; border-radius: 9px; background: transparent; color: var(--ink); text-align: left; font: inherit; }
+.mission-toggle:hover { background: var(--raised); }
+.mission-title { min-width: 0; display: flex; flex-direction: column; line-height: 1.3; }
+.mission-title strong { font-weight: 600; font-size: 14px; }
+.mission-objective { font-size: 13.5px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mission-meta { flex: 0 0 auto; font-family: var(--font-mono); font-size: 12.5px; color: var(--muted); }
+.mission .dot.live { animation: mission-pulse 1.6s ease-in-out infinite; }
+.mission .dot.done { background: var(--verified); }
+@keyframes mission-pulse { 0%, 100% { opacity: 1; transform: scale(1); } 50% { opacity: 0.35; transform: scale(0.8); } }
+@media (prefers-reduced-motion: reduce) { .mission .dot.live, .step-mark.run::after { animation: none; } }
+.mission-bar { height: 2px; background: var(--line); }
+.mission-bar span { display: block; height: 100%; background: var(--pulse); transition: width 0.4s ease; }
+.mission.completed .mission-bar span { background: var(--verified); }
+.mission.completed_with_issues .mission-bar span, .mission.cancelled .mission-bar span, .mission.interrupted .mission-bar span { background: var(--attention); }
+.mission.failed .mission-bar span { background: var(--danger); }
+.mission-body { display: flex; flex-direction: column; gap: 10px; padding: 10px 14px 12px; }
+.mission-steps { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.mission-step { display: flex; align-items: flex-start; gap: 10px; }
+.step-mark { flex: 0 0 18px; width: 18px; height: 18px; margin-top: 2px; border-radius: 9px; border: 1.5px solid var(--faint); display: flex; align-items: center; justify-content: center; font-size: 11px; font-weight: 700; color: var(--on-pulse, #0E1013); }
+.step-mark.done { background: var(--verified); border-color: var(--verified); }
+.step-mark.warn { background: var(--attention); border-color: var(--attention); }
+.step-mark.fail { background: var(--danger); border-color: var(--danger); }
+.step-mark.run { border-color: var(--pulse); position: relative; }
+.step-mark.run::after { content: ''; width: 8px; height: 8px; border-radius: 4px; background: var(--pulse); animation: mission-pulse 1.2s ease-in-out infinite; }
+.step-main { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; }
+.step-line { display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; }
+.step-line .agent { font-weight: 600; font-size: 14px; }
+.step-line .step-title { font-size: 14px; }
+.mission-step.pending .step-line, .mission-step.skipped .step-line { color: var(--muted); }
+.step-sub { font-size: 13px; color: var(--muted); overflow-wrap: anywhere; }
+.mission-step.running .step-sub { color: var(--ink); }
+.step-state { flex: 0 0 auto; font-family: var(--font-mono); font-size: 12.5px; color: var(--muted); padding-top: 2px; }
+.mission-approval { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 14px; padding: 10px 12px; border-radius: 10px; background: var(--attention-wash); border: 1px solid color-mix(in srgb, var(--attention) 40%, transparent); }
+.mission-approval-text { flex: 1 1 260px; min-width: 0; display: flex; gap: 10px; align-items: flex-start; font-size: 14px; overflow-wrap: anywhere; }
+.mission-approval-text .dot { margin-top: 7px; }
+.mission-approval-actions { display: flex; gap: 8px; }
+.mission-files { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 8px; }
+.mission-files .label { font-size: 13px; color: var(--muted); margin-right: 2px; }
+.mission-file { display: inline-flex; align-items: center; gap: 6px; max-width: 260px; height: 28px; padding: 0 10px; border: 1px solid var(--line); border-radius: 14px; background: transparent; color: var(--ink); font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mission-file:hover { background: var(--raised); }
+.mission-file .kind { color: var(--pulse); font-size: 11px; }
+.mission-summary, .mission-note { margin: 0; font-size: 13.5px; color: var(--muted); }
+.mission-note.error { color: var(--danger); }
