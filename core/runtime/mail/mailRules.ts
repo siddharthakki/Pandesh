@@ -6,18 +6,24 @@
 export type MailCategory = 'finance' | 'career' | 'event' | 'orders' | 'security' | 'other';
 export interface MailAmount { text: string; value: number; currency: string }
 export interface MailDate { text: string; iso: string | null; yearInferred: boolean }
-export interface MailFacts { amounts: MailAmount[]; dates: MailDate[]; needsReply: boolean; confidence: 'high' | 'medium' | 'low' }
+export interface MailFacts {
+  amounts: MailAmount[]; dates: MailDate[]; needsReply: boolean; confidence: 'high' | 'medium' | 'low';
+  /** Automated or bulk mail (newsletter, no-reply, alert): never "needs a reply", and a category must be named in the subject. */
+  bulk?: boolean;
+}
 export interface MailReading { category: MailCategory; facts: MailFacts }
 
 const MONTHS = ['january', 'february', 'march', 'april', 'may', 'june', 'july', 'august', 'september', 'october', 'november', 'december'];
 const monthIndex = (s: string) => MONTHS.findIndex((m) => m.startsWith(s.toLowerCase().slice(0, 3)));
 
-const FINANCE = /\b(invoice|rechnung|bill|statement|amount due|payment due|due date|receipt|beleg|quittung|iban|direct debit|lastschrift|subscription|renewal|tax|steuer|refund)\b/i;
+const FINANCE = /\b(invoice|rechnung|bill|statement|amount due|payment due|due date|receipt|beleg|quittung|iban|direct debit|lastschrift)\b/i;
 const CAREER = /\b(recruit\w*|interview|application|applied|job|position|vacancy|candidate|cv|resume|hiring|talent|career|offer letter|bewerbung)\b/i;
-const EVENT = /\b(appointment|termin|meeting|webinar|workshop|conference|rsvp|invitation|reservation|booking|confirmed for|calendar|join us)\b/i;
+const EVENT = /\b(appointment|termin|meeting|rsvp|reservation|booking|confirmed for|your registration|registration (is )?confirmed)\b/i;
 const ORDERS = /\b(order|dispatched|shipped|delivery|parcel|tracking|sendung|paket|package)\b/i;
 const SECURITY = /\b(security alert|sign-in|sign in|verification code|password|new login|suspicious)\b/i;
-const REPLY = /(\?|\bplease (reply|respond|confirm|let us know|share)|\bcould you\b|\bcan you\b|\bavailability\b|\bget back to\b|\bby (monday|tuesday|wednesday|thursday|friday)\b)/i;
+const REPLY = /(\bplease (reply|respond|confirm|let us know|share|send)\b|\bcould you\b|\bcan you\b|\bwould you\b|\bavailability\b|\bget back to (me|us)\b|\blet me know\b|\bantworten sie\b)/i;
+const BULK_SENDER = /(no[-_.]?reply|do[-_.]?not[-_.]?reply|newsletter|notifications?@|mailer|marketing|news@|updates?@|digest|alerts?@|offers?@|deals?@|promo|bounce)/i;
+const BULK_TEXT = /\b(unsubscribe|view (this email )?in (your )?browser|manage (your )?(email )?preferences|abbestellen|abmelden|you are receiving this|you received this (email|message) because)\b/i;
 
 export function extractAmounts(text: string): MailAmount[] {
   const out: MailAmount[] = [];
@@ -55,18 +61,20 @@ export function extractDates(text: string, receivedIso: string): MailDate[] {
   return out;
 }
 
-export function readMessage(input: { subject: string; fromName: string; fromAddress: string; body: string; received: string }): MailReading {
+export function readMessage(input: { subject: string; fromName: string; fromAddress: string; body: string; received: string; bulkHint?: boolean }): MailReading {
   const head = `${input.subject}\n${input.fromName} ${input.fromAddress}`;
   const text = `${head}\n${input.body}`;
+  const bulk = input.bulkHint === true || BULK_SENDER.test(input.fromAddress) || BULK_TEXT.test(input.body);
   let category: MailCategory = 'other';
   let hits = 0;
   const tests: Array<[MailCategory, RegExp]> = [['security', SECURITY], ['finance', FINANCE], ['career', CAREER], ['orders', ORDERS], ['event', EVENT]];
   for (const [c, re] of tests) {
     const inHead = re.test(head);
-    const inBody = re.test(input.body);
+    // Bulk mail must say it in the subject: its body mentions everything.
+    const inBody = !bulk && re.test(input.body);
     if (inHead || inBody) { if (category === 'other') { category = c; hits = inHead ? 2 : 1; } }
   }
   const amounts = category === 'finance' || category === 'orders' ? extractAmounts(text) : [];
   const dates = category === 'finance' || category === 'event' || category === 'orders' || category === 'career' ? extractDates(text, input.received) : [];
-  return { category, facts: { amounts, dates, needsReply: REPLY.test(`${input.subject}\n${input.body.slice(0, 1500)}`) && category !== 'security', confidence: category === 'other' ? 'low' : hits >= 2 ? 'high' : 'medium' } };
+  return { category, facts: { amounts, dates, needsReply: !bulk && category !== 'security' && REPLY.test(`${input.subject}\n${input.body.slice(0, 1500)}`), confidence: category === 'other' ? 'low' : hits >= 2 ? 'high' : 'medium', bulk } };
 }

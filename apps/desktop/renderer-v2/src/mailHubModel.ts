@@ -7,7 +7,7 @@
 export type MailCategory = 'finance' | 'career' | 'event' | 'orders' | 'security' | 'other';
 export interface MailAmount { text: string; value: number; currency: string }
 export interface MailDate { text: string; iso: string | null; yearInferred: boolean }
-export interface MailFacts { amounts: MailAmount[]; dates: MailDate[]; needsReply: boolean; confidence: 'high' | 'medium' | 'low' }
+export interface MailFacts { amounts: MailAmount[]; dates: MailDate[]; needsReply: boolean; confidence: 'high' | 'medium' | 'low'; bulk?: boolean }
 export interface MailRow {
   id: string; storeId: string; account: string; folder: string; subject: string; fromName: string; fromAddress: string; toText: string; received: string;
   unread: boolean; attachments: number; category: MailCategory; facts: MailFacts; snippet: string; duplicates: number;

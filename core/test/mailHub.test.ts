@@ -63,6 +63,18 @@ describe('extraction', () => {
     expect(r.category).toBe('career'); expect(r.facts.needsReply).toBe(true);
     expect(readMessage({ subject: 'Hello', fromName: 'x', fromAddress: 'x@y.z', body: 'nothing', received: iso(0) }).facts.confidence).toBe('low');
   });
+  // Found on a real mailbox: a newsletter that mentions "subscription" and "?" was shown as a bill that needs a reply.
+  it('does not turn bulk mail into a bill, an event or a request for an answer', () => {
+    const newsletter = readMessage({ subject: 'Your 2027 plan, ready in one week', fromName: 'Weekly', fromAddress: 'news@weekly.example', body: 'Join us for the webinar on 14 December. Your subscription renews soon. Why wait? Unsubscribe here.', received: iso(0) });
+    expect(newsletter.category).toBe('other'); expect(newsletter.facts.needsReply).toBe(false); expect(newsletter.facts.bulk).toBe(true); expect(newsletter.facts.dates).toEqual([]);
+    const alert = readMessage({ subject: '1 new offer: apartment near you', fromName: 'Listings', fromAddress: 'noreply@listings.example', body: 'Can you see yourself living here?', received: iso(0) });
+    expect(alert.facts.needsReply).toBe(false);
+    // The unsubscribe footer is past the stored text, so the worker reports it as a hint.
+    expect(readMessage({ subject: 'Weekly tips', fromName: 'Tips', fromAddress: 'hello@tips.example', body: 'A former recruiter shares an interview story.', received: iso(0), bulkHint: true }).category).toBe('other');
+    // A person writing from a normal address is still found, and an invoice named in the subject of automated mail still counts.
+    expect(readMessage({ subject: 'Quick question', fromName: 'Anna', fromAddress: 'anna@firm.example', body: 'Could you send me the file?', received: iso(0) }).facts.needsReply).toBe(true);
+    expect(readMessage({ subject: 'Your invoice for November', fromName: 'Billing', fromAddress: 'noreply@cloud.example', body: 'Amount due: €9.99. Unsubscribe', received: iso(0) }).category).toBe('finance');
+  });
 });
 
 describe('connector', () => {

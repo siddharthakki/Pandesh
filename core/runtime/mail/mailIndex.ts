@@ -98,7 +98,7 @@ export class MailIndex {
     const id = `mail_${sha(`${storeId}|${dedupeKey}`).slice(0, 24)}`;
     const received = new Date(m.received).toISOString();
     const body = (m.body ?? '').slice(0, bodyChars);
-    const reading = readMessage({ subject: m.subject, fromName: m.fromName, fromAddress: m.fromAddress, body, received });
+    const reading = readMessage({ subject: m.subject, fromName: m.fromName, fromAddress: m.fromAddress, body, received, bulkHint: m.bulkHint });
     const had = this.db.get<{ id: string }>('SELECT id FROM mail_messages WHERE id = ?', [id]);
     this.db.run(
       `INSERT INTO mail_messages (id, storeId, folder, entryId, dedupeKey, conversationId, subject, fromName, fromAddress, toText, received, unread, attachments, body, category, facts, seenGen, indexedAt)

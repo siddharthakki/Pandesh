@@ -64,7 +64,12 @@ function MessageRow($item, [int]$bodyChars) {
     unread = [bool]$item.UnRead
     attachments = [int]$item.Attachments.Count
   }
-  if ($bodyChars -gt 0) { $row['body'] = (Clip ([string]$item.Body) $bodyChars) }
+  if ($bodyChars -gt 0) {
+    $full = [string]$item.Body
+    $row['body'] = (Clip $full $bodyChars)
+    # Footers sit past the size cap, so bulk mail is recognised on the whole text here (a yes/no, no text leaves this process).
+    $row['bulkHint'] = [bool]($full -match '(?i)unsubscribe|abmelden|abbestellen|view (this email )?in (your )?browser|manage (your )?(email )?preferences|you are receiving this|you received this (email|message) because')
+  }
   return $row
 }
 

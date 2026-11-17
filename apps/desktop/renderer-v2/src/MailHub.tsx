@@ -33,7 +33,7 @@ export function MailHub({ narrow, initial, onAskPandesh, onOpenBots, onOpenAutom
 
   const authorized = (status?.accounts ?? []).filter((a) => a.enabled);
   const open = (id: string) => { setReaderId(id); setScreen('reader'); };
-  const go = (s: ScreenId) => setScreen(s);
+  const go = (s: ScreenId) => { setNotice(null); setScreen(s); };
   const run = async (key: string, work: () => Promise<string | void>) => {
     setBusy(key); setNotice(null);
     try { const done = await work(); if (done) setNotice({ text: done }); } catch (err) { setNotice({ text: errorText(err), error: true }); } finally { setBusy(null); await loadStatus(); }
@@ -291,7 +291,7 @@ function Reader({ ctx, id }: { ctx: Ctx; id: string | null }) {
         <div>
           <Box title="What Pandesh found">
             <div className="mh-eyebrow">Signals <Basis kind="rule" /></div>
-            <div className="mh-btns"><Pill tone={pillTone(r.category)}>{CATEGORY_LABEL[r.category]}</Pill>{r.facts.needsReply && <Pill tone="finance">May need a reply</Pill>}{r.attachments > 0 && <Pill>Attachment</Pill>}<Pill>{r.facts.confidence} confidence</Pill></div>
+            <div className="mh-btns"><Pill tone={pillTone(r.category)}>{CATEGORY_LABEL[r.category]}</Pill>{r.facts.needsReply && <Pill tone="finance">May need a reply</Pill>}{r.facts.bulk && <Pill>Automated / bulk</Pill>}{r.attachments > 0 && <Pill>Attachment</Pill>}<Pill>{r.facts.confidence} confidence</Pill></div>
             {r.facts.amounts.length > 0 && <><div className="mh-divider" /><div className="mh-eyebrow">Amounts in the text <Basis kind="confirmed" /></div>{r.facts.amounts.map((a) => <div key={a.text} className="small">{a.text}</div>)}</>}
             {r.facts.dates.length > 0 && <><div className="mh-divider" /><div className="mh-eyebrow">Dates in the text <Basis kind="confirmed" /></div>{r.facts.dates.map((x) => <div key={x.text} className="small">{x.text}{x.yearInferred ? <span className="mh-muted xs"> (year assumed from the send date: confirm)</span> : null}</div>)}</>}
             <div className="mh-divider" /><p className="mh-muted xs">Every finding comes from this message. Suggestions are never carried out for you.</p>

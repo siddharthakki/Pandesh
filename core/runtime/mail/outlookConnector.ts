@@ -14,7 +14,7 @@ export interface OutlookAccount { storeId: string; name: string; inboxItems: num
 export interface OutlookFolder { path: string; name: string; items: number; unread: number }
 export interface OutlookMessage {
   entryId: string; conversationId: string; internetMessageId: string; subject: string; fromName: string; fromAddress: string; to: string;
-  received: string; unread: boolean; attachments: number; body?: string;
+  received: string; unread: boolean; attachments: number; body?: string; bulkHint?: boolean;
 }
 export interface OutlookMessageDetail extends OutlookMessage { body: string; attachmentList: Array<{ name: string; size: number }> }
 export interface OutlookListResult { messages: OutlookMessage[]; folderItems: number; hasMore: boolean }
