@@ -48,7 +48,7 @@ describe('the destination registry', () => {
   });
 
   it('says where Google is really set up in both interfaces', () => {
-    expect(GOOGLE_SETUP_WHERE).toBe('System (bottom of the left rail) → Connections in the v2 interface, or Connections and settings (left sidebar) → Add / Configure → Google Services in the Classic interface');
+    expect(GOOGLE_SETUP_WHERE).toBe('Connections (left sidebar) in the v2 interface, or Connections and settings (left sidebar) → Add / Configure → Google Services in the Classic interface');
   });
 });
 
@@ -62,7 +62,7 @@ describe('navigate_to', () => {
     const result = await pending;
     expect(published).toBe(1);
     expect(result.status).toBe('opened');
-    expect(result.text).toBe('OPENED: Google account setup (Gmail, Calendar) is now showing in the Pandesh window (System (bottom of the left rail) → Connections).');
+    expect(result.text).toBe('OPENED: Google account setup (Gmail, Calendar) is now showing in the Pandesh window (Connections (left sidebar)).');
     expect(JSON.parse(requested()[0].metadata)).toMatchObject({ attemptId: 'att_1', destination: 'google_setup', target: 'view:connections', surface: 'v2' });
   });
 
@@ -72,11 +72,11 @@ describe('navigate_to', () => {
       if (!navigationConfirmation(db, ev.entityId)) confirmNavigation(db, { navigationId: ev.entityId, ok: false, detail: 'the window did not switch', actor: 'desktop' });
     } });
     expect((await refused)).toMatchObject({ status: 'not_opened' });
-    expect((await refused).text).toMatch(/^NOT OPENED: the Pandesh window could not open Projects: the window did not switch\. Do not say it is open; tell the user the way there: Spaces \(left rail\) → Projects\.$/);
+    expect((await refused).text).toMatch(/^NOT OPENED: the Pandesh window could not open Projects: the window did not switch\. Do not say it is open; tell the user the way there: Projects \(left sidebar\)\.$/);
 
     const silent = await navigateTo(db, { attemptId: 'att_3', surface: 'v2', destination: 'projects', actor: 'pi', timeoutMs: 0, sleep: noWait });
     expect(silent.status).toBe('not_confirmed');
-    expect(silent.text).toMatch(/^NOT CONFIRMED: .+do not say it is open\. Tell the user the way there: Spaces \(left rail\) → Projects\.$/);
+    expect(silent.text).toMatch(/^NOT CONFIRMED: .+do not say it is open\. Tell the user the way there: Projects \(left sidebar\)\.$/);
   });
 
   it('refuses a place that does not exist in this interface, requests nothing and names the nearest real places', async () => {

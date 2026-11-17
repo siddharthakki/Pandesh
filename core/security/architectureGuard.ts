@@ -85,6 +85,15 @@ export const AUTHORITATIVE_PROCESS_SPAWN_ALLOWLIST: ReadonlySet<string> = new Se
   // allowlist, an isolated home folder, a 90 s timeout, and a capped, untrusted-labelled result. Consent is asked by the caller.
   'core/runtime/agentReachTool.ts',
 
+  // My Bots: starts the installed Hermes program directly (no shell) with a fixed argv: `--version`, `profile
+  // create|delete|purge-identity <name>`, and the one-shot Bot turn `-p <profile> -z <prompt> -t memory`. The profile is
+  // checked to be local-only first, the toolset is always `memory`, the environment is reduced to paths and locale, and
+  // every call has a timeout that ends the whole process tree.
+  'core/runtime/bots/hermesBotRuntime.ts',
+  // The Pandesh Engineer's evidence: `git -C <repo>` with read-only subcommands only (rev-parse, log, show --stat,
+  // grep, rev-list, diff --quiet), started directly (no shell) with a 20 s timeout. It never writes to the repository.
+  'core/runtime/bots/botSources.ts',
+
   // Core external engine and agent runtimes
   'core/runtime/hermesEngine.ts',
   'core/runtime/opencodeEngine.ts',

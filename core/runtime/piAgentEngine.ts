@@ -3583,7 +3583,7 @@ export class PiAgentEngine implements EngineAdapter {
       },
       {
         // Alpha e2e T2: chat had no access to Software Discovery and guessed "Up to Date". This reads the stored result
-        // of the last update check (System → Software & Services); it never contacts the internet or installs anything.
+        // of the last update check (More → Software & Services); it never contacts the internet or installs anything.
         name: 'software_updates',
         label: 'software_updates',
         description: "Read the result of Pandesh's last software update check on this PC (winget, pip, npm, GitHub): installed and available versions, status and when it was checked. Read-only, offline: it never checks online and never installs. If no check was run yet, tell the user to run System → Software & Services → Check for updates.",
@@ -3591,7 +3591,7 @@ export class PiAgentEngine implements EngineAdapter {
         execute: async (_id: string, args: any) => {
           if (!ctx.dataDir) return { content: [{ type: 'text', text: "NOT AVAILABLE: Pandesh's data folder is not known in this run, so the stored update check cannot be read." }], isError: true };
           const state = readUpdateState(ctx.dataDir);
-          if (!state.lastCheckedAt) return { content: [{ type: 'text', text: 'No update check has been run on this PC yet, so no versions are known. Nothing was checked now. The user can run System → Software & Services → Check for updates (read-only).' }] };
+          if (!state.lastCheckedAt) return { content: [{ type: 'text', text: 'No update check has been run on this PC yet, so no versions are known. Nothing was checked now. The user can run More → Software & Services → Check for updates (read-only).' }] };
           const onlyUpdates = args?.onlyUpdates !== false;
           const filter = String(args?.nameContains ?? '').trim().toLowerCase();
           const rows = state.results
@@ -3644,7 +3644,7 @@ export class PiAgentEngine implements EngineAdapter {
         // Alpha e2e T10: no chat tool created projects, and the reply said "I have initiated the creation…".
         name: 'create_project',
         label: 'create_project',
-        description: "Create a project in Pandesh's Projects workspace (stored in Core, shown under Spaces → Projects), optionally with a list of open tasks. Only this tool creates a project; report the id it returns.",
+        description: "Create a project in Pandesh's Projects workspace (stored in Core, shown under Projects in the left sidebar), optionally with a list of open tasks. Only this tool creates a project; report the id it returns.",
         parameters: { type: 'object', properties: { name: { type: 'string' }, description: { type: 'string' }, tasks: { type: 'array', items: { type: 'string' }, description: 'Task titles.' }, taskStatus: { type: 'string', enum: ['pending', 'in_progress', 'done'], description: 'Status for every listed task (default pending). Use only what the user said; never mark work done that was not done.' } }, required: ['name'] },
         execute: async (_id: string, args: any) => {
           const name = String(args?.name ?? '').trim();
@@ -3659,7 +3659,7 @@ export class PiAgentEngine implements EngineAdapter {
           } catch (err: any) {
             return { content: [{ type: 'text', text: `NOT DONE: Core did not create the project: ${err?.message ?? String(err)}` }], isError: true };
           }
-          const summary = `Created project "${project.name}" (id ${project.id}, status ${project.status}) with ${tasks.length} task(s)${tasks.length ? `: ${tasks.map((t: { title: string; status: string }) => `${t.title} [${t.status}]`).join('; ')}` : ''}. It is shown under Spaces → Projects.`;
+          const summary = `Created project "${project.name}" (id ${project.id}, status ${project.status}) with ${tasks.length} task(s)${tasks.length ? `: ${tasks.map((t: { title: string; status: string }) => `${t.title} [${t.status}]`).join('; ')}` : ''}. It is shown under Projects in the left sidebar.`;
           return { content: [{ type: 'text', text: summary }], details: { activity: { kind: 'tool', title: `Created project ${project.name}`, excerpt: summary } } };
         },
       },
@@ -3698,7 +3698,7 @@ export class PiAgentEngine implements EngineAdapter {
               createProjectIfMissing: args?.createProject === true || !projectArg || /^inbox$/i.test(projectArg),
               source: `conversation:${conversationId || 'none'}`,
             }));
-            const text = `Added task ${formatTask(task)}. It is shown under Spaces → Projects.`;
+            const text = `Added task ${formatTask(task)}. It is shown under Projects in the left sidebar.`;
             return { content: [{ type: 'text', text }], details: { primaryId: task.id, taskRef: task.ref, activity: { kind: 'tool', title: `Added task ${task.title}`, excerpt: text } } };
           } catch (err: any) {
             return { content: [{ type: 'text', text: `NOT DONE: ${err?.message ?? String(err)}. Nothing was added.` }], isError: true };
@@ -5384,6 +5384,13 @@ ${availableToolNames.has('system_hardware_telemetry') ? `- For disk, storage, or
 ${availableToolNames.has('desktop_screenshot') ? `- 'desktop_screenshot' only CAPTURES: it saves a PNG of the whole visible Windows desktop on this PC and returns its path, size and SHA-256. Capturing is not opening (showing the image to the user, which this tool does not do) and not inspecting (reading what is on it). When the user asks what is on their screen or to analyze it, call it with the "question" argument set to their ask: a vision model on THIS PC then reads the capture (nothing leaves the PC) and the result carries its reading, which you may report as what that model reported, naming it. If the result says the image was not inspected, say that and the reason it gives; never describe the screen yourself, and never say you looked at, checked, verified or confirmed anything unless the result contains a local vision model's reading. Without a reading, say you saved it and where. It has no privacy filter: every visible window is in the file as it is, private messaging apps included, so never claim it leaves out, blurs or protects any app. Pandesh's real messaging rules: sending any message always needs the user's approval, and Pandesh never scrapes a WhatsApp Web session. 'desktop_windows_list' returns the titles of the visible top-level windows; that is real data you may report to say which apps are open. Both change nothing but read everything the user has open, so the user is asked before every call; use them only when the user asks about their screen or open apps, never to find out which Pandesh view is open (answer that from the product facts or navigate_to).\n` : ''}${availableToolNames.has('inspect_page') ? `- 'inspect_page' opens a real page in the managed browser: a workspace-relative HTML path, or a live URL on this machine (http://127.0.0.1:<port>/...). It acts on a running page, so it needs the operator's approval. Quote only what the tool returned; never describe a page you did not open.\n` : ''}${availableToolNames.has('scout_add_watch') ? `- 'scout_add_watch' creates a durable watch that Core then checks on its own schedule; 'scout_list_watches', 'scout_run_watch' and 'scout_run_all' read and check them. Only add a watch when the user asked for one, and never claim a watch is running without a tool result.\n` : ''}${availableToolNames.has('hermes_list_skills') ? `- 'hermes_list_skills' lists the skills installed in the local Hermes agent; 'hermes_invoke_skill' runs one of them and returns Hermes' own result. Never invent a skill name — list the skills first, then invoke one of the names that were listed.\n` : ''}- When a tool result says NOT DONE, NOT AVAILABLE or that it was declined, say so plainly. Never present a tool's failure as a success, and never invent a file path, a number or a quote. When the user declined an approval, say "you declined" — it is the user's choice, not a system protection — and do not offer a manual way around it. Offer to do something (send, book, buy, post) only when a tool for it is in your tool list.
 ` : '';
 
+    const botPromptSection = availableToolNames.has('bot_list') ? `BOTS (STRICT RULES):
+- The owner's Bots each have one job and their own memory: Inbox Assistant (Gmail), PC Manager (installed software, updates, disks), AI Scout (new local-AI releases vs this PC's GPU), Pandesh Engineer (Pandesh's own code, builds, logs and failures). A Bot only reads and reports; it changes nothing.
+- Recurring work in one of those areas ("every morning check my email", "monitor installed software", "follow new AI models") is a Bot routine: call 'bot_list' first, then 'bot_schedule' for the existing Bot with the time the owner gave, or a sensible one you state (inbox 07:30, PC 09:00, AI 06:45). If the Bot does not exist yet, 'bot_create' with its "standard" argument, then 'bot_schedule'. Never use 'schedule_task' or 'routine_create' for these.
+- A question addressed to a Bot or in its area ("Pandesh Engineer, …", "why is Pandesh slow", "which updates are worth installing", "anything new for my 3090") → 'bot_ask' with that Bot and the owner's question, then relay its report faithfully, with its citations. Nothing in a report has been done.
+- After 'bot_schedule' succeeds, tell the owner the Bot, the time, what it may read and that everything else still asks them, as the tool returned it. If a Bot cannot run (Hermes unavailable, Gmail not connected), say exactly that and what the owner can do; do not offer another engine.
+` : '';
+
     const pcOrgPromptSection = ['pc_capability_inventory', 'pc_organize_scan', 'routine_create', 'household_scan_obligations'].some((t) => availableToolNames.has(t)) ? `PC ORGANIZATION, ROUTINES, HOUSEHOLD & JUGAAD (STRICT RULES):
 ${availableToolNames.has('capability_explain') ? `- "What can you do / can you see images / which model would you use / why can't you X?" → 'capability_explain' (live: installed, loaded, active models, what fits, why). Answer from it; never from memory, and never confuse what a model CAN do with what the user has permitted.
 ` : ''}${availableToolNames.has('pc_capability_inventory') ? `- "What tools/software/models does this PC have?" → 'pc_capability_inventory'. If a task needs something missing, name the utility it recommends and offer 'pc_install_utility' (the user approves the exact package); never refuse just because a tool is missing.\n` : ''}${availableToolNames.has('pc_organize_scan') ? `- "Analyze/organize my PC, Downloads, Documents, tax files…" → 'pc_organize_scan' with the folders the user named (never a whole drive). Present its plan as it is: hierarchy, exact moves, what stays, project/model folders kept whole, duplicates, temporary files, space and risks. Nothing moves until the user approves 'pc_organize_apply'; offer saveRules when they want it kept organized. 'pc_organize_undo' reverses a plan. Pandesh never deletes files.\n` : ''}${availableToolNames.has('routine_create') ? `- "Every week…/every morning…/monitor…" → 'routine_create' (folder_cleanup, obligations_check or expiry_watch) with the time, weekdays and folders the user asked for; 'routine_list' shows schedule, authority and history; 'routine_control' pauses, resumes, edits, runs now or cancels.\n` : ''}${availableToolNames.has('household_scan_obligations') ? `- Bills, invoices, subscriptions, renewals, contracts, warranties → 'household_scan_obligations' (sources ["gmail"] and/or folders), then 'household_obligations' to list (withinDays 31 for "next month"). An invoice email does NOT prove a bill is unpaid: report payment status exactly as the tool gives it (requested, due soon, possibly overdue, confirmed, unknown). Only the user confirms a record ('household_obligation_update'); a confirmed record becomes a JUGAAD Important Date.\n` : ''}` : '';
@@ -5480,7 +5487,7 @@ NAVIGATION & WORKFLOW (STRICT RULES):
 - When an approval is required, inform the user to approve or deny the action directly from the prompt approval card or in Tasks & Missions.
 ${navigationPromptLines(uiSurface)}
 
-${printingPromptSection}${modelPromptSection}${weatherPromptSection}${systemAnalysisPromptSection}${setupHealthPromptSection}${specialistPromptSection}${pcOrgPromptSection}
+${printingPromptSection}${modelPromptSection}${weatherPromptSection}${systemAnalysisPromptSection}${setupHealthPromptSection}${specialistPromptSection}${botPromptSection}${pcOrgPromptSection}
 
 WORKSPACE & CONTEXT INTEGRITY (STRICT RULES):
 - Application Installation Directory: ${appInstallDir} (internal process location only, NOT the user's workspace)

@@ -3,6 +3,7 @@ import { api, errorText, type Snapshot } from './bridge';
 import { NOT_CONNECTED, SETUP_STEPS, STATE_LABEL, googleActions, googleState, serviceRows, type Busy, type Tone } from './googleModel';
 import { PhoneCard } from './Phone';
 import { FreeModelsCard } from './FreeModels';
+import { ProviderCards } from './ProviderCards';
 
 const TONE: Record<Tone, string> = { ok: 'var(--verified)', busy: 'var(--pulse)', warn: 'var(--attention)', neutral: 'var(--muted)' };
 
@@ -72,8 +73,8 @@ export function Connections({ snapshot, refresh }: { snapshot: Snapshot | null; 
         <button type="button" className="btn small" disabled={blocked} onClick={() => void run('checking', () => api.retryGmailProbe())}>Check again</button>
       </div>
       <div className="board" style={{ display: 'flex', flexDirection: 'column', gap: 12, maxWidth: 760 }}>
+        <ProviderCards snapshot={snapshot} refresh={refresh} />
         <PhoneCard />
-        <FreeModelsCard />
         <section className="card" aria-label="Google">
           <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
             <span className="title" style={{ fontSize: 16 }}>Google</span>
@@ -103,6 +104,11 @@ export function Connections({ snapshot, refresh }: { snapshot: Snapshot | null; 
           </div>
           <p role="status" aria-live="polite" style={{ margin: 0, fontSize: 14, minHeight: 1 }}>{note || (state === 'setup' ? 'Add your OAuth Client ID first.' : g.helperStaged === false && state !== 'connected' ? "Google helper (gws) not found: Gmail checks will fail until it's installed." : '')}</p>
         </section>
+
+        <details className="card">
+          <summary style={{ fontWeight: 500, cursor: 'pointer' }}>Advanced: free-model registry, automatic routing and key backup</summary>
+          <FreeModelsCard />
+        </details>
 
         {can.showSetup && (
           <details ref={setupRef} className="card" open={state === 'setup' || (state === 'problem-disconnected' && g.recovery?.code === 'invalid_client')}>

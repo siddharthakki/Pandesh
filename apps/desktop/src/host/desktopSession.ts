@@ -35,6 +35,7 @@ import {
   loadCloudSettings,
   saveCloudSettings,
 } from './cloudProviderSettings';
+import { cloudListingIsStale, loadCloudListings, saveCloudListings } from './cloudListingCache';
 import { CredentialVault, defaultCredentialBackend, listBackupProviders, type CredentialStatus } from './credentialVault';
 import { GmailTokenManager, type GmailConnectionStatus } from './gmailTokenManager';
 import {
@@ -313,6 +314,9 @@ export class DesktopSession {
   private cloudCatalogCache: DesktopCloudCatalog | null = null;
   private cloudListings = new Map<string, DesktopCloudModelListing>();
   private cloudTests = new Map<string, DesktopCloudConnectionTest>();
+  private cloudCatalogRetry: NodeJS.Timeout | null = null;
+  private cloudCatalogRetries = 0;
+  private cloudListingRefresh: Promise<void> | null = null;
   /** Provider API keys: Windows Credential Manager (legacy safeStorage files are still read). Never sent to the renderer. */
   private readonly vault: CredentialVault;
   /** Masked status per provider, refreshed after every key change; values never live here. */
@@ -429,6 +433,8 @@ export class DesktopSession {
       const at = cloud.selectedModel?.indexOf('::') ?? -1;
       if (cloud.selectedModel && at > 0 && cloud.enabledProviders.includes(cloud.selectedModel.slice(0, at))) this.selectedInferenceProvider = 'cloud';
     } catch { /* unreadable cloud settings: stay local */ }
+    // The last verified free-model lists survive a restart, so the model menus have something to offer at once.
+    this.cloudListings = loadCloudListings(this.dataDir);
     this.selectedConversationId = readSelectedConversation(this.dataDir);
     this.localSpeech = probeDesktopLocalSpeech(this.options.productRoot);
     this.localSpeechResponse = probeDesktopLocalSpeechResponse(this.options.productRoot, process.env, this.ttsPreference());
@@ -1839,7 +1845,7 @@ export class DesktopSession {
       if (!this.cloudListings.get(selection.providerId)) {
         try {
           const listing = await client.request<DesktopCloudModelListing>(`/v1/cloud/providers/${encodeURIComponent(selection.providerId)}/models`, { method: 'POST', body: {} });
-          this.cloudListings.set(selection.providerId, listing);
+          this.rememberCloudListing(selection.providerId, listing);
         } catch { /* not verified: Core will not offer it */ }
       }
       const verifiedFree = (this.cloudListings.get(selection.providerId)?.pool ?? []).some((entry) => entry.id === selection.modelId);
@@ -1849,17 +1855,74 @@ export class DesktopSession {
     }
   }
 
-  /** Reads the catalog Core ships. Cached for the session; a failure leaves the last good copy. */
+  private rememberCloudListing(providerId: string, listing: DesktopCloudModelListing): void {
+    this.cloudListings.set(providerId, listing);
+    if (!listing.ok) return;
+    try { saveCloudListings(this.dataDir, this.cloudListings); } catch (error) { this.options.log?.(`cloud listing not saved: ${(error as Error).message}`); }
+  }
+
+  private forgetCloudListing(providerId: string): void {
+    this.cloudListings.delete(providerId);
+    try { saveCloudListings(this.dataDir, this.cloudListings); } catch { /* the in-memory copy is already gone */ }
+  }
+
+  /**
+   * Reads the catalog Core ships. Cached for the session; a failure leaves the last good copy and is tried again
+   * (a Core that was still starting used to leave the provider list empty until the next app restart).
+   */
   async refreshCloudCatalog(): Promise<DesktopCloudState> {
     try {
       const catalog = await this.requireClient().request<DesktopCloudCatalog>('/v1/cloud/catalog');
       this.cloudCatalogCache = catalog;
+      this.cloudCatalogRetries = 0;
+      if (this.cloudCatalogRetry) { clearTimeout(this.cloudCatalogRetry); this.cloudCatalogRetry = null; }
       await this.refreshCredentialStatus();
       await this.pushCloudCredentials();
+      void this.refreshStaleCloudListings();
     } catch (error) {
       this.options.log?.(`cloud catalog unavailable: ${(error as Error).message}`);
+      this.scheduleCloudCatalogRetry();
     }
     return this.getCloudState();
+  }
+
+  private scheduleCloudCatalogRetry(): void {
+    if (this.cloudCatalogRetry || this.cloudCatalogCache || this.cloudCatalogRetries >= 20) return;
+    const delay = Math.min(120_000, 5_000 * 2 ** Math.min(this.cloudCatalogRetries, 5));
+    this.cloudCatalogRetries += 1;
+    this.cloudCatalogRetry = setTimeout(() => {
+      this.cloudCatalogRetry = null;
+      void this.refreshCloudCatalog().then(() => { if (this.cloudCatalogCache) this.emit({ kind: 'status', at: nowIso(), summary: 'Cloud providers loaded' }); });
+    }, delay);
+    this.cloudCatalogRetry.unref?.();
+  }
+
+  /**
+   * Checks the free-model list of each provider the person switched on and gave a key, when the stored list is
+   * missing or older than a day. One GET of the provider's model list with its key: no prompt, no user content.
+   * Providers that are off, or have no key, are never contacted.
+   */
+  private refreshStaleCloudListings(): Promise<void> {
+    if (this.cloudListingRefresh) return this.cloudListingRefresh;
+    this.cloudListingRefresh = (async () => {
+      const settings = loadCloudSettings(this.dataDir);
+      let changed = false;
+      for (const providerId of settings.enabledProviders) {
+        if (!this.credentialStatus[providerId]?.configured) continue;
+        if (!cloudListingIsStale(this.cloudListings.get(providerId), Date.now())) continue;
+        try {
+          const listing = await this.requireClient().request<DesktopCloudModelListing>(`/v1/cloud/providers/${encodeURIComponent(providerId)}/models`, { method: 'POST', body: {} });
+          // A failed check keeps the last good list (shown with its age); only a first failure is recorded as such.
+          if (listing.ok || !this.cloudListings.get(providerId)?.ok) this.rememberCloudListing(providerId, listing);
+          if (!listing.ok) this.options.log?.(`cloud model list for ${providerId} not refreshed: ${listing.errorClass ?? listing.error ?? 'unknown error'}`);
+          changed = true;
+        } catch (error) {
+          this.options.log?.(`cloud model list for ${providerId} not refreshed: ${(error as Error).message}`);
+        }
+      }
+      if (changed) this.emit({ kind: 'status', at: nowIso(), summary: 'Free cloud model lists checked' });
+    })().finally(() => { this.cloudListingRefresh = null; });
+    return this.cloudListingRefresh;
   }
 
   getCloudState(): DesktopCloudState {
@@ -1874,6 +1937,7 @@ export class DesktopSession {
       enabled: settings.enabledProviders.includes(provider.id),
       requiresBaseUrlInput: provider.requiresBaseUrlInput,
       baseUrl: settings.baseUrls[provider.id] ?? null,
+      endpoint: settings.baseUrls[provider.id] ?? (provider as { baseUrl?: string }).baseUrl ?? null,
       freeTier: provider.freeTier,
       paymentMethodRequired: provider.paymentMethodRequired,
       signupUrl: provider.signupUrl,
@@ -1910,7 +1974,7 @@ export class DesktopSession {
     });
     await this.pushCloudCredentials();
     // A new key invalidates what was discovered with the old one.
-    this.cloudListings.delete(providerId);
+    this.forgetCloudListing(providerId);
     this.cloudTests.delete(providerId);
     this.emit({ kind: 'status', at: nowIso(), summary: `Saved ${provider.displayName} key; cloud models are now discoverable` });
     return this.getCloudState();
@@ -1926,7 +1990,7 @@ export class DesktopSession {
       enabledProviders: settings.enabledProviders.filter((id) => id !== providerId),
       selectedModel: selected,
     });
-    this.cloudListings.delete(providerId);
+    this.forgetCloudListing(providerId);
     this.cloudTests.delete(providerId);
     try { await this.requireClient().clearProviderCredential(providerId); } catch { /* Core may be down; the key is gone from disk either way. */ }
     return this.getCloudState();
@@ -1955,7 +2019,7 @@ export class DesktopSession {
     if (!baseUrl) throw new Error('No endpoint is known for this provider.');
     await client.setProviderCredential(providerId, baseUrl, key);
     const listing = await client.request<DesktopCloudModelListing>(`/v1/cloud/providers/${encodeURIComponent(providerId)}/models`, { method: 'POST', body: {} });
-    this.cloudListings.set(providerId, listing);
+    this.rememberCloudListing(providerId, listing);
     this.emit({
       kind: 'status',
       at: nowIso(),
@@ -1973,7 +2037,7 @@ export class DesktopSession {
       `/v1/cloud/providers/${encodeURIComponent(providerId)}/test`,
       { method: 'POST', body: { model } },
     );
-    this.cloudListings.set(providerId, body.listing);
+    this.rememberCloudListing(providerId, body.listing);
     if (body.test) this.cloudTests.set(providerId, body.test);
     return this.getCloudState();
   }
@@ -2989,6 +3053,18 @@ export class DesktopSession {
       revenueDecide: { path: `/v1/revenue/${encodeURIComponent(String(args.track ?? ''))}/drafts/${id}/decide`, method: 'POST', body: { decision: args.decision, note: args.note } },
       revenueOutcome: { path: `/v1/revenue/${encodeURIComponent(String(args.track ?? ''))}/outcomes`, method: 'POST', body: { kind: args.kind, leadId: args.leadId, amountEur: args.amountEur, evidence: args.evidence } },
       softwareSettings: { path: '/v1/software/settings', method: 'POST', body: { periodicEnabled: args.periodicEnabled, intervalHours: args.intervalHours } },
+      // My Bots and Automations (core/api/botRoutes.ts). A Bot only reads and reports; nothing here lets one act.
+      bots: { path: `/v1/bots${args.refresh ? '?refresh=1' : ''}` },
+      bot: { path: `/v1/bots/${id}` },
+      botCreate: { path: '/v1/bots', method: 'POST', body: { name: args.name, responsibility: args.responsibility, instructions: args.instructions, sources: args.sources, model: args.model, repoPath: args.repoPath } },
+      botsStandard: { path: '/v1/bots/standard', method: 'POST', body: { only: args.only, repoPath: args.repoPath } },
+      botUpdate: { path: `/v1/bots/${id}`, method: 'POST', body: { status: args.status, name: args.name, responsibility: args.responsibility, instructions: args.instructions, model: args.model, sources: args.sources, ...('repoPath' in args ? { repoPath: args.repoPath } : {}) } },
+      botRemove: { path: `/v1/bots/${id}/remove`, method: 'POST', body: {} },
+      botRun: { path: `/v1/bots/${id}/run`, method: 'POST', body: { question: args.question } },
+      botRoutineAdd: { path: `/v1/bots/${id}/routines`, method: 'POST', body: { title: args.title, dailyTime: args.dailyTime, everyDays: args.everyDays, weekdays: args.weekdays, enabled: args.enabled } },
+      botRoutineRemove: { path: `/v1/bots/routines/${id}/remove`, method: 'POST', body: {} },
+      automations: { path: '/v1/automations' },
+      automationUpdate: { path: `/v1/automations/${id}`, method: 'POST', body: { enabled: args.enabled, dailyTime: args.dailyTime } },
     };
     if (action === 'selectAgent') {
       this.selectedAgentId = typeof args.agentId === 'string' && args.agentId && args.agentId !== 'chief' ? args.agentId : null;
@@ -3268,6 +3344,10 @@ export class DesktopSession {
     if (this.notificationTimer) {
       clearInterval(this.notificationTimer);
       this.notificationTimer = null;
+    }
+    if (this.cloudCatalogRetry) {
+      clearTimeout(this.cloudCatalogRetry);
+      this.cloudCatalogRetry = null;
     }
     this.reminderScheduler?.dispose();
     this.reminderScheduler = null;

@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import { api, errorText, type Snapshot } from './bridge';
 import {
   AUTO_MODEL, EXPIRY_CHOICES, PERMISSION_LABELS, STILL_ASKS_NOTE,
-  grantProblem, grantRows, modelMenu, permissionChip, permissionStatus, type PermissionMode,
+  cloudConfirmation, grantProblem, grantRows, isCloudValue, modelMenu, permissionChip, permissionStatus, type PermissionMode,
 } from './composerModel';
 
 type Notice = { text: string; error?: boolean } | null;
@@ -19,6 +19,8 @@ export function useComposerControls(opts: { snapshot: Snapshot | null; refresh: 
   const [expiry, setExpiry] = useState(60);
   const [grantError, setGrantError] = useState('');
   const [saving, setSaving] = useState(false);
+  /** A cloud model the person picked but has not confirmed yet. Nothing changes until they do. */
+  const [pendingCloud, setPendingCloud] = useState<string | null>(null);
 
   const permission = snapshot?.permission;
   const mode: PermissionMode = permission?.mode ?? 'ask';
@@ -49,10 +51,25 @@ export function useComposerControls(opts: { snapshot: Snapshot | null; refresh: 
 
   const chooseModel = (value: string) => {
     if (!value) return;
+    // Moving a chat to a cloud model is confirmed with what leaves this PC; going back to this PC never asks.
+    if (isCloudValue(value) && value !== snapshot?.cloud?.selectedModel) { setPendingCloud(value); return; }
+    setPendingCloud(null);
     void run(() => api.selectModel(value));
   };
 
-  const panel = (granting || status.length > 0) ? (
+  const confirmText = pendingCloud ? cloudConfirmation(snapshot, pendingCloud) : null;
+  const cloudConfirm = pendingCloud && confirmText ? (
+    <section className="perm-panel cloud-confirm" role="alertdialog" aria-label="Confirm cloud model">
+      <p className="perm-title">{confirmText.title}</p>
+      <ul className="perm-items">{confirmText.lines.map((line) => <li key={line}>{line}</li>)}</ul>
+      <div className="perm-actions">
+        <button type="button" className="btn primary small" disabled={saving} onClick={() => { const value = pendingCloud; setPendingCloud(null); void run(() => api.selectModel(value)); }}>Use this cloud model</button>
+        <button type="button" className="btn small" onClick={() => setPendingCloud(null)}>Stay on this PC</button>
+      </div>
+    </section>
+  ) : null;
+
+  const permissionPanel = (granting || status.length > 0) ? (
     <section className="perm-panel" aria-label="What the permission mode allows">
       {status.length > 0 && (
         <ul className="perm-status" aria-live="polite">
@@ -97,6 +114,7 @@ export function useComposerControls(opts: { snapshot: Snapshot | null; refresh: 
       )}
     </section>
   ) : null;
+  const panel = (permissionPanel || cloudConfirm) ? <>{cloudConfirm}{permissionPanel}</> : null;
 
   const modeControl = (
     <>
@@ -112,10 +130,13 @@ export function useComposerControls(opts: { snapshot: Snapshot | null; refresh: 
     <>
       <label className="sr-only" htmlFor="v2-model">Model for your next message</label>
       <select id="v2-model" className="ctl-select" title="Model for your next message. Auto lets Pandesh pick for each request; the reply shows which model answered."
-        value={menu.selected} disabled={disabled || saving || !snapshot || Boolean(snapshot?.running)} onChange={(e) => chooseModel(e.target.value)}>
-        {menu.options.filter((o) => o.group !== 'cloud').map((o) => <option key={o.value || 'none'} value={o.value} disabled={o.disabled}>{o.label}</option>)}
+        value={pendingCloud ?? menu.selected} disabled={disabled || saving || !snapshot || Boolean(snapshot?.running)} onChange={(e) => chooseModel(e.target.value)}>
+        {menu.options.filter((o) => o.group === 'auto').map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
+        <optgroup label="This PC — Ollama">
+          {menu.options.filter((o) => o.group === 'local').map((o) => <option key={o.value || 'none'} value={o.value} disabled={o.disabled}>{o.label}</option>)}
+        </optgroup>
         {menu.options.some((o) => o.group === 'cloud') && (
-          <optgroup label="Cloud — the whole chat runs there (choose one in Settings)">
+          <optgroup label="Free cloud — the chat leaves this PC, asks first">
             {menu.options.filter((o) => o.group === 'cloud').map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
           </optgroup>
         )}
@@ -125,5 +146,5 @@ export function useComposerControls(opts: { snapshot: Snapshot | null; refresh: 
 
   const controls = <>{modeControl}{modelControl}</>;
 
-  return { panel, controls, modeControl, modelControl, granting, autoSelected: menu.selected === AUTO_MODEL };
+  return { panel, controls, modeControl, modelControl, cloudConfirm, chooseModel, pendingCloud, granting, autoSelected: menu.selected === AUTO_MODEL };
 }

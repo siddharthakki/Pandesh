@@ -30,6 +30,7 @@ import { createIntelligenceScout, type IntelligenceScout } from './runtime/intel
 import { createComputerUseCapabilityAdapter } from './runtime/computerUseCapability';
 import { createLocalVisionInspector } from './runtime/localVisionInspector';
 import { createHermesSkillCapabilityAdapter } from './runtime/hermesSkillCapability';
+import { createBotCapabilityAdapter } from './runtime/bots/botCapability';
 import { createPortProcessManager } from './runtime/portManager';
 import { acquireSingleton } from './singleton/acquireSingleton';
 import { findForeignLiveOwners } from './singleton/foreignOwners';
@@ -334,6 +335,8 @@ function buildCapabilityRegistry(dataDir: string, db: CoreDatabase, connectors: 
     .register(createRevenueCapabilityAdapter({ dataDir }))
     .register(createOllamaManagementAdapter({ db }))
     .register(createMediaProductionAdapter({ inspectImage: createLocalVisionInspector() }))
+    // My Bots: Hermes profiles that read with Core's own sources and report; never an acting tool (core/runtime/bots).
+    .register(createBotCapabilityAdapter({ db, dataDir, connectorRegistry: connectors, broadcaster }))
     // The Workshop: versions are Core artifacts; a view command must reach the window while the tool waits for its answer.
     .register(createWorkshopCapabilityAdapter({ db, dataDir, publish: broadcaster ? (event) => broadcaster.publishRuntime(event) : undefined }));
   // The plan capability reads the registry it is registered in (it checks a

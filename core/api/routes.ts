@@ -16,6 +16,7 @@ import { registerBridgeRoutes } from './bridgeRoutes';
 import { registerOperatorRoutes } from './operatorRoutes';
 import { registerHouseholdRoutes } from './householdRoutes';
 import { registerSoftwareRoutes } from './softwareRoutes';
+import { registerBotRoutes } from './botRoutes';
 import { registerRevenueRoutes } from './revenueRoutes';
 import { registerWorkshopRoutes } from './workshopRoutes';
 import { registerAgentRoutes } from './agentRoutes';
@@ -544,6 +545,8 @@ export function buildRouter(
   if (bridge) registerHouseholdRoutes(router, { dataDir: bridge.dataDir, connectors, broadcaster });
   // --- Software & Services, read-only inventory and update discovery (core/api/softwareRoutes.ts) ---
   if (bridge) registerSoftwareRoutes(router, { dataDir: bridge.dataDir });
+  // --- My Bots and Automations: Hermes profiles as Bots, run read-only by Core (core/api/botRoutes.ts) ---
+  if (bridge) registerBotRoutes(router, { dataDir: bridge.dataDir, connectors, broadcaster });
   if (bridge) registerRevenueRoutes(router, { dataDir: bridge.dataDir });
   // --- Workshop: what Pandesh made, opened and refined in the window (core/api/workshopRoutes.ts) ---
   if (bridge) registerWorkshopRoutes(router, { dataDir: bridge.dataDir, broadcaster });

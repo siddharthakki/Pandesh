@@ -566,3 +566,28 @@ button.tl-row:hover { background: var(--raised); }
 .mission-file .kind { color: var(--pulse); font-size: 11px; }
 .mission-summary, .mission-note { margin: 0; font-size: 13.5px; color: var(--muted); }
 .mission-note.error { color: var(--danger); }
+
+/* My Bots, Automations and provider cards */
+.bot-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 12px; }
+.bot-card { text-align: left; cursor: pointer; font: inherit; color: inherit; align-items: stretch; }
+.bot-card:hover, .bot-card:focus-visible { border-color: var(--pulse); }
+.bot-clamp { font-size: 14px; color: var(--muted); display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+.bot-list { margin: 0; padding-left: 18px; display: flex; flex-direction: column; gap: 4px; font-size: 14px; }
+.bot-field { display: flex; flex-direction: column; gap: 4px; font-size: 14px; }
+.bot-field input, .bot-field textarea, .bot-input, .bot-time { padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); color: var(--ink); font: inherit; font-size: 14px; }
+.bot-field textarea { resize: vertical; }
+.bot-input { flex: 1 1 260px; min-width: 0; height: 34px; padding: 0 10px; }
+.bot-time { height: 32px; padding: 0 8px; }
+.bot-edit { display: flex; flex-direction: column; gap: 8px; margin-top: 6px; padding-top: 10px; border-top: 1px solid var(--line); }
+.bot-row { display: flex; gap: 12px; align-items: center; justify-content: space-between; flex-wrap: wrap; font-size: 14px; padding: 6px 0; border-bottom: 1px solid var(--line); }
+.bot-row .actions { margin: 0; }
+.bot-run { border-bottom: 1px solid var(--line); }
+.bot-run:last-child { border-bottom: 0; }
+.bot-run-head { width: 100%; display: flex; gap: 10px; align-items: baseline; flex-wrap: wrap; padding: 8px 0; border: 0; background: transparent; color: inherit; font: inherit; font-size: 14px; text-align: left; cursor: pointer; }
+.bot-run-body { display: flex; flex-direction: column; gap: 6px; padding: 0 0 10px; }
+.provider-head { display: flex; gap: 10px; align-items: baseline; flex-wrap: wrap; }
+.settings-availability { margin: 0; padding-left: 18px; display: flex; flex-direction: column; gap: 3px; font-size: 14px; color: var(--muted); }
+.settings-availability li[data-state="ready"] strong { color: var(--verified); }
+.settings-availability li[data-state="failed"] strong, .settings-availability li[data-state="no_key"] strong { color: var(--attention); }
+.cloud-confirm { border-color: var(--attention); }
+.rail .rail-more { margin-top: 4px; }

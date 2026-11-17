@@ -260,6 +260,8 @@ export interface DesktopApi {
   qualifyFreeModel(providerId: string, model: string): Promise<FreeModelsState>;
   setCloudProviderKey(providerId: string, apiKey: string, baseUrl?: string): Promise<unknown>;
   clearCloudProviderKey(providerId: string): Promise<unknown>;
+  /** Switches a provider on or off without touching its stored key. Off: Core forgets the key until it is switched on again. */
+  setCloudProviderEnabled(providerId: string, enabled: boolean): Promise<unknown>;
   migrateLegacyKeys(providerIds: string[]): Promise<{ results: Array<{ provider: string; migrated: boolean; reason?: string }>; state: FreeModelsState }>;
   exportCredentialBackup(passphrase: string, providerIds: string[]): Promise<{ file: string; providers: string[] } | null>;
   inspectCredentialBackup(file: string | null, passphrase: string): Promise<{ file: string; providers: string[] } | null>;

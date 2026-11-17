@@ -81,6 +81,17 @@ export const CHAT_CAPABILITY_IDS = [
  * Keeps prompt payload bounded (~2-5k tokens instead of ~29k), preventing
  * small/local model overload and empty responses.
  */
+/** Wording that points at a Bot: its name, "bot", recurring monitoring, or Pandesh's own health and code. */
+export const BOT_INTENT = /\b(?:bots?|inbox assistant|pc manager|ai scout|pandesh engineer|engineer|automations?|every (?:morning|evening|night|day|week|weekday|monday|tuesday|wednesday|thursday|friday|saturday|sunday)|each (?:morning|evening|day|week)|daily|weekly|monitor(?:ing)?\s+(?:my|the|our|all|any|this|these|installed|new|for|local|software|updates?|email|e-mail|inbox)|keep an eye on|keep track of|follow new|watch for|recurring|routines?)\b|\b(?:why is|why does|what(?:'s| is) wrong with|what(?:'s| is) missing (?:for|in)|which features)\b[^.?!]{0,60}\bpandesh\b|\bpandesh\b[^.?!]{0,40}\b(?:slow|broken|fail(?:s|ed|ing)?|crash\w*|source code|codebase|commits?|architecture)\b/i;
+
+/** What the standard Bots are responsible for: mail, this PC's software, AI releases, Pandesh itself. */
+export const BOT_TOPIC = /\b(?:e-?mails?|mail|inbox|gmail|software|programs?|apps?|updates?|upgrades?|installed|disk space|ai (?:models?|releases?|news|tools?)|local (?:ai|models?)|new models?|llms?|3090|gpu|pandesh|bots?)\b/i;
+
+/** True when recurring or delegated work in a Bot's area is asked for: the Bot tools then own it, not the household routines. */
+export function isBotRequest(text: string): boolean {
+  return BOT_INTENT.test(text) && BOT_TOPIC.test(text);
+}
+
 export function selectCapabilitiesForIntent(requestText?: string): readonly string[] {
   if (!requestText || !requestText.trim()) {
     return [
@@ -110,6 +121,12 @@ export function selectCapabilitiesForIntent(requestText?: string): readonly stri
   // Media production: narrated videos, slideshows, checking a media file (core/runtime/mediaProduction.ts).
   if (/\b(?:videos?|narrat\w*|voice-?overs?|subtitles?|thumbnails?|youtube|shorts?|reels?|clips?|mp4|media_\w+|faceless|bedtime stor(?:y|ies)|audio file|soundtrack)\b/i.test(text)) {
     caps.add('media-production');
+  }
+
+  // My Bots: a Bot named or addressed, recurring monitoring, or a question about Pandesh itself for the Engineer
+  // (core/runtime/bots/botCapability.ts).
+  if (BOT_INTENT.test(text)) {
+    caps.add('bots');
   }
 
   // Weather intent
@@ -149,8 +166,10 @@ export function selectCapabilitiesForIntent(requestText?: string): readonly stri
     caps.add('filesystem');
   }
 
-  // Household / routines / obligations / PC organize
-  if (/\b(?:routine|every (?:week|morning|day)|bills?|obligations?|warrant(?:y|ies)|renewals?|organi[sz]e)\b/i.test(text)) {
+  // Household / routines / obligations / PC organize. Recurring work in a Bot's area (mail, software, AI releases,
+  // Pandesh itself) belongs to the Bot: offering routine_create beside bot_schedule made a small local model create an
+  // "obligations" routine for "monitor installed software every day" (live test, 2026-11-17).
+  if (!isBotRequest(text) && /\b(?:routine|every (?:week|morning|day)|bills?|obligations?|warrant(?:y|ies)|renewals?|organi[sz]e)\b/i.test(text)) {
     caps.add('household');
     caps.add('pc-organizer');
   }
@@ -214,7 +233,7 @@ export interface BuildPiCapabilityBridgeOptions {
 }
 
 /** Chat capabilities the intent selection can add beyond the bounded set. */
-export const CHAT_EXPANDABLE_CAPABILITY_IDS = [...CHAT_CAPABILITY_IDS, 'system-management', 'port-management', 'computer-use', 'pc-organizer', 'revenue', 'workshop', 'media-production'] as const;
+export const CHAT_EXPANDABLE_CAPABILITY_IDS = [...CHAT_CAPABILITY_IDS, 'system-management', 'port-management', 'computer-use', 'pc-organizer', 'revenue', 'workshop', 'media-production', 'bots'] as const;
 
 /**
  * Builds the bridge, or returns undefined when this build's registry owns none

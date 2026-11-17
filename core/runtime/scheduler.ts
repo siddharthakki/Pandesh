@@ -23,6 +23,8 @@ import type { ConnectorId } from '../shared/wireTypes';
 import { SCHEDULER_CLIENT_ID } from '../domain/processTerminationPolicy';
 import { HOUSEHOLD_ROUTINES, recordMissedRun, settleInterruptedRuns } from '../domain/householdRoutines';
 import { runHouseholdRoutine } from './householdRoutineRunner';
+import { BOT_ROUTINE, runBot } from './bots/botRunner';
+import { BotStore } from './bots/botStore';
 
 const ACTOR = SCHEDULER_CLIENT_ID;
 
@@ -55,6 +57,11 @@ export function startScheduledTaskLoop(
     const settled = settleInterruptedRuns(db);
     if (settled) console.log(`[karkedikha-core ${new Date().toISOString()}] ${settled} household routine run(s) interrupted by the last shutdown recorded as failed`);
   } catch { /* the routine tables are optional in very old databases */ }
+  try {
+    // A Bot run cut off by the last shutdown, sleep or crash is recorded as interrupted, never as done.
+    const interrupted = options.cwd ? new BotStore(options.cwd).settleInterrupted() : 0;
+    if (interrupted) console.log(`[karkedikha-core ${new Date().toISOString()}] ${interrupted} Bot run(s) interrupted by the last shutdown recorded as interrupted`);
+  } catch { /* no Bots yet */ }
   const tick = () => {
     let claimed: ReturnType<typeof claimDueScheduledTasks>;
     try {
@@ -106,6 +113,14 @@ export function startScheduledTaskLoop(
           void runAiRadarRoutine(db, broadcaster, { task, dataDir: options.cwd })
             .then((r) => console.log(`[karkedikha-core ${new Date().toISOString()}] ai radar ${task.id}: ${r.newFindings.length} new, ${r.urgent.length} urgent, ${r.errors.length} errors`))
             .catch((err) => console.error(`[karkedikha-core ${new Date().toISOString()}] ai radar ${task.id} failed:`, err instanceof Error ? err.message : err));
+          continue;
+        }
+        if (task.routine === BOT_ROUTINE) {
+          const botId = (task.scope as { botId?: string } | null)?.botId;
+          if (!options.cwd || !botId) { console.error(`[karkedikha-core ${new Date().toISOString()}] bot routine ${task.id} skipped: ${options.cwd ? 'it names no Bot' : 'no data dir'}`); continue; }
+          void runBot({ db, broadcaster, dataDir: options.cwd, connectorRegistry: options.connectorRegistry }, { botId, trigger: late ? 'catch_up' : 'schedule', task })
+            .then((run) => console.log(`[karkedikha-core ${new Date().toISOString()}] bot routine ${task.id} (${botId}) ${run.status}: ${run.reason}`))
+            .catch((err) => console.error(`[karkedikha-core ${new Date().toISOString()}] bot routine ${task.id} failed:`, err instanceof Error ? err.message : err));
           continue;
         }
         if (task.routine === FREE_MODEL_ROUTINE) {

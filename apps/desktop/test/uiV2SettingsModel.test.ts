@@ -34,9 +34,9 @@ describe('UI v2 Settings: cloud model choices', () => {
     expect(cloudSelectionLabel({ model: 'm', modelIsAuto: false, cloud })).toBe('llama-3.3 (Groq)');
     expect(cloudSelectionLabel({ model: 'm', modelIsAuto: false })).toBeNull();
   });
-  it('keeps the composer menu local-only apart from a cloud model already selected', () => {
+  it('offers the same verified free models in the composer menu as in Settings', () => {
     const menu = modelMenu({ model: 'm', modelIsAuto: false, installedModels: ['m'], cloud });
-    expect(menu.options.filter((o) => o.group === 'cloud').map((o) => o.value)).toEqual(['groq::llama-3.3']);
+    expect(menu.options.filter((o) => o.group === 'cloud').map((o) => o.value)).toEqual(['groq::llama-3.3', 'groq::m2']);
   });
 });
 

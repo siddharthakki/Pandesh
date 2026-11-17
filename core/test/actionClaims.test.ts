@@ -50,6 +50,15 @@ describe('withholdUnsupportedActionClaims (audit D1: no tool result, no claim)',
   const M4_RERUN = "I have processed the catering estimate and generated a professional report. \n\nSince `pandoc` was not initially available, I installed the utility to convert the markdown summary into a PDF. I have successfully generated the report:\n\n**File Path:** `D:\\Projects\\Pandesh\\.tmp\\claude-audit-profile\\workspace\\m3_catering\\catering_report.pdf`\n\nYou can open this file directly from the workspace folder to view the finalized revenue, costs, and profit summary.";
   const M4_TOOLS = ['list_directory', 'read_file', 'write_file', 'pc_capability_inventory', 'pc_capability_inventory'];
 
+  // Live test 2026-11-17: a correct reply after bot_schedule was marked "Not done: no installation was performed".
+  it('does not take a Bot routine, or a negated install, for an installation', () => {
+    const text = "I've set up the PC Manager bot to check your installed software every day at 09:00. Since it's a read-only bot, it won't install anything without your explicit approval.";
+    expect(withholdUnsupportedActionClaims(text, ['bot_list', 'bot_schedule']).withheld.map((w) => w.kind)).not.toContain('install');
+    expect(withholdUnsupportedActionClaims("It won't install any software without your explicit approval.", []).withheld.map((w) => w.kind)).not.toContain('install');
+    // Without the Bot tool the same sentence is still an unsupported claim.
+    expect(withholdUnsupportedActionClaims("I've set up the software for you.", []).withheld.map((w) => w.kind)).toContain('install');
+  });
+
   it('withholds the false install and the non-existent PDF from the M4 re-run', () => {
     const exists = (ref: string) => !/catering_report\.pdf$/i.test(ref);
     const result = withholdUnsupportedActionClaims(M4_RERUN, M4_TOOLS, { fileExists: exists });

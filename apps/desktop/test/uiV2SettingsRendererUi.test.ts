@@ -38,12 +38,25 @@ const mount = (s: Record<string, unknown>, initialSection?: 'models' | 'diagnost
 };
 
 describe('UI v2 Settings', () => {
-  it('chooses a verified free cloud model through the host and states the boundary', async () => {
+  it('chooses a verified free cloud model only after the person confirms what leaves this PC', async () => {
     const p = mount(snap());
     expect(screen.getByText(/never reads your images, files, email/)).toBeTruthy();
+    expect(screen.getByText(/Free models not checked yet|1 free model/)).toBeTruthy();
     fireEvent.click(screen.getByRole('radio', { name: /Llama/ }));
+    // Picking alone changes nothing.
+    expect(bridge.selectModel).not.toHaveBeenCalled();
+    expect(screen.getByRole('alertdialog', { name: 'Confirm cloud model' }).textContent).toMatch(/sent to Groq over the internet/);
+    fireEvent.click(screen.getByRole('button', { name: 'Use this cloud model' }));
     await waitFor(() => expect(bridge.selectModel).toHaveBeenCalledWith('groq::llama'));
     await waitFor(() => expect(p.refresh).toHaveBeenCalled());
+  });
+
+  it('stays on this PC when the cloud confirmation is declined', () => {
+    mount(snap());
+    fireEvent.click(screen.getByRole('radio', { name: /Llama/ }));
+    fireEvent.click(screen.getByRole('button', { name: 'Stay on this PC' }));
+    expect(screen.queryByRole('alertdialog')).toBeNull();
+    expect(bridge.selectModel).not.toHaveBeenCalled();
   });
 
   it('points to Connections when no provider is set up, instead of inventing choices', () => {

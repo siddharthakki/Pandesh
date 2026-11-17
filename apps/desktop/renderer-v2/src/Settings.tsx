@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { api, errorText, type AppMetadata, type Snapshot, type UpdateStatus } from './bridge';
 import { useComposerControls } from './ComposerControls';
-import { AUTO_MODEL, PERMISSION_LABELS, cloudChoices, modelLabel } from './composerModel';
+import { AUTO_MODEL, PERMISSION_LABELS, cloudAvailability, cloudChoices, modelLabel } from './composerModel';
 import {
   CLOUD_BOUNDARY_NOTE, SETTINGS_SECTIONS, capabilityWords, cloudSelectionLabel, updateStatusText, usingCloud, type SettingsSection, type Tone,
 } from './settingsModel';
@@ -53,7 +53,7 @@ export function Settings({ snapshot, refresh, narrow, initialSection, theme, set
         {nav}
         <div className="settings-body">
           {notice && <div className={`notice${notice.error ? ' error' : ''}`} role={notice.error ? 'alert' : 'status'}>{notice.text}</div>}
-          {section === 'models' && <ModelsSection snapshot={snapshot} refresh={refresh} modelControl={controls.modelControl} setNotice={setNotice} onGo={onGo} />}
+          {section === 'models' && <ModelsSection snapshot={snapshot} refresh={refresh} modelControl={controls.modelControl} cloudConfirm={controls.cloudConfirm} chooseModel={controls.chooseModel} pendingCloud={controls.pendingCloud} setNotice={setNotice} onGo={onGo} />}
           {section === 'permissions' && (
             <section className="card" aria-label="Permissions">
               <span className="title" style={{ fontSize: 16 }}>What Pandesh may do without asking</span>
@@ -93,7 +93,7 @@ export function Settings({ snapshot, refresh, narrow, initialSection, theme, set
   );
 }
 
-function ModelsSection({ snapshot, refresh, modelControl, setNotice, onGo }: { snapshot: Snapshot | null; refresh: () => void; modelControl: React.ReactNode; setNotice: (n: Notice) => void; onGo: (v: GoTarget) => void }) {
+function ModelsSection({ snapshot, refresh, modelControl, cloudConfirm, chooseModel, pendingCloud, setNotice, onGo }: { snapshot: Snapshot | null; refresh: () => void; modelControl: React.ReactNode; cloudConfirm: React.ReactNode; chooseModel: (value: string) => void; pendingCloud: string | null; setNotice: (n: Notice) => void; onGo: (v: GoTarget) => void }) {
   const [saving, setSaving] = useState(false);
   const cloud = usingCloud(snapshot);
   const choices = cloudChoices(snapshot);
@@ -106,12 +106,21 @@ function ModelsSection({ snapshot, refresh, modelControl, setNotice, onGo }: { s
     } catch (err) { setNotice({ text: errorText(err), error: true }); } finally { setSaving(false); refresh(); }
   };
   const enabled = (snapshot?.cloud?.providers ?? []).filter((p) => p.enabled && p.configured);
+  const availability = cloudAvailability(snapshot);
+  const [checking, setChecking] = useState(false);
+  const checkNow = async () => {
+    setChecking(true); setNotice(null);
+    try {
+      for (const p of enabled) await api.testProviderKey(p.id);
+      setNotice({ text: 'Free model lists checked.' });
+    } catch (err) { setNotice({ text: errorText(err), error: true }); } finally { setChecking(false); refresh(); }
+  };
   return (
     <>
       <section className="card" aria-label="Where answers come from">
         <span className="title" style={{ fontSize: 16 }}>Where answers come from</span>
         <dl className="settings-kv">
-          <dt>Provider</dt><dd>{cloud ? 'Free cloud' : 'This PC · Ollama'}</dd>
+          <dt>Provider</dt><dd>{cloud ? 'Free cloud' : 'This PC Â· Ollama'}</dd>
           <dt>Model</dt><dd>{cloud ? cloudSelectionLabel(snapshot) : modelLabel(snapshot)}</dd>
           <dt>Model server</dt><dd>{cloud ? 'Not used while a cloud model is chosen' : snapshot?.modelServerReachable === false ? 'Not answering' : snapshot?.modelServerReachable ? 'Answering' : 'Unknown'}</dd>
           <dt>Context</dt><dd>{snapshot?.contextEnvelope ? `${Math.round(snapshot.contextEnvelope / 1024)}K tokens` : 'Not reported'}</dd>
@@ -128,17 +137,26 @@ function ModelsSection({ snapshot, refresh, modelControl, setNotice, onGo }: { s
 
       <section className="card" aria-label="Free cloud models">
         <span className="title" style={{ fontSize: 16 }}>Free cloud models</span>
-        <p className="settings-note">Off until you add a provider key. {CLOUD_BOUNDARY_NOTE}</p>
+        <p className="settings-note">Off until you add a provider key. Nothing is sent to a cloud model until you pick one and confirm. {CLOUD_BOUNDARY_NOTE}</p>
+        {availability.length > 0 && (
+          <ul className="settings-availability" aria-label="Cloud provider availability">
+            {availability.map((a) => <li key={a.id} data-state={a.state}><strong>{a.name}</strong>: {a.text}</li>)}
+          </ul>
+        )}
+        <div className="settings-row">
+          {enabled.length > 0 && <button type="button" className="btn small" disabled={checking || saving} onClick={() => void checkNow()}>{checking ? 'Checkingâ€¦' : 'Check free models now'}</button>}
+          <button type="button" className="btn small" onClick={() => onGo('connections')}>Open Connections</button>
+        </div>
+        {cloudConfirm}
         {choices.length === 0 ? (
-          <p className="settings-note" role="status">{enabled.length === 0 ? 'No provider is set up yet.' : 'No verified free model is listed yet. Open Free models and refresh the list.'}{' '}
-            <button type="button" className="btn small" onClick={() => onGo('connections')}>Open Connections</button></p>
+          <p className="settings-note" role="status">{enabled.length === 0 ? 'No provider is set up yet.' : 'No verified free model is listed yet.'}</p>
         ) : (
           <fieldset className="settings-fieldset" disabled={saving || running}>
             <legend className="sr-only">Free cloud model</legend>
             {choices.map((c) => (
               <label key={c.value} className="settings-choice">
-                <input type="radio" name="v2-cloud-model" checked={snapshot?.cloud?.selectedModel === c.value} onChange={() => void pick(c.value)} />
-                <span><strong>{c.label}</strong> · {c.providerName}<br /><span className="settings-sub">{capabilityWords('Vision', c.vision)} · {capabilityWords('Tools', c.tools)}</span></span>
+                <input type="radio" name="v2-cloud-model" checked={(pendingCloud ?? snapshot?.cloud?.selectedModel) === c.value} onChange={() => chooseModel(c.value)} />
+                <span><strong>{c.label}</strong> Â· {c.providerName}<br /><span className="settings-sub">{capabilityWords('Vision', c.vision)} Â· {capabilityWords('Tools', c.tools)}</span></span>
               </label>
             ))}
           </fieldset>
@@ -173,10 +191,10 @@ function DiagnosticsSection({ snapshot, refresh, setNotice, onGo }: { snapshot: 
       <section className="card" aria-label="Health">
         <span className="title" style={{ fontSize: 16 }}>Health</span>
         <dl className="settings-kv">
-          <dt>Core</dt><dd style={{ color: coreOk ? 'var(--verified)' : 'var(--danger)' }}>{coreOk ? 'Connected' : core}{snapshot?.coreDetail ? ` — ${snapshot.coreDetail}` : ''}</dd>
+          <dt>Core</dt><dd style={{ color: coreOk ? 'var(--verified)' : 'var(--danger)' }}>{coreOk ? 'Connected' : core}{snapshot?.coreDetail ? ` â€” ${snapshot.coreDetail}` : ''}</dd>
           <dt>Model server</dt><dd>{snapshot?.modelServerReachable === false ? 'Not answering' : snapshot?.modelServerReachable ? 'Answering' : 'Unknown'}</dd>
-          <dt>Build</dt><dd>{meta ? `${meta.productName} ${meta.version}${meta.buildNumber ? ` · build b${meta.buildNumber}` : ''} · ${meta.buildKind}${meta.commit ? ` · ${meta.commit.slice(0, 8)}` : ''}` : 'Not reported'}</dd>
-          <dt>Core version</dt><dd>{meta?.coreVersion ?? 'Not reported'}{meta?.coreVersionMismatch ? ' — differs from this window' : ''}</dd>
+          <dt>Build</dt><dd>{meta ? `${meta.productName} ${meta.version}${meta.buildNumber ? ` Â· build b${meta.buildNumber}` : ''} Â· ${meta.buildKind}${meta.commit ? ` Â· ${meta.commit.slice(0, 8)}` : ''}` : 'Not reported'}</dd>
+          <dt>Core version</dt><dd>{meta?.coreVersion ?? 'Not reported'}{meta?.coreVersionMismatch ? ' â€” differs from this window' : ''}</dd>
         </dl>
         {!coreOk && <div><button type="button" className="btn small" onClick={() => void api.retryCoreConnection().then(refresh).catch((err) => setNotice({ text: errorText(err), error: true }))}>Reconnect to Core</button></div>}
       </section>
@@ -201,7 +219,7 @@ function UpdatesSection() {
   const load = () => api.getUpdateStatus().then(setStatus).catch(() => setStatus(null));
   useEffect(() => { void load(); }, []);
   const start = async () => {
-    setBusy(true); setMsg('Checking the update…');
+    setBusy(true); setMsg('Checking the updateâ€¦');
     try {
       void api.acknowledgeUpdateResult?.();
       const r = await api.startUpdate();
@@ -214,7 +232,7 @@ function UpdatesSection() {
       <span className="title" style={{ fontSize: 16 }}>Updates</span>
       <p className="settings-note" role="status" style={{ color: TONE[t.tone] }}>{t.text}</p>
       <p className="settings-note">Pandesh does not download updates by itself. Choose an update package (.pdupdate) from your PC. It is checked first, Pandesh finishes safe work, installs it and restarts; if the new build does not start, the old one is restored.</p>
-      <div className="actions"><button type="button" className="btn primary small" disabled={busy || !status?.available} onClick={() => void start()}>Choose an update package…</button></div>
+      <div className="actions"><button type="button" className="btn primary small" disabled={busy || !status?.available} onClick={() => void start()}>Choose an update packageâ€¦</button></div>
       {msg && <p className="settings-note" role="status">{msg}</p>}
     </section>
   );

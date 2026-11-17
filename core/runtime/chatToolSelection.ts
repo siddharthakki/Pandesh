@@ -33,6 +33,10 @@ export const TOOL_GROUPS: Record<string, ToolGroup> = {
     // Locating an app: "find/where … app|program" (not "write a program"), and a short "where is X?" question.
     pattern: /\b(?:pc|computer|machine|laptop|hardware|specs?|disks?|drives?|free space|storage|ram|cpu|gpu|vram|nvidia|processes?|services?|ports?|screen(?:shot)?|desktop|windows? (?:list|open)|installed|install|software|utilit(?:y|ies)|setup|diagnos\w*|capabilit(?:y|ies)|what can you do|can you (?:see|read|hear)|vision|which tools|updates?|outdated|upgrades?|versions?|[\w-]+\.exe)\b|\b(?:where|find|locate)\b[^.?!]{0,40}\b(?:apps?|applications?|programs?)\b|^\s*(?:(?:hey|ok|so)[\s,]+)?(?:pandesh[\s,]+)?where(?:'s|\s+is|\s+are)\s+(?:the\s+|my\s+)?[\w.+-]+(?:\s+[\w.+-]+)?\s*[?.!]*\s*$/i,
   },
+  bots: {
+    purpose: "the owner's Bots (Inbox Assistant, PC Manager, AI Scout, Pandesh Engineer): ask one, create one, give one a recurring routine, pause or resume",
+    pattern: /\b(?:bots?|inbox assistant|pc manager|ai scout|pandesh engineer|engineer|automations?|every (?:morning|evening|night|day|week|weekday|monday|tuesday|wednesday|thursday|friday|saturday|sunday)|each (?:morning|evening|day|week)|daily|weekly|monitor(?:ing)?\s+(?:my|the|our|all|any|this|these|installed|new|for|local|software|updates?|email|e-mail|inbox)|keep an eye on|keep track of|follow new|watch for|recurring|routines?)\b|\b(?:why is|why does|what(?:'s| is) wrong with|what(?:'s| is) missing (?:for|in)|which features)\b[^.?!]{0,60}\bpandesh\b|\bpandesh\b[^.?!]{0,40}\b(?:slow|broken|fail(?:s|ed|ing)?|crash\w*|source code|codebase|commits?|architecture)\b/i,
+  },
   projects: {
     purpose: "Pandesh's Projects workspace: create a project with tasks, list saved projects",
     // F13e: "current project tasks" did not offer list_projects, and the model went through the folder running tests.
@@ -193,6 +197,7 @@ export const CAPABILITY_GROUP: Record<string, string> = {
   'ollama-management': 'models',
   weather: 'weather',
   workshop: 'workshop',
+  bots: 'bots',
 };
 
 /**

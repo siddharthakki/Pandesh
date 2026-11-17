@@ -116,7 +116,12 @@ const CATEGORIES: ActionClaimCategory[] = [
     kind: 'install',
     object: /\b(?:utility|utilities|tools?|apps?|application|program|software|package|driver|pandoc|libreoffice|converter)\b/i,
     verbs: 'installed|set up|downloaded|added|enabled',
-    tools: /install|setup|download/i,
+    // "I've set up the PC Manager bot to monitor your installed software" after bot_schedule is a Bot routine, not an
+    // install, and "it won't install anything without your approval" is the opposite of a claim (live test 2026-11-17:
+    // a correct reply was marked "Not done: no installation was performed").
+    // Only a negation of the install itself: "since pandoc was not available, I installed it" is still a claim.
+    exclude: /\b(?:won't|will\s+not|would\s+not|wouldn't|never|cannot|can't|not)\s+(?:\w+\s+){0,2}?(?:install|set\s+up|download|add|enable)\w*\b|\bwithout\s+(?:\w+\s+){0,3}?(?:install\w*|approval|permission)\b/i,
+    tools: /install|setup|download|^bot_(?:create|schedule)$/i,
     label: 'installation',
   },
   {

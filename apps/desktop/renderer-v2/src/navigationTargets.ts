@@ -3,7 +3,7 @@
  * menu and the two composer menus are accepted; anything else is refused, so the window never pretends to open it.
  */
 /** The v2 views and spaces navigate_to may open (a subset of App's View and Workspaces' SpaceId). */
-export type V2View = 'chat' | 'board' | 'team' | 'connections' | 'tools' | 'software' | 'processes' | 'brain' | 'radar' | 'revenue';
+export type V2View = 'chat' | 'bots' | 'automations' | 'settings' | 'board' | 'team' | 'connections' | 'tools' | 'software' | 'processes' | 'brain' | 'radar' | 'revenue';
 export type V2Space = 'projects' | 'wish' | 'social' | 'media' | 'automations';
 
 export type V2Action =
@@ -13,7 +13,7 @@ export type V2Action =
   | { kind: 'focus'; id: 'v2-permission-mode' | 'v2-model' }
   | { kind: 'unknown'; detail: string };
 
-const VIEWS: ReadonlySet<string> = new Set(['chat', 'board', 'team', 'connections', 'tools', 'software', 'processes', 'brain', 'radar', 'revenue']);
+const VIEWS: ReadonlySet<string> = new Set(['chat', 'bots', 'automations', 'settings', 'board', 'team', 'connections', 'tools', 'software', 'processes', 'brain', 'radar', 'revenue']);
 const SPACES: ReadonlySet<string> = new Set(['projects', 'wish', 'social', 'media', 'automations']);
 
 export function parseV2Target(target: string): V2Action {
@@ -23,6 +23,8 @@ export function parseV2Target(target: string): V2Action {
     if (!VIEWS.has(view)) return { kind: 'unknown', detail: `v2 has no view "${view}"` };
     return tab === 'connectors' && view === 'tools' ? { kind: 'view', view: 'tools', toolsTab: 'connectors' } : { kind: 'view', view: view as V2View };
   }
+  // Automations is a main destination now; the older "space:automations" target opens the same page.
+  if (kind === 'space' && rest === 'automations') return { kind: 'view', view: 'automations' };
   if (kind === 'space') return SPACES.has(rest) ? { kind: 'space', space: rest as V2Space } : { kind: 'unknown', detail: `v2 has no space "${rest}"` };
   if (kind === 'menu' && rest === 'system') return { kind: 'menu' };
   if (kind === 'focus' && (rest === 'permission' || rest === 'model')) return { kind: 'focus', id: rest === 'permission' ? 'v2-permission-mode' : 'v2-model' };
