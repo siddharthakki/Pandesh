@@ -20,7 +20,7 @@ import { redactResearchText } from '../domain/researchProvenance';
 import type { ModelToolDefinition, ModelToolCall } from './modelBackend';
 import type { ToolExecutionContext, ToolExecutionResult } from './toolRunner';
 import type { CapabilityHealth, GovernedCapabilityAdapter } from './governedCapability';
-import { assertSafeSource, extractReadableText, normalizeSourceUrl, parseDuckDuckGoResults } from './researchRunner';
+import { RESEARCH_REQUEST_HEADERS, SEARCH_PROVIDER_BLOCKED, assertSafeSource, extractReadableText, isSearchChallenge, normalizeSourceUrl, parseDuckDuckGoResults } from './researchRunner';
 
 const MAX_RESULTS = 5;
 const MAX_FETCHED_SOURCES = 3;
@@ -76,7 +76,7 @@ function createResearchCapabilityAdapterInternal(options: ResearchCapabilityOpti
     if (remaining <= 0) return Promise.reject(new Error('research_timeout'));
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), remaining);
-    return fetchFn(url, { redirect, signal: controller.signal }).finally(() => clearTimeout(timer));
+    return fetchFn(url, { redirect, signal: controller.signal, headers: RESEARCH_REQUEST_HEADERS }).finally(() => clearTimeout(timer));
   }
 
   async function search(query: string, deadline: number): Promise<SearchResult[]> {
@@ -84,8 +84,12 @@ function createResearchCapabilityAdapterInternal(options: ResearchCapabilityOpti
       const ddg = new URL('https://html.duckduckgo.com/html/');
       ddg.searchParams.set('q', query);
       const res = await request(ddg, deadline);
+      // A bot-check page is the provider refusing to answer, never "no results" (it arrives as HTTP 202, which is ok).
+      if (isSearchChallenge(res.status, '')) throw new Error(SEARCH_PROVIDER_BLOCKED);
       if (!res.ok) throw new Error(`duckduckgo_http_${res.status}`);
-      return parseDuckDuckGoResults(await boundedText(res)).slice(0, MAX_RESULTS);
+      const html = await boundedText(res);
+      if (isSearchChallenge(res.status, html)) throw new Error(SEARCH_PROVIDER_BLOCKED);
+      return parseDuckDuckGoResults(html).slice(0, MAX_RESULTS);
     }
     const base = new URL(providerUrl);
     if (!['http:', 'https:'].includes(base.protocol)) throw new Error('provider_scheme_invalid');
@@ -146,7 +150,12 @@ function createResearchCapabilityAdapterInternal(options: ResearchCapabilityOpti
         }
       }
       if (evidence.length === 0) {
-        return { status: 'failed', exitCode: null, output: 'Search results were found but none could be safely retrieved.', resultCategory: 'research_all_sources_failed' };
+        // The pages exist but refuse a plain fetch (shops and price-comparison sites often do). Their links are real
+        // search results, so they are handed on: the person can open one, or have the browser read it. No page text was
+        // read, so nothing here is evidence for a price.
+        const found = results.map((r) => ({ url: normalizeSourceUrl(r.url), title: r.title })).filter((r): r is { url: string; title: string } => Boolean(r.url)).slice(0, 4);
+        const links = found.map((r) => `- ${r.title.replace(/\s+/g, ' ').slice(0, 70) || 'Untitled'}: ${r.url.slice(0, 160)}`).join('\n');
+        return { status: 'failed', exitCode: null, output: `Search results were found but none could be safely retrieved.${links ? ` Pages found (not read, so no price or fact from them is verified):\n${links}` : ''}`, resultCategory: 'research_all_sources_failed' };
       }
       return {
         status: 'succeeded',
@@ -157,7 +166,11 @@ function createResearchCapabilityAdapterInternal(options: ResearchCapabilityOpti
         researchProvenance: { query, retrievedAt, sources },
       };
     } catch (err) {
-      return { status: 'failed', exitCode: null, output: err instanceof Error ? err.message : String(err), resultCategory: 'research_failed' };
+      const message = err instanceof Error ? err.message : String(err);
+      if (message === SEARCH_PROVIDER_BLOCKED) {
+        return { status: 'failed', exitCode: null, output: 'The search provider refused this request (bot check or rate limit), so nothing was searched. This is not "no results": the query was never answered. Do not state prices, shops or findings from memory; tell the user the search is blocked right now.', resultCategory: 'research_provider_blocked' };
+      }
+      return { status: 'failed', exitCode: null, output: message, resultCategory: 'research_failed' };
     }
   }
 

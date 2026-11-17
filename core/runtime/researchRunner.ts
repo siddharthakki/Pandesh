@@ -15,6 +15,26 @@ const MAX_REDIRECTS = 3;
 const MAX_EVIDENCE_CHARS = 12_000;
 const hash = (value: string) => crypto.createHash('sha256').update(value, 'utf8').digest('hex');
 
+/**
+ * Every research request says who is asking. Node's bare fetch sends no browser-style headers, and the keyless search
+ * endpoint answers such a request with a bot-check page (HTTP 202, no results) — which read as "no results" for every
+ * query. The name is Pandesh's own: it never claims to be a browser.
+ */
+export const RESEARCH_REQUEST_HEADERS: Readonly<Record<string, string>> = {
+  'user-agent': 'Pandesh/0.1 (local personal assistant; one search per user request)',
+  accept: 'text/html,application/xhtml+xml,application/json;q=0.9,*/*;q=0.5',
+  'accept-language': 'en-US,en;q=0.8,de;q=0.6',
+};
+
+/** The search provider refused to answer (bot check or rate limit). This is not "no results". */
+export const SEARCH_PROVIDER_BLOCKED = 'search_provider_blocked';
+
+/** True when the search endpoint returned its bot-check page instead of a result list. */
+export function isSearchChallenge(status: number, html: string): boolean {
+  if (status === 202 || status === 403 || status === 429) return true;
+  return /anomaly-modal|anomaly\.js|bots use DuckDuckGo|challenge-form/i.test(html) && !/class="result__a"/.test(html);
+}
+
 export interface GovernedResearchRunnerOptions { backend: ModelBackend; providerUrl?: string; defaultModel?: string; fetchFn?: typeof fetch; }
 interface SearchResult { url: string; title: string; }
 
@@ -95,8 +115,12 @@ export class GovernedResearchRunner {
   }
   private async searchDuckDuckGo(query: string, deadline: number): Promise<SearchResult[]> {
     const url = new URL('https://html.duckduckgo.com/html/'); url.searchParams.set('q', query);
-    const res = await this.request(url, deadline); if (!res.ok) throw new Error(`duckduckgo_http_${res.status}`);
-    return parseDuckDuckGoResults(await boundedText(res));
+    const res = await this.request(url, deadline);
+    if (isSearchChallenge(res.status, '')) throw new Error(SEARCH_PROVIDER_BLOCKED);
+    if (!res.ok) throw new Error(`duckduckgo_http_${res.status}`);
+    const html = await boundedText(res);
+    if (isSearchChallenge(res.status, html)) throw new Error(SEARCH_PROVIDER_BLOCKED);
+    return parseDuckDuckGoResults(html);
   }
   private async fetchSource(initial: string, deadline: number): Promise<{ finalUrl: string; status: number; contentType: string | null; text: string; rawHash: string }> {
     let url = new URL(initial);
@@ -110,7 +134,7 @@ export class GovernedResearchRunner {
     }
     throw new Error('redirect_limit_exceeded');
   }
-  private request(url: URL, deadline: number, redirect: NonNullable<RequestInit['redirect']> = 'follow'): Promise<Response> { const remaining = Math.min(REQUEST_TIMEOUT_MS, deadline - Date.now()); if (remaining <= 0) return Promise.reject(new Error('research_timeout')); const controller = new AbortController(); const timer = setTimeout(() => controller.abort(), remaining); return this.fetchFn(url, { redirect, signal: controller.signal }).finally(() => clearTimeout(timer)); }
+  private request(url: URL, deadline: number, redirect: NonNullable<RequestInit['redirect']> = 'follow'): Promise<Response> { const remaining = Math.min(REQUEST_TIMEOUT_MS, deadline - Date.now()); if (remaining <= 0) return Promise.reject(new Error('research_timeout')); const controller = new AbortController(); const timer = setTimeout(() => controller.abort(), remaining); return this.fetchFn(url, { redirect, signal: controller.signal, headers: RESEARCH_REQUEST_HEADERS }).finally(() => clearTimeout(timer)); }
 }
 function emptySource(researchId: string, resultRank: number, normalizedUrl: string, title: string, status: 'failed' | 'rejected', failure: string, provider = 'searxng') { return { researchId, resultRank, normalizedUrl, finalUrl: null, title: title || null, provider, retrievedAt: null, httpStatus: null, contentType: null, extractedTextHash: null, rawResponseHash: null, extractedText: null, status, failure }; }
 export function researchProviderName(providerUrl = process.env.KARKEDIKHA_SEARXNG_URL): 'searxng' | 'duckduckgo' { return providerUrl ? 'searxng' : 'duckduckgo'; }

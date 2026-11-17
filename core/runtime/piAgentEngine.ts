@@ -403,6 +403,28 @@ export type PiToolApprovalOutcome =
  * request says so, and stays retryable; a request that could not be created is
  * reported as the system failure it is, not as the user's decision.
  */
+/**
+ * What the person reads when a price/offer question could not be searched. It states the real reason and offers the
+ * browser, and it never lists shops or prices: there is no evidence for any.
+ */
+export function failedProductSearchReply(toolError: string): string {
+  const reason = /research_provider_blocked/.test(toolError)
+    ? 'the search provider refused the request (a bot check or rate limit), so the query was never answered'
+    : /research_no_results/.test(toolError)
+      ? 'the search came back with no results for that wording'
+      : /research_all_sources_failed/.test(toolError)
+        ? 'the search found pages, but none of them could be read'
+        : /timeout|abort/i.test(toolError)
+          ? 'the search did not answer in time'
+          : 'the web search failed';
+  // Links the search itself returned (never from memory); the pages were not read, so they carry no price.
+  const links = [...toolError.matchAll(/^- (.+?): (https?:\/\/\S+)$/gm)].slice(0, 4).map((m) => `- [${m[1]}](${m[2]})`);
+  if (links.length) {
+    return `I could not read current prices: ${reason}. These are the pages the search found; I have not read them, so I am not quoting a price:\n\n${links.join('\n')}\n\nTell me which one to open in the browser and I will read the offers from the page.`;
+  }
+  return `I could not get current prices: ${reason}. I have no verified offer, so I am not naming shops or prices from memory.\n\nYou can ask me again in a minute, or tell me to open a price-comparison site in the browser (for example "open geizhals.de and look up this model") and I will read the offers from the page.`;
+}
+
 export function describeUnansweredApproval(outcome: PiToolApprovalOutcome): string {
   if (outcome.outcome === 'rejected') {
     return 'The user declined web access for this task. Do not claim any web findings; answer only from what you know and say it is unverified.';
@@ -3007,7 +3029,7 @@ export class PiAgentEngine implements EngineAdapter {
           }
           const result = await runWebResearch(query);
           if (result.status !== 'succeeded') {
-            return { content: [{ type: 'text', text: `Web research failed (${result.resultCategory}): ${String(result.output).slice(0, 400)}` }], isError: true };
+            return { content: [{ type: 'text', text: `Web research failed (${result.resultCategory}): ${String(result.output).slice(0, 1200)}` }], isError: true };
           }
           const text = String(result.output).replace(/\[S(\d+)\]/g, (_m, n) => `[S${webResearchCount}.${n}]`);
           if (result.researchProvenance) {
@@ -6588,8 +6610,15 @@ When the user asks to continue, resume, or check progress/updates, resume this w
               // The tool's error text is written for the model ("Do not claim any web findings…"); the person gets a plain
               // note under the answer instead of that text replacing it.
               const declined = /declin|not approve|did not approve|no approval/i.test(outText);
-              const note = declined ? 'No web search was run: you declined it.' : 'The web search did not return verified results.';
-              finalReply = finalReply ? `${finalReply.trimEnd()}\n\n${note}` : note;
+              if (declined) {
+                const note = 'No web search was run: you declined it.';
+                finalReply = finalReply ? `${finalReply.trimEnd()}\n\n${note}` : note;
+              } else {
+                // A price or offer question with no search evidence has no honest answer from memory: a list of shops
+                // "to check" (for the wrong country) and guessed model-name advice is what this replaced. Say what
+                // happened and what the person can do next; nothing else.
+                finalReply = failedProductSearchReply(outText);
+              }
             }
           } catch (err: any) {
             safeRecordRuntimeEvent(db, broadcaster, attemptId, 'web_research_fallback_failed', { error: err?.message ?? String(err) }, actor);
