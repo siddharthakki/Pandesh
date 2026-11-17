@@ -184,7 +184,7 @@ const CATEGORIES: ActionClaimCategory[] = [
     verbs: '',
     claim: /\b(?:by|from|via)\s+(?:the|your|my|our|a)\s+(?:research|coding|operations|personal|verification|testing|qa)\s+(?:specialists?|agents?)\b|\b(?:research|coding|operations|personal|verification|testing|qa)\s+(?:specialists?|agents?)\s+(?:has\s+|have\s+|had\s+|then\s+|also\s+|successfully\s+)*(?:conducted|implemented|completed|created|built|wrote|written|found|researched|done|did|finished|ran|run|handled|reported|delivered|prepared|performed|verified|investigated|returned|confirmed)\b|\bdelegated\s+(?:this|it|the\s+\w+)?\s*(?:task\s+)?to\s+(?:the|your|my)\s+\w+\s+(?:specialist|agent)/i,
     exclude: /\b(?:not|never|cannot|unable|could(?:n't| not))\b|n't\b|\b(?:would|will|can|could|should)\s+(?:ask|delegate|hand)/i,
-    tools: /^delegate_to_agent$/,
+    tools: /^(?:delegate_to_agent|mission_start)$/, // a mission hands its steps to specialists (Build 179: a true "I assigned Operations" was marked not done)
     label: 'specialist hand-off',
   },
   {
@@ -227,7 +227,7 @@ const CATEGORIES: ActionClaimCategory[] = [
     verbs: '',
     claim: /\bi(?:'ve|\s+have)?\s+(?:(?:now|just|already|successfully)\s+)*(?:passed|sent|shared|handed|forwarded|given|delegated|assigned)\b[^.!?]{0,120}?\bto\s+(?:the|your|my|our)\s+(?:\w+\s+)?(?:agents?|specialists?)\b/i,
     exclude: /\b(?:not|never|cannot|unable|could(?:n't| not))\b|n't\b/i,
-    tools: /^delegate_to_agent$/,
+    tools: /^(?:delegate_to_agent|mission_start)$/, // a mission hands its steps to specialists (Build 179: a true "I assigned Operations" was marked not done)
     label: 'specialist hand-off',
   },
   {

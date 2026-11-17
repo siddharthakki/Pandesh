@@ -116,6 +116,55 @@ export function wantsBackgroundWork(request: string | null | undefined): boolean
   return /\b(?:in the background|as a (?:background )?mission|keep (?:talking|chatting|working) (?:to|with) you|keep (?:talking|chatting)\b|continue (?:talking|chatting|our conversation)|carry on (?:talking|chatting)|while (?:you|that|it|this) (?:works?|runs?|is running|is working))\b|\b(?:meanwhile|in the meantime)\b[^.?!]{0,60}\b(?:talk|chat|ask you|conversation|other things)\b/i.test(text);
 }
 
+/** What a turn that was asked to work in the background did about it, from its recorded tool calls. */
+export function missionOutcome(calls: ReadonlyArray<{ tool: string; status: string }>): 'started' | 'managed' | 'refused' | 'none' {
+  const starts = calls.filter((c) => c.tool === 'mission_start');
+  if (starts.some((c) => c.status === 'completed')) return 'started';
+  // Continuing a stopped mission is also real background work.
+  if (calls.some((c) => c.tool === 'mission_manage' && c.status === 'completed' && /MISSION CONTINUED/.test(resultText(c)))) return 'started';
+  if (starts.length) return 'refused';
+  // The turn looked at, stopped or tried to continue an existing mission: that is an answer, not a missing start.
+  return calls.some((c) => c.tool === 'mission_manage' && c.status === 'completed') ? 'managed' : 'none';
+}
+
+/** The reply only asks the user something back (what exactly, which folder): nothing was claimed, so nothing to correct. */
+export function onlyAsksBack(reply: string): boolean {
+  const text = reply.trim();
+  if (!text.endsWith('?')) return false;
+  return !/\b(?:i(?:'ve| have)\s+(?:started|launched|begun|kicked off|initiated|assigned|set up)|is (?:now )?(?:running|under way|underway|in progress)|(?:has|have) been (?:started|launched|assigned)|mission (?:started|is running))\b/i.test(text);
+}
+
+function resultText(call: unknown): string {
+  const r = (call as { result?: { content?: Array<{ text?: string }> } }).result;
+  return String(r?.content?.[0]?.text ?? '');
+}
+
+/** Why Core refused the last mission_start of the turn (its own words, one line). */
+export function lastMissionRefusal(calls: ReadonlyArray<{ tool: string; status: string }>): string | null {
+  const last = [...calls].reverse().find((c) => c.tool === 'mission_start' && c.status !== 'completed');
+  const text = last ? resultText(last).replace(/\s+/g, ' ').trim() : '';
+  return text ? text.slice(0, 300) : null;
+}
+
+/** Core's one request to a model that answered a background-work request in words. */
+export const MISSION_START_REASK = 'Pandesh Core: the user asked for this to be done while they keep talking to you, and you have started nothing: this turn contains no mission_start call, so no specialist is working. Do not answer in words. Call mission_start now with the objective and one to three steps (each: agent, title, brief), and review set to true if the user asked for the work to be checked.';
+
+/**
+ * Core's own reply when background work was asked for and no mission exists at the end of the turn. It replaces the
+ * model's text: an account of a mission that was never started must not reach the user. (Worded without "in the
+ * background", so the promise audit does not add a second correction to a statement that is already Core's.)
+ */
+export function missionNotStartedReply(model: string, refusal: string | null): string {
+  return [
+    '**Nothing was started.**',
+    refusal
+      ? `You asked me to work on this while we keep talking. I planned it, but Pandesh Core refused the plan: ${refusal}`
+      : `You asked me to work on this while we keep talking, but the model answering this turn${model ? ` (${model})` : ''} did not hand the work to a specialist, even after Pandesh Core asked it to.`,
+    'No specialist is working on it and no report will arrive.',
+    refusal ? 'Tell me how to change the request and I will plan it again.' : 'Ask again, or pick another local model in the model menu and repeat the request.',
+  ].join(' ');
+}
+
 /** What the lead is told about missions at the start of a turn: running ones anywhere, and this conversation's latest. */
 export function missionTurnFact(db: CoreDatabase, conversationId: string | null, requestText: string): string | null {
   const parts: string[] = [];
