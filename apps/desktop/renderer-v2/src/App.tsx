@@ -16,11 +16,12 @@ import { Connections } from './Connections';
 import { Settings } from './Settings';
 import { Bots } from './Bots';
 import { Automations } from './Automations';
+import { MailHub } from './MailHub';
 import type { SettingsSection } from './settingsModel';
 import { useWakeWord } from './wake';
 import { startWorkshopIntake } from './workshop/useWorkshop';
 
-export type View = 'chat' | 'bots' | 'automations' | 'board' | 'team' | 'space' | 'system' | 'software' | 'tools' | 'brain' | 'processes' | 'workspace' | 'radar' | 'revenue' | 'connections' | 'settings';
+export type View = 'chat' | 'bots' | 'automations' | 'board' | 'team' | 'space' | 'system' | 'software' | 'tools' | 'brain' | 'processes' | 'workspace' | 'radar' | 'revenue' | 'mailhub' | 'connections' | 'settings';
 
 interface PaletteEntry { group: string; label: string; run: () => void }
 
@@ -96,6 +97,7 @@ export function App() {
   const spaces = [
     { name: needs ? `Board · ${needs} need you` : 'Board', sub: 'Every task and its real status', run: () => go('board') },
     { name: 'Team', sub: 'Specialist agents', run: () => go('team') },
+    { name: 'Mail Hub', sub: 'Read-only Outlook mail: inbox, bills, recruiters, dates', run: () => go('mailhub') },
     { name: 'Second Brain', sub: 'Search your memories, notes and documents', run: () => go('brain') },
     { name: 'AI Radar', sub: 'New local-AI releases and advisories vs this PC', run: () => go('radar') },
     { name: 'Media Studio', sub: 'Local image studio and media Pandesh made', run: () => openSpace('media') },
@@ -126,7 +128,7 @@ export function App() {
     const nav = e.navigation;
     if (e.kind !== 'navigate' || !nav) return;
     const action = nav.surface === 'v2' ? parseV2Target(nav.target) : { kind: 'unknown' as const, detail: 'this window shows the v2 interface' };
-    if (action.kind === 'view') { if (action.toolsTab) setToolsTab({ tab: action.toolsTab, n: Date.now() }); setPop(null); setView(action.view); }
+    if (action.kind === 'view') { if (action.toolsTab) setToolsTab({ tab: action.toolsTab, n: Date.now() }); if (action.view === 'mailhub' && action.screen) setMailScreen({ screen: action.screen, n: Date.now() }); setPop(null); setView(action.view); }
     else if (action.kind === 'space') { setSpace(action.space); setPop(null); setView('workspace'); }
     else if (action.kind === 'menu') setPop('spaces');
     else if (action.kind === 'focus') { setPop(null); setView('chat'); }
@@ -149,6 +151,7 @@ export function App() {
     setTimeout(check, 50);
   }), []);
   const [draft, setDraft] = useState<string | null>(null);
+  const [mailScreen, setMailScreen] = useState<{ screen: string; n: number } | null>(null);
 
   const paletteEntries: PaletteEntry[] = useMemo(() => [
     { group: 'GO TO', label: 'Chat', run: () => go('chat') },
@@ -156,6 +159,7 @@ export function App() {
     { group: 'GO TO', label: 'Automations', run: () => go('automations') },
     { group: 'GO TO', label: 'Projects', run: () => openSpace('projects') },
     { group: 'GO TO', label: 'Board', run: () => go('board') },
+    { group: 'GO TO', label: 'Mail Hub', run: () => go('mailhub') },
     { group: 'GO TO', label: 'Software & Services', run: () => go('software') },
     { group: 'GO TO', label: 'AI Radar', run: () => go('radar') },
     { group: 'GO TO', label: 'Team', run: () => go('team') },
@@ -180,7 +184,7 @@ export function App() {
       {(labels || narrow) && <span className="label">{r.text}</span>}
     </button>
   ));
-  const moreCurrent = ['board', 'team', 'brain', 'radar', 'revenue', 'processes', 'software'].includes(view) || (view === 'workspace' && space !== 'projects');
+  const moreCurrent = ['mailhub', 'board', 'team', 'brain', 'radar', 'revenue', 'processes', 'software'].includes(view) || (view === 'workspace' && space !== 'projects');
 
   return (
     <div className={`app${narrow ? ' narrow' : ''}`}>
@@ -204,6 +208,7 @@ export function App() {
         {view === 'software' && <Software narrow={narrow} />}
         {view === 'radar' && <Radar onOpenChat={() => { setOpenConversationId(null); refresh(); go('chat'); }} />}
         {view === 'revenue' && <Revenue />}
+        {view === 'mailhub' && <MailHub narrow={narrow} initial={mailScreen} onAskPandesh={(t) => { setDraft(t); go('chat'); }} onOpenBots={() => go('bots')} onOpenAutomations={() => go('automations')} />}
         {view === 'tools' && <ToolsHub narrow={narrow} initialTab={toolsTab} onOpenView={go} />}
         {view === 'connections' && <Connections snapshot={snapshot} refresh={refresh} />}
         {view === 'settings' && <Settings snapshot={snapshot} refresh={refresh} narrow={narrow} initialSection={settingsSection?.id} theme={theme} setTheme={applyTheme} labels={labels} setLabels={setLabelsTo}

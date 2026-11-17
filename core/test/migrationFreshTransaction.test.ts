@@ -31,7 +31,7 @@ describe('migrations on a new and on an existing database', () => {
     const full = tables(db);
     // Put it back to the previous build's schema: forget the last migration and what it created.
     const last = MIGRATIONS[MIGRATIONS.length - 1];
-    db.exec('DROP TABLE IF EXISTS mission_steps; DROP TABLE IF EXISTS missions;');
+    db.exec('DROP TABLE IF EXISTS mail_fts; DROP TABLE IF EXISTS mail_activity; DROP TABLE IF EXISTS mail_settings; DROP TABLE IF EXISTS mail_messages; DROP TABLE IF EXISTS mail_accounts;');
     db.run('DELETE FROM schema_migrations WHERE version = ?', [last.version]);
     expect(appliedSchemaVersion(db)).toBe(last.version - 1);
     expect(runMigrations(db).applied).toEqual([last.version]);

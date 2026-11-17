@@ -221,6 +221,18 @@ export class MailIndex {
     }
   }
 
+  /** The indexed text of one message of an authorized account, for a local model to read as data. */
+  excerpt(id: string, chars = 3000): { row: MailRow; text: string } | null {
+    const r = this.db.get<DbMessage>('SELECT m.*, a.name AS accountName FROM mail_messages m JOIN mail_accounts a ON a.storeId = m.storeId WHERE m.id = ? AND a.enabled = 1', [id]);
+    return r ? { row: this.toRow(r), text: r.body.slice(0, chars) } : null;
+  }
+
+  /** Authorized accounts whose index is older than maxAgeMs (or never synced). */
+  staleStoreIds(maxAgeMs: number): string[] {
+    const now = this.now().getTime();
+    return this.db.all<{ storeId: string; lastSyncAt: string | null }>('SELECT storeId, lastSyncAt FROM mail_accounts WHERE enabled = 1').filter((a) => !a.lastSyncAt || now - Date.parse(a.lastSyncAt) > maxAgeMs).map((a) => a.storeId);
+  }
+
   overview() {
     const stores = this.enabledStoreIds();
     const accounts = this.knownAccounts().filter((a) => a.enabled);

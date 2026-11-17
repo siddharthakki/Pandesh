@@ -3,17 +3,17 @@
  * menu and the two composer menus are accepted; anything else is refused, so the window never pretends to open it.
  */
 /** The v2 views and spaces navigate_to may open (a subset of App's View and Workspaces' SpaceId). */
-export type V2View = 'chat' | 'bots' | 'automations' | 'settings' | 'board' | 'team' | 'connections' | 'tools' | 'software' | 'processes' | 'brain' | 'radar' | 'revenue';
+export type V2View = 'chat' | 'bots' | 'automations' | 'settings' | 'board' | 'team' | 'connections' | 'tools' | 'software' | 'processes' | 'brain' | 'radar' | 'revenue' | 'mailhub';
 export type V2Space = 'projects' | 'wish' | 'social' | 'media' | 'automations';
 
 export type V2Action =
-  | { kind: 'view'; view: V2View; toolsTab?: 'connectors' }
+  | { kind: 'view'; view: V2View; toolsTab?: 'connectors'; screen?: string }
   | { kind: 'space'; space: V2Space }
   | { kind: 'menu' }
   | { kind: 'focus'; id: 'v2-permission-mode' | 'v2-model' }
   | { kind: 'unknown'; detail: string };
 
-const VIEWS: ReadonlySet<string> = new Set(['chat', 'bots', 'automations', 'settings', 'board', 'team', 'connections', 'tools', 'software', 'processes', 'brain', 'radar', 'revenue']);
+const VIEWS: ReadonlySet<string> = new Set(['chat', 'bots', 'automations', 'settings', 'board', 'team', 'connections', 'tools', 'software', 'processes', 'brain', 'radar', 'revenue', 'mailhub']);
 const SPACES: ReadonlySet<string> = new Set(['projects', 'wish', 'social', 'media', 'automations']);
 
 export function parseV2Target(target: string): V2Action {
@@ -21,6 +21,7 @@ export function parseV2Target(target: string): V2Action {
   if (kind === 'view') {
     const [view, tab] = rest.split('#');
     if (!VIEWS.has(view)) return { kind: 'unknown', detail: `v2 has no view "${view}"` };
+    if (view === 'mailhub') return { kind: 'view', view: 'mailhub', screen: tab || undefined };
     return tab === 'connectors' && view === 'tools' ? { kind: 'view', view: 'tools', toolsTab: 'connectors' } : { kind: 'view', view: view as V2View };
   }
   // Automations is a main destination now; the older "space:automations" target opens the same page.

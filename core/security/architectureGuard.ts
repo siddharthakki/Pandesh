@@ -94,6 +94,10 @@ export const AUTHORITATIVE_PROCESS_SPAWN_ALLOWLIST: ReadonlySet<string> = new Se
   // grep, rev-list, diff --quiet), started directly (no shell) with a 20 s timeout. It never writes to the repository.
   'core/runtime/bots/botSources.ts',
 
+  // Mail Hub: starts powershell.exe directly (no shell) with a fixed argv (-STA, the worker script Core wrote itself) to read Classic
+  // Outlook over COM. The worker has no write command; every call has a timeout that ends the whole process tree.
+  'core/runtime/mail/outlookConnector.ts',
+
   // Core external engine and agent runtimes
   'core/runtime/hermesEngine.ts',
   'core/runtime/opencodeEngine.ts',
