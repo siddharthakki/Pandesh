@@ -12,7 +12,16 @@ export interface MailRow {
   id: string; storeId: string; account: string; folder: string; subject: string; fromName: string; fromAddress: string; toText: string; received: string;
   unread: boolean; attachments: number; category: MailCategory; facts: MailFacts; snippet: string; duplicates: number;
 }
-export interface MailAccount { storeId: string; name: string; enabled: boolean; authorizedAt: string | null; lastSyncAt: string | null; lastError: string | null; inboxItems?: number | null; inboxUnread?: number | null; indexed?: number }
+export interface MailCoverage { from: string | null; floor: string; complete: boolean; capped: boolean }
+export interface MailAccount { storeId: string; name: string; enabled: boolean; authorizedAt: string | null; lastSyncAt: string | null; lastError: string | null; inboxItems?: number | null; inboxUnread?: number | null; indexed?: number; coverage?: MailCoverage }
+
+/** How far back the index has been checked against Outlook, in words. */
+export function coverageWords(c: MailCoverage | undefined): string {
+  if (!c) return 'not read yet';
+  if (c.complete) return `the whole window is covered (back to ${c.floor.slice(0, 10)})`;
+  if (!c.from) return 'nothing indexed yet';
+  return `indexed back to ${c.from.slice(0, 10)} of ${c.floor.slice(0, 10)}${c.capped ? ' (stopped by the size limit)' : ', continues on the next sync'}`;
+}
 export interface MailSettings { windowDays: number; maxPerAccount: number; maxPerSync: number; bodyChars: number; retentionDays: number }
 export interface MailCounts { indexed: number; unread: number; needsReply: number; byCategory: Record<string, number> }
 export interface MailStatus {

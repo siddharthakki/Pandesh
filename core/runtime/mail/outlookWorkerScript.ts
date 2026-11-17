@@ -106,6 +106,11 @@ function Handle($req) {
         $since = ([datetime]::Parse([string]$req.sinceIso, $inv, [System.Globalization.DateTimeStyles]::RoundtripKind)).ToLocalTime().ToString('MM/dd/yyyy HH:mm', $inv)
         $items = $items.Restrict("[ReceivedTime] >= '$since'")
       }
+      if ($req.beforeIso) {
+        # Inclusive to the end of that minute (Outlook compares at minute resolution), so the boundary message is re-read, never skipped.
+        $before = ([datetime]::Parse([string]$req.beforeIso, $inv, [System.Globalization.DateTimeStyles]::RoundtripKind)).ToLocalTime().AddMinutes(1).ToString('MM/dd/yyyy HH:mm', $inv)
+        $items = $items.Restrict("[ReceivedTime] < '$before'")
+      }
       $items.Sort('[ReceivedTime]', $true)
       $skip = [Math]::Max([int]$req.offset, 0)
       $rows = New-Object System.Collections.ArrayList

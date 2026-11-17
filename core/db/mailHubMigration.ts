@@ -52,3 +52,16 @@ CREATE TABLE IF NOT EXISTS mail_activity (
   detail TEXT NOT NULL
 );
 `;
+
+/**
+ * Mail Hub coverage: how far back each account's index has been verified against Outlook. A sync that stops at its
+ * per-sync limit continues from here next time (older mail first), instead of reading the newest mail again.
+ * `capped` marks an account whose per-account cap stopped the backfill, so it does not fight the cap.
+ */
+export const MIGRATION_55_MAIL_COVERAGE = `
+CREATE TABLE IF NOT EXISTS mail_coverage (
+  storeId TEXT PRIMARY KEY,
+  coverageFrom TEXT,
+  capped INTEGER NOT NULL DEFAULT 0
+);
+`;

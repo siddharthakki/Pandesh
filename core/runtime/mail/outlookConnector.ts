@@ -55,7 +55,7 @@ export class OutlookConnector {
   accounts(signal?: AbortSignal) { return this.call<{ accounts: OutlookAccount[] }>('accounts', {}, { signal }).then((r) => r.accounts); }
   ping(signal?: AbortSignal) { return this.call<{ version: string; stores: number }>('ping', {}, { signal, timeoutMs: this.defaultTimeoutMs }); }
   folders(storeId: string, depth = 2, signal?: AbortSignal) { return this.call<{ folders: OutlookFolder[] }>('folders', { storeId, depth }, { signal }).then((r) => r.folders); }
-  list(p: { storeId: string; folder?: string; sinceIso?: string; limit: number; offset?: number; bodyChars?: number }, signal?: AbortSignal) {
+  list(p: { storeId: string; folder?: string; sinceIso?: string; beforeIso?: string; limit: number; offset?: number; bodyChars?: number }, signal?: AbortSignal) {
     return this.call<OutlookListResult>('list', p, { signal, timeoutMs: this.defaultTimeoutMs * 2 });
   }
   get(p: { storeId: string; entryId: string; bodyChars?: number }, signal?: AbortSignal) { return this.call<OutlookMessageDetail>('get', p, { signal }); }

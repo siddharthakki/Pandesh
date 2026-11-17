@@ -1,14 +1,14 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { api, errorText } from './bridge';
 import {
-  CATEGORY_LABEL, SCREENS, askAbout, bytesWords, careerView, connectorWords, detectedDates, financeView, isScreen, sender, suggestedTasks, weekStrip, whenWords,
+  CATEGORY_LABEL, SCREENS, askAbout, bytesWords, careerView, connectorWords, coverageWords, detectedDates, financeView, isScreen, sender, suggestedTasks, weekStrip, whenWords,
   type CareerStage, type MailAccount, type MailAskRun, type MailCategory, type MailOverview, type MailRow, type MailSettings, type MailStatus, type ScreenId,
 } from './mailHubModel';
 
 type Reply<T> = T & { ok?: boolean; error?: string; code?: string };
 const call = async <T,>(action: string, args?: Record<string, unknown>): Promise<Reply<T>> => (await api.household(action, args)) as Reply<T>;
 type Notice = { text: string; error?: boolean } | null;
-interface ListState { rows: MailRow[]; total: number }
+interface ListState { rows: MailRow[]; total: number; interpreted?: string | null }
 interface Detail { row: MailRow; body: string; attachments: Array<{ name: string; size: number }>; source: 'outlook' | 'index'; note?: string }
 
 const pillTone = (c: MailCategory) => (c === 'finance' ? 'finance' : c === 'career' ? 'career' : c === 'security' ? 'alert' : '');
@@ -39,12 +39,12 @@ export function MailHub({ narrow, initial, onAskPandesh, onOpenBots, onOpenAutom
     try { const done = await work(); if (done) setNotice({ text: done }); } catch (err) { setNotice({ text: errorText(err), error: true }); } finally { setBusy(null); await loadStatus(); }
   };
   const sync = (storeId?: string) => run('sync', async () => {
-    const r = await call<{ results: Array<{ ok: boolean; indexed: number; removed: number; error?: string; complete: boolean }> }>('mailSync', { storeId });
+    const r = await call<{ results: Array<{ ok: boolean; indexed: number; removed: number; error?: string; complete: boolean; coverageFrom: string | null; backfilled: number; capped?: boolean }> }>('mailSync', { storeId });
     if (r.ok === false) throw new Error(r.error ?? 'Outlook did not answer');
     const bad = r.results.find((x) => !x.ok);
     if (bad) throw new Error(`Sync stopped: ${bad.error}`);
     const n = r.results.reduce((s, x) => s + x.indexed, 0); const gone = r.results.reduce((s, x) => s + x.removed, 0);
-    return `Read ${n} message(s) from Outlook${gone ? `, removed ${gone} that are no longer there` : ''}${r.results.some((x) => !x.complete) ? '. The limit was reached, so the oldest part of the window is not indexed yet' : ''}.`;
+    return `Read ${n} message(s) from Outlook${gone ? `, removed ${gone} that are no longer there` : ''}${r.results.some((x) => x.capped) ? '. The size limit stopped the index before the whole window; raise it in Settings → Limits to go further back' : r.results.some((x) => !x.complete) ? '. Older mail is not indexed yet: press Sync now again to continue further back' : '. The whole window is now covered'}.`;
   });
 
   const ctx = { status, authorized, open, go, sync, run, busy, setNotice, reload: loadStatus, onAskPandesh, onOpenBots, onOpenAutomations, narrow };
@@ -72,6 +72,7 @@ export function MailHub({ narrow, initial, onAskPandesh, onOpenBots, onOpenAutom
           {unavailableHere && <div className="notice error" role="alert" style={{ margin: '0 0 12px', maxWidth: 'none' }}>Mail Hub reads Classic Outlook, which is only available on Windows.</div>}
           {status && !unavailableHere && status.connector.state === 'down' && <div className="notice error" role="alert" style={{ margin: '0 0 12px', maxWidth: 'none' }}>{connector?.text}. Showing what was indexed earlier; Pandesh keeps working. Start Classic Outlook and press Sync now.</div>}
           {!status && !notice && <div className="notice" role="status">Reading Mail Hub…</div>}
+          {status && ready(ctx) && !['settings', 'activity', 'reader', 'rules'].includes(screen) && <CoverageNotice ctx={ctx} />}
           {status && screen === 'overview' && <Overview ctx={ctx} />}
           {status && screen === 'inbox' && <Inbox ctx={ctx} />}
           {status && screen === 'reader' && <Reader ctx={ctx} id={readerId} />}
@@ -102,6 +103,18 @@ const Head = ({ title, sub, right }: { title: string; sub: string; right?: React
 const Box = ({ title, extra, children }: { title: React.ReactNode; extra?: React.ReactNode; children: React.ReactNode }) => <div className="mh-card"><div className="mh-card-head"><h2>{title}</h2>{extra}</div>{children}</div>;
 const Kpi = ({ title, value, sub }: { title: string; value: React.ReactNode; sub: string }) => <div className="mh-card mh-kpi"><div className="mh-muted small">{title}</div><div className="mh-value">{value}</div><div className="mh-muted xs">{sub}</div></div>;
 const Empty = ({ children }: { children: React.ReactNode }) => <div className="mh-empty">{children}</div>;
+
+/** Says plainly when the index does not yet reach back over the whole window, so a count is never read as "all of it". */
+function CoverageNotice({ ctx }: { ctx: Ctx }) {
+  const gaps = ctx.authorized.filter((a) => a.coverage && !a.coverage.complete);
+  if (gaps.length === 0) return null;
+  return (
+    <div className="mh-notice" role="status" style={{ marginTop: 0, marginBottom: 12 }}>
+      {gaps.map((a) => `${a.name}: ${coverageWords(a.coverage)}`).join(' · ')}.
+      {' '}Counts and answers cover only the indexed part. {gaps.some((a) => a.coverage?.capped) ? 'Raise the size limit in Settings to go further back. ' : ''}<button type="button" className="btn link" disabled={ctx.busy === 'sync'} onClick={() => void ctx.sync()}>Continue reading older mail</button>
+    </div>
+  );
+}
 
 /** Shown in place of a screen's data when no account is authorized or nothing is indexed: no zero that looks like a result. */
 function NeedsSetup({ ctx, what }: { ctx: Ctx; what: string }) {
@@ -186,6 +199,7 @@ function Inbox({ ctx }: { ctx: Ctx }) {
       <div className="mh-card" style={{ marginBottom: 12 }}>
         <div className="mh-between"><div className="mh-filters" role="group" aria-label="Filter">{([['all', 'All'], ['unread', 'Unread'], ['reply', 'May need reply'], ['attachments', 'Attachments']] as const).map(([id, label]) => <button key={id} type="button" className={`mh-filter${filter === id ? ' selected' : ''}`} aria-pressed={filter === id} onClick={() => { setFilter(id); setOffset(0); }}>{label}</button>)}</div>
           <span className="mh-muted xs">{data ? `${data.total} message${data.total === 1 ? '' : 's'}` : ''}</span></div>
+        {q && data?.interpreted && <p className="mh-muted xs" style={{ marginTop: 8 }} data-testid="read-as">Read as: {data.interpreted}. Searched on this PC, in the index only.</p>}
         <form className="mh-row" onSubmit={(e) => { e.preventDefault(); setQ(text); setOffset(0); }}>
           <label className="sr-only" htmlFor="mh-search">Search messages</label>
           <input id="mh-search" className="mh-field" placeholder="Search sender, subject and text…" value={text} onChange={(e) => setText(e.target.value)} />
@@ -500,7 +514,7 @@ function SettingsScreen({ ctx }: { ctx: Ctx }) {
       <Box title="Outlook accounts" extra={<button type="button" className="btn small" disabled={ctx.busy === 'discover'} onClick={() => void discover()}>{ctx.busy === 'discover' ? 'Asking Outlook…' : 'Find accounts in Outlook'}</button>}>
         {list.length === 0 && <Empty>No accounts yet. Make sure Classic Outlook is installed, then press “Find accounts in Outlook”. It lists names and counts only.</Empty>}
         {list.map((a) => (
-          <div key={a.storeId} className="mh-cfg"><div><strong className="small">{a.name}</strong><p className="small mh-muted">{a.enabled ? `Authorized ${a.authorizedAt ? new Date(a.authorizedAt).toLocaleDateString() : ''} · ${a.indexed ?? 0} indexed${a.lastSyncAt ? ` · last read ${new Date(a.lastSyncAt).toLocaleString()}` : ' · not read yet'}` : 'Not authorized: Pandesh does not read this account.'}{typeof a.inboxItems === 'number' ? ` · Outlook inbox: ${a.inboxItems} items, ${a.inboxUnread ?? 0} unread` : ''}{a.lastError ? ` · last error: ${a.lastError}` : ''}</p></div>
+          <div key={a.storeId} className="mh-cfg"><div><strong className="small">{a.name}</strong><p className="small mh-muted">{a.enabled ? `Authorized ${a.authorizedAt ? new Date(a.authorizedAt).toLocaleDateString() : ''} · ${a.indexed ?? 0} indexed${a.lastSyncAt ? ` · last read ${new Date(a.lastSyncAt).toLocaleString()}` : ' · not read yet'} · Coverage: ${coverageWords(a.coverage)}` : 'Not authorized: Pandesh does not read this account.'}{typeof a.inboxItems === 'number' ? ` · Outlook inbox: ${a.inboxItems} items, ${a.inboxUnread ?? 0} unread` : ''}{a.lastError ? ` · last error: ${a.lastError}` : ''}</p></div>
             <span className="mh-btns">{a.enabled && <button type="button" className="btn small" disabled={ctx.busy === 'sync'} onClick={() => void ctx.sync(a.storeId)}>Sync</button>}<button type="button" className={`mh-toggle${a.enabled ? ' on' : ''}`} role="switch" aria-checked={a.enabled} aria-label={`${a.enabled ? 'Revoke' : 'Authorize'} ${a.name}`} onClick={() => void authorize(a, !a.enabled)} /></span></div>))}
         <div className="mh-notice">Start with one account. Revoking an account also removes what was indexed from it.</div>
       </Box>

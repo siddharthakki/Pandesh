@@ -1,4 +1,4 @@
-import { MIGRATION_54_MAIL_HUB } from './mailHubMigration';
+import { MIGRATION_54_MAIL_HUB, MIGRATION_55_MAIL_COVERAGE } from './mailHubMigration';
 import * as crypto from 'node:crypto';
 import type { CoreDatabase } from './connection';
 
@@ -2035,6 +2035,7 @@ export const MIGRATIONS: Migration[] = [
   { version: 52, description: 'Standing write grants for unattended routines (per task, frozen folder and operations, revocable) and their audited uses', sql: MIGRATION_52_ROUTINE_WRITE_GRANTS },
   { version: 53, description: 'Missions: a durable objective with ordered specialist steps, their evidence and artifacts, run in the background', sql: MIGRATION_53_MISSIONS },
   { version: 54, description: 'Mail Hub: local read-only index of Outlook mail (accounts, bounded messages with FTS5, settings, activity audit)', sql: MIGRATION_54_MAIL_HUB },
+  { version: 55, description: 'Mail Hub coverage: per-account verified-back-to date and cap flag, so a limited sync continues with older mail', sql: MIGRATION_55_MAIL_COVERAGE },
 ];
 
 

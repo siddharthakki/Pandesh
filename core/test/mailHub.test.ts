@@ -24,7 +24,7 @@ rl.on('line',(l)=>{const r=JSON.parse(l);const s=JSON.parse(fs.readFileSync(${JS
  if(s.hang&&r.cmd==='list')return; if(s.crash){process.exit(3);}
  const out=(data)=>console.log(JSON.stringify({id:r.id,ok:true,data}));
  if(r.cmd==='accounts')return out({accounts:s.accounts});
- if(r.cmd==='list'){const all=s.messages.filter(m=>!r.sinceIso||m.received>=r.sinceIso);const page=all.slice(r.offset||0,(r.offset||0)+r.limit);return out({messages:page,folderItems:all.length,hasMore:(r.offset||0)+page.length<all.length});}
+ if(r.cmd==='list'){const before=r.beforeIso?new Date(Date.parse(r.beforeIso)+60000).toISOString():null;const all=s.messages.filter(m=>(!r.sinceIso||m.received>=r.sinceIso)&&(!before||m.received<before)).sort((a,b)=>b.received.localeCompare(a.received));const page=all.slice(r.offset||0,(r.offset||0)+r.limit);fs.appendFileSync(${JSON.stringify(state + '.reads')},page.map(m=>m.entryId).join(' ')+' ');return out({messages:page,folderItems:all.length,hasMore:(r.offset||0)+page.length<all.length});}
  if(r.cmd==='get'){const m=s.messages.find(x=>x.entryId===r.entryId);return m?out({...m,body:m.body+' [live]',attachmentList:[{name:'statement.pdf',size:1200}]}):console.log(JSON.stringify({id:r.id,ok:false,error:'item not found'}));}
  console.log(JSON.stringify({id:r.id,ok:false,error:'unknown command'}));});`);
   return { file: process.execPath, args: [script] };

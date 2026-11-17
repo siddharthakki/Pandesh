@@ -10,6 +10,7 @@ import * as crypto from 'node:crypto';
 import type { CoreDatabase } from '../../db/connection';
 import { OutlookConnector, OutlookError, type OutlookAccount, type OutlookMessage } from './outlookConnector';
 import { readMessage, type MailCategory, type MailFacts } from './mailRules';
+import { ftsOrQuery, hasAnyIntent, interpretQuestion } from './mailSearch';
 
 export interface MailSettings { windowDays: number; maxPerAccount: number; maxPerSync: number; bodyChars: number; retentionDays: number }
 export const DEFAULT_MAIL_SETTINGS: MailSettings = { windowDays: 30, maxPerAccount: 2000, maxPerSync: 500, bodyChars: 4000, retentionDays: 90 };
@@ -22,7 +23,11 @@ export interface MailRow {
   unread: boolean; attachments: number; category: MailCategory; facts: MailFacts; snippet: string; duplicates: number;
 }
 export interface MailQuery { storeIds?: string[]; category?: MailCategory; unreadOnly?: boolean; needsReply?: boolean; q?: string; sinceIso?: string; limit?: number; offset?: number }
-export interface SyncResult { storeId: string; ok: boolean; indexed: number; removed: number; complete: boolean; mode: 'reconcile' | 'incremental'; error?: string }
+export interface SyncResult {
+  storeId: string; ok: boolean; indexed: number; removed: number; mode: 'reconcile' | 'incremental'; error?: string;
+  /** True when the whole window is verified against Outlook; false means a later sync continues with older mail. */
+  complete: boolean; coverageFrom: string | null; backfilled: number; capped?: boolean;
+}
 
 interface DbMessage {
   id: string; storeId: string; folder: string; entryId: string; subject: string; fromName: string; fromAddress: string; toText: string; received: string;
@@ -47,6 +52,8 @@ export class MailIndex {
       if (patch[k] === undefined) continue;
       this.db.run('INSERT INTO mail_settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value', [k, String(clampSetting(k, patch[k], DEFAULT_MAIL_SETTINGS[k]))]);
     }
+    // A raised cap or window may let a capped account continue its backfill.
+    this.db.run('UPDATE mail_coverage SET capped = 0');
     return this.settings();
   }
   activity(kind: string, storeId: string | null, ok: boolean, detail: string): void {
@@ -58,19 +65,22 @@ export class MailIndex {
   // ── accounts and authorization ──────────────────────────────────────────────────────────────
 
   /** Discovers the Outlook accounts (a read of names and counts only) and joins them with the owner's authorization. */
-  async accounts(signal?: AbortSignal): Promise<Array<OutlookAccount & { enabled: boolean; authorizedAt: string | null; lastSyncAt: string | null; indexed: number; lastError: string | null }>> {
+  async accounts(signal?: AbortSignal): Promise<Array<OutlookAccount & { enabled: boolean; authorizedAt: string | null; lastSyncAt: string | null; indexed: number; lastError: string | null; coverage: { from: string | null; floor: string; complete: boolean; capped: boolean } }>> {
     const live = await this.connector.accounts(signal);
     const out = [];
     for (const a of live) {
       this.db.run('INSERT INTO mail_accounts (storeId, name) VALUES (?, ?) ON CONFLICT(storeId) DO UPDATE SET name = excluded.name', [a.storeId, a.name]);
       const row = this.db.get<{ enabled: number; authorizedAt: string | null; lastSyncAt: string | null; lastError: string | null }>('SELECT enabled, authorizedAt, lastSyncAt, lastError FROM mail_accounts WHERE storeId = ?', [a.storeId])!;
       const n = this.db.get<{ n: number }>('SELECT COUNT(*) n FROM mail_messages WHERE storeId = ?', [a.storeId])?.n ?? 0;
-      out.push({ ...a, enabled: Boolean(row.enabled), authorizedAt: row.authorizedAt, lastSyncAt: row.lastSyncAt, indexed: n, lastError: row.lastError });
+      out.push({ ...a, enabled: Boolean(row.enabled), authorizedAt: row.authorizedAt, lastSyncAt: row.lastSyncAt, indexed: n, lastError: row.lastError, coverage: this.coverage(a.storeId) });
     }
     this.activity('discover', null, true, `${live.length} Outlook account(s) found`);
     return out;
   }
-  knownAccounts() { return this.db.all<{ storeId: string; name: string; enabled: number; authorizedAt: string | null; lastSyncAt: string | null; lastError: string | null }>('SELECT * FROM mail_accounts ORDER BY name').map((r) => ({ ...r, enabled: Boolean(r.enabled) })); }
+  knownAccounts() {
+    return this.db.all<{ storeId: string; name: string; enabled: number; authorizedAt: string | null; lastSyncAt: string | null; lastError: string | null }>('SELECT * FROM mail_accounts ORDER BY name')
+      .map((r) => ({ ...r, enabled: Boolean(r.enabled), coverage: this.coverage(r.storeId) }));
+  }
   enabledStoreIds(): string[] { return this.db.all<{ storeId: string }>('SELECT storeId FROM mail_accounts WHERE enabled = 1').map((r) => r.storeId); }
 
   /** The owner's decision. Turning an account off also forgets what was indexed from it. */
@@ -86,6 +96,7 @@ export class MailIndex {
       for (const { id } of ids) this.db.run('DELETE FROM mail_fts WHERE msgId = ?', [id]);
       this.db.run(storeId ? 'DELETE FROM mail_messages WHERE storeId = ?' : 'DELETE FROM mail_messages', storeId ? [storeId] : []);
       this.db.run(storeId ? 'UPDATE mail_accounts SET watermark = NULL, lastReconcileAt = NULL WHERE storeId = ?' : 'UPDATE mail_accounts SET watermark = NULL, lastReconcileAt = NULL', storeId ? [storeId] : []);
+      this.db.run(storeId ? 'DELETE FROM mail_coverage WHERE storeId = ?' : 'DELETE FROM mail_coverage', storeId ? [storeId] : []);
     });
     this.activity('clear', storeId ?? null, true, `${ids.length} indexed message(s) removed`);
     return ids.length;
@@ -110,36 +121,103 @@ export class MailIndex {
     this.db.run('INSERT INTO mail_fts (subject, sender, body, msgId) VALUES (?, ?, ?, ?)', [m.subject, `${m.fromName} ${m.fromAddress}`, body, id]);
   }
 
+  // ── coverage ────────────────────────────────────────────────────────────────────────────────
+
+  /** The oldest date the index may reach: the window, but never older than retention (which would be pruned again). */
+  windowFloor(s: MailSettings = this.settings()): string {
+    return new Date(this.now().getTime() - Math.min(s.windowDays, s.retentionDays) * 86_400_000).toISOString();
+  }
+  private coverageRow(storeId: string): { coverageFrom: string | null; capped: boolean } {
+    const r = this.db.get<{ coverageFrom: string | null; capped: number }>('SELECT coverageFrom, capped FROM mail_coverage WHERE storeId = ?', [storeId]);
+    return { coverageFrom: r?.coverageFrom ?? null, capped: Boolean(r?.capped) };
+  }
+  private setCoverage(storeId: string, coverageFrom: string | null, capped?: boolean) {
+    this.db.run('INSERT INTO mail_coverage (storeId, coverageFrom, capped) VALUES (?, ?, ?) ON CONFLICT(storeId) DO UPDATE SET coverageFrom = excluded.coverageFrom, capped = COALESCE(?, mail_coverage.capped)',
+      [storeId, coverageFrom, capped ? 1 : 0, capped === undefined ? null : capped ? 1 : 0]);
+  }
+  /** How far back this account's index has been checked against Outlook, for the window now in force. */
+  coverage(storeId: string): { from: string | null; floor: string; complete: boolean; capped: boolean } {
+    const floor = this.windowFloor(); const c = this.coverageRow(storeId);
+    return { from: c.coverageFrom, floor, complete: Boolean(c.coverageFrom) && (c.coverageFrom as string) <= floor, capped: c.capped };
+  }
+
+  private dropIds(ids: Array<{ id: string }>): number {
+    this.db.transaction(() => { for (const { id } of ids) { this.db.run('DELETE FROM mail_fts WHERE msgId = ?', [id]); this.db.run('DELETE FROM mail_messages WHERE id = ?', [id]); } });
+    return ids.length;
+  }
+
+  /**
+   * Reads newest-first from Outlook within [sinceIso, beforeIso] up to `budget` messages. Because the list is newest-first,
+   * what it returns is contiguous: everything between `oldest` and the upper bound was seen, so a message of that range that
+   * was not seen is gone. Returns what was read, the oldest date reached, and whether the whole range was read.
+   */
+  private async scan(storeId: string, p: { sinceIso: string; beforeIso?: string; budget: number }, gen: number, s: MailSettings, signal?: AbortSignal) {
+    let read = 0; let offset = 0; let oldest: string | null = null; let newest: string | null = null; let complete = true;
+    while (read < p.budget) {
+      const page = await this.connector.list({ storeId, folder: '@inbox', sinceIso: p.sinceIso, beforeIso: p.beforeIso, limit: Math.min(200, p.budget - read), offset, bodyChars: s.bodyChars }, signal);
+      this.db.transaction(() => { for (const m of page.messages) this.upsert(storeId, '@inbox', m, gen, s.bodyChars); });
+      for (const m of page.messages) { const iso = new Date(m.received).toISOString(); if (!oldest || iso < oldest) oldest = iso; if (!newest || iso > newest) newest = iso; }
+      read += page.messages.length; offset += page.messages.length;
+      if (!page.hasMore || page.messages.length === 0) return { read, oldest, newest, complete };
+    }
+    // The budget ran out while Outlook still had more in this range.
+    complete = false;
+    return { read, oldest, newest, complete };
+  }
+
+  /** Removes indexed mail in [lower, upper] that this sync did not see: it was moved or deleted in Outlook. */
+  private dropUnseen(storeId: string, lower: string, upper: string | null, gen: number): number {
+    return this.dropIds(this.db.all<{ id: string }>(
+      `SELECT id FROM mail_messages WHERE storeId = ? AND folder = '@inbox' AND received >= ? AND (? IS NULL OR received <= ?) AND seenGen < ?`, [storeId, lower, upper, upper, gen]));
+  }
+
   async sync(storeId: string, signal?: AbortSignal): Promise<SyncResult> {
     const acct = this.db.get<{ enabled: number; watermark: string | null; lastReconcileAt: string | null }>('SELECT enabled, watermark, lastReconcileAt FROM mail_accounts WHERE storeId = ?', [storeId]);
     if (!acct?.enabled) throw new OutlookError('failed', 'this account is not authorized for Mail Hub');
     const s = this.settings();
     const now = this.now();
     const gen = now.getTime();
-    const reconcile = !acct.watermark || !acct.lastReconcileAt || now.getTime() - Date.parse(acct.lastReconcileAt) > RECONCILE_EVERY_MS;
-    const sinceIso = reconcile ? new Date(now.getTime() - s.windowDays * 86_400_000).toISOString() : new Date(Date.parse(acct.watermark!) - 2 * 86_400_000).toISOString();
-    const result: SyncResult = { storeId, ok: false, indexed: 0, removed: 0, complete: true, mode: reconcile ? 'reconcile' : 'incremental' };
+    const floor = this.windowFloor(s);
+    let cov = this.coverageRow(storeId);
+    const full = !acct.watermark || !acct.lastReconcileAt || !cov.coverageFrom || now.getTime() - Date.parse(acct.lastReconcileAt) > RECONCILE_EVERY_MS;
+    const result: SyncResult = { storeId, ok: false, indexed: 0, removed: 0, complete: false, mode: full ? 'reconcile' : 'incremental', coverageFrom: cov.coverageFrom, backfilled: 0 };
     try {
-      let offset = 0; let newest: string | null = null;
-      for (;;) {
-        const page = await this.connector.list({ storeId, folder: '@inbox', sinceIso, limit: Math.min(200, s.maxPerSync - result.indexed), offset, bodyChars: s.bodyChars }, signal);
-        this.db.transaction(() => { for (const m of page.messages) this.upsert(storeId, '@inbox', m, gen, s.bodyChars); });
-        for (const m of page.messages) { const iso = new Date(m.received).toISOString(); if (!newest || iso > newest) newest = iso; }
-        result.indexed += page.messages.length; offset += page.messages.length;
-        if (!page.hasMore || page.messages.length === 0) break;
-        if (result.indexed >= s.maxPerSync) { result.complete = false; break; }
+      let budget = s.maxPerSync;
+      let newest: string | null = null;
+      // Pass 1: the newest mail. A full pass rereads the whole window (newest first); an incremental one only what is new.
+      const since1 = full ? floor : new Date(Date.parse(acct.watermark!) - 2 * 86_400_000).toISOString();
+      const a = await this.scan(storeId, { sinceIso: since1, budget }, gen, s, signal);
+      result.indexed += a.read; budget -= a.read; newest = a.newest;
+      if (full) {
+        // Contiguous from the newest down to a.oldest (or the whole window when complete): unseen mail there is gone.
+        const lower = a.complete || !a.oldest ? floor : a.oldest;
+        result.removed += this.dropUnseen(storeId, lower, null, gen);
+        this.setCoverage(storeId, lower);
+        cov = { ...cov, coverageFrom: lower };
       }
-      // A complete scan of the window is the only evidence that a message is gone: anything not seen was moved or deleted.
-      if (reconcile && result.complete) {
-        const stale = this.db.all<{ id: string }>('SELECT id FROM mail_messages WHERE storeId = ? AND folder = ? AND received >= ? AND seenGen < ?', [storeId, '@inbox', sinceIso, gen]);
-        this.db.transaction(() => { for (const { id } of stale) { this.db.run('DELETE FROM mail_fts WHERE msgId = ?', [id]); this.db.run('DELETE FROM mail_messages WHERE id = ?', [id]); } });
-        result.removed = stale.length;
+      // Pass 2: older mail, from the coverage boundary down towards the floor, with whatever budget is left. This is what
+      // makes a limited sync continue where the last one stopped.
+      while (budget > 0 && cov.coverageFrom && cov.coverageFrom > floor && !cov.capped) {
+        if (signal?.aborted) break;
+        const upper = cov.coverageFrom;
+        const b = await this.scan(storeId, { sinceIso: floor, beforeIso: upper, budget }, gen, s, signal);
+        result.indexed += b.read; result.backfilled += b.read; budget -= b.read;
+        const lower = b.complete || !b.oldest ? floor : b.oldest;
+        if (!b.complete && lower >= upper) break; // no progress: stop rather than loop
+        result.removed += this.dropUnseen(storeId, lower, upper, gen);
+        this.setCoverage(storeId, lower);
+        cov = { ...cov, coverageFrom: lower };
       }
-      result.removed += this.prune(storeId, s);
+      const pruned = this.prune(storeId, s);
+      result.removed += pruned.removed;
+      if (pruned.capped) { cov = { coverageFrom: pruned.oldestKept && (!cov.coverageFrom || pruned.oldestKept > cov.coverageFrom) ? pruned.oldestKept : cov.coverageFrom, capped: true }; this.setCoverage(storeId, cov.coverageFrom, true); }
+      result.coverageFrom = cov.coverageFrom;
+      result.complete = Boolean(cov.coverageFrom) && (cov.coverageFrom as string) <= floor;
+      result.capped = cov.capped;
       this.db.run('UPDATE mail_accounts SET lastSyncAt = ?, lastError = NULL, watermark = COALESCE(?, watermark), lastReconcileAt = ? WHERE storeId = ?',
-        [now.toISOString(), newest, reconcile && result.complete ? now.toISOString() : acct.lastReconcileAt, storeId]);
+        [now.toISOString(), newest, full ? now.toISOString() : acct.lastReconcileAt, storeId]);
       result.ok = true;
-      this.activity('sync', storeId, true, `${result.mode}: ${result.indexed} read, ${result.removed} removed${result.complete ? '' : ', partial (limit reached)'}`);
+      this.activity('sync', storeId, true, `${result.mode}: ${result.indexed} read (${result.backfilled} older), ${result.removed} removed; ${result.complete ? 'window fully covered' : result.capped ? 'stopped by the per-account cap' : `covered back to ${cov.coverageFrom?.slice(0, 10) ?? 'nothing yet'}, continues next sync`}`);
     } catch (err) {
       result.error = err instanceof Error ? err.message : String(err);
       this.db.run('UPDATE mail_accounts SET lastError = ? WHERE storeId = ?', [result.error.slice(0, 300), storeId]);
@@ -148,13 +226,14 @@ export class MailIndex {
     return result;
   }
 
-  /** Retention and the per-account cap: the oldest mail leaves the index first. */
-  private prune(storeId: string, s: MailSettings): number {
+  /** Retention and the per-account cap: the oldest mail leaves the index first. `capped` says the cap (not age) removed some. */
+  private prune(storeId: string, s: MailSettings): { removed: number; capped: boolean; oldestKept: string | null } {
     const cutoff = new Date(this.now().getTime() - s.retentionDays * 86_400_000).toISOString();
-    const old = this.db.all<{ id: string }>(
-      `SELECT id FROM mail_messages WHERE storeId = ? AND (received < ? OR id IN (SELECT id FROM mail_messages WHERE storeId = ? ORDER BY received DESC LIMIT -1 OFFSET ?))`, [storeId, cutoff, storeId, s.maxPerAccount]);
-    this.db.transaction(() => { for (const { id } of old) { this.db.run('DELETE FROM mail_fts WHERE msgId = ?', [id]); this.db.run('DELETE FROM mail_messages WHERE id = ?', [id]); } });
-    return old.length;
+    const aged = this.db.all<{ id: string }>('SELECT id FROM mail_messages WHERE storeId = ? AND received < ?', [storeId, cutoff]);
+    const over = this.db.all<{ id: string }>('SELECT id FROM mail_messages WHERE storeId = ? ORDER BY received DESC LIMIT -1 OFFSET ?', [storeId, s.maxPerAccount]);
+    this.dropIds([...aged, ...over.filter((o) => !aged.some((a) => a.id === o.id))]);
+    const oldest = this.db.get<{ r: string | null }>('SELECT MIN(received) r FROM mail_messages WHERE storeId = ?', [storeId])?.r ?? null;
+    return { removed: aged.length + over.length, capped: over.length > 0, oldestKept: oldest };
   }
 
   // ── reading the index (authorized accounts only) ────────────────────────────────────────────
@@ -168,36 +247,60 @@ export class MailIndex {
       attachments: r.attachments, category: r.category, facts: JSON.parse(r.facts) as MailFacts, snippet: r.body.replace(/<?https?:\/\/\S+>?/gi, ' ').replace(/[͏​-‏⁠﻿­]/g, '').replace(/\s+/g, ' ').trim().slice(0, 220), duplicates: Math.max(0, (r.dupes ?? 1) - 1) };
   }
 
-  /** FTS query from free text: plain words only, so nothing a user (or an email) types can become query syntax. */
-  static ftsQuery(q: string): string | null {
-    const words = (q.toLowerCase().match(/[\p{L}\p{N}]{2,}/gu) ?? []).slice(0, 8);
-    return words.length ? words.map((w) => `"${w}"*`).join(' AND ') : null;
-  }
-
-  list(query: MailQuery): { rows: MailRow[]; total: number } {
+  /**
+   * The index, filtered. Free text in `q` is read as a question first (mailSearch.ts): "recruiters", "this week",
+   * "unread", "needs a reply" become conditions, so a sentence finds mail instead of requiring every word to occur.
+   * `interpreted` says how the text was read (shown to the owner, given to the model).
+   */
+  list(query: MailQuery): { rows: MailRow[]; total: number; interpreted: string | null } {
     const stores = this.scope(query.storeIds);
-    if (stores.length === 0) return { rows: [], total: 0 };
+    if (stores.length === 0) return { rows: [], total: 0, interpreted: null };
+    const intent = query.q?.trim() ? interpretQuestion(query.q, this.now()) : null;
+    if (intent && !hasAnyIntent(intent)) return { rows: [], total: 0, interpreted: null };
     const where: string[] = [`m.storeId IN (${stores.map(() => '?').join(',')})`];
     const params: unknown[] = [...stores];
     // One row per message even when two accounts hold the same one.
     where.push('m.id = (SELECT m2.id FROM mail_messages m2 WHERE m2.dedupeKey = m.dedupeKey AND m2.storeId IN (' + stores.map(() => '?').join(',') + ') ORDER BY m2.received DESC, m2.id LIMIT 1)');
     params.push(...stores);
     if (query.category) { where.push('m.category = ?'); params.push(query.category); }
-    if (query.unreadOnly) where.push('m.unread = 1');
-    if (query.needsReply) where.push(`json_extract(m.facts, '$.needsReply') = 1`);
-    if (query.sinceIso) { where.push('m.received >= ?'); params.push(query.sinceIso); }
-    if (query.q?.trim()) {
-      const fts = MailIndex.ftsQuery(query.q);
-      if (!fts) return { rows: [], total: 0 };
-      where.push('m.id IN (SELECT msgId FROM mail_fts WHERE mail_fts MATCH ?)'); params.push(fts);
-    }
-    const w = where.join(' AND ');
-    const total = this.db.get<{ n: number }>(`SELECT COUNT(*) n FROM mail_messages m WHERE ${w}`, params)?.n ?? 0;
+    if (query.unreadOnly || intent?.unread) where.push('m.unread = 1');
+    if (query.needsReply || intent?.needsReply) where.push(`json_extract(m.facts, '$.needsReply') = 1`);
+    if (intent?.excludeBulk) where.push(`COALESCE(json_extract(m.facts, '$.bulk'), 0) = 0`);
+    const since = query.sinceIso ?? intent?.sinceIso;
+    if (since) { where.push('m.received >= ?'); params.push(since); }
+
+    const fts = intent ? ftsOrQuery(intent.words) : null;
+    const ftsSql = fts ? 'm.id IN (SELECT msgId FROM mail_fts WHERE mail_fts MATCH ?)' : null;
+    const cats = intent?.categories ?? [];
+    const catSql = cats.length ? `m.category IN (${cats.map(() => '?').join(',')})` : null;
     const limit = Math.min(Math.max(query.limit ?? 25, 1), 100);
-    const rows = this.db.all<DbMessage>(
-      `SELECT m.*, a.name AS accountName, (SELECT COUNT(*) FROM mail_messages d WHERE d.dedupeKey = m.dedupeKey) AS dupes
-       FROM mail_messages m JOIN mail_accounts a ON a.storeId = m.storeId WHERE ${w} ORDER BY m.received DESC LIMIT ? OFFSET ?`, [...params, limit, Math.max(query.offset ?? 0, 0)]);
-    return { rows: rows.map((r) => this.toRow(r)), total };
+    const offset = Math.max(query.offset ?? 0, 0);
+
+    const run = (match: { sql: string; params: unknown[] } | null, rankByText: boolean) => {
+      const w = [...where, ...(match ? [match.sql] : [])].join(' AND ');
+      const p = [...params, ...(match?.params ?? [])];
+      const total = this.db.get<{ n: number }>(`SELECT COUNT(*) n FROM mail_messages m WHERE ${w}`, p)?.n ?? 0;
+      const order = rankByText && fts ? `ORDER BY (CASE WHEN ${ftsSql} THEN 0 ELSE 1 END), m.received DESC` : 'ORDER BY m.received DESC';
+      const rows = this.db.all<DbMessage>(
+        `SELECT m.*, a.name AS accountName, (SELECT COUNT(*) FROM mail_messages d WHERE d.dedupeKey = m.dedupeKey) AS dupes
+         FROM mail_messages m JOIN mail_accounts a ON a.storeId = m.storeId WHERE ${w} ${order} LIMIT ? OFFSET ?`, [...p, ...(rankByText && fts ? [fts] : []), limit, offset]);
+      return { rows: rows.map((r) => this.toRow(r)), total };
+    };
+
+    if (!intent) return { ...run(null, false), interpreted: null };
+    let interpreted = intent.text;
+    let out;
+    if (catSql && ftsSql) {
+      if (intent.short) out = run({ sql: `(${catSql} OR ${ftsSql})`, params: [...cats, fts] }, true);
+      else {
+        // A longer question names a category and a topic: the topic inside that category first; if nothing has both, the category.
+        out = run({ sql: `(${catSql} AND ${ftsSql})`, params: [...cats, fts] }, false);
+        if (out.total === 0) { out = run({ sql: catSql, params: [...cats] }, false); interpreted = `${cats.join(' or ')} mail${intent.unread ? ', unread' : ''}${intent.needsReply ? ', that may need a reply' : ''} (nothing also matched ${intent.words.map((x) => `“${x}”`).join(', ')})${intent.sinceIso ? `, ${intent.text.split(', ').pop()}` : ''}`; }
+      }
+    } else if (catSql) out = run({ sql: catSql, params: [...cats] }, false);
+    else if (ftsSql) out = run({ sql: ftsSql, params: [fts] }, false);
+    else out = run(null, false); // only filters: unread, needs a reply, a time range
+    return { ...out, interpreted };
   }
 
   row(id: string): MailRow | null {
