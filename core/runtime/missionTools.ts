@@ -109,11 +109,25 @@ export function describeMission(db: CoreDatabase, m: Mission, detail: 'line' | '
  * a mission once and worked inline the next time. Core therefore decides the mode from the user's words and offers
  * the turn only the mission tools; the model still decides the plan.
  */
-export function wantsBackgroundWork(request: string | null | undefined): boolean {
+export function wantsBackgroundWork(request: string | null | undefined, state: { missionRunning?: boolean } = {}): boolean {
   const text = String(request ?? '').replace(/\s+/g, ' ').trim();
   if (text.length < 40) return false;
   if (/\b(?:don't|do not|no need to|not)\b[^.?!]{0,30}\b(?:background|meanwhile)\b/i.test(text)) return false;
-  return /\b(?:in the background|as a (?:background )?mission|keep (?:talking|chatting|working) (?:to|with) you|keep (?:talking|chatting)\b|continue (?:talking|chatting|our conversation)|carry on (?:talking|chatting)|while (?:you|that|it|this) (?:works?|runs?|is running|is working))\b|\b(?:meanwhile|in the meantime)\b[^.?!]{0,60}\b(?:talk|chat|ask you|conversation|other things)\b/i.test(text);
+  if (ASKS_FOR_BACKGROUND.test(text)) return true;
+  // "While that runs: what is the capital of Japan?" points at work that is already running (Build 180 in production:
+  // the question started a second, duplicate mission and was never answered). With a mission running, such a phrase
+  // alone asks for nothing new; with none running, it describes how the work in this very message should be done.
+  return !state.missionRunning && REFERS_TO_RUNNING_WORK.test(text);
+}
+
+/** The user's own words for "work on it apart from this conversation". */
+const ASKS_FOR_BACKGROUND = /\b(?:in the background|as a (?:background )?mission|keep (?:talking|chatting|working) (?:to|with) you|keep (?:talking|chatting)\b|continue (?:talking|chatting|our conversation)|carry on (?:talking|chatting))\b|\b(?:meanwhile|in the meantime)\b[^.?!]{0,60}\b(?:talk|chat|ask you|conversation|other things)\b/i;
+/** Words that point at work in progress: a request for background work only when nothing is running yet. */
+const REFERS_TO_RUNNING_WORK = /\bwhile (?:you|that|it|this) (?:works?|runs?|is running|is working)\b/i;
+
+/** Whether Core is running a mission right now (any conversation: the user's "that" may have been started elsewhere). */
+export function aMissionIsRunning(db: CoreDatabase): boolean {
+  try { return listMissions(db, { activeOnly: true, limit: 1 }).length > 0; } catch { return false; }
 }
 
 /** What a turn that was asked to work in the background did about it, from its recorded tool calls. */

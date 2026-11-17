@@ -148,7 +148,7 @@ import {
 } from './adapters/EngineAdapter';
 import { agentScopeForAttempt, allowedMemoryScopes, BUILTIN_AGENTS, SPECIALIST_COMMON_RULES, checkEgress, checkPathArguments, egressOf, egressPreapproved, getAgentDefinition, isToolAllowed, recordScopeRefusal, chiefDelegationScope, deriveScope } from '../domain/agents';
 import { delegationOutcome, isTerminalAttemptStatus as isTerminalDelegation, startDelegation } from '../domain/delegation';
-import { buildMissionTools, lastMissionRefusal, onlyAsksBack, MISSION_START_REASK, missionNotStartedReply, missionOutcome, missionTurnFact, wantsBackgroundWork } from './missionTools';
+import { aMissionIsRunning, buildMissionTools, lastMissionRefusal, onlyAsksBack, MISSION_START_REASK, missionNotStartedReply, missionOutcome, missionTurnFact, wantsBackgroundWork } from './missionTools';
 import { asksForIndependentCheck, independentCheckBrief, reviewerReport, reviewerTookPart } from './independentCheck';
 import {
   isGmailContractExtractionRequest,
@@ -4823,7 +4823,7 @@ Report this to the user, saying the ${name} agent did the work. Do not add facts
     // scoping would remove every local tool, so the private file is never read (audit D2, M9).
     // The user said how to work: in the background, while they keep talking. Only a mission does that, so this turn is
     // offered the mission tools and nothing that would do the work inline (missionTools.wantsBackgroundWork).
-    const backgroundAsked = (!agentScope || agentScope.agentId === 'chief') && !cloudTarget && tools.some((t) => t.name === 'mission_start') && wantsBackgroundWork(ctx.currentMessage ?? requestText);
+    const backgroundAsked = (!agentScope || agentScope.agentId === 'chief') && !cloudTarget && tools.some((t) => t.name === 'mission_start') && wantsBackgroundWork(ctx.currentMessage ?? requestText, { missionRunning: aMissionIsRunning(db) });
     if (backgroundAsked) {
       const kept = tools.filter((t) => t.name === 'mission_start' || t.name === 'mission_manage');
       tools.length = 0;
