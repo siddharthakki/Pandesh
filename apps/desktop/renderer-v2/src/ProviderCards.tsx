@@ -1,18 +1,12 @@
 import React, { useEffect, useState } from 'react';
 import { api, errorText, type FreeModelsState, type Snapshot } from './bridge';
 import { cloudAvailability, type CloudProviderAvailability } from './composerModel';
-import { TONE_COLOR, type BotsResponse, type Tone } from './botsModel';
+import { TONE_COLOR, credentialWords, type BotsResponse, type Tone } from './botsModel';
 
 type Notice = { text: string; error?: boolean } | null;
 interface CloudProviderView { id: string; displayName?: string; enabled?: boolean; configured?: boolean; endpoint?: string | null; privacyWarning?: string | null; apiKeysUrl?: string; keySource?: string | null; freeTier?: { kind: string; note?: string } }
 
 const STATE_TONE: Record<CloudProviderAvailability['state'], Tone> = { ready: 'ok', no_key: 'warn', off: 'neutral', not_checked: 'neutral', failed: 'bad', none_free: 'warn' };
-
-/** Where a key is kept, in words. Never the key, and not a part of it. */
-export function credentialWords(configured: boolean | undefined, source: string | null | undefined): string {
-  if (!configured) return 'No key stored';
-  return source === 'credential-manager' ? 'Key stored in Windows Credential Manager' : source === 'legacy-encrypted-file' ? 'Key stored in an older encrypted file on this PC' : 'Key stored on this PC';
-}
 
 /**
  * One card per provider Pandesh can use: where it is, whether its credential is stored (never the value), what it

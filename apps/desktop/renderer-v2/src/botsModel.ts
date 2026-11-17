@@ -94,6 +94,12 @@ export function createProblem(input: { name: string; responsibility: string; sou
   return null;
 }
 
+/** Where a provider key is kept, in words. Never the key, and not a part of it. */
+export function credentialWords(configured: boolean | undefined, source: string | null | undefined): string {
+  if (!configured) return 'No key stored';
+  return source === 'credential-manager' ? 'Key stored in Windows Credential Manager' : source === 'legacy-encrypted-file' ? 'Key stored in an older encrypted file on this PC' : 'Key stored on this PC';
+}
+
 export function validDailyTime(value: string): boolean {
   return /^([01]\d|2[0-3]):[0-5]\d$/.test(value.trim());
 }
