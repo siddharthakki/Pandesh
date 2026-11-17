@@ -217,6 +217,13 @@ describe('a Bot run reads, reports and records; it never acts', () => {
     expect(calls.some((c) => c.args[0] === '-p')).toBe(false);
   });
 
+  it('answers a Bot asked from chat even though that chat turn is the busy one', async () => {
+    const { bot, hermes } = await makeBot();
+    const run = await runBot(deps(hermes, [UPDATE_A], { busy: () => true, busyWaitMs: 120 }), { botId: bot.id, trigger: 'chat', question: 'Which updates matter?' });
+    expect(run.status).toBe('completed');
+    expect(run.question).toBe('Which updates matter?');
+  });
+
   it('flags a report that claims an action the Bot cannot take', async () => {
     const { bot, hermes } = await makeBot();
     reply = () => ({ code: 0, stdout: 'I have installed Git 2.50 for you.\n\nPROPOSED ACTIONS:\nNone\n' });

@@ -203,11 +203,13 @@ async function runBotOnce(deps: BotRunnerDeps, input: { botId: string; trigger: 
   }
 
   // The GPU is shared with chat: wait for it rather than slow a reply down.
-  const busy = deps.busy ?? (() => chatIsBusy(deps.db));
+  // A Bot asked from chat is exempt: the chat turn that asked is itself the "busy" one and is waiting for this answer
+  // (live test 2026-11-17: the Engineer waited ten minutes for its own caller and gave up).
+  const busy = input.trigger === 'chat' ? () => false : deps.busy ?? (() => chatIsBusy(deps.db));
   const waitUntil = Date.now() + (deps.busyWaitMs ?? BUSY_WAIT_MS);
   while (busy()) {
     if (input.signal?.aborted) return finish('interrupted', 'The run was cancelled while waiting for the PC to be free.');
-    if (Date.now() >= waitUntil) return finish('skipped', 'The PC stayed busy with chat work, so this run was skipped. It will run at the next occurrence.');
+    if (Date.now() >= waitUntil) return finish('skipped', `The PC stayed busy with chat work, so this run was skipped.${scheduled ? ' It will run at the next occurrence.' : ' Try again when the chat is idle.'}`);
     await sleep(Math.min(BUSY_POLL_MS, Math.max(50, waitUntil - Date.now())));
   }
 
