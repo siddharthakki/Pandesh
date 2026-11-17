@@ -79,7 +79,7 @@ export class MailIndex {
   }
   knownAccounts() {
     return this.db.all<{ storeId: string; name: string; enabled: number; authorizedAt: string | null; lastSyncAt: string | null; lastError: string | null }>('SELECT * FROM mail_accounts ORDER BY name')
-      .map((r) => ({ ...r, enabled: Boolean(r.enabled), coverage: this.coverage(r.storeId) }));
+      .map((r) => ({ ...r, enabled: Boolean(r.enabled), coverage: this.coverage(r.storeId), indexed: this.db.get<{ n: number }>('SELECT COUNT(*) n FROM mail_messages WHERE storeId = ?', [r.storeId])?.n ?? 0 }));
   }
   enabledStoreIds(): string[] { return this.db.all<{ storeId: string }>('SELECT storeId FROM mail_accounts WHERE enabled = 1').map((r) => r.storeId); }
 
@@ -185,9 +185,17 @@ export class MailIndex {
       let budget = s.maxPerSync;
       let newest: string | null = null;
       // Pass 1: the newest mail. A full pass rereads the whole window (newest first); an incremental one only what is new.
-      const since1 = full ? floor : new Date(Date.parse(acct.watermark!) - 2 * 86_400_000).toISOString();
+      // The incremental overlap is short (6 h): the old 2-day overlap alone could use the whole budget on a busy mailbox and
+      // leave nothing for older mail. Moved and deleted mail is caught by the full pass and by the backfill.
+      const since1 = full ? floor : new Date(Date.parse(acct.watermark!) - 6 * 3_600_000).toISOString();
       const a = await this.scan(storeId, { sinceIso: since1, budget }, gen, s, signal);
       result.indexed += a.read; budget -= a.read; newest = a.newest;
+      if (!full && !a.complete && a.oldest && cov.coverageFrom && a.oldest > cov.coverageFrom) {
+        // More new mail than this pass could read: what is verified now starts where the pass stopped, and the backfill
+        // below continues from there (rereading, never skipping, the gap).
+        this.setCoverage(storeId, a.oldest);
+        cov = { ...cov, coverageFrom: a.oldest };
+      }
       if (full) {
         // Contiguous from the newest down to a.oldest (or the whole window when complete): unseen mail there is gone.
         const lower = a.complete || !a.oldest ? floor : a.oldest;

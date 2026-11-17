@@ -65,6 +65,22 @@ describe('backfill after a limited sync', () => {
     expect(Math.max(...counts.values())).toBeLessThanOrEqual(3);
   });
 
+  it('keeps backfilling on a busy mailbox where a day of mail is more than one sync can read', async () => {
+    // Found live on a real mailbox: 60 messages are about one day, so a 2-day overlap used the whole budget every time.
+    const busy = Array.from({ length: 300 }, (_, i) => mk(i + 1, { received: iso((i + 1) / 60) })); // 60 per day
+    setBox(busy);
+    index.updateSettings({ maxPerSync: 60, windowDays: 30, maxPerAccount: 2000 });
+    await index.sync('S1');
+    let from = index.coverage('S1').from!;
+    for (let i = 0; i < 4; i++) {
+      await index.sync('S1');
+      const now = index.coverage('S1').from!;
+      expect(now < from).toBe(true); // every sync reaches further back
+      from = now;
+    }
+    expect(index.list({ limit: 100 }).total).toBeGreaterThan(60 * 3); // about 60 new each sync, less the short overlap
+  });
+
   it('once covered, a sync reads only what is new and does not backfill again', async () => {
     setBox(Array.from({ length: 20 }, (_, i) => mk(i + 1)));
     await index.sync('S1');
