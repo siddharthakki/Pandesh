@@ -35,7 +35,7 @@ function dpapiScript(op: 'Protect' | 'Unprotect'): string {
 function runDpapi(op: 'Protect' | 'Unprotect', input: Buffer): Promise<Buffer> {
   return new Promise((resolve, reject) => {
     const encoded = Buffer.from(dpapiScript(op), 'utf16le').toString('base64');
-    const child = execFile('powershell.exe', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-EncodedCommand', encoded], { windowsHide: true, timeout: 30_000, maxBuffer: 1024 * 1024 }, (err, stdout) => {
+    const child = execFile('powershell.exe', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-EncodedCommand', encoded], { windowsHide: true, timeout: 15_000, maxBuffer: 1024 * 1024 }, (err, stdout) => {
       if (err) { reject(new Error(`DPAPI ${op.toLowerCase()} failed: ${err.message.split('\n')[0]}`)); return; }
       const out = Buffer.from(String(stdout).trim(), 'base64');
       if (!out.length) { reject(new Error(`DPAPI ${op.toLowerCase()} returned nothing`)); return; }

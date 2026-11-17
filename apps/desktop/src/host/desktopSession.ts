@@ -174,6 +174,7 @@ import {
 } from './desktopWakeWord';
 import { WAKE_SCORE_THRESHOLD, WAKE_WARMUP_AUDIO_FRAMES } from './wakeWordConfig';
 import { collectDesktopHostTelemetry, type DesktopHostTelemetry } from './desktopHostTelemetry';
+import { runStartupStep } from './startupResilience';
 import { buildConversationContextView, conversationWorkspaceIdentity } from './desktopConversationContext';
 import {
   ensureImageStudioServices,
@@ -1406,6 +1407,31 @@ export class DesktopSession {
       },
       log: this.options.log,
     });
+    // A slow Core must cost time, never the app: wait for the client's own reconnect and retry (startupResilience.ts).
+    const init = await runStartupStep('post-connect initialisation', () => this.initialiseAfterConnect(), {
+      isReady: () => this.coreState === 'connected',
+      waitForReady: (ms) => this.waitForCoreConnected(ms),
+      log: this.options.log,
+    });
+    if (!init.ok) {
+      this.coreDetail = `Core is slow to answer (${init.error.message}). Use Retry.`;
+      this.options.log?.(`startup: continuing without finishing initialisation: ${init.error.message}`);
+      this.emit({ kind: 'error', at: nowIso(), summary: this.coreDetail });
+    }
+  }
+
+  /** Resolves true once the Core client reports connected, false after `ms`. */
+  private async waitForCoreConnected(ms: number): Promise<boolean> {
+    const until = Date.now() + ms;
+    while (Date.now() < until) {
+      if (this.coreState === 'connected') return true;
+      await new Promise((r) => setTimeout(r, 500));
+    }
+    return this.coreState === 'connected';
+  }
+
+  /** Everything the desktop reads from Core after connecting. Every step is safe to run again. */
+  private async initialiseAfterConnect(): Promise<void> {
     await this.refreshEverydayTools();
     this.startNotificationDelivery();
     await this.reconcileRemindersAfterResume('startup');

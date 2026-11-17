@@ -33,6 +33,7 @@ import { createHermesSkillCapabilityAdapter } from './runtime/hermesSkillCapabil
 import { createPortProcessManager } from './runtime/portManager';
 import { acquireSingleton } from './singleton/acquireSingleton';
 import { findForeignLiveOwners } from './singleton/foreignOwners';
+import { watchEventLoopStalls } from './runtime/eventLoopWatch';
 import { writeDiscoveryRecord, removeDiscoveryRecord } from './discovery/record';
 import { startApiServer } from './api/server';
 import { attachWsServer } from './ws/server';
@@ -582,7 +583,10 @@ async function main(): Promise<void> {
 
   // The JUGAAD phone listener: off unless the person turned phone sync on (companion-sync.json).
   const companion = companionController(db, dataDir, redactedLog);
-  await companion.apply().catch((err) => redactedLog(`companion: ${err instanceof Error ? err.message : String(err)}`));
+  // Not awaited: DPAPI runs in a PowerShell child and took ~50 s on Build 181's first starts. Phone sync starts when it is
+  // ready; Core is usable from the moment it listens.
+  void companion.apply().catch((err) => redactedLog(`companion: ${err instanceof Error ? err.message : String(err)}`));
+  watchEventLoopStalls(redactedLog, { label: 'core' });
 
   redactedLog(
     `listening on 127.0.0.1:${api.port}, instance ${instanceId}, coreVersion ${coreVersion}, bundleHash ${bundleHash ?? 'unknown'}, apiVersion ${CORE_API_VERSION}, node ${process.version}, electron ${process.versions.electron ?? 'n/a'}, dataDir ${dataDir}`,

@@ -32,6 +32,7 @@ import { JarvisTrayController } from './host/jarvisTray';
 import { createAppIcon } from './host/appIcon';
 import { normalizeSafeExternalUrl, normalizeSafeBrowserUrl } from './host/desktopSafeOpen';
 import { MobileServer, defaultMobileHost, parseMobileAccess } from './host/mobileServer';
+import { watchEventLoopStalls } from './host/startupResilience';
 
 /**
  * Dev: repo root. Portable / installed: directory that contains `app/` + `runtime/core.js`
@@ -1989,6 +1990,7 @@ if (gotSingleInstanceLock) {
 
   app.whenReady().then(async () => {
     hostLog('Electron ready');
+    watchEventLoopStalls(hostLog, { label: 'host' });
     // Workshop previews come from memory by token, never from a path (host/designPreview.ts).
     protocol.handle(DESIGN_PREVIEW_SCHEME, (request) => {
       const answer = designPreviews.respond(request.url, request.method);
