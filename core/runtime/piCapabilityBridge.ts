@@ -81,6 +81,9 @@ export const CHAT_CAPABILITY_IDS = [
  * Keeps prompt payload bounded (~2-5k tokens instead of ~29k), preventing
  * small/local model overload and empty responses.
  */
+/** Wording that points at a Bot: its name, "bot", recurring monitoring, or Pandesh's own health and code. */
+export const BOT_INTENT = /\b(?:bots?|inbox assistant|pc manager|ai scout|pandesh engineer|engineer|automations?|every (?:morning|evening|night|day|week|weekday|monday|tuesday|wednesday|thursday|friday|saturday|sunday)|each (?:morning|evening|day|week)|daily|weekly|monitor(?:ing)?\s+(?:my|the|our|all|any|this|these|installed|new|for|local|software|updates?|email|e-mail|inbox)|keep an eye on|keep track of|follow new|watch for|recurring|routines?)\b|\b(?:why is|why does|what(?:'s| is) wrong with|what(?:'s| is) missing (?:for|in)|which features)\b[^.?!]{0,60}\bpandesh\b|\bpandesh\b[^.?!]{0,40}\b(?:slow|broken|fail(?:s|ed|ing)?|crash\w*|source code|codebase|commits?|architecture)\b/i;
+
 export function selectCapabilitiesForIntent(requestText?: string): readonly string[] {
   if (!requestText || !requestText.trim()) {
     return [
@@ -110,6 +113,12 @@ export function selectCapabilitiesForIntent(requestText?: string): readonly stri
   // Media production: narrated videos, slideshows, checking a media file (core/runtime/mediaProduction.ts).
   if (/\b(?:videos?|narrat\w*|voice-?overs?|subtitles?|thumbnails?|youtube|shorts?|reels?|clips?|mp4|media_\w+|faceless|bedtime stor(?:y|ies)|audio file|soundtrack)\b/i.test(text)) {
     caps.add('media-production');
+  }
+
+  // My Bots: a Bot named or addressed, recurring monitoring, or a question about Pandesh itself for the Engineer
+  // (core/runtime/bots/botCapability.ts).
+  if (BOT_INTENT.test(text)) {
+    caps.add('bots');
   }
 
   // Weather intent
@@ -214,7 +223,7 @@ export interface BuildPiCapabilityBridgeOptions {
 }
 
 /** Chat capabilities the intent selection can add beyond the bounded set. */
-export const CHAT_EXPANDABLE_CAPABILITY_IDS = [...CHAT_CAPABILITY_IDS, 'system-management', 'port-management', 'computer-use', 'pc-organizer', 'revenue', 'workshop', 'media-production'] as const;
+export const CHAT_EXPANDABLE_CAPABILITY_IDS = [...CHAT_CAPABILITY_IDS, 'system-management', 'port-management', 'computer-use', 'pc-organizer', 'revenue', 'workshop', 'media-production', 'bots'] as const;
 
 /**
  * Builds the bridge, or returns undefined when this build's registry owns none

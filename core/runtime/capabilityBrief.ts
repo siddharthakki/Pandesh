@@ -60,6 +60,7 @@ const CAPABILITY_LABELS: Record<string, string> = {
   browser: 'the managed browser',
   'computer-use': 'the desktop (screenshot, windows)',
   hermes: 'the Hermes specialist skills',
+  bots: 'the owner\'s Bots (Inbox Assistant, PC Manager, AI Scout, Pandesh Engineer): asking one, creating one, and their recurring routines',
   weather: 'weather',
   'capability-inventory': "this PC's capabilities",
   'pc-organizer': 'organizing folders',
