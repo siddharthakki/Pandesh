@@ -480,6 +480,8 @@ export interface DesktopCloudProviderView {
   enabled: boolean;
   requiresBaseUrlInput: boolean;
   baseUrl: string | null;
+  /** The address requests to this provider go to: the person's override, else the catalog's. Never a key. */
+  endpoint: string | null;
   freeTier: { kind: string; note?: string };
   paymentMethodRequired: string;
   signupUrl: string;

@@ -3,7 +3,8 @@
  * what it may read; see core/runtime/bots. No route here lets a Bot act: a run only reads and reports.
  */
 import { CoreError } from '../domain/errors';
-import { listScheduledTasks, type ScheduledTaskRecord } from '../domain/scheduledTasks';
+import { getScheduledTask, listScheduledTasks, rescheduleDailyTask, setScheduledTaskEnabled, type ScheduledTaskRecord } from '../domain/scheduledTasks';
+import { HOUSEHOLD_ROUTINES } from '../domain/householdRoutines';
 import type { EventBroadcaster } from '../ws/broadcaster';
 import type { ConnectorId } from '../shared/wireTypes';
 import type { ConnectorAdapter } from '../runtime/connectors/connectorCapability';
@@ -31,6 +32,8 @@ export function automationRow(task: ScheduledTaskRecord, service: BotService): R
     id: task.id, title: task.title, purpose: task.purpose, enabled: task.enabled, dailyTime: task.dailyTime, timezone: task.timezone, repeat: task.repeat, recurrence: task.recurrence,
     nextRunAt: task.enabled ? task.nextRunAt : null, lastRunAt: task.lastRunAt, routine: task.routine, conversationId: bot?.conversationId ?? task.conversationId,
     owner: 'Pandesh Core scheduler',
+    // "Run now" exists only where Core has a route that runs it on demand.
+    runNow: task.routine === BOT_ROUTINE ? (bot ? 'bot' : null) : task.routine && HOUSEHOLD_ROUTINES.has(task.routine) ? 'household' : null,
     kind: task.routine === BOT_ROUTINE ? 'bot' : task.routine ? 'built_in' : 'instruction',
     bot: bot ? { id: bot.id, name: bot.name, status: bot.status } : null,
     lastResult: lastRun ? { status: lastRun.status, reason: lastRun.reason, at: lastRun.finishedAt ?? lastRun.startedAt } : null,
@@ -98,20 +101,21 @@ export function registerBotRoutes(router: Router<ApiContext, ApiResult>, options
     return ok({ bot });
   });
 
-  router.delete('/v1/bots/:id', async (ctx, match) => {
-    requireHost(ctx);
-    await serviceFor(ctx).remove(match.params.id);
-    return ok({ removed: true });
-  });
+  const remove = async (ctx: ApiContext, id: string) => { requireHost(ctx); await serviceFor(ctx).remove(id); return ok({ removed: true }); };
+  router.delete('/v1/bots/:id', (ctx, match) => remove(ctx, match.params.id));
+  router.post('/v1/bots/:id/remove', (ctx, match) => remove(ctx, match.params.id));
 
   router.post('/v1/bots/:id/run', async (ctx, match) => {
     requireHost(ctx);
     const service = serviceFor(ctx);
     const bot = service.require(match.params.id);
     const question = typeof body(ctx).question === 'string' ? String(body(ctx).question).trim().slice(0, 1500) : null;
-    // The run is started and answered when it ends; the page shows "running" meanwhile through GET /v1/bots.
-    const run = await runBot({ db: ctx.db, broadcaster: options.broadcaster, dataDir: options.dataDir, connectorRegistry: options.connectors, hermes: options.hermes }, { botId: bot.id, trigger: 'manual', question: question || null });
-    return ok({ run, bot: service.view(service.require(bot.id)) });
+    // A run takes minutes, so it is started here and read back through GET /v1/bots/:id ("running", then its record).
+    // `wait: true` (tests, scripts) answers when it ends instead.
+    const started = runBot({ db: ctx.db, broadcaster: options.broadcaster, dataDir: options.dataDir, connectorRegistry: options.connectors, hermes: options.hermes }, { botId: bot.id, trigger: 'manual', question: question || null });
+    if (body(ctx).wait === true) return ok({ started: true, run: await started, bot: service.view(service.require(bot.id)) });
+    started.catch((err) => console.error(`[karkedikha-core ${new Date().toISOString()}] bot run ${bot.id} failed:`, err instanceof Error ? err.message : err));
+    return ok({ started: true, run: null, bot: service.view(service.require(bot.id)) });
   });
 
   router.post('/v1/bots/:id/routines', (ctx, match) => {
@@ -135,10 +139,9 @@ export function registerBotRoutes(router: Router<ApiContext, ApiResult>, options
     return ok({ routine: task });
   });
 
-  router.delete('/v1/bots/routines/:taskId', (ctx, match) => {
-    requireHost(ctx);
-    return ok({ routine: serviceFor(ctx).removeRoutine(match.params.taskId) });
-  });
+  const removeRoutine = (ctx: ApiContext, taskId: string) => { requireHost(ctx); return ok({ routine: serviceFor(ctx).removeRoutine(taskId) }); };
+  router.delete('/v1/bots/routines/:taskId', (ctx, match) => removeRoutine(ctx, match.params.taskId));
+  router.post('/v1/bots/routines/:taskId/remove', (ctx, match) => removeRoutine(ctx, match.params.taskId));
 
   // Every recurring thing Core runs, in one list, each with its single scheduler owner.
   router.get('/v1/automations', (ctx) => {
@@ -146,5 +149,16 @@ export function registerBotRoutes(router: Router<ApiContext, ApiResult>, options
     const service = serviceFor(ctx);
     const tasks = listScheduledTasks(ctx.db, true).filter((t) => t.repeat === 'daily');
     return ok({ automations: tasks.map((t) => automationRow(t, service)), scheduler: 'Pandesh Core scheduler' });
+  });
+
+  // Pause, resume or re-time any recurring routine. Nothing else about it can be changed from here.
+  router.post('/v1/automations/:id', (ctx, match) => {
+    requireHost(ctx);
+    const b = body(ctx);
+    let task = getScheduledTask(ctx.db, match.params.id);
+    if (task.repeat !== 'daily') throw new CoreError('invalid_request', 'Only a recurring routine can be changed here.');
+    if (typeof b.dailyTime === 'string') task = rescheduleDailyTask(ctx.db, task.id, { dailyTime: b.dailyTime });
+    if (typeof b.enabled === 'boolean') task = setScheduledTaskEnabled(ctx.db, task.id, b.enabled);
+    return ok({ automation: automationRow(task, serviceFor(ctx)) });
   });
 }

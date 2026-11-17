@@ -23,7 +23,11 @@ afterEach(() => { cleanup(); document.body.innerHTML = ''; });
 describe('every registered v2 place is one the v2 window can open', () => {
   it('parses each v2 target and refuses anything else', () => {
     for (const d of destinationsFor('v2')) expect(parseV2Target(d.targets.v2!).kind, d.id).not.toBe('unknown');
-    expect(parseV2Target('view:settings')).toEqual({ kind: 'unknown', detail: 'v2 has no view "settings"' });
+    expect(parseV2Target('view:settings')).toEqual({ kind: 'view', view: 'settings' });
+    expect(parseV2Target('view:bots')).toEqual({ kind: 'view', view: 'bots' });
+    // The older Automations target still opens the Automations page.
+    expect(parseV2Target('space:automations')).toEqual({ kind: 'view', view: 'automations' });
+    expect(parseV2Target('view:bluetooth')).toEqual({ kind: 'unknown', detail: 'v2 has no view "bluetooth"' });
     expect(parseV2Target('space:bluetooth').kind).toBe('unknown');
     expect(parseV2Target('surface:integrations').kind).toBe('unknown');
   });
@@ -75,7 +79,7 @@ describe('the v2 window', () => {
 
     await act(async () => { listener(navEvent('menu:system', 'v2', 'uinav_c')); });
     await act(async () => { await vi.advanceTimersByTimeAsync(1200); });
-    expect(document.querySelector('[role="dialog"][aria-label="System"]')).not.toBeNull();
+    expect(document.querySelector('[role="dialog"][aria-label="More"]')).not.toBeNull();
     expect(confirmNavigation).toHaveBeenLastCalledWith('uinav_c', true, undefined, 'v2');
 
     await act(async () => { listener(navEvent('view:nowhere', 'v2', 'uinav_d')); });

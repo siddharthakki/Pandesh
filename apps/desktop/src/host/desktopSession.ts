@@ -1937,6 +1937,7 @@ export class DesktopSession {
       enabled: settings.enabledProviders.includes(provider.id),
       requiresBaseUrlInput: provider.requiresBaseUrlInput,
       baseUrl: settings.baseUrls[provider.id] ?? null,
+      endpoint: settings.baseUrls[provider.id] ?? (provider as { baseUrl?: string }).baseUrl ?? null,
       freeTier: provider.freeTier,
       paymentMethodRequired: provider.paymentMethodRequired,
       signupUrl: provider.signupUrl,
@@ -3052,6 +3053,18 @@ export class DesktopSession {
       revenueDecide: { path: `/v1/revenue/${encodeURIComponent(String(args.track ?? ''))}/drafts/${id}/decide`, method: 'POST', body: { decision: args.decision, note: args.note } },
       revenueOutcome: { path: `/v1/revenue/${encodeURIComponent(String(args.track ?? ''))}/outcomes`, method: 'POST', body: { kind: args.kind, leadId: args.leadId, amountEur: args.amountEur, evidence: args.evidence } },
       softwareSettings: { path: '/v1/software/settings', method: 'POST', body: { periodicEnabled: args.periodicEnabled, intervalHours: args.intervalHours } },
+      // My Bots and Automations (core/api/botRoutes.ts). A Bot only reads and reports; nothing here lets one act.
+      bots: { path: `/v1/bots${args.refresh ? '?refresh=1' : ''}` },
+      bot: { path: `/v1/bots/${id}` },
+      botCreate: { path: '/v1/bots', method: 'POST', body: { name: args.name, responsibility: args.responsibility, instructions: args.instructions, sources: args.sources, model: args.model, repoPath: args.repoPath } },
+      botsStandard: { path: '/v1/bots/standard', method: 'POST', body: { only: args.only, repoPath: args.repoPath } },
+      botUpdate: { path: `/v1/bots/${id}`, method: 'POST', body: { status: args.status, name: args.name, responsibility: args.responsibility, instructions: args.instructions, model: args.model, sources: args.sources, ...('repoPath' in args ? { repoPath: args.repoPath } : {}) } },
+      botRemove: { path: `/v1/bots/${id}/remove`, method: 'POST', body: {} },
+      botRun: { path: `/v1/bots/${id}/run`, method: 'POST', body: { question: args.question } },
+      botRoutineAdd: { path: `/v1/bots/${id}/routines`, method: 'POST', body: { title: args.title, dailyTime: args.dailyTime, everyDays: args.everyDays, weekdays: args.weekdays, enabled: args.enabled } },
+      botRoutineRemove: { path: `/v1/bots/routines/${id}/remove`, method: 'POST', body: {} },
+      automations: { path: '/v1/automations' },
+      automationUpdate: { path: `/v1/automations/${id}`, method: 'POST', body: { enabled: args.enabled, dailyTime: args.dailyTime } },
     };
     if (action === 'selectAgent') {
       this.selectedAgentId = typeof args.agentId === 'string' && args.agentId && args.agentId !== 'chief' ? args.agentId : null;
