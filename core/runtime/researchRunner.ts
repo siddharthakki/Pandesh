@@ -26,6 +26,19 @@ export const RESEARCH_REQUEST_HEADERS: Readonly<Record<string, string>> = {
   'accept-language': 'en-US,en;q=0.8,de;q=0.6',
 };
 
+/**
+ * The search region for the keyless endpoint (its `kl` parameter), from the PC's own time zone. Without it a PC in
+ * Germany got UK price listings in pounds for a product question. Only zones that name one country are listed; any
+ * other zone sends no region. The provider sees the request's network address anyway, so this tells it nothing new.
+ */
+const SEARCH_REGION_BY_TIME_ZONE: Readonly<Record<string, string>> = {
+  'Europe/Berlin': 'de-de', 'Europe/Busingen': 'de-de', 'Europe/Vienna': 'at-de', 'Europe/Zurich': 'ch-de', 'Europe/London': 'uk-en',
+  'Europe/Paris': 'fr-fr', 'Europe/Madrid': 'es-es', 'Europe/Rome': 'it-it', 'Europe/Amsterdam': 'nl-nl', 'Asia/Kolkata': 'in-en',
+};
+export function searchRegion(timeZone: string = Intl.DateTimeFormat().resolvedOptions().timeZone): string | null {
+  return SEARCH_REGION_BY_TIME_ZONE[timeZone] ?? null;
+}
+
 /** The search provider refused to answer (bot check or rate limit). This is not "no results". */
 export const SEARCH_PROVIDER_BLOCKED = 'search_provider_blocked';
 
@@ -36,7 +49,7 @@ export function isSearchChallenge(status: number, html: string): boolean {
 }
 
 export interface GovernedResearchRunnerOptions { backend: ModelBackend; providerUrl?: string; defaultModel?: string; fetchFn?: typeof fetch; }
-interface SearchResult { url: string; title: string; }
+interface SearchResult { url: string; title: string; /** The search listing's own summary of the result, when it gives one. */ snippet?: string; }
 
 /** Core-only, bounded SearXNG research. Web page text is always inserted as
  * explicitly untrusted evidence; it never becomes a tool or control channel. */
@@ -115,6 +128,7 @@ export class GovernedResearchRunner {
   }
   private async searchDuckDuckGo(query: string, deadline: number): Promise<SearchResult[]> {
     const url = new URL('https://html.duckduckgo.com/html/'); url.searchParams.set('q', query);
+    const region = searchRegion(); if (region) url.searchParams.set('kl', region);
     const res = await this.request(url, deadline);
     if (isSearchChallenge(res.status, '')) throw new Error(SEARCH_PROVIDER_BLOCKED);
     if (!res.ok) throw new Error(`duckduckgo_http_${res.status}`);
@@ -141,16 +155,21 @@ export function researchProviderName(providerUrl = process.env.KARKEDIKHA_SEARXN
 /** Parses DuckDuckGo HTML results; result links are redirect URLs carrying the target in `uddg`. */
 export function parseDuckDuckGoResults(html: string): SearchResult[] {
   const results: SearchResult[] = [];
-  for (const match of html.matchAll(/<a[^>]*class="result__a"[^>]*href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/g)) {
+  const anchors = [...html.matchAll(/<a[^>]*class="result__a"[^>]*href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/g)];
+  anchors.forEach((match, i) => {
     let target = decodeEntities(match[1]);
     try {
       const redirect = new URL(target, 'https://duckduckgo.com');
       if (redirect.searchParams.get('uddg')) target = redirect.searchParams.get('uddg')!;
       else target = redirect.toString();
-    } catch { continue; }
-    if (/^https?:\/\/(?:[^/]+\.)?duckduckgo\.com\/y\.js/.test(target)) continue; // sponsored
-    results.push({ url: target, title: decodeEntities(match[2].replace(/<[^>]+>/g, '')).trim() });
-  }
+    } catch { return; }
+    if (/^https?:\/\/(?:[^/]+\.)?duckduckgo\.com\/y\.js/.test(target)) return; // sponsored
+    // The listing's own summary of this result: the text between this title and the next one.
+    const block = html.slice((match.index ?? 0) + match[0].length, anchors[i + 1]?.index ?? html.length);
+    const snippet = /class="result__snippet"[^>]*>([\s\S]*?)<\/a>/.exec(block)?.[1];
+    const summary = snippet ? decodeEntities(snippet.replace(/<[^>]+>/g, '')).replace(/[­\s]+/g, ' ').trim().slice(0, 320) : '';
+    results.push({ url: target, title: decodeEntities(match[2].replace(/<[^>]+>/g, '')).trim(), ...(summary ? { snippet: summary } : {}) });
+  });
   return results;
 }
 export function normalizeSourceUrl(value: string): string | null { try { const url = new URL(value); assertSafeSource(url); url.hash = ''; return url.toString(); } catch { return null; } }
