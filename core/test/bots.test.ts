@@ -89,9 +89,13 @@ describe('a Bot is a Hermes profile, pinned to this PC', () => {
     expect(readProfileRouting('model:\n  provider: nous\n  default: solar\n').localOnly).toBe(false);
     expect(readProfileRouting('model:\n  provider: custom\n  base_url: https://api.example.com/v1\n  default: m\n').localOnly).toBe(false);
     expect(readProfileRouting(`${botProfileConfig({ model: 'm', ollamaUrl: 'http://127.0.0.1:11434' })}`.replace('fallback_providers: []', 'fallback_providers:\n  - openrouter')).localOnly).toBe(false);
+    fs.mkdirSync(path.join(home, 'profiles', '.deleted'), { recursive: true });
+    fs.mkdirSync(path.join(home, 'profiles', 'pandesheval'), { recursive: true });
+    expect(runtime().listProfiles().map((p) => p.name)).toEqual(['pandesheval']);
     expect(botProfileName('Inbox Assistant')).toBe('pandeshinboxassistant');
     expect(botProfileName('Inbox Assistant', new Set(['pandeshinboxassistant']))).toBe('pandeshinboxassistant2');
     expect(botProfileName('Überprüfer #1!')).toMatch(/^pandesh[a-z0-9]+$/);
+    expect(botProfileName('Pandesh Engineer')).toBe('pandeshengineer');
   });
 
   it('does not create a Pandesh record when Hermes is not installed', async () => {
@@ -115,6 +119,9 @@ describe('a Bot run reads, reports and records; it never acts', () => {
     expect(prompt).toMatch(/You have no tools except memory/);
     expect(prompt).toContain('- NEW Git: installed 1 -> 2.50 via winget');
     expect(run.proposals).toEqual(['Update Git to 2.50 with winget']);
+    // The counts in the report come from Core, not from the model.
+    expect(run.report).toMatch(/^Checked by Pandesh: This PC: 1 update\(s\) available; nothing was installed\. Disks: C: 400 GB free of 900 GB\./);
+    expect(turn.args[turn.args.indexOf('--reasoning') + 1]).toBe('none');
     expect(run.evidence[0]).toMatchObject({ source: 'pc_software', ok: true, items: 1, newItems: 1 });
     expect(run.evidence[0].sha256).toMatch(/^[0-9a-f]{64}$/);
     expect(run.hermes).toMatchObject({ profile: 'pandeshpcmanager', model: 'gemma4:12b', provider: 'custom' });
@@ -227,6 +234,24 @@ describe('a Bot run reads, reports and records; it never acts', () => {
     expect(run.status).toBe('failed');
     expect(run.report).toBeNull();
     expect(run.reason).toMatch(/Hermes could not complete the turn/);
+  });
+});
+
+describe('a source that could not be read is never reported as "nothing new"', () => {
+  it('fails the AI Scout run when every public source was rate limited', async () => {
+    const hermes = runtime();
+    const service = new BotService(db, dir, { hermes });
+    const bot = await service.create({ name: 'AI Scout', responsibility: 'Follow local AI releases.', sources: ['ai_radar'] });
+    const task = service.addRoutine(bot.id, { dailyTime: '06:45' });
+    const run = await runBot({ db, dataDir: dir, hermes, busy: () => false, sources: {
+      inventory: async () => ({ generatedAt: '2026-11-17T08:00:00Z', sections: [], items: [], ports: [], services: [], repositories: [], scanRoots: [] }),
+      radar: async () => ({ scannedAt: '2026-11-17T12:41:36Z', newFindings: [], urgent: [], errors: ['ollama/ollama releases: GitHub rate limit (403)', 'ollama/ollama advisories: GitHub rate limit (403)'], state: { findings: {}, scans: [] } }),
+      gpu: () => null,
+    } }, { botId: bot.id, trigger: 'schedule', task });
+    expect(run.status).toBe('failed');
+    expect(run.reason).toMatch(/None of this Bot's sources could be read: .*2 read\(s\) of the public sources failed \(ollama\/ollama releases: GitHub rate limit \(403\), and others\)/);
+    expect(run.reason).not.toMatch(/Nothing new/);
+    expect(calls.some((c) => c.args[0] === '-p')).toBe(false);
   });
 });
 

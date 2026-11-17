@@ -78,7 +78,7 @@ export function profileDir(name: string, env: NodeJS.ProcessEnv = process.env): 
 
 /** A Hermes profile name for a Bot: lowercase letters and digits only (Hermes' own rule), always prefixed. */
 export function botProfileName(displayName: string, taken: ReadonlySet<string> = new Set()): string {
-  const slug = displayName.toLowerCase().normalize('NFKD').replace(/[^a-z0-9]+/g, '').slice(0, 24) || 'bot';
+  const slug = displayName.toLowerCase().normalize('NFKD').replace(/[^a-z0-9]+/g, '').replace(new RegExp(`^${BOT_PROFILE_PREFIX}(?=.)`), '').slice(0, 24) || 'bot';
   const base = `${BOT_PROFILE_PREFIX}${slug}`;
   let name = base; let n = 2;
   while (taken.has(name)) name = `${base}${n++}`;
@@ -115,7 +115,7 @@ export function botProfileConfig(input: { model: string; ollamaUrl: string }): s
     'delegation:',
     '  fallback_providers: []',
     'agent:',
-    '  max_turns: 8',
+    '  max_turns: 4',
     '  api_max_retries: 1',
     'memory:',
     '  memory_enabled: true',
@@ -199,7 +199,8 @@ export class HermesBotRuntime {
     if (!home) return [];
     const root = path.join(home, 'profiles');
     let names: string[] = [];
-    try { names = fs.readdirSync(root, { withFileTypes: true }).filter((d) => d.isDirectory()).map((d) => d.name); } catch { return []; }
+    // Hermes keeps housekeeping folders here too (".deleted"); only real profile names are profiles.
+    try { names = fs.readdirSync(root, { withFileTypes: true }).filter((d) => d.isDirectory() && /^[a-z0-9][a-z0-9_-]*$/i.test(d.name)).map((d) => d.name); } catch { return []; }
     return names.sort().map((name) => {
       const dir = path.join(root, name);
       let routing = { model: null as string | null, localOnly: false };
@@ -285,7 +286,7 @@ export class HermesBotRuntime {
     if (!local.ok) return fail(`Not run: ${local.reason}. A Bot only runs on a local model.`);
     if (input.prompt.length > MAX_BOT_PROMPT_CHARS) return fail(`Not run: the prompt is ${input.prompt.length} characters, over the ${MAX_BOT_PROMPT_CHARS} limit`);
     const usageFile = path.join(os.tmpdir(), `pandesh-bot-usage-${process.pid}-${started}-${Math.random().toString(36).slice(2, 8)}.json`);
-    const r = await this.exec(st.binary, ['-p', input.profile, '-z', input.prompt, '-t', BOT_TOOLSETS, '--usage-file', usageFile], { timeoutMs: input.timeoutMs ?? 300_000, env: botProcessEnv(this.env), signal: input.signal });
+    const r = await this.exec(st.binary, ['-p', input.profile, '-z', input.prompt, '-t', BOT_TOOLSETS, '--reasoning', 'none', '--usage-file', usageFile], { timeoutMs: input.timeoutMs ?? 300_000, env: botProcessEnv(this.env), signal: input.signal });
     let usage: BotTurnResult['usage'] = null;
     let failedByUsage = false;
     try {

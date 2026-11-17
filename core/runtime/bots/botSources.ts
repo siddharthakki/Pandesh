@@ -22,6 +22,8 @@ import type { BotRecord, BotSourceId } from './botStore';
 
 export interface BotEvidenceItem { id: string; text: string }
 export interface BotEvidence {
+  /** One line of counts Core computed itself. It heads the delivered report, so the numbers never depend on the model. */
+  facts?: string;
   source: BotSourceId;
   ok: boolean;
   /** Why the source could not be read; null when it was. */
@@ -97,7 +99,7 @@ async function gmailInbox(deps: BotSourceDeps): Promise<BotEvidence> {
       for (const e of cal.tomorrow.slice(0, 6)) lines.push(`- tomorrow: ${clip(entry(e), 100)}`);
       if (cal.today.length + cal.tomorrow.length === 0) lines.push('- (none today or tomorrow)');
     }
-    return { source: 'gmail_inbox', ok: true, reason: email.status === 'partial' ? email.reason : null, privateData: true, text: bounded(lines), items, refs };
+    return { source: 'gmail_inbox', ok: true, facts: `Inbox: ${email.surfaced.length} message(s) need attention, ${email.canWait.length} can wait, ${email.suppressed.promotion + email.suppressed.lowSignal + email.suppressed.replied} left out as low value.`, reason: email.status === 'partial' ? email.reason : null, privateData: true, text: bounded(lines), items, refs };
   } catch (err) {
     return unavailable('gmail_inbox', err instanceof Error ? err.message : String(err), true);
   } finally {
@@ -138,14 +140,14 @@ async function pcSoftware(deps: BotSourceDeps): Promise<BotEvidence> {
         catch (err) { checkNote = ` (a new check failed: ${err instanceof Error ? err.message : String(err)}; showing the last stored result)`; }
       }
     }
-    const lines: string[] = [`Inventory read ${inv.generatedAt}: ${inv.items.length} installed items, ${inv.ports.length} listening ports, ${inv.services.length} services, ${inv.repositories.length} git repositories.`,
-      `Updates last checked: ${state.lastCheckedAt ?? 'never'}${checkNote}`];
+    const updates = state.results.filter((u) => u.status === 'update_available' || u.advisories.length > 0);
+    const lines: string[] = [`NUMBER OF UPDATES AVAILABLE: ${updates.length}. Updates last checked: ${state.lastCheckedAt ?? 'never'}${checkNote}`,
+      `(For context only, not updates: the inventory lists ${inv.items.length} installed programs and packages, ${inv.ports.length} listening ports, ${inv.services.length} services.)`];
     const unavailableSections = inv.sections.filter((s) => !s.available);
     if (unavailableSections.length) lines.push(`Could not read: ${unavailableSections.map((s) => `${s.label} (${s.reason ?? 'unknown'})`).join('; ')}`);
     const items: BotEvidenceItem[] = [];
     const refs: string[] = [];
     lines.push('', 'UPDATES AVAILABLE (nothing was installed):');
-    const updates = state.results.filter((u) => u.status === 'update_available' || u.advisories.length > 0);
     for (const u of updates.slice(0, 30)) {
       const adv = u.advisories.length ? ` | SECURITY: ${u.advisories.slice(0, 2).map((a) => `${a.id}${a.severity ? ` (${a.severity})` : ''}`).join(', ')}` : '';
       const line = `- ${u.name}: installed ${u.installed ?? 'unknown'} -> ${u.latestStable ?? 'unknown'} via ${u.source}${u.publishedAt ? `, released ${u.publishedAt.slice(0, 10)}` : ''}${adv}${u.notesUrl ? ` | ${u.notesUrl}` : ''}`;
@@ -156,14 +158,17 @@ async function pcSoftware(deps: BotSourceDeps): Promise<BotEvidence> {
     lines.push('', 'DISKS:');
     for (const d of (deps.disks ?? readDisks)()) {
       const pct = d.totalGb ? Math.round((d.freeGb / d.totalGb) * 100) : 0;
-      const line = `- ${d.drive} ${d.freeGb} GB free of ${d.totalGb} GB (${pct}% free)`;
+      const line = `- ${d.drive} ${d.freeGb} GB free of ${d.totalGb} GB (${pct}% free, ${100 - pct}% used)`;
       lines.push(line);
       // Disk space is reported again only when it gets low, and then once per 10-GB step.
       if (pct < 12) items.push({ id: `disk:${d.drive}:${Math.floor(d.freeGb / 10)}`, text: `${line} — LOW` });
     }
     const dirty = inv.repositories.filter((r) => (r as unknown as { modified?: number }).modified).length;
     lines.push('', `Git repositories with uncommitted changes: ${dirty}`);
-    return { source: 'pc_software', ok: true, reason: null, privateData: false, text: bounded(lines), items, refs: [...new Set(refs)].slice(0, 30) };
+    const security = updates.filter((u) => u.advisories.length > 0).length;
+    const disks = (deps.disks ?? readDisks)();
+    const low = disks.filter((d) => d.totalGb && d.freeGb / d.totalGb < 0.12).map((d) => d.drive);
+    return { source: 'pc_software', ok: true, facts: `This PC: ${updates.length} update(s) available${security ? `, ${security} with a security advisory` : ''}; nothing was installed. Disks: ${disks.map((d) => `${d.drive} ${d.freeGb} GB free of ${d.totalGb} GB`).join(', ')}${low.length ? ` (low: ${low.join(', ')})` : ''}.`, reason: null, privateData: false, text: bounded(lines), items, refs: [...new Set(refs)].slice(0, 30) };
   } catch (err) {
     return unavailable('pc_software', err instanceof Error ? err.message : String(err));
   }
@@ -193,7 +198,11 @@ async function aiRadar(deps: BotSourceDeps): Promise<BotEvidence> {
       lines.push(line); items.push({ id: `radar:${f.id}`, text: line }); refs.push(f.url);
     }
     if (relevant.length === 0) lines.push('- (nothing relevant)');
-    return { source: 'ai_radar', ok: true, reason: scan.errors.length ? `${scan.errors.length} source(s) could not be read` : null, privateData: false, text: bounded(lines), items, refs: [...new Set(refs)].slice(0, 30) };
+    // Sources failed and nothing relevant is known: that is "could not check", never "nothing new".
+    if (scan.errors.length > 0 && relevant.length === 0) {
+      return unavailable('ai_radar', `${scan.errors.length} read(s) of the public sources failed (${clip(scan.errors[0], 120)}${scan.errors.length > 1 ? ', and others' : ''}), so new releases could not be checked`);
+    }
+    return { source: 'ai_radar', ok: true, facts: `AI Radar: ${relevant.length} relevant finding(s), ${relevant.filter((f) => f.urgent).length} urgent, ${relevant.filter((f) => f.kind === 'security').length} security; scanned ${scan.scannedAt}${scan.errors.length ? `; ${scan.errors.length} source(s) could not be read` : ''}.`, reason: scan.errors.length ? `${scan.errors.length} source(s) could not be read` : null, privateData: false, text: bounded(lines), items, refs: [...new Set(refs)].slice(0, 30) };
   } catch (err) {
     return unavailable('ai_radar', err instanceof Error ? err.message : String(err));
   }
