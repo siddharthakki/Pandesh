@@ -3040,6 +3040,7 @@ export class DesktopSession {
       // Missions: background objectives with specialist steps (core/api/missionRoutes.ts).
       missions: { path: '/v1/missions?limit=12' },
       mission: { path: `/v1/missions/${id}` },
+      missionReceipt: { path: `/v1/missions/${id}/receipt` },
       missionCancel: { path: `/v1/missions/${id}/cancel`, method: 'POST', body: {} },
       missionContinue: { path: `/v1/missions/${id}/continue`, method: 'POST', body: {} },
       agent: { path: `/v1/agents/${id}` },
