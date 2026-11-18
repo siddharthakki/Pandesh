@@ -1849,6 +1849,23 @@ export class PiAgentEngine implements EngineAdapter {
         const verdict = evaluateAuthorizedDispatch(db, { attemptId, toolName: 'write_file', arguments: writeArgs });
         if (verdict.decision === 'auto_authorize' && verdict.authorization) {
           const standingGrantId = verdict.authorization.authorizedBy?.startsWith('standing_grant:') ? verdict.authorization.authorizedBy.slice('standing_grant:'.length) : undefined;
+          // DRV-010: a task's folder envelope lets the model write without a card per file, but it must not silently
+          // REPLACE an existing file it has never read or written this task. The recorded defect: asked to rename a file,
+          // the model wrote "93" over an unrelated 3-line document under a folder-wide card, and the reply never said so.
+          // Creating a new file, or rewriting one the model already read or wrote, stays allowed (the coding flow).
+          if (!standingGrantId) {
+            let existingBytes = 0;
+            try { const st = fs.statSync(full); if (st.isFile()) existingBytes = st.size; } catch { existingBytes = 0; }
+            if (existingBytes > 0 && !folderLedger.hasSeen(full)) {
+              // Allow the overwrite when the request itself names this file as the target: the person asked for it, so
+              // replacing it is the intended operation even without a prior read (e.g. "Update steady.txt to version 2").
+              const basename = path.basename(full).toLowerCase();
+              const namedInRequest = basename.length > 0 && requestText.toLowerCase().includes(basename);
+              if (!namedInRequest) {
+                return notDone('the file was not read before overwriting', `NOT WRITTEN: ${path.basename(full)} already holds ${existingBytes} bytes that Pandesh has not read in this task, and write_file replaces the whole file. Nothing was changed. Read the file first, then write the complete new text (or propose the exact edit). write_file cannot rename, move or delete a file; if that is what the user asked for, tell them Pandesh cannot do it here.`);
+              }
+            }
+          }
           return {
             ok: true, source: standingGrantId ? 'standing_grant' : 'mission_envelope', reason: verdict.reason, standingGrantId,
             mission: { id: verdict.authorization.id, digest: verdict.authorization.digest, normalizedPath: verdict.normalizedPath, contentDigest: verdict.contentDigest, contentBytes: verdict.contentBytes },

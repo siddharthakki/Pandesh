@@ -178,6 +178,44 @@ describe('Ask mode', () => {
   }, 60_000);
 });
 
+describe('DRV-010: a folder envelope must not silently overwrite an existing file the model never read', () => {
+  const original = 'This is a test document for the approved account.\nGenerated on: 2026-11-11.\nStatus: Verified.\n';
+
+  it('refuses to replace an existing file that was neither read nor written this task', async () => {
+    human(() => 'approved');
+    fs.writeFileSync(path.join(ws, 'test_document.txt'), original);
+    // The model lists nothing and reads nothing; it just writes garbage over an existing file (the recorded DRV-010 defect).
+    steps = [write('test_document.txt', '93')];
+    const { attemptId } = await turn('Rename the selected test file.');
+    expect(asked).toEqual(['authorize_mission']);
+    // The existing content must survive untouched.
+    expect(fs.readFileSync(path.join(ws, 'test_document.txt'), 'utf8')).toBe(original);
+    const events = writeEvents(attemptId);
+    expect(events.map((e) => e.type)).toEqual(['file_write_refused']);
+    expect(events[0].reason).toMatch(/not read|read the file first/i);
+  }, 60_000);
+
+  it('allows the overwrite once the model has read the file first', async () => {
+    human(() => 'approved');
+    fs.writeFileSync(path.join(ws, 'test_document.txt'), 'old line\n');
+    steps = [
+      { tool: { name: 'read_file', args: { filePath: 'test_document.txt' } } },
+      write('test_document.txt', 'new line\n'),
+    ];
+    const { attemptId } = await turn('Update the test document.');
+    expect(fs.readFileSync(path.join(ws, 'test_document.txt'), 'utf8')).toBe('new line\n');
+    expect(writeEvents(attemptId).map((e) => e.authorizationSource)).toEqual(['mission_envelope']);
+  }, 60_000);
+
+  it('still allows creating a brand-new file under the envelope', async () => {
+    human(() => 'approved');
+    steps = [write('fresh.txt', 'hello\n')];
+    const { attemptId } = await turn('Write a fresh note.');
+    expect(fs.readFileSync(path.join(ws, 'fresh.txt'), 'utf8')).toBe('hello\n');
+    expect(writeEvents(attemptId).map((e) => e.authorizationSource)).toEqual(['mission_envelope']);
+  }, 60_000);
+});
+
 describe('folder search permission is read-only', () => {
   it('a searched folder outside the workspace still needs an exact-file approval, and a declined one writes nothing', async () => {
     human((tool) => (tool === 'request_search_permission' ? 'approved' : 'rejected'));

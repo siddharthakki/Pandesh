@@ -88,6 +88,9 @@ export class FolderReadLedger {
 
   noteRead(file: string): void { this.read.add(key(file)); }
 
+  /** Whether this turn has read or already written the file — i.e. the model has seen its contents. */
+  hasSeen(file: string): boolean { const k = key(file); return this.read.has(k) || this.written.has(k); }
+
   hasListed(directory: string): boolean { return this.listed.has(key(directory)); }
 
   /** Documents actually read this turn (by the model or by Core). */
