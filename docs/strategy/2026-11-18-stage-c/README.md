@@ -15,7 +15,7 @@ One complete vertical slice: from a user instruction ("find what's consuming spa
 - Real file organization on an isolated profile (never production data).
 - Three verification levels shown (observed / checked / reviewed) — never overstated.
 - Failure/recovery paths: rejected approval, partial apply, interrupted mission, missing tool, reviewer partly-done.
-- v2 default flip (only after receipts + onboarding land — onboarding is Stage D/E).
+- v2 default flip: **Classic remains default** until separately approved after the completed vertical slice is reviewed. No production installation or change to the default UI before then.
 
 ## Scope (out — explicitly not in Stage C)
 

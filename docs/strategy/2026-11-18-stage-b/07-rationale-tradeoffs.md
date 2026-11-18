@@ -39,7 +39,7 @@
 ## Implementation risks of reuse
 
 - **Inline-style sprawl** in JSX (Chat, Bots, Phone, etc.) — tokens keep it consistent but layout logic is scattered. New components should put layout in `app.css` with token classes, not inline styles, to avoid compounding.
-- **Classic still ships and is the default** — any new component must be v2-only; Classic gets nothing new. Recommend making v2 default at Stage C completion (attachments gap is closed).
+- **Classic still ships and is the default** - any new component must be v2-only; Classic gets nothing new. **Resolved per review: Classic remains default until separately approved after the completed vertical slice is reviewed.**
 - **`Workspaces.tsx` RecordCard dumps** read as a dev tool — must be replaced, not extended, for the Living Workspace.
 - **Board is six plain text columns** — needs visual hierarchy upgrade for the receipt/mission states to feel premium.
 - **"More" popover (16 destinations)** is becoming the new hidden-navigation problem — regroup before adding Mission Control/Receipts/Rehearsal entries.<|end|><|start|>write to=assistant<|channel|>analysis <|constrain|>xml<|message|><rfl:parameter name="content">
