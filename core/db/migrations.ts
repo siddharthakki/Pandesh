@@ -1,3 +1,4 @@
+import { MIGRATION_54_MAIL_HUB, MIGRATION_55_MAIL_COVERAGE } from './mailHubMigration';
 import * as crypto from 'node:crypto';
 import type { CoreDatabase } from './connection';
 
@@ -1978,6 +1979,7 @@ CREATE INDEX IF NOT EXISTS idx_mission_steps_mission ON mission_steps(missionId,
 CREATE INDEX IF NOT EXISTS idx_mission_steps_attempt ON mission_steps(childAttemptId);
 `;
 
+
 export const MIGRATIONS: Migration[] = [
   { version: 1, description: 'bootstrap core_metadata and schema_migrations', sql: MIGRATION_1_BOOTSTRAP },
   { version: 2, description: 'M31 domain schema (projects/repositories/stories/events/etc.)', sql: MIGRATION_2_DOMAIN },
@@ -2032,6 +2034,8 @@ export const MIGRATIONS: Migration[] = [
   { version: 51, description: 'Tool execution journal: structured, conversation- and agent-scoped record of every completed tool call (ids, paths, artifacts, status, bounded result)', sql: MIGRATION_51_TOOL_EXECUTION_JOURNAL },
   { version: 52, description: 'Standing write grants for unattended routines (per task, frozen folder and operations, revocable) and their audited uses', sql: MIGRATION_52_ROUTINE_WRITE_GRANTS },
   { version: 53, description: 'Missions: a durable objective with ordered specialist steps, their evidence and artifacts, run in the background', sql: MIGRATION_53_MISSIONS },
+  { version: 54, description: 'Mail Hub: local read-only index of Outlook mail (accounts, bounded messages with FTS5, settings, activity audit)', sql: MIGRATION_54_MAIL_HUB },
+  { version: 55, description: 'Mail Hub coverage: per-account verified-back-to date and cap flag, so a limited sync continues with older mail', sql: MIGRATION_55_MAIL_COVERAGE },
 ];
 
 

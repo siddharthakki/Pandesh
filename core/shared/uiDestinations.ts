@@ -53,6 +53,8 @@ export const UI_DESTINATIONS: readonly UiDestination[] = [
     targets: { v2: 'view:brain' }, where: { v2: 'More → Second Brain' } },
   { id: 'automations', label: 'Automations (recurring work: next run, last result, run now, pause)', keywords: ['automations', 'routines', 'schedule', 'recurring', 'brief'],
     targets: { v2: 'view:automations' }, where: { v2: 'Automations (left sidebar)' } },
+  { id: 'mail_hub', label: 'Mail Hub (Outlook mail: overview, inbox, reader, Ask Pandesh, finance, career, calendar, tasks, rules, activity, settings)', keywords: ['mail', 'mail hub', 'email', 'emails', 'outlook', 'inbox', 'bills', 'invoices', 'recruiter', 'recruiters'],
+    targets: { v2: 'view:mailhub' }, where: { v2: 'More → Mail Hub (screens open with view:mailhub#overview, inbox, reader, assistant, finance, career, calendar, tasks, rules, activity, settings)' } },
   { id: 'media_studio', label: 'Media Studio', keywords: ['media', 'images', 'image', 'studio', 'pictures'],
     targets: { v2: 'space:media' }, where: { v2: 'More → Media Studio' } },
   { id: 'social_studio', label: 'Social Studio', keywords: ['social', 'posts', 'drafts'],

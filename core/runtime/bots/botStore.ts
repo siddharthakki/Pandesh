@@ -10,13 +10,14 @@ import * as crypto from 'node:crypto';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 
-export type BotSourceId = 'gmail_inbox' | 'pc_software' | 'ai_radar' | 'engineering';
+export type BotSourceId = 'gmail_inbox' | 'outlook_mail' | 'pc_software' | 'ai_radar' | 'engineering';
 export type BotStatus = 'active' | 'paused';
 export type BotRunStatus = 'running' | 'completed' | 'failed' | 'skipped' | 'interrupted';
 export type BotRunTrigger = 'schedule' | 'catch_up' | 'manual' | 'chat';
 
 export const BOT_SOURCES: Record<BotSourceId, { label: string; reads: string; privateData: boolean; needsApproval: string }> = {
   gmail_inbox: { label: 'Gmail inbox (read)', reads: 'Subjects, senders and snippets of recent inbox mail, through the Gmail connection', privateData: true, needsApproval: 'Sending, replying, labelling, archiving or deleting mail' },
+  outlook_mail: { label: 'Outlook mail via Mail Hub (read)', reads: 'Subjects, senders, dates and short excerpts of mail in the Mail Hub index, from the Outlook accounts you authorized there', privateData: true, needsApproval: 'Sending, replying, moving, deleting or marking mail, saving attachments, creating calendar events' },
   pc_software: { label: 'This PC: software, updates, disks, services', reads: 'Installed software and versions, available updates, disk space, listening ports and services', privateData: false, needsApproval: 'Installing or updating software, cleanup, stopping a process or service, restart' },
   ai_radar: { label: 'AI Radar: releases and advisories', reads: 'Public releases and security advisories of the watched local-AI projects, compared with what is installed and the GPU here', privateData: false, needsApproval: 'Installing a model or tool, or changing a configuration' },
   engineering: { label: 'Pandesh source, git history and logs', reads: 'The Pandesh repository (search, git log), the installed build identity, Core and desktop logs, recent failed tasks', privateData: false, needsApproval: 'Editing code, committing, merging, building, installing or deploying' },

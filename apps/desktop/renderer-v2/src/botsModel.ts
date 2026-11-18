@@ -3,7 +3,7 @@
  * and the tests share one reading. A Bot is a Hermes profile plus Pandesh's record of what it may read; Core runs
  * it read-only and its scheduler owns every routine.
  */
-export type BotSourceId = 'gmail_inbox' | 'pc_software' | 'ai_radar' | 'engineering';
+export type BotSourceId = 'gmail_inbox' | 'outlook_mail' | 'pc_software' | 'ai_radar' | 'engineering';
 export interface BotSourceInfo { id: BotSourceId; label: string; reads: string; privateData: boolean; needsApproval: string }
 export interface Routine { id: string; title: string; purpose: string | null; enabled: boolean; dailyTime: string; timezone: string; nextRunAt: string | null; lastRunAt: string | null; recurrence: { kind: 'weekly'; weekdays: number[] } | { kind: 'interval_days'; every: number; anchor: string } | null }
 export interface BotRun {
