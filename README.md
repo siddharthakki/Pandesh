@@ -21,7 +21,11 @@ and keep the final say over every file, command and web request.
 
 <sub>Real screen recording, sped up 2.5×: a background mission checks the disks, memory and open ports while you keep chatting. You stop it, continue it, and an independent Reviewer checks the numbers. Local <code>gemma4:12b</code>, isolated demo profile. <a href="#-see-it-work">More recorded runs below.</a></sub>
 
-**Latest build: Build 185** (source commit [`b1b41e5`](https://github.com/siddharthakki/Pandesh/commit/b1b41e5), 2026-11-17). [Run it from source](#-quick-start); no packaged v2 installer has been published yet.
+**Latest build: Build 185** (source commit [`b1b41e5`](https://github.com/siddharthakki/Pandesh/commit/b1b41e5), 2026-11-17). 
+
+### [⬇️ Download Pandesh Setup (Build 185, Windows, 356 MB)](https://github.com/siddharthakki/Pandesh/releases/download/v0.1.8-build185/Pandesh-Setup.exe)
+
+<sub>Unsigned alpha installer, so Windows SmartScreen will warn. Check the SHA-256 on the [release page](https://github.com/siddharthakki/Pandesh/releases/tag/v0.1.8-build185). You also need [Ollama](https://ollama.com/download). Prefer source? See the [quick start](#-quick-start).</sub>
 
 </div>
 
@@ -284,7 +288,7 @@ Real-speech and local-TTS tests are skipped unless their models are staged (`nod
 | **Unattended low-risk work** (read-only checks, scheduled reports) | ✅ In source builds: the watchdog, AI Radar and briefing run on schedule and only report |
 | **Unattended consequential work** (writing, running, sending, spending) | ⛔ Not safe yet |
 
-**Now:** Build 185 is the build in daily use. **Next:** a packaged v2 installer on Electron 45, with an upgrade and rollback test against a copy of a real profile,
+**Now:** Build 185 is the build in daily use. **Next:** a signed installer, an upgrade and rollback test against a copy of a real profile on Electron 45,
 and the first results of the revenue pilot. **Later:** an MCP server registry and embedded terminals. See the
 [roadmap](docs/ROADMAP.md).
 
@@ -324,10 +328,10 @@ A Windows 10/11 PC with a GPU that fits your model. The demos ran on an RTX 3090
 <summary><b>Is there an installer?</b></summary>
 <br>
 
-Not for v2 yet, so run it from source as shown above. The latest build is Build 185, commit
-[`b1b41e5`](https://github.com/siddharthakki/Pandesh/commit/b1b41e5). The last published installers (Build 144 and
-earlier) predate v2, and the [Releases page](https://github.com/siddharthakki/Pandesh/releases) has no v2 download. A
-packaged v2 installer is the next release milestone.
+Yes: [Pandesh-Setup.exe for Build 185](https://github.com/siddharthakki/Pandesh/releases/tag/v0.1.8-build185)
+(source commit [`b1b41e5`](https://github.com/siddharthakki/Pandesh/commit/b1b41e5)). It is unsigned, so Windows
+SmartScreen will warn; verify the SHA-256 on the release page. An isolated smoke test of the installer passed (install,
+launch, a governed tool call, upgrade while running, data kept, uninstall). You can still run from source as shown above.
 
 </details>
 
