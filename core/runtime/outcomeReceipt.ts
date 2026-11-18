@@ -93,7 +93,7 @@ export function buildOutcomeReceipt(db: CoreDatabase, missionId: string): Outcom
   for (const r of toolRows) {
     if (r.status !== 'succeeded') continue;
     const name = r.toolName;
-    if (/^write_file$|^propose_file_change$|^propose_text_edit$/.test(name)) counts.set('files changed', (counts.get('files changed') ?? 0) + 1);
+    if (/^write_file$|^propose_file_change$|^propose_text_edit$/.test(name)) counts.set('files written', (counts.get('files written') ?? 0) + 1);
     else if (/^run_checks$/.test(name)) counts.set('checks run', (counts.get('checks run') ?? 0) + 1);
     else if (/^run_command$/.test(name)) counts.set('commands run', (counts.get('commands run') ?? 0) + 1);
     else if (/^web_research$|^governed_research$/.test(name)) counts.set('research queries', (counts.get('research queries') ?? 0) + 1);
@@ -113,17 +113,16 @@ export function buildOutcomeReceipt(db: CoreDatabase, missionId: string): Outcom
   const artifacts: OutcomeReceipt['artifacts'] = [];
   for (const s of mission.steps) for (const a of (s.artifacts ?? [])) artifacts.push({ path: a.path, bytes: a.bytes, kind: a.kind, exists: a.exists });
 
-  // Verified outputs with evidence levels.
+  // Verified outputs with evidence levels. Never manufacture a verified output from completion alone.
   const verifiedOutputs: ReceiptVerifiedOutput[] = [];
   const hasReviewer = mission.steps.some((s) => s.kind === 'review');
   for (const s of mission.steps) {
     if (s.status === 'succeeded' && s.evidence && s.evidence.verified.length > 0) {
-      const level: EvidenceLevel = s.kind === 'review' ? 'reviewed' : (s.evidence.totalCalls > 0 ? 'checked' : 'observed');
+      // Caveats downgrade: a step with caveats is not fully "checked".
+      const hasCaveats = (s.evidence.caveats ?? []).length > 0;
+      const level: EvidenceLevel = s.kind === 'review' ? 'reviewed' : (hasCaveats ? 'observed' : (s.evidence.totalCalls > 0 ? 'checked' : 'observed'));
       for (const v of s.evidence.verified) verifiedOutputs.push({ label: `${v.tool} (${v.count})`, level });
     }
-  }
-  if (verifiedOutputs.length === 0 && mission.status === 'completed') {
-    verifiedOutputs.push({ label: 'step completed', level: 'observed' });
   }
 
   // Partial / failed steps.
@@ -153,11 +152,11 @@ export function buildOutcomeReceipt(db: CoreDatabase, missionId: string): Outcom
   const nextAction = mission.resultSummary ? String(mission.resultSummary).slice(0, 200) : null;
 
   // Undo availability: if any organizer action ran (tool ledger or step evidence), or git commit exists.
-  const orgInTools = toolRows.some((r) => /^pc_organize_/.test(r.toolName));
-  const orgInEvidence = mission.steps.some((s) => (s.evidence?.verified ?? []).some((v) => /^pc_organize_/.test(v.tool)));
-  const undoAvailable = orgInTools || orgInEvidence || gitCommits > 0;
+  const orgApplied = toolRows.some((r) => r.toolName === 'pc_organize_apply' && r.status === 'succeeded') ||
+    mission.steps.some((s) => (s.evidence?.verified ?? []).some((v) => v.tool === 'pc_organize_apply'));
+  const undoAvailable = orgApplied || gitCommits > 0;
   const undoHint = undoAvailable
-    ? (orgInTools || orgInEvidence ? 'pc_organize_undo available' : 'git revert available')
+    ? (orgApplied ? 'pc_organize_undo available' : 'git revert available')
     : null;
 
   const independentlyReviewed = hasReviewer && mission.steps.some((s) => s.kind === 'review' && s.status === 'succeeded');

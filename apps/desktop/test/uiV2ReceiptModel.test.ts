@@ -41,13 +41,13 @@ describe('receipt model', () => {
     expect(hasPartial(receipt())).toBe(false);
     expect(hasPartial(receipt({ partialOrFailed: [{ step: 1, status: 'failed', reason: 'x' }] }))).toBe(true);
   });
-  it('shareable redacts and includes key facts', () => {
+  it('shareable excludes free-text and includes key facts', () => {
     const text = shareable(receipt());
     expect(text).toContain('Pandesh Outcome Receipt');
-    expect(text).toContain('Build a tip calculator');
     expect(text).toContain('Verified');
     expect(text).toContain('gemma4:12b');
     expect(text).toContain('redacted');
+    expect(text).not.toContain('Build a tip calculator'); // objective excluded
     expect(text).not.toContain('C:\\');
   });
 });
