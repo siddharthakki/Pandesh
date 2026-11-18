@@ -17,9 +17,15 @@ and keep the final say over every file, command and web request.
 
 **[Quick start](#-quick-start)** · **[How it works](#-how-it-works)** · **[Features](#-what-it-does-today)** · **[Safety](#-safety-you-can-check)** · **[Roadmap](docs/ROADMAP.md)** · **[Discussions](https://github.com/siddharthakki/Pandesh/discussions)**
 
-<img src="docs/media/pandesh-demo.gif" width="860" alt="Pandesh v2: the Coding specialist runs failing tests, asks before running them, fixes the bug and re-runs them until they pass">
+<img src="docs/media/pandesh-demo.gif" width="860" alt="Pandesh v2 running a background mission: Operations checks the PC while you keep chatting, you stop and continue it, and an independent Reviewer checks the result">
 
-<sub>Real run, sped up: Pandesh asks the Coding specialist to fix a failing project. It asks before running the tests, shows the real failure, fixes the bug and re-runs the tests to green. Local <code>gemma4:12b</code>, isolated demo profile.</sub>
+<sub>Real screen recording, sped up 2.5×: a background mission checks the disks, memory and open ports while you keep chatting. You stop it, continue it, and an independent Reviewer checks the numbers. Local <code>gemma4:12b</code>, isolated demo profile. <a href="#-see-it-work">More recorded runs below.</a></sub>
+
+**Latest build: Build 185** (source commit [`b1b41e5`](https://github.com/siddharthakki/Pandesh/commit/b1b41e5), 2026-11-17). 
+
+### [⬇️ Download Pandesh Setup (Build 185, Windows, 356 MB)](https://github.com/siddharthakki/Pandesh/releases/download/v0.1.8-build185/Pandesh-Setup.exe)
+
+<sub>Unsigned alpha installer, so Windows SmartScreen will warn. Check the SHA-256 on the [release page](https://github.com/siddharthakki/Pandesh/releases/tag/v0.1.8-build185). You also need [Ollama](https://ollama.com/download). Prefer source? See the [quick start](#-quick-start).</sub>
 
 </div>
 
@@ -175,6 +181,8 @@ Everything below runs in the current source build. Most of it is shown in the re
 | 💻 **Coding that checks its work** | Writes files, runs your tests after you approve the exact command, fixes failures and re-runs them. Core checks written files, attributes results and flags suggested commands that can't work. Aider runs as a local coding engine; OpenCode is optional. |
 | 🔎 **Research with sources** | Asks once for internet access, searches public sources and returns citations. Private text is stripped from the query before it leaves your PC. |
 | 🧠 **Second Brain** | Remember, recall in another chat, correct, and forget a single detail. Every fact keeps its source and history, and you can search it all in one place. |
+| 🤖 **Bots (Hermes)** | Named, read-only helpers for recurring jobs: an inbox assistant, a PC manager, an AI scout and an engineer's repository watch. Core gathers the evidence with its own read-only code and a Hermes profile only reasons over it; a Bot gets the memory tool and nothing that acts. Reports lead with counts Core computed, and a source that could not be read is never reported as "nothing new". Routines run on Core's scheduler and stay off until you switch them on. Needs Hermes and a model with a 64K context. |
+| ☁️ **Cloud models, only if you choose** | The model menu lists the free cloud models that were checked (NVIDIA, OpenRouter, Groq and others) next to your local ones. Nothing is selected for you, and a cloud pick runs that whole chat. Provider cards switch a stored provider on or off. |
 | 🎯 **Background missions** | Ask for work "in the background" and Pandesh starts a durable mission: Core runs the specialists step by step (up to three in parallel), you keep chatting, and you can stop or continue it. An independent Reviewer step checks the result, and Core writes the final report from the tool calls it recorded. A restart marks a running mission *interrupted* so it can be continued. |
 | 🎬 **Studio: narrated video** | The Studio specialist makes a short narrated video entirely on your PC: script, local Piper voice, ComfyUI pictures, FFmpeg render, subtitles, thumbnail and a draft upload sheet. It never publishes anything. |
 | 📋 **Board and live activity** | Task status from Core's records (needs you, running, completed, failed), plus a live panel with commands, exit codes and test output. |
@@ -226,7 +234,7 @@ Pandesh is not an operating-system sandbox: review what you approve, and keep ba
 
 ## 🚀 Quick start
 
-Runs from source on Windows 10/11. Checked from a fresh clone with Node.js 24 on 2026-11-09.
+Runs from source on Windows 10/11. Checked from a fresh clone with Node.js 24 on 2026-11-09 (the app has moved on to Build 185 since).
 
 **You need:** [Node.js 24](https://nodejs.org) · [Git](https://git-scm.com) · [Ollama](https://ollama.com/download) · Python 3 (optional, for the coding demos)
 
@@ -280,7 +288,7 @@ Real-speech and local-TTS tests are skipped unless their models are staged (`nod
 | **Unattended low-risk work** (read-only checks, scheduled reports) | ✅ In source builds: the watchdog, AI Radar and briefing run on schedule and only report |
 | **Unattended consequential work** (writing, running, sending, spending) | ⛔ Not safe yet |
 
-**Next:** a packaged v2 installer on Electron 45, with an upgrade and rollback test against a copy of a real profile,
+**Now:** Build 185 is the build in daily use. **Next:** a signed installer, an upgrade and rollback test against a copy of a real profile on Electron 45,
 and the first results of the revenue pilot. **Later:** an MCP server registry and embedded terminals. See the
 [roadmap](docs/ROADMAP.md).
 
@@ -320,8 +328,10 @@ A Windows 10/11 PC with a GPU that fits your model. The demos ran on an RTX 3090
 <summary><b>Is there an installer?</b></summary>
 <br>
 
-Not for v2 yet, so run it from source as shown above. The last published installers (Build 144 and earlier) predate
-v2. A packaged v2 installer is the next release milestone.
+Yes: [Pandesh-Setup.exe for Build 185](https://github.com/siddharthakki/Pandesh/releases/tag/v0.1.8-build185)
+(source commit [`b1b41e5`](https://github.com/siddharthakki/Pandesh/commit/b1b41e5)). It is unsigned, so Windows
+SmartScreen will warn; verify the SHA-256 on the release page. An isolated smoke test of the installer passed (install,
+launch, a governed tool call, upgrade while running, data kept, uninstall). You can still run from source as shown above.
 
 </details>
 
