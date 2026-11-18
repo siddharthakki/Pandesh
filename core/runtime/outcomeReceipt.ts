@@ -99,6 +99,8 @@ export function buildOutcomeReceipt(db: CoreDatabase, missionId: string): Outcom
     else if (/^web_research$|^governed_research$/.test(name)) counts.set('research queries', (counts.get('research queries') ?? 0) + 1);
     else if (/^pc_organize_/.test(name)) counts.set('organizer actions', (counts.get('organizer actions') ?? 0) + 1);
     else if (/^memory_remember$/.test(name)) counts.set('facts remembered', (counts.get('facts remembered') ?? 0) + 1);
+    else if (/^read_file$/.test(name)) counts.set('files read', (counts.get('files read') ?? 0) + 1);
+    else if (/^list_directory$/.test(name)) counts.set('directories scanned', (counts.get('directories scanned') ?? 0) + 1);
   }
   // Tests passed: run_checks with exit code 0.
   const testsPassed = toolRows.filter((r) => r.toolName === 'run_checks' && r.status === 'succeeded' && r.exitCode === 0).length;

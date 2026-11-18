@@ -81,7 +81,7 @@ export function receiptHeadline(r: Receipt): string {
 
 export function visibleOps(r: Receipt): ReceiptOp[] {
   // Hide zero-count ops; keep a stable, meaningful order.
-  const order = ['files changed', 'tests passed', 'checks run', 'commands run', 'research queries', 'organizer actions', 'facts remembered', 'git commits'];
+  const order = ['files written', 'files read', 'directories scanned', 'tests passed', 'checks run', 'commands run', 'research queries', 'organizer actions', 'facts remembered', 'git commits'];
   const map = new Map(r.operations.map((o) => [o.label, o.count]));
   const out: ReceiptOp[] = [];
   for (const label of order) {

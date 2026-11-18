@@ -7,7 +7,7 @@ import {
 const receipt = (over: Partial<Receipt> = {}): Receipt => ({
   missionId: 'msn_1', objective: 'Build a tip calculator', status: 'completed', headline: 'Verified',
   startedAt: '2026-01-01T00:00:00Z', completedAt: '2026-01-01T00:00:47Z', durationMs: 47000,
-  steps: [], operations: [{ label: 'files changed', count: 2 }, { label: 'tests passed', count: 5 }],
+  steps: [], operations: [{ label: 'files written', count: 2 }, { label: 'tests passed', count: 5 }],
   artifacts: [], verifiedOutputs: [{ label: 'tests pass', level: 'checked' }],
   partialOrFailed: [], approvalsUsed: 2, model: 'gemma4:12b', provider: 'ollama',
   tokens: { prompt: 100, completion: 50 }, costUsd: null, nextAction: 'Run it for 84.50.', undoAvailable: true,
@@ -33,9 +33,9 @@ describe('receipt model', () => {
     expect(formatTokens(null)).toBe('—');
   });
   it('orders visible ops and hides zeros', () => {
-    const r = receipt({ operations: [{ label: 'files changed', count: 2 }, { label: 'tests passed', count: 5 }, { label: 'git commits', count: 0 }] });
+    const r = receipt({ operations: [{ label: 'files written', count: 2 }, { label: 'tests passed', count: 5 }, { label: 'git commits', count: 0 }] });
     const ops = visibleOps(r);
-    expect(ops.map((o) => o.label)).toEqual(['files changed', 'tests passed']);
+    expect(ops.map((o) => o.label)).toEqual(['files written', 'tests passed']);
   });
   it('hasPartial is true only when partialOrFailed non-empty', () => {
     expect(hasPartial(receipt())).toBe(false);
