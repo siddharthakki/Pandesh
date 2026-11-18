@@ -1,7 +1,9 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { MissionDock } from './Missions';
+import { MissionControlPane } from './MissionControlPane';
 import { OutcomeReceipt } from './OutcomeReceipt';
 import { type Receipt } from './receiptModel';
+import { type MissionView } from './missionModel';
 import { api, errorText, onDesktopEvent, type ApprovalCard, type BriefAction, type BriefItem, type Snapshot, type TranscriptMessage } from './bridge';
 import { Icon, Mark, elapsed, timeOf } from './ui';
 import { ActivityAside } from './Activity';
@@ -116,6 +118,7 @@ export function Chat({ snapshot, snapshotError, refresh, narrow, openConversatio
   const [closedFor, setClosedFor] = useState<string | null>(null);
   const [receipt, setReceipt] = useState<Receipt | null>(null);
   const [receiptMissionId, setReceiptMissionId] = useState<string | null>(null);
+  const [activeMission, setActiveMission] = useState<MissionView | null>(null);
 
   const fetchReceipt = async (missionId: string) => {
     try {
@@ -137,6 +140,23 @@ export function Chat({ snapshot, snapshotError, refresh, narrow, openConversatio
   useEffect(() => { if (draft) { setText(draft); onDraftUsed?.(); setTimeout(() => textarea.current?.focus(), 0); } }, [draft]);
   const convId = openConversationId ?? snapshot?.selectedConversationId ?? null;
   const runningHere = Boolean(snapshot?.running) && (snapshot?.activeConversationId ?? null) === convId;
+
+  // Poll missions for the contextual Mission Control pane.
+  useEffect(() => {
+    if (!convId) { setActiveMission(null); return; }
+    let cancelled = false;
+    const load = async () => {
+      try {
+        const r = await api.household('missions', { conversationId: convId }) as { missions: MissionView[] };
+        if (cancelled) return;
+        const running = (r.missions ?? []).find((m) => m.status === 'running');
+        setActiveMission(running ?? null);
+      } catch { /* ignore */ }
+    };
+    void load();
+    const t = setInterval(load, 2000);
+    return () => { cancelled = true; clearInterval(t); };
+  }, [convId]);
 
   // Open the conversation the user picked so the next send goes there.
   useEffect(() => {
@@ -601,6 +621,9 @@ export function Chat({ snapshot, snapshotError, refresh, narrow, openConversatio
                 if (done) void fetchReceipt(done.id);
               } catch { /* ignore */ }
             })(); }} />
+            {activeMission && !narrow && (
+              <MissionControlPane mission={activeMission} onStop={() => void (async () => { try { await api.household('missionCancel', { id: activeMission.id }); } catch { /* ignore */ } })()} onAllow={(id) => void (async () => { try { await api.resolveAssistantApproval(id, 'approved'); } catch { /* ignore */ } })()} onDeny={(id) => void (async () => { try { await api.resolveAssistantApproval(id, 'rejected'); } catch { /* ignore */ } })()} />
+            )}
             {!showDecisionBar && controls.panel}
             {!showDecisionBar && folder.card}
             {/* On the home screen there is no transcript to hold a send error, so it shows here. */}
