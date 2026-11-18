@@ -1,5 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { MissionDock } from './Missions';
+import { OutcomeReceipt } from './OutcomeReceipt';
+import { type Receipt } from './receiptModel';
 import { api, errorText, onDesktopEvent, type ApprovalCard, type BriefAction, type BriefItem, type Snapshot, type TranscriptMessage } from './bridge';
 import { Icon, Mark, elapsed, timeOf } from './ui';
 import { ActivityAside } from './Activity';
@@ -112,6 +114,15 @@ export function Chat({ snapshot, snapshotError, refresh, narrow, openConversatio
   const [busy, setBusy] = useState(false);
   const [deciding, setDeciding] = useState(false);
   const [closedFor, setClosedFor] = useState<string | null>(null);
+  const [receipt, setReceipt] = useState<Receipt | null>(null);
+  const [receiptMissionId, setReceiptMissionId] = useState<string | null>(null);
+
+  const fetchReceipt = async (missionId: string) => {
+    try {
+      const r = await api.household('missionReceipt', { id: missionId }) as { receipt: Receipt };
+      if (r?.receipt) { setReceipt(r.receipt); setReceiptMissionId(missionId); }
+    } catch { /* not ready */ }
+  };
   const [forcedOpen, setForcedOpen] = useState(false);
   const [declined, setDeclined] = useState(false);
   const [routeOpen, setRouteOpen] = useState(false);
@@ -534,6 +545,14 @@ export function Chat({ snapshot, snapshotError, refresh, narrow, openConversatio
                   </div>
                 ))}
               {pendingUser && <div className="msg-user" aria-label="Sending">{pendingUser}{pendingFiles.length ? <AttachmentChips items={pendingFiles} /> : null}</div>}
+              {receipt && (
+                <div style={{ margin: '16px 0' }}>
+                  <OutcomeReceipt receipt={receipt} onReviewDiff={() => {}} onUndo={() => {}} onShare={() => {}} onNext={() => setReceipt(null)} />
+                  <div style={{ textAlign: 'center', marginTop: '8px' }}>
+                    <button type="button" className="btn link" onClick={() => setReceipt(null)}>Dismiss receipt</button>
+                  </div>
+                </div>
+              )}
               {runningHere && (
                 <div className="msg-assistant" aria-live="polite">
                   <Mark />
@@ -575,7 +594,13 @@ export function Chat({ snapshot, snapshotError, refresh, narrow, openConversatio
 
         <div className="footer">
           <div className="footer-inner">
-            <MissionDock conversationId={convId} narrow={narrow} onReport={() => { void loadTranscript(convId); }} />
+            <MissionDock conversationId={convId} narrow={narrow} onReport={() => { void loadTranscript(convId); void (async () => {
+              try {
+                const r = await api.household('missions', { conversationId: convId ?? undefined }) as { missions: Array<{ id: string; status: string }> };
+                const done = (r.missions ?? []).find((m) => m.status === 'completed' || m.status === 'completed_with_issues' || m.status === 'failed');
+                if (done) void fetchReceipt(done.id);
+              } catch { /* ignore */ }
+            })(); }} />
             {!showDecisionBar && controls.panel}
             {!showDecisionBar && folder.card}
             {/* On the home screen there is no transcript to hold a send error, so it shows here. */}
