@@ -214,6 +214,29 @@ describe('DRV-010: a folder envelope must not silently overwrite an existing fil
     expect(fs.readFileSync(path.join(ws, 'fresh.txt'), 'utf8')).toBe('hello\n');
     expect(writeEvents(attemptId).map((e) => e.authorizationSource)).toEqual(['mission_envelope']);
   }, 60_000);
+
+  it('does not treat a longer filename mention as authorization (word boundary)', async () => {
+    human(() => 'approved');
+    fs.writeFileSync(path.join(ws, 'test_document.txt'), original);
+    // The request names "test_document.txt.old", not "test_document.txt": the overwrite must still be refused.
+    steps = [write('test_document.txt', '93')];
+    const { attemptId } = await turn('Update test_document.txt.old to version 2.');
+    expect(fs.readFileSync(path.join(ws, 'test_document.txt'), 'utf8')).toBe(original);
+    const events = writeEvents(attemptId);
+    expect(events.map((e) => e.type)).toEqual(['file_write_refused']);
+  }, 60_000);
+
+  it('matches reads case-insensitively (Windows path)', async () => {
+    human(() => 'approved');
+    fs.writeFileSync(path.join(ws, 'test_document.txt'), 'old line\n');
+    steps = [
+      { tool: { name: 'read_file', args: { filePath: 'Test_Document.TXT' } } },
+      write('test_document.txt', 'new line\n'),
+    ];
+    const { attemptId } = await turn('Update the test document.');
+    expect(fs.readFileSync(path.join(ws, 'test_document.txt'), 'utf8')).toBe('new line\n');
+    expect(writeEvents(attemptId).map((e) => e.authorizationSource)).toEqual(['mission_envelope']);
+  }, 60_000);
 });
 
 describe('folder search permission is read-only', () => {
