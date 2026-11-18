@@ -1,0 +1,562 @@
+{
+  "summary": {
+    "label": "m4-baseline",
+    "commit": "55c1c20",
+    "prompts": 40,
+    "exactCorrect": 38,
+    "expectedGroupRecall": "37/38",
+    "promptsMissingAnExpectedGroup": 1,
+    "promptsWithAForbiddenGroup": 1,
+    "promptsOfferingWrongExternalDataGroup": 1,
+    "meanGroupsOffered": 1.77
+  },
+  "rows": [
+    {
+      "id": "P01",
+      "text": "How much free space is on my C drive?",
+      "expect": [
+        "pc"
+      ],
+      "offered": [
+        "files_more",
+        "pc",
+        "personal"
+      ],
+      "missing": [],
+      "forbidden": [],
+      "exact": true
+    },
+    {
+      "id": "P02",
+      "text": "Where is Notepad++ installed?",
+      "expect": [
+        "pc"
+      ],
+      "offered": [
+        "pc"
+      ],
+      "missing": [],
+      "forbidden": [],
+      "exact": true
+    },
+    {
+      "id": "P03",
+      "text": "Find duplicate files in my Downloads folder",
+      "expect": [
+        "files_more"
+      ],
+      "offered": [
+        "files_more",
+        "personal"
+      ],
+      "missing": [],
+      "forbidden": [],
+      "exact": true
+    },
+    {
+      "id": "P04",
+      "text": "Create notes/hello.txt containing exactly: Pandesh baseline 42",
+      "expect": [],
+      "offered": [
+        "personal",
+        "reminders"
+      ],
+      "missing": [],
+      "forbidden": [],
+      "exact": true
+    },
+    {
+      "id": "P05",
+      "text": "Organize the messy folder: put .txt and .md files into messy/docs, .csv files into messy/data and everything else into messy/other. Do not delete anything.",
+      "expect": [
+        "household"
+      ],
+      "offered": [
+        "household"
+      ],
+      "missing": [],
+      "forbidden": [],
+      "exact": true
+    },
+    {
+      "id": "P06",
+      "text": "Count the files in the inbox folder and write only that number into reports/inbox-count.txt in this folder.",
+      "expect": [],
+      "offered": [],
+      "missing": [],
+      "forbidden": [],
+      "exact": true
+    },
+    {
+      "id": "P07",
+      "text": "Read invoice.pdf and tell me the total amount.",
+      "expect": [
+        "documents"
+      ],
+      "offered": [
+        "documents",
+        "personal"
+      ],
+      "missing": [],
+      "forbidden": [],
+      "exact": true
+    },
+    {
+      "id": "P08",
+      "text": "Which software updates are available on this machine?",
+      "expect": [
+        "pc"
+      ],
+      "offered": [
+        "pc"
+      ],
+      "missing": [],
+      "forbidden": [],
+      "exact": true
+    },
+    {
+      "id": "P09",
+      "text": "Summarize my unread emails from today.",
+      "expect": [
+        "email"
+      ],
+      "offered": [
+        "email",
+        "personal"
+      ],
+      "missing": [],
+      "forbidden": [],
+      "exact": true
+    },
+    {
+      "id": "P10",
+      "text": "Draft a reply to Anna's email about the invoice.",
+      "expect": [
+        "email"
+      ],
+      "offered": [
+        "documents",
+        "email"
+      ],
+      "missing": [],
+      "forbidden": [],
+      "exact": true
+    },
+    {
+      "id": "P11",
+      "text": "What meetings do I have tomorrow?",
+      "expect": [
+        "calendar"
+      ],
+      "offered": [
+        "calendar",
+        "personal"
+      ],
+      "missing": [],
+      "forbidden": [],
+      "exact": true
+    },
+    {
+      "id": "P12",
+      "text": "Add a meeting with Ben on Friday at 3pm.",
+      "expect": [
+        "calendar"
+      ],
+      "offered": [
+        "calendar"
+      ],
+      "missing": [],
+      "forbidden": [],
+      "exact": true
+    },
+    {
+      "id": "P13",
+      "text": "Check my inbox for the flight confirmation and put it in my calendar.",
+      "expect": [
+        "email",
+        "calendar"
+      ],
+      "offered": [
+        "calendar",
+        "email",
+        "personal"
+      ],
+      "missing": [],
+      "forbidden": [],
+      "exact": true
+    },
+    {
+      "id": "P14",
+      "text": "Send a mail to ben@example.com saying thanks for the call.",
+      "expect": [
+        "email"
+      ],
+      "offered": [
+        "email"
+      ],
+      "missing": [],
+      "forbidden": [],
+      "exact": true
+    },
+    {
+      "id": "P15",
+      "text": "Remind me tomorrow at 9:00 to call Dr. Weber about the appointment.",
+      "expect": [
+        "reminders"
+      ],
+      "offered": [
+        "calendar",
+        "personal",
+        "reminders"
+      ],
+      "missing": [],
+      "forbidden": [],
+      "exact": true
+    },
+    {
+      "id": "P16",
+      "text": "Every day at 7 check my downloads folder and tell me what is new.",
+      "expect": [
+        "scheduling"
+      ],
+      "offered": [
+        "personal",
+        "scheduling"
+      ],
+      "missing": [],
+      "forbidden": [],
+      "exact": true
+    },
+    {
+      "id": "P17",
+      "text": "Jot down: buy milk and bread.",
+      "expect": [
+        "reminders"
+      ],
+      "offered": [
+        "reminders"
+      ],
+      "missing": [],
+      "forbidden": [],
+      "exact": true
+    },
+    {
+      "id": "P18",
+      "text": "Remember that I prefer short answers.",
+      "expect": [
+        "memory"
+      ],
+      "offered": [
+        "memory",
+        "personal"
+      ],
+      "missing": [],
+      "forbidden": [],
+      "exact": true
+    },
+    {
+      "id": "P19",
+      "text": "What did I promise Anna last week?",
+      "expect": [
+        "scheduling",
+        "personal"
+      ],
+      "offered": [
+        "personal",
+        "scheduling"
+      ],
+      "missing": [],
+      "forbidden": [],
+      "exact": true
+    },
+    {
+      "id": "P20",
+      "text": "Search the web for the latest Ollama release.",
+      "expect": [
+        "web"
+      ],
+      "offered": [
+        "models",
+        "web"
+      ],
+      "missing": [],
+      "forbidden": [],
+      "exact": true
+    },
+    {
+      "id": "P21",
+      "text": "Open https://example.com and tell me the main heading.",
+      "expect": [
+        "browser"
+      ],
+      "offered": [
+        "personal",
+        "web",
+        "workshop"
+      ],
+      "missing": [
+        "browser"
+      ],
+      "forbidden": [],
+      "exact": false
+    },
+    {
+      "id": "P22",
+      "text": "Find current data engineer job openings in Ulm.",
+      "expect": [
+        "web"
+      ],
+      "offered": [
+        "web"
+      ],
+      "missing": [],
+      "forbidden": [],
+      "exact": true
+    },
+    {
+      "id": "P23",
+      "text": "What is the weather in Ulm tomorrow?",
+      "expect": [
+        "weather"
+      ],
+      "offered": [
+        "personal",
+        "weather"
+      ],
+      "missing": [],
+      "forbidden": [],
+      "exact": true
+    },
+    {
+      "id": "P24",
+      "text": "Make an image of a red panda logo.",
+      "expect": [
+        "images"
+      ],
+      "offered": [
+        "images"
+      ],
+      "missing": [],
+      "forbidden": [],
+      "exact": true
+    },
+    {
+      "id": "P25",
+      "text": "Edit the attached photo and remove the background.",
+      "expect": [
+        "images"
+      ],
+      "offered": [
+        "images"
+      ],
+      "missing": [],
+      "forbidden": [],
+      "exact": true
+    },
+    {
+      "id": "P26",
+      "text": "Build an interactive 3D model of a gearbox.",
+      "expect": [
+        "workshop"
+      ],
+      "offered": [
+        "coding",
+        "models",
+        "workshop"
+      ],
+      "missing": [],
+      "forbidden": [],
+      "exact": true
+    },
+    {
+      "id": "P27",
+      "text": "Simulate a queue with two serving counters and show waiting times.",
+      "expect": [
+        "workshop"
+      ],
+      "offered": [
+        "workshop"
+      ],
+      "missing": [],
+      "forbidden": [],
+      "exact": true
+    },
+    {
+      "id": "P28",
+      "text": "Run the tests in this project.",
+      "expect": [
+        "coding"
+      ],
+      "offered": [
+        "coding",
+        "files_more"
+      ],
+      "missing": [],
+      "forbidden": [],
+      "exact": true
+    },
+    {
+      "id": "P29",
+      "text": "Fix the failing test in src/app.ts.",
+      "expect": [
+        "coding"
+      ],
+      "offered": [
+        "coding"
+      ],
+      "missing": [],
+      "forbidden": [],
+      "exact": true
+    },
+    {
+      "id": "P30",
+      "text": "Delegate this research to the research agent.",
+      "expect": [
+        "agents"
+      ],
+      "offered": [
+        "agents",
+        "web"
+      ],
+      "missing": [],
+      "forbidden": [],
+      "exact": true
+    },
+    {
+      "id": "P31",
+      "text": "Create a project named Atlas with three tasks.",
+      "expect": [
+        "projects"
+      ],
+      "offered": [
+        "files_more",
+        "projects"
+      ],
+      "missing": [],
+      "forbidden": [],
+      "exact": true
+    },
+    {
+      "id": "P32",
+      "text": "Which Ollama models do I have installed?",
+      "expect": [
+        "models"
+      ],
+      "offered": [
+        "models",
+        "pc",
+        "personal"
+      ],
+      "missing": [],
+      "forbidden": [],
+      "exact": true
+    },
+    {
+      "id": "P33",
+      "text": "Unload the 27b model to free VRAM.",
+      "expect": [
+        "models"
+      ],
+      "offered": [
+        "models",
+        "pc"
+      ],
+      "missing": [],
+      "forbidden": [],
+      "exact": true
+    },
+    {
+      "id": "P34",
+      "text": "Print a test page.",
+      "expect": [
+        "printing"
+      ],
+      "offered": [
+        "coding",
+        "printing"
+      ],
+      "missing": [],
+      "forbidden": [],
+      "exact": true
+    },
+    {
+      "id": "P35",
+      "text": "Send this file to my phone.",
+      "expect": [
+        "phone"
+      ],
+      "offered": [
+        "personal",
+        "phone"
+      ],
+      "missing": [],
+      "forbidden": [],
+      "exact": true
+    },
+    {
+      "id": "P36",
+      "text": "Give me my daily briefing.",
+      "expect": [
+        "briefing"
+      ],
+      "offered": [
+        "briefing",
+        "personal",
+        "scheduling"
+      ],
+      "missing": [],
+      "forbidden": [],
+      "exact": true
+    },
+    {
+      "id": "P37",
+      "text": "I want to earn the money for a new laptop.",
+      "expect": [
+        "wish"
+      ],
+      "offered": [
+        "pc",
+        "personal",
+        "wish"
+      ],
+      "missing": [],
+      "forbidden": [],
+      "exact": true
+    },
+    {
+      "id": "P38",
+      "text": "What is 17 times 23?",
+      "expect": [],
+      "offered": [],
+      "missing": [],
+      "forbidden": [],
+      "exact": true
+    },
+    {
+      "id": "P39",
+      "text": "What are my priorities this week?",
+      "expect": [
+        "personal"
+      ],
+      "offered": [
+        "personal"
+      ],
+      "missing": [],
+      "forbidden": [],
+      "exact": true
+    },
+    {
+      "id": "P40",
+      "text": "Explain how events work in JavaScript.",
+      "expect": [],
+      "offered": [
+        "calendar"
+      ],
+      "missing": [],
+      "forbidden": [
+        "calendar"
+      ],
+      "exact": false
+    }
+  ]
+}
