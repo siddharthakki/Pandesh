@@ -1853,42 +1853,32 @@ export class PiAgentEngine implements EngineAdapter {
           // REPLACE an existing file it has never read or written this task. The recorded defect: asked to rename a file,
           // the model wrote "93" over an unrelated 3-line document under a folder-wide card, and the reply never said so.
           // Creating a new file, or rewriting one the model already read or wrote, stays allowed (the coding flow).
-          let existingBytes = 0;
+          let fileExists = false;
           let statFailed = false;
-          try { const st = fs.statSync(full); if (st.isFile()) existingBytes = st.size; else if (st.isDirectory()) existingBytes = 1; } catch (e: any) {
+          try { const st = fs.statSync(full); fileExists = true; if (st.isDirectory()) { /* treat as existing */ } } catch (e: any) {
             // Fail closed for both mission envelopes and standing (routine) grants: a metadata lookup failure must not
             // be treated as "file does not exist", or an unreadable existing file could be silently replaced.
-            if (e?.code !== 'ENOENT') { statFailed = true; existingBytes = 0; }
+            if (e?.code !== 'ENOENT') { statFailed = true; }
           }
           if (statFailed) {
             return notDone('the file metadata could not be read', `NOT WRITTEN: Pandesh could not read the metadata of ${path.basename(full)}, so it will not replace it. Nothing was changed. Check the file's permissions and try again.`);
           }
           // Standing (routine) grants are owner-approved for the frozen folder and are exempt from the read-before-overwrite
-          // guard, but still fail closed on metadata errors (above). Mission envelopes require read-or-named-target.
-          if (!standingGrantId && existingBytes > 0 && !folderLedger.hasSeen(full)) {
-            // Allow the overwrite only when the request names this exact file as a target (word-boundary match, so
-            // "update test_document.txt.old" does not authorize overwriting "test_document.txt"). The earlier
-            // substring check was too weak (DRV-010 review).
-            const basename = path.basename(full);
-            const lowerText = requestText.toLowerCase();
-            const lowerName = basename.toLowerCase();
-            let namedTarget = false;
-            let idx = 0;
-            while ((idx = lowerText.indexOf(lowerName, idx)) !== -1) {
-              const before = idx === 0 ? '' : lowerText[idx - 1];
-              const after = idx + lowerName.length >= lowerText.length ? '' : lowerText[idx + lowerName.length];
-              const isBoundary = (c: string) => c === '' || !/[a-z0-9._-]/.test(c);
-              if (isBoundary(before) && isBoundary(after)) { namedTarget = true; break; }
-              idx += Math.max(1, lowerName.length);
-            }
-            if (!namedTarget) {
-              return notDone('the file was not read before overwriting', `NOT WRITTEN: ${path.basename(full)} already holds ${existingBytes} bytes that Pandesh has not read in this task, and write_file replaces the whole file. Nothing was changed. Read the file first, then write the complete new text (or propose the exact edit). write_file cannot rename, move or delete a file; if that is what the user asked for, tell them Pandesh cannot do it here.`);
-            }
+          // guard, but still fail closed on metadata errors (above). Mission envelopes require created-this-turn.
+          // DRV-010 (final): under a mission envelope, an existing file (any size, including zero-byte) that this turn did
+          // not create may not be silently replaced. A filename appearing in the request is NOT authorization ("Do not
+          // change report.txt", "Rename report.txt", "Compare report.txt" none authorize replacement). A read is
+          // evidence of observation, not authorization. Route to an explicit per-file approval card (with diff) instead.
+          // Files created this turn (coding rewrites) and standing (routine) grants keep auto-authorization.
+          if (!standingGrantId && fileExists && !folderLedger.createdThisTurn(full)) {
+            // Fall through to the per-file approval card below instead of auto-authorizing.
+            reviewNote = `\nNot covered by this task's file authorization: replacing an existing file requires your explicit approval.`;
+          } else {
+            return {
+              ok: true, source: standingGrantId ? 'standing_grant' : 'mission_envelope', reason: verdict.reason, standingGrantId,
+              mission: { id: verdict.authorization.id, digest: verdict.authorization.digest, normalizedPath: verdict.normalizedPath, contentDigest: verdict.contentDigest, contentBytes: verdict.contentBytes },
+            };
           }
-          return {
-            ok: true, source: standingGrantId ? 'standing_grant' : 'mission_envelope', reason: verdict.reason, standingGrantId,
-            mission: { id: verdict.authorization.id, digest: verdict.authorization.digest, normalizedPath: verdict.normalizedPath, contentDigest: verdict.contentDigest, contentBytes: verdict.contentBytes },
-          };
         }
         if (verdict.decision === 'deny') return notDone(verdict.reason, `Error: "${full}" cannot be written: ${verdict.reason}. Nothing was written.`);
         reviewNote = `\nNot covered by this task's file authorization: ${verdict.reason}.`;

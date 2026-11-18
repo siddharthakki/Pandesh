@@ -98,6 +98,9 @@ export class FolderReadLedger {
 
   noteWritten(file: string): void { this.written.add(key(file)); this.writtenPaths.set(key(file), path.resolve(file)); }
 
+  /** Whether this turn created/wrote the file (its own output) — a rewrite of something it produced is allowed under an envelope. */
+  createdThisTurn(file: string): boolean { return this.written.has(key(file)); }
+
   writtenFiles(): string[] { return [...this.writtenPaths.values()]; }
 
   /** Relevant documents that were neither read nor written by this turn (the target of a pending write excluded). */
