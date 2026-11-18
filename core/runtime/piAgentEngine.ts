@@ -1881,7 +1881,7 @@ export class PiAgentEngine implements EngineAdapter {
           }
         }
         if (verdict.decision === 'deny') return notDone(verdict.reason, `Error: "${full}" cannot be written: ${verdict.reason}. Nothing was written.`);
-        reviewNote = `\nNot covered by this task's file authorization: ${verdict.reason}.`;
+        if (!reviewNote) reviewNote = `\nNot covered by this task's file authorization: ${verdict.reason}.`;
       } else {
         // Outside the selected workspace a folder the user let Pandesh search is a precondition, never the authority.
         if (!isPathAuthorized(full)) {
@@ -1896,7 +1896,7 @@ export class PiAgentEngine implements EngineAdapter {
         filePath: full,
         arguments: { path: full, bytes },
         workspaceRoot: selectedWorkspace || null,
-        cardText: `Pandesh wants to write ${full} (${bytes} bytes):${reviewNote}\n${redactCredentialShapes(content.slice(0, 600))}`,
+        cardText: `Pandesh wants to write ${full} (${bytes} bytes):${reviewNote}\n${fs.existsSync(full) ? 'This replaces the existing contents of ' + path.basename(full) + '.\n' : ''}${redactCredentialShapes(content.slice(0, 600))}`,
       });
       if (outcome.outcome === 'approved') {
         // Micro-test PER-019: approving a card for a file that changed since it appeared must not overwrite that change.
@@ -3523,10 +3523,12 @@ export class PiAgentEngine implements EngineAdapter {
 
           try {
             let before = '';
-            try { before = fs.statSync(full).size <= 512 * 1024 ? fs.readFileSync(full, 'utf8') : ''; } catch { before = ''; }
+            let existedBefore = false;
+            try { const st = fs.statSync(full); existedBefore = true; before = st.size <= 512 * 1024 ? fs.readFileSync(full, 'utf8') : ''; } catch { before = ''; existedBefore = false; }
             fs.mkdirSync(path.dirname(full), { recursive: true });
             fs.writeFileSync(full, args.content, 'utf8');
             folderLedger.noteWritten(full);
+            if (!existedBefore) folderLedger.noteCreated(full);
             // A write made under a standing permission is read back and checked by Core itself, and recorded per use.
             if (grant.standingGrantId) {
               const taskId = scheduledTaskOfAttempt(db, attemptId) ?? '';

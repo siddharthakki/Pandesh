@@ -64,6 +64,7 @@ export class FolderReadLedger {
   private readonly skippedFolders = new Map<string, number>();
   private readonly read = new Set<string>();
   private readonly written = new Set<string>();
+  private readonly created = new Set<string>();   // files that did not exist before this turn wrote them
   private readonly writtenPaths = new Map<string, string>();
   private readonly outputStems: string[];
 
@@ -98,8 +99,11 @@ export class FolderReadLedger {
 
   noteWritten(file: string): void { this.written.add(key(file)); this.writtenPaths.set(key(file), path.resolve(file)); }
 
-  /** Whether this turn created/wrote the file (its own output) — a rewrite of something it produced is allowed under an envelope. */
-  createdThisTurn(file: string): boolean { return this.written.has(key(file)); }
+  /** Record that this turn CREATED the file (it did not exist before). Only created files may be silently rewritten. */
+  noteCreated(file: string): void { this.created.add(key(file)); }
+
+  /** Whether this turn created the file (its own output) - a rewrite of something it produced is allowed under an envelope. */
+  createdThisTurn(file: string): boolean { return this.created.has(key(file)); }
 
   writtenFiles(): string[] { return [...this.writtenPaths.values()]; }
 
