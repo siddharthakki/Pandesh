@@ -84,7 +84,9 @@ That single difference — **verified delegation instead of confident claims** �
 - **Windows-only** limits market, buys a real native wedge (OpenClaw/Agent Zero lean Unix/WSL2).
 - **Local models only by default** costs capability vs cloud, buys the privacy story and the "no silent fallback" guarantee.
 
-## The one-sentence positioning test
+## Smart Pandesh integration principle (added in review)
+
+Verified Delegation is the execution and trust foundation, not the whole product. Smart Pandesh integrates existing engines (Hermes, OpenClaw, n8n, desktop operators, coding agents) through reliable governed interfaces; it does not duplicate them. One central memory, identity, permission authority and evidence ledger. Planned capabilities are documented as future contracts (see 08-future-contracts.md) and never shown as operational.
 
 > "Give your AI agents real work, watch them do it, and see what actually got done — all from your own PC."
 

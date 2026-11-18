@@ -3,6 +3,10 @@
 **Date:** 2026-11-18 · **Status:** design-only milestone. No Core implementation, no production changes, no installer.
 **Branch:** `docs/stage-b-design` · **Companion:** Stage A docs in `docs/strategy/2026-11-18-stage-a/`.
 
+## Product direction (conditional acceptance)
+
+Smart Pandesh is a local-first, continuously aware, cross-device personal intelligence. Verified Delegation is the **execution and trust foundation**, not the complete product definition. Pandesh integrates (Hermes, OpenClaw, n8n, desktop operators, coding agents, local models, authorized cloud) — it does not duplicate engines. One central memory, identity, permission authority and evidence ledger.
+
 ## One coherent product
 
 > **Calm when idle. Alive when working. Precise when deciding.**
@@ -38,7 +42,7 @@ Plus the three flagship flows (Mission Control, Outcome Receipt, Rehearse) each 
 | [04-data-contracts.md](04-data-contracts.md) | Core event/API data per screen; missing capabilities |
 | [05-components-reuse.md](05-components-reuse.md) | Reusable existing components + new ones needed |
 | [06-prototype/](06-prototype/) | Clickable local prototype (HTML/CSS/JS) |
-| [07-rationale-tradeoffs.md](07-rationale-tradeoffs.md) | Why Pandesh daily, rejected alternatives, trade-offs |
+| [08-future-contracts.md](08-future-contracts.md) | Planned Smart Pandesh capabilities as future contracts (not implemented); integration contracts |
 
 ## Guardrails honored
 

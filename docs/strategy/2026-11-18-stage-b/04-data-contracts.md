@@ -439,7 +439,27 @@ The user sees the **exact** before/after of every consequential action before au
 - **Outcome Receipt:** needs the receipt aggregation above (new, Stage C).
 - **Rehearse:** `pc_organize_scan` + `pc_organize_plan` + `renderPlanPreview` (read-only, exist) + `pc_organize_apply` (exists) + `operator.ts` propose→verify→ask→move→rollback (exists). **Missing: a unified Preview surface in the UI** — today previews are text in chat. New work: a Rehearsal pane component. Flagged for Stage E.
 
-## Missing capabilities (honestly listed — not invented)
+## External agents and workflows (Smart Pandesh)
+
+Mission Control and the Outcome Receipt must represent executions from **external** agents and workflows (Hermes, OpenClaw, n8n, desktop operators, coding agents, local models, authorized cloud services) — not only native Pandesh missions. Pandesh integrates; it does not duplicate engines.
+
+- **Execution identity:** every mission step carries an `executor` field: `native` | `hermes` | `openclaw` | `n8n` | `desktop-operator` | `coding-agent` | `local-model` | `cloud (consented)`. The UI shows the executor's name and an "external" badge where applicable.
+- **Evidence contract:** external executors must return the same evidence shape (tool calls, artifacts, counts) through the governed interface, or the step is marked `unverified` with "no evidence returned by external executor." Pandesh never trusts an external executor's self-report.
+- **Permission authority:** one central permission authority (Core). External executors receive a scoped, frozen grant; they cannot widen scope. All approvals flow through Core's approval cards.
+- **Memory authority:** one central memory. External executors may read/write memory only through Core's memory API with the declared scopes.
+- **Evidence ledger:** one central ledger. External executions are recorded as runtime events with `executor` metadata, so receipts and replay are uniform.
+
+## Verification levels (never overstated)
+
+Every "verified output" carries exactly one of three levels, shown as a chip. The UI never uses a stronger word than the level supports.
+
+| Level | Meaning | Source |
+|---|---|---|
+| **observed** | Core saw the tool output | tool_invocations evidence |
+| **checked** | Core re-ran or re-statted it | outputChecks / pc_organize verify |
+| **reviewed** | An independent Reviewer judged it | mission review step |
+
+A sample is never reported as a verification. A technical check is not a content review. Unsupported controls (input control, takeover, ambient overlay, proactive trigger engine) are shown as **unavailable**, never as operational.
 
 1. **Outcome Receipt aggregation** (receipt builder + export). Distributed today; needs consolidation.
 2. **Structured Living Workspace record** (goal, sections, last-activity, next action, contract). Projects are thin RecordCards.

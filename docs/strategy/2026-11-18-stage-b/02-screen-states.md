@@ -10,11 +10,15 @@ Each state: **purpose · layout · key elements · data sources · reuse · comp
 
 **Key elements:**
 - Greeting (time-of-day + name), one line.
-- Needs-you line: "3 things need you" (links to approvals) — single, not a banner stack.
+- **Proactive attention line (new):** a single, calm line — "3 things need you" — linking to approvals/commitments. Never a banner stack. If more than 5, collapses to "5+ things need you" with a "review all" link. Proactive items are deduplicated and ranked by urgency; no invented urgency.
+- **Ongoing goals strip (new):** up to 3 active goal cards (Living Workspaces) showing goal name + "where we left off" one-liner + last activity. Collapses to a single "N ongoing goals" link if space is tight. Never auto-expands.
+- **Commitments strip (new):** reminders and follow-ups due today, compact, dismissible.
 - Active work strip: 1–3 mission cards (compact) if any running; else "Nothing running."
 - Recent receipts strip (horizontal, 3 cards): last completed tasks with verified stamp, click to expand.
 - Composer (central, large) with attachments, voice, model picker, permission mode, folder chip.
 - Empty state: "calm panda welcome" (existing, preserved).
+
+**Clutter guard:** idle home shows at most one line of proactive attention, up to 3 goal cards, up to 3 commitment items, and up to 3 recent receipts. Anything beyond collapses into a "More" link. No auto-playing, no stacked banners, no modal popups on open. Proactive items are ranked, deduplicated, and dismissible; dismissed items don't reappear for 24h.
 
 **Data:** `missions` (status=running/interrupted), pending approvals count, last 3 completed mission reports, conversation list.
 
