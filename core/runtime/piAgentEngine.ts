@@ -1849,13 +1849,39 @@ export class PiAgentEngine implements EngineAdapter {
         const verdict = evaluateAuthorizedDispatch(db, { attemptId, toolName: 'write_file', arguments: writeArgs });
         if (verdict.decision === 'auto_authorize' && verdict.authorization) {
           const standingGrantId = verdict.authorization.authorizedBy?.startsWith('standing_grant:') ? verdict.authorization.authorizedBy.slice('standing_grant:'.length) : undefined;
-          return {
-            ok: true, source: standingGrantId ? 'standing_grant' : 'mission_envelope', reason: verdict.reason, standingGrantId,
-            mission: { id: verdict.authorization.id, digest: verdict.authorization.digest, normalizedPath: verdict.normalizedPath, contentDigest: verdict.contentDigest, contentBytes: verdict.contentBytes },
-          };
+          // DRV-010: a task's folder envelope lets the model write without a card per file, but it must not silently
+          // REPLACE an existing file it has never read or written this task. The recorded defect: asked to rename a file,
+          // the model wrote "93" over an unrelated 3-line document under a folder-wide card, and the reply never said so.
+          // Creating a new file, or rewriting one the model already read or wrote, stays allowed (the coding flow).
+          let fileExists = false;
+          let statFailed = false;
+          try { const st = fs.statSync(full); fileExists = true; if (st.isDirectory()) { /* treat as existing */ } } catch (e: any) {
+            // Fail closed for both mission envelopes and standing (routine) grants: a metadata lookup failure must not
+            // be treated as "file does not exist", or an unreadable existing file could be silently replaced.
+            if (e?.code !== 'ENOENT') { statFailed = true; }
+          }
+          if (statFailed) {
+            return notDone('the file metadata could not be read', `NOT WRITTEN: Pandesh could not read the metadata of ${path.basename(full)}, so it will not replace it. Nothing was changed. Check the file's permissions and try again.`);
+          }
+          // Standing (routine) grants are owner-approved for the frozen folder and are exempt from the read-before-overwrite
+          // guard, but still fail closed on metadata errors (above). Mission envelopes require created-this-turn.
+          // DRV-010 (final): under a mission envelope, an existing file (any size, including zero-byte) that this turn did
+          // not create may not be silently replaced. A filename appearing in the request is NOT authorization ("Do not
+          // change report.txt", "Rename report.txt", "Compare report.txt" none authorize replacement). A read is
+          // evidence of observation, not authorization. Route to an explicit per-file approval card (with diff) instead.
+          // Files created this turn (coding rewrites) and standing (routine) grants keep auto-authorization.
+          if (!standingGrantId && fileExists && !folderLedger.createdThisTurn(full)) {
+            // Fall through to the per-file approval card below instead of auto-authorizing.
+            reviewNote = `\nNot covered by this task's file authorization: replacing an existing file requires your explicit approval.`;
+          } else {
+            return {
+              ok: true, source: standingGrantId ? 'standing_grant' : 'mission_envelope', reason: verdict.reason, standingGrantId,
+              mission: { id: verdict.authorization.id, digest: verdict.authorization.digest, normalizedPath: verdict.normalizedPath, contentDigest: verdict.contentDigest, contentBytes: verdict.contentBytes },
+            };
+          }
         }
         if (verdict.decision === 'deny') return notDone(verdict.reason, `Error: "${full}" cannot be written: ${verdict.reason}. Nothing was written.`);
-        reviewNote = `\nNot covered by this task's file authorization: ${verdict.reason}.`;
+        if (!reviewNote) reviewNote = `\nNot covered by this task's file authorization: ${verdict.reason}.`;
       } else {
         // Outside the selected workspace a folder the user let Pandesh search is a precondition, never the authority.
         if (!isPathAuthorized(full)) {
@@ -1870,7 +1896,7 @@ export class PiAgentEngine implements EngineAdapter {
         filePath: full,
         arguments: { path: full, bytes },
         workspaceRoot: selectedWorkspace || null,
-        cardText: `Pandesh wants to write ${full} (${bytes} bytes):${reviewNote}\n${redactCredentialShapes(content.slice(0, 600))}`,
+        cardText: `Pandesh wants to write ${full} (${bytes} bytes):${reviewNote}\n${fs.existsSync(full) ? 'This replaces the existing contents of ' + path.basename(full) + '.\n' : ''}${redactCredentialShapes(content.slice(0, 600))}`,
       });
       if (outcome.outcome === 'approved') {
         // Micro-test PER-019: approving a card for a file that changed since it appeared must not overwrite that change.
@@ -3497,10 +3523,12 @@ export class PiAgentEngine implements EngineAdapter {
 
           try {
             let before = '';
-            try { before = fs.statSync(full).size <= 512 * 1024 ? fs.readFileSync(full, 'utf8') : ''; } catch { before = ''; }
+            let existedBefore = false;
+            try { const st = fs.statSync(full); existedBefore = true; before = st.size <= 512 * 1024 ? fs.readFileSync(full, 'utf8') : ''; } catch { before = ''; existedBefore = false; }
             fs.mkdirSync(path.dirname(full), { recursive: true });
             fs.writeFileSync(full, args.content, 'utf8');
             folderLedger.noteWritten(full);
+            if (!existedBefore) folderLedger.noteCreated(full);
             // A write made under a standing permission is read back and checked by Core itself, and recorded per use.
             if (grant.standingGrantId) {
               const taskId = scheduledTaskOfAttempt(db, attemptId) ?? '';
