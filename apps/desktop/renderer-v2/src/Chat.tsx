@@ -1,5 +1,11 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { MissionDock } from './Missions';
+import { MissionControlPane } from './MissionControlPane';
+import { OutcomeReceipt } from './OutcomeReceipt';
+import { RehearsalPane } from './RehearsalPane';
+import { type RehearsalPlan, type RehearsalMove } from './rehearsalModel';
+import { type Receipt } from './receiptModel';
+import { type MissionView } from './missionModel';
 import { api, errorText, onDesktopEvent, type ApprovalCard, type BriefAction, type BriefItem, type Snapshot, type TranscriptMessage } from './bridge';
 import { Icon, Mark, elapsed, timeOf } from './ui';
 import { ActivityAside } from './Activity';
@@ -112,6 +118,43 @@ export function Chat({ snapshot, snapshotError, refresh, narrow, openConversatio
   const [busy, setBusy] = useState(false);
   const [deciding, setDeciding] = useState(false);
   const [closedFor, setClosedFor] = useState<string | null>(null);
+  const [receipt, setReceipt] = useState<Receipt | null>(null);
+  const [receiptMissionId, setReceiptMissionId] = useState<string | null>(null);
+  const [activeMission, setActiveMission] = useState<MissionView | null>(null);
+  const [rehearsalPlan, setRehearsalPlan] = useState<RehearsalPlan | null>(null);
+
+  const fetchReceipt = async (missionId: string) => {
+    try {
+      const r = await api.household('missionReceipt', { id: missionId }) as { receipt: Receipt };
+      if (r?.receipt) { setReceipt(r.receipt); setReceiptMissionId(missionId); }
+    } catch { /* not ready */ }
+  };
+
+  const fetchRehearsal = async (roots: string[]) => {
+    try {
+      const r = await api.household('propose', { roots, inspectContents: true }) as { plan: any; preview: string };
+      if (r?.plan) {
+        const p = r.plan;
+        const moves = (p.moves ?? p.proposedMoves ?? []).map((m: any) => ({
+          source: m.source ?? m.from ?? '',
+          destination: m.destination ?? m.to ?? '',
+          bytes: m.bytes ?? m.size ?? 0,
+          conflict: Boolean(m.conflict || m.destinationExists),
+        }));
+        const plan: RehearsalPlan = {
+          planId: p.id ?? p.planId,
+          totalMoves: p.totalMoves ?? moves.length,
+          moves,
+          duplicates: (p.duplicateSets ?? []).map((d: any, i: number) => ({ set: i + 1, files: d.files ?? d.count ?? 0, bytes: d.bytes ?? d.redundantBytes ?? 0 })),
+          conflicts: moves.filter((m: RehearsalMove) => m.conflict).length,
+          spaceFreedBytes: p.spaceFreedBytes ?? p.redundantBytes ?? 0,
+          spaceMovedBytes: p.spaceMovedBytes ?? 0,
+          digest: p.digest ?? '',
+        };
+        setRehearsalPlan(plan);
+      }
+    } catch { /* ignore */ }
+  };
   const [forcedOpen, setForcedOpen] = useState(false);
   const [declined, setDeclined] = useState(false);
   const [routeOpen, setRouteOpen] = useState(false);
@@ -126,6 +169,23 @@ export function Chat({ snapshot, snapshotError, refresh, narrow, openConversatio
   useEffect(() => { if (draft) { setText(draft); onDraftUsed?.(); setTimeout(() => textarea.current?.focus(), 0); } }, [draft]);
   const convId = openConversationId ?? snapshot?.selectedConversationId ?? null;
   const runningHere = Boolean(snapshot?.running) && (snapshot?.activeConversationId ?? null) === convId;
+
+  // Poll missions for the contextual Mission Control pane.
+  useEffect(() => {
+    if (!convId) { setActiveMission(null); return; }
+    let cancelled = false;
+    const load = async () => {
+      try {
+        const r = await api.household('missions', { conversationId: convId }) as { missions: MissionView[] };
+        if (cancelled) return;
+        const running = (r.missions ?? []).find((m) => m.status === 'running');
+        setActiveMission(running ?? null);
+      } catch { /* ignore */ }
+    };
+    void load();
+    const t = setInterval(load, 2000);
+    return () => { cancelled = true; clearInterval(t); };
+  }, [convId]);
 
   // Open the conversation the user picked so the next send goes there.
   useEffect(() => {
@@ -534,6 +594,19 @@ export function Chat({ snapshot, snapshotError, refresh, narrow, openConversatio
                   </div>
                 ))}
               {pendingUser && <div className="msg-user" aria-label="Sending">{pendingUser}{pendingFiles.length ? <AttachmentChips items={pendingFiles} /> : null}</div>}
+              {receipt && (
+                <div style={{ margin: '16px 0' }}>
+                  <OutcomeReceipt receipt={receipt} onReviewDiff={() => {}} onUndo={() => {}} onShare={() => {}} onNext={() => setReceipt(null)} />
+                  <div style={{ textAlign: 'center', marginTop: '8px' }}>
+                    <button type="button" className="btn link" onClick={() => setReceipt(null)}>Dismiss receipt</button>
+                  </div>
+                </div>
+              )}
+              {rehearsalPlan && (
+                <div style={{ margin: '16px 0' }}>
+                  <RehearsalPane plan={rehearsalPlan} onAuthorize={() => { void (async () => { try { await api.household('apply', { id: rehearsalPlan.planId, digest: rehearsalPlan.digest }); setRehearsalPlan(null); } catch { /* ignore */ } })(); }} onCancel={() => setRehearsalPlan(null)} />
+                </div>
+              )}
               {runningHere && (
                 <div className="msg-assistant" aria-live="polite">
                   <Mark />
@@ -575,7 +648,16 @@ export function Chat({ snapshot, snapshotError, refresh, narrow, openConversatio
 
         <div className="footer">
           <div className="footer-inner">
-            <MissionDock conversationId={convId} narrow={narrow} onReport={() => { void loadTranscript(convId); }} />
+            <MissionDock conversationId={convId} narrow={narrow} onReport={(missionId) => { void loadTranscript(convId); if (missionId) void fetchReceipt(missionId); else void (async () => {
+              try {
+                const r = await api.household('missions', { conversationId: convId ?? undefined }) as { missions: Array<{ id: string; status: string }> };
+                const done = (r.missions ?? []).find((m) => m.status === 'completed' || m.status === 'completed_with_issues' || m.status === 'failed');
+                if (done) void fetchReceipt(done.id);
+              } catch { /* ignore */ }
+            })(); }} />
+            {activeMission && !narrow && (
+              <MissionControlPane mission={activeMission} onStop={() => void (async () => { try { await api.household('missionCancel', { id: activeMission.id }); } catch { /* ignore */ } })()} onAllow={(id) => void (async () => { try { await api.resolveAssistantApproval(id, 'approved'); } catch { /* ignore */ } })()} onDeny={(id) => void (async () => { try { await api.resolveAssistantApproval(id, 'rejected'); } catch { /* ignore */ } })()} />
+            )}
             {!showDecisionBar && controls.panel}
             {!showDecisionBar && folder.card}
             {/* On the home screen there is no transcript to hold a send error, so it shows here. */}

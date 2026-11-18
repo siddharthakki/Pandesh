@@ -12,6 +12,7 @@ import { CoreError } from '../domain/errors';
 import { listAgentDefinitions } from '../domain/agents';
 import { listCapabilityActions } from '../domain/capabilityDispatch';
 import { getMission, listMissions, missionStepAttemptIds, reopenMission, requestMissionCancel, type Mission } from '../domain/missions';
+import { buildOutcomeReceipt } from '../runtime/outcomeReceipt';
 import type { CoreDatabase } from '../db/connection';
 
 function requireHost(ctx: ApiContext): void {
@@ -79,6 +80,8 @@ export function registerMissionRoutes(router: Router<ApiContext, ApiResult>, opt
   });
 
   router.get('/v1/missions/:id', (ctx, match) => ok({ mission: missionView(ctx.db, getMission(ctx.db, match.params.id), ctx.clientId) }));
+
+  router.get('/v1/missions/:id/receipt', (ctx, match) => ok({ receipt: buildOutcomeReceipt(ctx.db, match.params.id) }));
 
   router.post('/v1/missions/:id/cancel', (ctx, match) => {
     requireHost(ctx);

@@ -9,7 +9,7 @@ import { describeStep, missionHeadline, missionProgress, visibleMissions, type M
  * person's OK, the files it left, and Stop / Continue. Everything shown is Core's record (GET /v1/missions); the card
  * never shows an agent's own words as a status.
  */
-export function MissionDock({ conversationId, narrow, onReport }: { conversationId: string | null; narrow: boolean; onReport: () => void }) {
+export function MissionDock({ conversationId, narrow, onReport }: { conversationId: string | null; narrow: boolean; onReport: (missionId?: string) => void }) {
   const [missions, setMissions] = useState<MissionView[]>([]);
   const [open, setOpen] = useState<Record<string, boolean>>({});
   const [hidden, setHidden] = useState<Record<string, boolean>>({});
@@ -25,7 +25,7 @@ export function MissionDock({ conversationId, narrow, onReport }: { conversation
       // A mission that just ended has written its report into the conversation: show it.
       for (const m of list) {
         const before = lastStatus.current[m.id];
-        if (before === 'running' && m.status !== 'running' && m.conversationId === conversationId) onReport();
+        if (before === 'running' && m.status !== 'running' && m.conversationId === conversationId) onReport(m.id);
         lastStatus.current[m.id] = m.status;
       }
       setMissions(list);
