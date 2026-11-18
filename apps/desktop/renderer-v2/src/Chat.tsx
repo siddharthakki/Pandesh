@@ -2,6 +2,8 @@ import React, { useEffect, useRef, useState } from 'react';
 import { MissionDock } from './Missions';
 import { MissionControlPane } from './MissionControlPane';
 import { OutcomeReceipt } from './OutcomeReceipt';
+import { RehearsalPane } from './RehearsalPane';
+import { type RehearsalPlan, type RehearsalMove } from './rehearsalModel';
 import { type Receipt } from './receiptModel';
 import { type MissionView } from './missionModel';
 import { api, errorText, onDesktopEvent, type ApprovalCard, type BriefAction, type BriefItem, type Snapshot, type TranscriptMessage } from './bridge';
@@ -119,12 +121,39 @@ export function Chat({ snapshot, snapshotError, refresh, narrow, openConversatio
   const [receipt, setReceipt] = useState<Receipt | null>(null);
   const [receiptMissionId, setReceiptMissionId] = useState<string | null>(null);
   const [activeMission, setActiveMission] = useState<MissionView | null>(null);
+  const [rehearsalPlan, setRehearsalPlan] = useState<RehearsalPlan | null>(null);
 
   const fetchReceipt = async (missionId: string) => {
     try {
       const r = await api.household('missionReceipt', { id: missionId }) as { receipt: Receipt };
       if (r?.receipt) { setReceipt(r.receipt); setReceiptMissionId(missionId); }
     } catch { /* not ready */ }
+  };
+
+  const fetchRehearsal = async (roots: string[]) => {
+    try {
+      const r = await api.household('propose', { roots, inspectContents: true }) as { plan: any; preview: string };
+      if (r?.plan) {
+        const p = r.plan;
+        const moves = (p.moves ?? p.proposedMoves ?? []).map((m: any) => ({
+          source: m.source ?? m.from ?? '',
+          destination: m.destination ?? m.to ?? '',
+          bytes: m.bytes ?? m.size ?? 0,
+          conflict: Boolean(m.conflict || m.destinationExists),
+        }));
+        const plan: RehearsalPlan = {
+          planId: p.id ?? p.planId,
+          totalMoves: p.totalMoves ?? moves.length,
+          moves,
+          duplicates: (p.duplicateSets ?? []).map((d: any, i: number) => ({ set: i + 1, files: d.files ?? d.count ?? 0, bytes: d.bytes ?? d.redundantBytes ?? 0 })),
+          conflicts: moves.filter((m: RehearsalMove) => m.conflict).length,
+          spaceFreedBytes: p.spaceFreedBytes ?? p.redundantBytes ?? 0,
+          spaceMovedBytes: p.spaceMovedBytes ?? 0,
+          digest: p.digest ?? '',
+        };
+        setRehearsalPlan(plan);
+      }
+    } catch { /* ignore */ }
   };
   const [forcedOpen, setForcedOpen] = useState(false);
   const [declined, setDeclined] = useState(false);
@@ -571,6 +600,11 @@ export function Chat({ snapshot, snapshotError, refresh, narrow, openConversatio
                   <div style={{ textAlign: 'center', marginTop: '8px' }}>
                     <button type="button" className="btn link" onClick={() => setReceipt(null)}>Dismiss receipt</button>
                   </div>
+                </div>
+              )}
+              {rehearsalPlan && (
+                <div style={{ margin: '16px 0' }}>
+                  <RehearsalPane plan={rehearsalPlan} onAuthorize={() => { void (async () => { try { await api.household('apply', { id: rehearsalPlan.planId, digest: rehearsalPlan.digest }); setRehearsalPlan(null); } catch { /* ignore */ } })(); }} onCancel={() => setRehearsalPlan(null)} />
                 </div>
               )}
               {runningHere && (
