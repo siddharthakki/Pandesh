@@ -49,6 +49,14 @@ describe('worker script is read-only', () => {
   it('contains no mailbox write', () => {
     for (const w of ['.Send(', '.Delete(', '.Move(', '.Save(', '.SaveAs', '.Display(', '.UnRead =', '.FlagStatus', '.Categories =', 'SaveAsFile', '.MarkAsTask']) expect(OUTLOOK_WORKER_SCRIPT).not.toContain(w);
   });
+  it('forgets its Outlook connection after a failure and attaches again once when a store is not listed', () => {
+    const catchBlock = OUTLOOK_WORKER_SCRIPT.slice(OUTLOOK_WORKER_SCRIPT.lastIndexOf('} catch {'));
+    expect(catchBlock).toContain('$script:ns = $null');
+    expect(catchBlock).toContain('$script:ol = $null');
+    const find = OUTLOOK_WORKER_SCRIPT.slice(OUTLOOK_WORKER_SCRIPT.indexOf('function FindStore'), OUTLOOK_WORKER_SCRIPT.indexOf('function FolderByPath'));
+    expect(find).toContain('Connect');
+    expect(find).toContain('foreach ($attempt in 1, 2)');
+  });
 });
 
 describe('extraction', () => {

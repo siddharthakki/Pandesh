@@ -22,7 +22,11 @@ function Connect {
 function Clip([string]$s, [int]$n) { if ($null -eq $s) { return '' }; if ($s.Length -gt $n) { return $s.Substring(0, $n) }; return $s }
 
 function FindStore([string]$storeId) {
-  foreach ($s in $script:ns.Stores) { if ($s.StoreID -eq $storeId) { return $s } else { Release $s } }
+  foreach ($attempt in 1, 2) {
+    foreach ($s in $script:ns.Stores) { if ($s.StoreID -eq $storeId) { return $s } else { Release $s } }
+    # Not listed: the connection may belong to an Outlook that has since been restarted. Attach again once before giving up.
+    if ($attempt -eq 1) { $script:ns = $null; $script:ol = $null; Connect }
+  }
   throw "store not found"
 }
 
@@ -156,6 +160,9 @@ while ($true) {
     $reply = [ordered]@{ id = $id; ok = $true; data = $data }
   } catch {
     $msg = ($_.Exception.Message -split [char]10)[0]
+    # A failure here may mean Outlook was closed or restarted: forget the old connection so the next request attaches to the live one.
+    $script:ns = $null
+    $script:ol = $null
     $reply = [ordered]@{ id = $id; ok = $false; error = (Clip $msg 300) }
   }
   [Console]::Out.WriteLine(($reply | ConvertTo-Json -Depth 8 -Compress))
