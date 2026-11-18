@@ -167,7 +167,7 @@ export function buildOutcomeReceipt(db: CoreDatabase, missionId: string): Outcom
     objective: mission.objective,
     status: mission.status,
     headline: headlineFor(mission.status),
-    startedAt: mission.startedAt,
+    startedAt: mission.createdAt,
     completedAt: mission.completedAt,
     durationMs,
     steps: mission.steps.map((s) => ({
