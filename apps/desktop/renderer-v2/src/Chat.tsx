@@ -648,7 +648,7 @@ export function Chat({ snapshot, snapshotError, refresh, narrow, openConversatio
 
         <div className="footer">
           <div className="footer-inner">
-            <MissionDock conversationId={convId} narrow={narrow} onReport={() => { void loadTranscript(convId); void (async () => {
+            <MissionDock conversationId={convId} narrow={narrow} onReport={(missionId) => { void loadTranscript(convId); if (missionId) void fetchReceipt(missionId); else void (async () => {
               try {
                 const r = await api.household('missions', { conversationId: convId ?? undefined }) as { missions: Array<{ id: string; status: string }> };
                 const done = (r.missions ?? []).find((m) => m.status === 'completed' || m.status === 'completed_with_issues' || m.status === 'failed');
