@@ -19,6 +19,7 @@ import { KandevClient } from '../runtime/kandev/kandevClient';
 import {
   cancelBridgeTask, discoverExecutors, dispatchBridgeTask, pauseBridgeTask, refreshBridgeTask, resumeBridgeTask, type BridgeRuntime,
 } from '../runtime/kandev/pandaBridge';
+import { bridgeServices } from '../runtime/kandev/bridgeServices';
 import type { RuntimeExecutor } from '../runtime/executor';
 
 export interface BridgeRouteOptions {
@@ -59,7 +60,7 @@ const ok = (status: number, payload: unknown): ApiResult => ({ status, body: pay
 
 export function registerBridgeRoutes(router: Router<ApiContext, ApiResult>, options: BridgeRouteOptions): void {
   const kandev = options.kandev ?? new KandevClient();
-  const runtime = (ctx: ApiContext): BridgeRuntime => ({ db: ctx.db, kandev, dataDir: options.dataDir, executor: options.executor });
+  const runtime = (ctx: ApiContext): BridgeRuntime => ({ db: ctx.db, kandev, dataDir: options.dataDir, executor: options.executor, services: bridgeServices(options.dataDir) });
   const view = (ctx: ApiContext, task: BridgeTaskRecord) => toBridgeTaskView(task, listCheckpoints(ctx.db, task.id));
 
   // --- pairing ---
