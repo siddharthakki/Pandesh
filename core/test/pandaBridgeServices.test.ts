@@ -91,3 +91,18 @@ describe('bridge service executors', () => {
     expect(getBridgeTask(db, t.id).status).toBe('cancelled');
   });
 });
+
+describe('stale failed capability probe', () => {
+  it('re-probes a failed agent and trusts the fresh result', async () => {
+    let probed = 0;
+    const k = {
+      healthy: async () => true,
+      tool: async () => ({ agents: [{ id: 'a', name: 'opencode-acp', capability_status: 'failed', capability_error: 'peer disconnected', profiles: [] }] }),
+      reprobeAgent: async () => { probed++; return { status: 'ok' }; },
+    } as unknown as KandevClient;
+    const l = await discoverExecutors(k, {});
+    const oc = l.executors.find(e => e.id === 'opencode')!;
+    expect(probed).toBe(1);
+    expect(oc.reason === null || !/failed/.test(oc.reason)).toBe(true);
+  });
+});

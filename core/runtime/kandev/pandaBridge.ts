@@ -98,6 +98,10 @@ export async function discoverExecutors(kandev: KandevClient, opts: { nativeAvai
     const installed = known.binary ? onPath(known.binary) : Boolean(agent);
     let available = installed;
     let reason: string | null = null;
+    if (agent && agent.capability_status === 'failed') {
+      const fresh = await kandev.reprobeAgent(agent.name);
+      if (fresh) { agent.capability_status = fresh.status; agent.capability_error = fresh.error ?? ''; }
+    }
     if (agent && agent.capability_status && agent.capability_status !== 'ok') { available = false; reason = `${agent.capability_status} ${agent.capability_error ?? ''}`.trim(); }
     else if (!installed) reason = `${known.label} is not installed on this PC`;
     else if (!running) reason = 'Kandev is started on demand when the task is dispatched';

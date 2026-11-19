@@ -206,6 +206,10 @@ async function profileFor(kandev: KandevClient, agent: DevAgent, model: string |
   const { agents } = await kandev.tool<{ agents: Array<{ id: string; name: string; capability_status?: string; capability_error?: string; profiles?: Array<{ id: string; name: string; model: string; auto_approve: boolean }> }> }>('list_agents_kandev', {});
   const entry = agents.find(a => a.name === AGENT_IDS[agent]);
   if (!entry) throw new Error(`${agent} is not installed for Kandev (${AGENT_IDS[agent]} missing)`);
+  if (entry.capability_status === 'failed') {
+    const fresh = await kandev.reprobeAgent(entry.name);
+    if (fresh) { entry.capability_status = fresh.status; entry.capability_error = fresh.error ?? ''; }
+  }
   if (entry.capability_status && entry.capability_status !== 'ok') throw new Error(`${agent} is not usable in Kandev: ${entry.capability_status} ${entry.capability_error ?? ''}`.trim());
   const want = agent === 'claude' ? (model || DEFAULT_CLAUDE_MODEL) : model;
   const safe = (entry.profiles ?? []).filter(p => !p.auto_approve);

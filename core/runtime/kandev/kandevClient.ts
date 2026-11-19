@@ -125,6 +125,15 @@ export class KandevClient {
     if (out.code !== 0 || !(await this.healthy())) throw new KandevUnavailableError(`Could not start Kandev: ${out.text.trim().slice(-400)}`);
   }
 
+  /**
+   * Kandev probes each agent once at startup and keeps the result. A probe that raced the machine's own start-up leaves a
+   * healthy agent marked failed for the whole session, so a failed status is re-checked on demand (the probe is an ACP
+   * initialize in a throwaway process; it runs nothing for the user). Returns null when Kandev cannot say.
+   */
+  async reprobeAgent(agentType: string): Promise<{ status: string; error?: string } | null> {
+    try { return await this.rest<{ status: string; error?: string }>('POST', `/agent-capabilities/${encodeURIComponent(agentType)}/probe`); } catch { return null; }
+  }
+
   async healthy(): Promise<boolean> {
     try {
       const res = await fetch(`${this.baseUrl}/health`, { signal: AbortSignal.timeout(2_000) });
