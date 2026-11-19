@@ -25,6 +25,7 @@ import {
 import { detectGpu, gpuLaneLimit, type GpuInfo } from '../hardwareCapacity';
 import type { RuntimeExecutor } from '../executor';
 import { KandevClient, KandevUnavailableError } from './kandevClient';
+import { parseServiceArgs, type ServiceRegistry } from './bridgeServices';
 import {
   AGENT_IDS, devSpec, devStoryDetail, dispatchDevStories, planDevStories, retryDevStory, stopDevStory, usesLocalGpu, type DevAgent,
 } from './devStories';
@@ -34,7 +35,7 @@ export type BridgeExecutorId = DevAgent | 'native';
 export interface BridgeExecutor {
   id: string;
   label: string;
-  kind: 'acp' | 'native';
+  kind: 'acp' | 'native' | 'service';
   /** False for an ACP agent Kandev knows but the coordinator cannot drive yet. */
   dispatchable: boolean;
   available: boolean;
@@ -59,6 +60,8 @@ export function isLocalModel(model: string | null | undefined): boolean {
 }
 
 export function transferInfo(executor: string, model: string | null | undefined): { id: string; label: string; external: boolean } {
+  // Registered deterministic services run in-process on this PC; nothing is sent to a model.
+  if (executor.startsWith('service:')) return { id: executor, label: executor, external: false };
   const known = KNOWN[executor as BridgeExecutorId];
   const label = known?.label ?? executor;
   // Unknown executors are treated as external until proven otherwise.
@@ -80,7 +83,7 @@ export interface ExecutorListing {
 }
 
 /** What can run a task right now. Passive: it never starts Kandev. */
-export async function discoverExecutors(kandev: KandevClient, opts: { nativeAvailable?: boolean } = {}): Promise<ExecutorListing> {
+export async function discoverExecutors(kandev: KandevClient, opts: { nativeAvailable?: boolean; services?: ServiceRegistry } = {}): Promise<ExecutorListing> {
   const running = await kandev.healthy();
   const gpu = detectGpu();
   const executors: BridgeExecutor[] = [];
@@ -118,6 +121,9 @@ export async function discoverExecutors(kandev: KandevClient, opts: { nativeAvai
     id: 'native', label: KNOWN.native.label, kind: 'native', dispatchable: true, available: opts.nativeAvailable !== false, reason: opts.nativeAvailable === false ? 'no runtime executor is configured on this Core' : null,
     external: false, usesLocalGpu: false, models: [],
   });
+  for (const svc of opts.services?.list() ?? []) {
+    executors.push({ id: `service:${svc.id}`, label: svc.label, kind: 'service', dispatchable: true, available: true, reason: null, external: false, usesLocalGpu: false, models: [] });
+  }
   return { kandev: { running }, hardware: { gpu, gpuLanes: gpuLaneLimit(gpu) }, executors };
 }
 
@@ -177,6 +183,8 @@ export interface BridgeRuntime {
   dataDir: string;
   /** Runs Pandesh's own capabilities; absent on a Core without a runtime executor. */
   executor?: RuntimeExecutor;
+  /** Deterministic services and workflows dispatched through the same task lifecycle (no LLM). */
+  services?: ServiceRegistry;
 }
 
 export interface DispatchRequest {
@@ -219,7 +227,7 @@ export async function dispatchBridgeTask(rt: BridgeRuntime, taskId: string, req:
     if (!decision.allowed) throw new CoreError('forbidden', decision.message, { reason: decision.code });
   }
 
-  const listing = await discoverExecutors(rt.kandev, { nativeAvailable: Boolean(rt.executor) });
+  const listing = await discoverExecutors(rt.kandev, { nativeAvailable: Boolean(rt.executor), ...(rt.services ? { services: rt.services } : {}) });
   let routing: 'explicit' | 'auto' = 'explicit';
   let chosen: BridgeExecutor | undefined;
   if (req.executor === 'auto') {
@@ -241,7 +249,8 @@ export async function dispatchBridgeTask(rt: BridgeRuntime, taskId: string, req:
   const includeContext = task.contextConfirmed && (!info.external || consent?.includeContext === true);
 
   try {
-    if (chosen.id === 'native') await startNative(rt, getBridgeTask(db, taskId));
+    if (chosen.kind === 'service') startService(rt, getBridgeTask(db, taskId), chosen.id.slice('service:'.length));
+    else if (chosen.id === 'native') await startNative(rt, getBridgeTask(db, taskId));
     else await startAcp(rt, getBridgeTask(db, taskId), chosen.id as DevAgent, model, includeContext);
   } catch (err) {
     // Not started: hand the task back so the user can retry or pick another executor. A half-created story is reused on retry.
@@ -298,6 +307,33 @@ async function dispatchWhenKandevIsReady(rt: BridgeRuntime, projectId: string, s
     }
   }
   throw last;
+}
+
+const activeServices = new Map<string, AbortController>();
+
+/** Runs a registered deterministic service in the background; status, cancel and the deadline reuse the bridge lifecycle. */
+function startService(rt: BridgeRuntime, task: BridgeTaskRecord, serviceId: string): void {
+  const svc = rt.services?.get(serviceId);
+  if (!svc) throw new CoreError('invalid_request', `unknown service '${serviceId}'`);
+  const ac = new AbortController();
+  activeServices.set(task.id, ac);
+  const base: BridgeTaskResult = { verification: null, evidence: null, changedFiles: [], commit: null, pendingApprovals: [], activity: [], timeline: [] };
+  const log = (event: string, text: string) => ({ at: new Date().toISOString(), event, text });
+  recordBridgeStatus(rt.db, task.id, 'running', `${svc.label} is running (no model involved).`);
+  void (async () => {
+    try {
+      const out = await svc.run({ args: parseServiceArgs(task.instruction), signal: ac.signal });
+      if (ac.signal.aborted || getBridgeTask(rt.db, task.id).control === 'cancelled') return;
+      recordBridgeStatus(rt.db, task.id, 'completed', out.summary, {
+        ...base, verification: 'independent', evidence: redactPaths(JSON.stringify(out.evidence)).slice(0, 3_000), changedFiles: out.files ?? [],
+        timeline: [log('service', `${svc.id}: ${out.summary}`)],
+      });
+    } catch (err) {
+      if (ac.signal.aborted) return;
+      const msg = redactPaths(err instanceof Error ? err.message : String(err)).slice(0, 300);
+      recordBridgeStatus(rt.db, task.id, 'failed', `${svc.label} failed: ${msg}`, { ...base, timeline: [log('service', `failed: ${msg}`)] });
+    } finally { activeServices.delete(task.id); }
+  })();
 }
 
 async function startNative(rt: BridgeRuntime, task: BridgeTaskRecord): Promise<void> {
@@ -410,6 +446,7 @@ export async function cancelBridgeTask(rt: BridgeRuntime, taskId: string, who: s
   const task = getBridgeTask(rt.db, taskId);
   if (task.status === 'cancelled' || task.status === 'completed') return task;
   setBridgeControl(rt.db, taskId, 'cancelled');
+  activeServices.get(taskId)?.abort();
   if (task.storyId) {
     const story = getStory(rt.db, task.storyId);
     if (['implementing', 'review', 'validation', 'delivery_approval', 'merge_queue'].includes(story.status)) {
@@ -427,6 +464,7 @@ export async function cancelBridgeTask(rt: BridgeRuntime, taskId: string, who: s
 }
 
 const DISPATCH_STALE_MS = 3 * 60_000;
+const BRIDGE_TASK_DEADLINE_MS = 30 * 60_000;
 
 /** Background mirror: keeps every live relayed task current, so a result is stored even when no browser is watching. */
 export function startPandaBridgeLoop(rt: BridgeRuntime, intervalMs = 5_000): () => void {
@@ -439,6 +477,16 @@ export function startPandaBridgeLoop(rt: BridgeRuntime, intervalMs = 5_000): () 
         // A dispatch claimed but never started (Core stopped in between) must not sit in "dispatching" forever.
         if (t.status === 'dispatching' && Date.now() - Date.parse(t.updatedAt) > DISPATCH_STALE_MS) {
           recordBridgeStatus(rt.db, t.id, 'failed', 'Starting the executor was interrupted. Start it again.');
+          continue;
+        }
+        // A service task whose in-process run is gone (Core restarted) cannot finish: say so instead of showing it as running.
+        if (t.status === 'running' && t.executor?.startsWith('service:') && !activeServices.has(t.id)) {
+          recordBridgeStatus(rt.db, t.id, 'failed', 'Core restarted while this service was running. Start it again.');
+          continue;
+        }
+        // Practical deadline: a tiny bridge job must not run indefinitely. Reuse the existing cancel path.
+        if (t.status === 'running' && Date.now() - Date.parse(t.createdAt) > BRIDGE_TASK_DEADLINE_MS) {
+          await cancelBridgeTask(rt, t.id, 'Pandesh (deadline)').catch(() => { /* best effort */ });
           continue;
         }
         if (['dispatching', 'running', 'awaiting_approval', 'verifying', 'needs_attention'].includes(t.status)) await refreshBridgeTask(rt, t.id).catch(() => { /* next tick */ });
