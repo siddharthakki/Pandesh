@@ -92,6 +92,8 @@ export async function runWorkflow(
     if (rec.status === 'failed' && step.fallback && step.fallback.when.test(rec.detail ?? '')) {
       rec = await execute(step.fallback.step, `${step.name}:fallback`, i);
     }
+    // An optional step that was refused or failed is simply absent from the result; the run still completes.
+    if (step.optional && ['refused', 'failed', 'cancelled', 'timeout'].includes(rec.status)) { rec.detail = `skipped (optional): ${rec.detail ?? rec.status}`; continue; }
     if (rec.status === 'refused') { run.status = 'refused'; return run; }
     if (rec.status === 'timeout') { run.status = 'timeout'; return run; }
     previous.push({ name: step.name, evidence: rec.evidence });

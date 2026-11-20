@@ -32,7 +32,7 @@ export const BUILTIN_DECLARATIONS: ExecutorDeclaration[] = [
   { executor: 'opencode', classes: { 'code.edit': 90, 'code.review': 70, 'general.reasoning': 40 }, deterministic: false, readOnly: false },
   { executor: 'hermes', classes: { 'general.reasoning': 80, research: 70, 'code.edit': 40 }, deterministic: false, readOnly: false },
   { executor: 'claude', classes: { 'code.edit': 95, 'code.review': 90, 'general.reasoning': 95, research: 85 }, deterministic: false, readOnly: false },
-  { executor: 'native', classes: { 'windows.operate': 70, 'filesystem.inspect': 40 }, deterministic: false, readOnly: false },
+  { executor: 'native', classes: { 'windows.operate': 70, 'filesystem.inspect': 40, 'text.summarize': 70 }, deterministic: false, readOnly: false },
 ];
 
 export function declarationForService(s: BridgeService): ExecutorDeclaration {
@@ -149,6 +149,8 @@ export interface WorkflowStep {
   deterministicOnly?: boolean;
   /** The instruction for this step, built from the workflow input and the evidence of earlier steps. */
   instruction(input: Record<string, unknown>, previous: Array<{ name: string; evidence: Record<string, unknown> | null }>): string;
+  /** A refused or failed optional step does not fail the run: its result is simply absent (e.g. an AI summary on top of collected data). */
+  optional?: boolean;
   /** Runs instead of this step, as its own bridge task, only when this step failed and its failure detail matches `when`. */
   fallback?: { when: RegExp; step: Omit<WorkflowStep, 'fallback'> };
 }
@@ -188,4 +190,20 @@ export const EXTRACT_DOCUMENT_WORKFLOW: WorkflowDefinition = {
   }],
 };
 
-export const BUILTIN_WORKFLOWS: WorkflowDefinition[] = [VERIFY_FILE_WORKFLOW, EXTRACT_DOCUMENT_WORKFLOW];
+/**
+ * Daily brief: deterministic collection from what Pandesh already recorded, then (optionally) a model summary of exactly that
+ * data. It never starts a research mission; with no model available the collected data is still the result.
+ */
+export const DAILY_BRIEF_WORKFLOW: WorkflowDefinition = {
+  id: 'daily-brief', label: 'Daily brief (collect from Pandesh records, then summarise)',
+  steps: [
+    { name: 'collect', taskClass: 'brief.daily', readOnly: true, deterministicOnly: true, instruction: () => '{}' },
+    {
+      name: 'summarize', taskClass: 'text.summarize', optional: true,
+      instruction: (_i, prev) => 'Summarise this daily brief for the owner in at most 8 short bullet points. Use only the data below; do not browse, search, run tools or invent anything. If a section is unavailable, say so.\n\n'
+        + JSON.stringify(prev.find(p => p.name === 'collect')?.evidence ?? {}).slice(0, 6000),
+    },
+  ],
+};
+
+export const BUILTIN_WORKFLOWS: WorkflowDefinition[] = [VERIFY_FILE_WORKFLOW, EXTRACT_DOCUMENT_WORKFLOW, DAILY_BRIEF_WORKFLOW];

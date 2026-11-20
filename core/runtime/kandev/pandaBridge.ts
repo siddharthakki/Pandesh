@@ -340,7 +340,7 @@ function startService(rt: BridgeRuntime, task: BridgeTaskRecord, serviceId: stri
   recordBridgeStatus(rt.db, task.id, 'running', `${svc.label} is running (no model involved).`);
   void (async () => {
     try {
-      const out = await svc.run({ args: parseServiceArgs(task.instruction), signal: ac.signal });
+      const out = await svc.run({ args: parseServiceArgs(task.instruction), signal: ac.signal, db: rt.db });
       if (ac.signal.aborted || getBridgeTask(rt.db, task.id).control === 'cancelled') return;
       recordBridgeStatus(rt.db, task.id, 'completed', out.summary, {
         ...base, verification: 'independent', evidence: redactPaths(JSON.stringify(out.evidence)).slice(0, 3_000), changedFiles: out.files ?? [],
