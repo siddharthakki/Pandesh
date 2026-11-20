@@ -12,6 +12,8 @@ import { CoreError } from './errors';
 import { nowIso } from './ids';
 
 export const APPROVAL_TTL_MS = 30 * 60_000;
+/** After the owner says yes, the start must follow promptly; an approval not used within this time is void (no stockpiled approvals). */
+export const APPROVED_USE_TTL_MS = 5 * 60_000;
 
 export interface ApprovalProject { name: string; branch: string; commit: string; access: 'read' | 'read-write'; uncommittedFiles: number }
 
@@ -29,15 +31,15 @@ export interface ExternalApprovalRequest {
   requestedBy: string; requestedAt: string; expiresAt: string;
 }
 
-export type ApprovalEventKind = 'requested' | 'approved' | 'refused' | 'expired' | 'superseded';
+export type ApprovalEventKind = 'requested' | 'approved' | 'refused' | 'expired' | 'superseded' | 'consumed';
 export interface ApprovalEvent {
   event: ApprovalEventKind; requestId: string; at: string; by: string;
   /** Approved: exactly what was authorised. */
-  scope?: { executor: string; model: string | null; project: string | null; branch: string | null; access: string; instructionSha256: string; confidentialOverride: boolean; includeContext: boolean };
+  scope?: { executor: string; model: string | null; project: string | null; branch: string | null; commit?: string | null; access: string; instructionSha256: string; confidentialOverride: boolean; includeContext: boolean };
   request?: ExternalApprovalRequest;
 }
 
-function write(db: CoreDatabase, taskId: string, status: 'awaiting_approval' | 'awaiting_executor', detail: string, ev: ApprovalEvent): void {
+function write(db: CoreDatabase, taskId: string, status: 'awaiting_approval' | 'awaiting_executor' | 'dispatching', detail: string, ev: ApprovalEvent): void {
   db.run('INSERT INTO bridge_task_checkpoints (taskId, status, detail, snapshot, createdAt) VALUES (?, ?, ?, ?, ?)', [taskId, status, detail.slice(0, 500), JSON.stringify({ approval: ev }), ev.at]);
 }
 
@@ -68,6 +70,11 @@ export function requestApproval(db: CoreDatabase, req: Omit<ExternalApprovalRequ
   return full;
 }
 
+/** Withdraws the waiting request because the facts on its card changed; nothing was sent and the owner must ask again. */
+export function withdrawApproval(db: CoreDatabase, taskId: string, requestId: string, why: string): void {
+  write(db, taskId, 'awaiting_executor', `Approval request withdrawn: ${why}`.slice(0, 400), { event: 'expired', requestId, at: nowIso(), by: 'pandesh' });
+}
+
 export interface DecisionInput { taskId: string; requestId: string; decision: 'approve' | 'refuse'; by: string; confidentialOverride?: boolean }
 
 /** Records the owner's decision on the pending request. Throws if there is none, it is not the one named, or it expired. */
@@ -92,10 +99,28 @@ export function decideApproval(db: CoreDatabase, input: DecisionInput, now = Dat
   }
   const event: ApprovalEvent = {
     event: 'approved', requestId: request.requestId, at, by: input.by,
-    scope: { executor: request.executor, model: request.model, project: request.project?.name ?? null, branch: request.project?.branch ?? null, access: request.accessLevel, instructionSha256: request.instructionSha256, confidentialOverride: input.confidentialOverride === true, includeContext: request.includeContext },
+    scope: { executor: request.executor, model: request.model, project: request.project?.name ?? null, branch: request.project?.branch ?? null, commit: request.project?.commit ?? null, access: request.accessLevel, instructionSha256: request.instructionSha256, confidentialOverride: input.confidentialOverride === true, includeContext: request.includeContext },
   };
   write(db, input.taskId, 'awaiting_executor', `Approved by ${input.by} for ${request.agentLabel} only.`, event);
   return { request, event };
+}
+
+/**
+ * The approval a dispatch may use: an `approved` decision for exactly this request, recent, and not used before. Single use:
+ * [consumeApproval] is recorded when the dispatch is claimed, so a replay (a retry of a failed start, a second dispatch, a copied request id)
+ * finds it spent and needs a new approval.
+ */
+export function usableApproval(db: CoreDatabase, taskId: string, requestId: string, now = Date.now()): ApprovalEvent & { scope: NonNullable<ApprovalEvent['scope']> } {
+  const events = listApprovalEvents(db, taskId);
+  const ev = events.find(e => e.event === 'approved' && e.requestId === requestId);
+  if (!ev?.scope) throw new CoreError('forbidden', 'there is no approval for this request; nothing was started');
+  if (events.some(e => e.event === 'consumed' && e.requestId === requestId)) throw new CoreError('forbidden', 'this approval was already used; ask for a new one');
+  if (now - Date.parse(ev.at) > APPROVED_USE_TTL_MS) throw new CoreError('forbidden', 'this approval was not used in time and is void; ask for a new one');
+  return ev as ApprovalEvent & { scope: NonNullable<ApprovalEvent['scope']> };
+}
+
+export function consumeApproval(db: CoreDatabase, taskId: string, requestId: string, by: string): void {
+  write(db, taskId, 'dispatching', 'The approval was used to start the task.', { event: 'consumed', requestId, at: nowIso(), by });
 }
 
 /** An owner-authorised external start that did not go through an approval card (the Pandesh app's own API): same audit event, same scope fields. */
