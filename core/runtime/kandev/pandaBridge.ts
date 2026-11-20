@@ -14,6 +14,7 @@ import { CoreError } from '../../domain/errors';
 import { runHardenedGit } from '../../security/hardenedGit';
 import { getStory } from '../../domain/stories';
 import { loadProjects, projectAllows, resolveProject, type ProjectRecord } from '../../domain/projectRegistry';
+import { decideApproval, listApprovalEvents, recordDirectApproval, requestApproval, type ExternalApprovalRequest } from '../../domain/bridgeApprovals';
 import { getAttempt, requestCancelAttempt } from '../../domain/attempts';
 import { isTerminalAttemptStatus } from '../../domain/attemptTransitions';
 import { submitRequest } from '../../domain/submission';
@@ -228,6 +229,78 @@ function needsClarification(db: CoreDatabase, taskId: string, question: string):
 /** Words that make a bare project NAME a reference to its code rather than to the product ("ask Pandesh for my brief"). */
 const CODE_CUE = /\b(repo|repository|codebase|source|implementation|branch|tests?|test suite|module|files?|folder|directory|defects?|bugs?|code)\b/i;
 
+export interface ProjectIntent { project: ProjectRecord; path: string; ref: string | null; readOnlyRequested: boolean }
+
+/**
+ * The project gate, without copying anything: which authorised project (if any) the task is about, and whether this executor and this
+ * kind of work are allowed there. Ambiguous, unauthorised or not-allowed means ask (the task stays waiting; nothing runs, nothing widens).
+ */
+function gateProject(rt: BridgeRuntime, task: BridgeTaskRecord, chosen: BridgeExecutor): ProjectIntent | null {
+  if (chosen.kind === 'service') return null;
+  const projects = loadProjects(rt.dataDir);
+  const r = projects.length || /[A-Za-z]:[\\/]/.test(task.instruction) ? resolveProject(projects, task.instruction) : ({ status: 'none' } as const);
+  if (r.status === 'ambiguous' || r.status === 'unauthorized') needsClarification(rt.db, task.id, r.question);
+  if (r.status !== 'resolved' || !(r.via === 'path' || CODE_CUE.test(task.instruction))) return null;
+  if (chosen.kind !== 'acp') needsClarification(rt.db, task.id, `This task is about the project '${r.project.name}'. ${chosen.label} cannot be confined to that project yet; choose Claude Code or OpenCode for a read-only inspection.`);
+  const allowed = projectAllows(r.project, r.readOnlyRequested);
+  if (!allowed.ok) needsClarification(rt.db, task.id, allowed.reason);
+  if (!r.readOnlyRequested) needsClarification(rt.db, task.id, `Tasks that change files in '${r.project.name}' are not run from the browser bridge yet. Ask for a read-only inspection (say "do not modify files"), or run the change in Pandesh.`);
+  return { project: r.project, path: r.path, ref: r.ref, readOnlyRequested: r.readOnlyRequested };
+}
+
+/** Read-only look at what an inspection would copy (branch, commit, uncommitted files); copies nothing. */
+function previewInspection(intent: ProjectIntent): { branch: string; commit: string; uncommittedFiles: number } {
+  const fp = checkoutFingerprint(intent.path);
+  if (!fp) throw new CoreError('invalid_request', `'${intent.project.name}' is not a readable git checkout at its registered path`);
+  const run = (args: string[]) => runHardenedGit(args, { cwd: intent.path, encoding: 'utf8', windowsHide: true, timeout: 30_000 });
+  const current = String(run(['rev-parse', '--abbrev-ref', 'HEAD']).stdout ?? '').trim();
+  const branch = intent.ref ?? (current && current !== 'HEAD' ? current : intent.project.repo.defaultBranch ?? '');
+  if (!branch) throw new CoreError('invalid_request', `which branch of '${intent.project.name}' should be inspected? The checkout is on a detached HEAD and the task named none.`, { reason: 'needs_clarification' });
+  const tip = run(['rev-parse', '--verify', '--quiet', `refs/heads/${branch}`]);
+  if (tip.status !== 0) throw new CoreError('invalid_request', `'${intent.project.name}' has no branch '${branch}'. Nothing was inspected; name an existing branch.`, { reason: 'needs_clarification' });
+  const dirty = String(run(['status', '--porcelain', '--untracked-files=all']).stdout ?? '').split('\n').filter(Boolean).length;
+  return { branch, commit: String(tip.stdout ?? '').trim().slice(0, 12), uncommittedFiles: dirty };
+}
+
+/** Who receives the data, in the owner's words. */
+function providerOf(executor: string, model: string | null): string {
+  if (executor === 'claude') return 'Anthropic (Claude, your Claude account; may cost money)';
+  if (executor === 'antigravity') return 'Google (Antigravity)';
+  return model ? `the cloud provider behind model "${model}"` : 'an external cloud provider';
+}
+
+/**
+ * A paired browser asked for an external agent. It cannot authorise that, so nothing starts: Pandesh records an approval request with the
+ * full picture (agent, provider, project, branch, access, what leaves the PC, the instruction) and waits for the owner in the Pandesh app.
+ */
+async function requestExternalApproval(rt: BridgeRuntime, task: BridgeTaskRecord, req: DispatchRequest): Promise<{ task: BridgeTaskRecord; started: false; approval: ExternalApprovalRequest }> {
+  const listing = await discoverExecutors(rt.kandev, { nativeAvailable: Boolean(rt.executor), ...(rt.services ? { services: rt.services } : {}) });
+  const chosen = listing.executors.find(e => e.id === req.executor);
+  if (!chosen) throw new CoreError('invalid_request', `unknown executor '${req.executor}'`);
+  if (!chosen.dispatchable) throw new CoreError('invalid_request', `${chosen.label}: ${chosen.reason}`);
+  if (!chosen.available) throw new CoreError('conflict', `${chosen.label} is not available: ${chosen.reason ?? 'unavailable'}`);
+  const intent = gateProject(rt, task, chosen);
+  const preview = intent ? previewInspection(intent) : null;
+  const provider = providerOf(chosen.id, req.model ?? null);
+  const includeContext = task.contextConfirmed;
+  const exposure = [
+    `The task text goes to ${provider}.`,
+    preview
+      ? `Everything ${chosen.label} reads in a private copy of ${intent!.project.name} (branch ${preview.branch} at ${preview.commit}) goes there too. Your own checkout is not shared${preview.uncommittedFiles ? `, and ${preview.uncommittedFiles} uncommitted or untracked file(s) in it are not part of the copy` : ''}.`
+      : `${chosen.label} works in an empty isolated workspace; only what it reads there goes to ${provider}.`,
+    includeContext ? 'The ChatGPT conversation context you chose to share is included.' : 'No ChatGPT conversation context is included.',
+  ];
+  const request = requestApproval(rt.db, {
+    taskId: task.id, executor: chosen.id, agentLabel: chosen.label, provider, model: req.model ?? null,
+    project: intent && preview ? { name: intent.project.name, branch: preview.branch, commit: preview.commit, access: intent.project.access, uncommittedFiles: preview.uncommittedFiles } : null,
+    accessLevel: preview ? 'Read-only inspection of a private copy: it may read files and run existing tests, it cannot change anything' : 'Isolated task workspace: it may create and change files only inside that workspace',
+    exposure, instruction: task.instruction.slice(0, 2000), instructionSha256: task.instructionSha256,
+    sensitivity: task.sensitivity, sensitivityReasons: task.sensitivityReasons, includeContext, requestedBy: req.decidedBy,
+  });
+  recordBridgeStatus(rt.db, task.id, 'awaiting_executor', `Waiting for your approval in Pandesh to send this task to ${chosen.label}.`);
+  return { task: getBridgeTask(rt.db, task.id), started: false, approval: request };
+}
+
 // ------------------------------------------------------------------ dispatch
 
 export interface BridgeRuntime {
@@ -252,6 +325,8 @@ export interface DispatchRequest {
   allowExternal?: boolean;
   /** What the caller is allowed to authorise. An extension can never grant an external transfer. */
   authority: 'host' | 'extension';
+  /** The owner's approval this dispatch executes. It must be an `approved` decision whose scope matches exactly. */
+  approvalRequestId?: string;
 }
 
 function chooseAuto(listing: ExecutorListing): BridgeExecutor | null {
@@ -267,7 +342,7 @@ function chooseAuto(listing: ExecutorListing): BridgeExecutor | null {
  * Starts a task on an executor. Exactly-once: the dispatch is claimed in one atomic statement, so a retry, a double click
  * or a second browser gets the existing task back and nothing else starts.
  */
-export async function dispatchBridgeTask(rt: BridgeRuntime, taskId: string, req: DispatchRequest): Promise<{ task: BridgeTaskRecord; started: boolean }> {
+export async function dispatchBridgeTask(rt: BridgeRuntime, taskId: string, req: DispatchRequest): Promise<{ task: BridgeTaskRecord; started: boolean; approval?: ExternalApprovalRequest }> {
   const { db } = rt;
   const task = getBridgeTask(db, taskId);
   if (task.control === 'cancelled' || TERMINAL_BRIDGE_STATUSES.has(task.status)) throw new CoreError('conflict', `task is ${task.status}`);
@@ -281,7 +356,18 @@ export async function dispatchBridgeTask(rt: BridgeRuntime, taskId: string, req:
   const consent = req.authority === 'host' ? req.consent : undefined;
   if (req.executor !== 'auto') {
     const decision = evaluateTransferPolicy(task, transferInfo(req.executor, model), consent);
-    if (!decision.allowed) throw new CoreError('forbidden', decision.message, { reason: decision.code });
+    if (!decision.allowed) {
+      // A browser may ASK for a cloud agent; it cannot authorise it. The request goes to the Pandesh app for the owner's decision.
+      if (decision.code === 'external_consent_required' && req.authority === 'extension') return requestExternalApproval(rt, task, req);
+      throw new CoreError('forbidden', decision.message, { reason: decision.code });
+    }
+    // An external agent started with consent must be the one the owner approved, for this very instruction.
+    if (transferInfo(req.executor, model).external && req.approvalRequestId) {
+      const ev = listApprovalEvents(db, taskId).find(e => e.event === 'approved' && e.requestId === req.approvalRequestId);
+      if (!ev?.scope || ev.scope.executor !== req.executor || ev.scope.model !== model || ev.scope.instructionSha256 !== task.instructionSha256) {
+        throw new CoreError('forbidden', 'this approval does not cover that executor, model or instruction; nothing was started');
+      }
+    }
   }
 
   const listing = await discoverExecutors(rt.kandev, { nativeAvailable: Boolean(rt.executor), includeInternal: true, ...(rt.services ? { services: rt.services } : {}) });
@@ -329,18 +415,8 @@ export async function dispatchBridgeTask(rt: BridgeRuntime, taskId: string, req:
   // against the owner's registry. It is never resolved to whatever workspace is open, never searched for, and a read-only
   // project never runs a task that may change files. Ambiguous or unauthorized means ask; no permission is widened.
   let inspection: InspectionPlan | null = null;
-  if (chosen.kind !== 'service') {
-    const projects = loadProjects(rt.dataDir);
-    const r = projects.length || /[A-Za-z]:[\\/]/.test(task.instruction) ? resolveProject(projects, task.instruction) : ({ status: 'none' } as const);
-    if (r.status === 'ambiguous' || r.status === 'unauthorized') needsClarification(db, taskId, r.question);
-    if (r.status === 'resolved' && (r.via === 'path' || CODE_CUE.test(task.instruction))) {
-      if (chosen.kind !== 'acp') needsClarification(db, taskId, `This task is about the project '${r.project.name}'. ${chosen.label} cannot be confined to that project yet; choose Claude Code or OpenCode for a read-only inspection.`);
-      const allowed = projectAllows(r.project, r.readOnlyRequested);
-      if (!allowed.ok) needsClarification(db, taskId, allowed.reason);
-      if (!r.readOnlyRequested) needsClarification(db, taskId, `Tasks that change files in '${r.project.name}' are not run from the browser bridge yet. Ask for a read-only inspection (say "do not modify files"), or run the change in Pandesh.`);
-      inspection = prepareProjectInspection(rt.dataDir, task.id, r.project, r.path, r.ref);
-    }
-  }
+  const intent = gateProject(rt, task, chosen);
+  if (intent) inspection = prepareProjectInspection(rt.dataDir, task.id, intent.project, intent.path, intent.ref);
   const info = transferInfo(chosen.id, model);
   if (routing === 'auto' && info.external) {
     // A routed (not hand-picked) external executor still needs the host's explicit consent for this task.
@@ -352,6 +428,10 @@ export async function dispatchBridgeTask(rt: BridgeRuntime, taskId: string, req:
     return { task: getBridgeTask(db, taskId), started: false };
   }
   const includeContext = task.contextConfirmed && (!info.external || consent?.includeContext === true);
+  // A host-authorised external start that did not come through an approval card is still put in the audit trail, with who and what scope.
+  if (info.external && !req.approvalRequestId) {
+    recordDirectApproval(db, taskId, { executor: chosen.id, model, project: inspection?.project.name ?? null, branch: inspection?.ref ?? null, access: inspection ? 'read-only inspection' : 'isolated workspace', instructionSha256: task.instructionSha256, confidentialOverride: consent?.confidentialOverride === true, includeContext }, req.decidedBy);
+  }
 
   try {
     if (chosen.kind === 'service') startService(rt, getBridgeTask(db, taskId), chosen.id.slice('service:'.length), derived ?? undefined);
@@ -641,3 +721,24 @@ export function startPandaBridgeLoop(rt: BridgeRuntime, intervalMs = 5_000): () 
   return () => clearInterval(timer);
 }
 
+
+// ------------------------------------------------------------------ the owner's decision on an external-agent request
+
+/**
+ * The owner's decision, made in the Pandesh app. Approve: the task starts on exactly the approved agent, with exactly the approved scope.
+ * Refuse: the task ends here. Nothing else is started in its place and no other executor is tried.
+ */
+export async function decideExternalApproval(rt: BridgeRuntime, taskId: string, input: { requestId: string; decision: 'approve' | 'refuse'; by: string; confidentialOverride?: boolean }): Promise<{ task: BridgeTaskRecord; started: boolean }> {
+  const task = getBridgeTask(rt.db, taskId);
+  if (task.control === 'cancelled' || TERMINAL_BRIDGE_STATUSES.has(task.status)) throw new CoreError('conflict', `task is ${task.status}`);
+  const { request } = decideApproval(rt.db, { taskId, requestId: input.requestId, decision: input.decision, by: input.by, confidentialOverride: input.confidentialOverride });
+  if (input.decision === 'refuse') {
+    setBridgeControl(rt.db, taskId, 'cancelled');
+    recordBridgeStatus(rt.db, taskId, 'cancelled', `You refused to send this task to ${request.agentLabel}. Nothing was sent, and no other executor was used.`);
+    return { task: getBridgeTask(rt.db, taskId), started: false };
+  }
+  return dispatchBridgeTask(rt, taskId, {
+    executor: request.executor, model: request.model, decidedBy: input.by, authority: 'host', approvalRequestId: request.requestId,
+    consent: { externalTransfer: true, confidentialOverride: input.confidentialOverride === true, includeContext: request.includeContext },
+  });
+}
