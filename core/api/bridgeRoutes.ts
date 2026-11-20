@@ -20,6 +20,9 @@ import {
   cancelBridgeTask, discoverExecutors, dispatchBridgeTask, pauseBridgeTask, refreshBridgeTask, resumeBridgeTask, type BridgeRuntime,
 } from '../runtime/kandev/pandaBridge';
 import { bridgeServices } from '../runtime/kandev/bridgeServices';
+import { allDeclarations, BUILTIN_WORKFLOWS, routeTask, trackRecords } from '../runtime/kandev/capabilityRegistry';
+import { planWorkflow, runWorkflow } from '../runtime/kandev/workflowRouter';
+import { newId } from '../domain/ids';
 import type { RuntimeExecutor } from '../runtime/executor';
 
 export interface BridgeRouteOptions {
@@ -102,6 +105,51 @@ export function registerBridgeRoutes(router: Router<ApiContext, ApiResult>, opti
     return ok(200, await discoverExecutors(kandev, { nativeAvailable: Boolean(options.executor) }));
   });
 
+  // --- capability registry and workflow router ---
+  const listing = (ctx: ApiContext) => discoverExecutors(kandev, { nativeAvailable: Boolean(options.executor), services: bridgeServices(options.dataDir) });
+  router.get('/v1/bridge/capabilities', async (ctx) => {
+    caller(ctx);
+    const l = await listing(ctx);
+    const records = trackRecords(ctx.db);
+    return ok(200, {
+      executors: l.executors,
+      declarations: allDeclarations(bridgeServices(options.dataDir)).map(d => ({
+        ...d,
+        track: Object.fromEntries(Object.keys(d.classes).map(c => [c, records.get(`${d.executor}|${c}`) ?? null])),
+      })),
+      workflows: BUILTIN_WORKFLOWS.map(w => ({ id: w.id, label: w.label, steps: w.steps.map(s => ({ name: s.name, taskClass: s.taskClass })) })),
+    });
+  });
+  router.post('/v1/bridge/route', async (ctx) => {
+    const c = caller(ctx);
+    const b = body(ctx);
+    if (typeof b.taskClass !== 'string' || !b.taskClass) throw new CoreError('invalid_request', "'taskClass' is required");
+    const decision = routeTask(
+      { taskClass: b.taskClass, readOnly: b.readOnly === true, deterministicOnly: b.deterministicOnly === true, allowExternal: c.kind === 'host' && b.allowExternal === true },
+      await listing(ctx), allDeclarations(bridgeServices(options.dataDir)), trackRecords(ctx.db),
+    );
+    return ok(200, decision);
+  });
+  const workflowById = (id: string) => {
+    const w = BUILTIN_WORKFLOWS.find(x => x.id === id);
+    if (!w) throw new CoreError('not_found', `workflow '${id}' not found`);
+    return w;
+  };
+  router.post('/v1/bridge/workflows/:id/plan', async (ctx, match) => {
+    caller(ctx);
+    return ok(200, { workflow: match.params.id, steps: await planWorkflow(runtime(ctx), workflowById(match.params.id)) });
+  });
+  // JUGAAD, the browser and the phone are all paired clients: their workflow tasks are owned by their pairing.
+  router.post('/v1/bridge/workflows/:id/run', async (ctx, match) => {
+    const c = caller(ctx);
+    if (c.kind !== 'extension') throw new CoreError('invalid_request', 'workflows are run by a paired client (browser, JUGAAD, phone)');
+    const b = body(ctx);
+    const input = b.input && typeof b.input === 'object' ? (b.input as Record<string, unknown>) : {};
+    const runId = typeof b.runId === 'string' && /^[\w.:-]{6,60}$/.test(b.runId) ? b.runId : newId('wfrun');
+    const run = await runWorkflow(runtime(ctx), c.pairing, workflowById(match.params.id), input, { runId, decidedBy: `extension:${c.pairing.id}` });
+    return ok(200, run);
+  });
+
   // --- tasks ---
   router.post('/v1/bridge/tasks', (ctx) => {
     const c = caller(ctx);
@@ -145,6 +193,9 @@ export function registerBridgeRoutes(router: Router<ApiContext, ApiResult>, opti
         executor: String(b.executor ?? ''),
         model: typeof b.model === 'string' && b.model ? b.model : null,
         consent,
+        ...(typeof b.taskClass === 'string' && b.taskClass ? { taskClass: b.taskClass } : {}),
+        // Only the Pandesh host can open routing to external executors; a paired browser or JUGAAD never can.
+        ...(c.kind === 'host' && b.allowExternal === true ? { allowExternal: true } : {}),
         decidedBy: c.kind === 'host' ? ctx.principal.id : `extension:${c.pairing.id}`,
         authority: c.kind === 'host' ? 'host' : 'extension',
       });
