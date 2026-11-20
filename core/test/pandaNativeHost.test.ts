@@ -8,7 +8,7 @@ import type { CoreDatabase } from '../db/connection';
 import { startApiServer, type RunningApiServer } from '../api/server';
 import { EventBroadcaster } from '../ws/broadcaster';
 import { generateToken } from '../auth/token';
-import { createPairingCode } from '../domain/pandaBridge';
+import { createPairingCode, getBridgeTask } from '../domain/pandaBridge';
 
 const HOST_JS = path.resolve(__dirname, '..', '..', 'apps', 'panda-bridge', 'native-host', 'panda-native-host.mjs');
 const TOKEN = generateToken();
@@ -98,7 +98,9 @@ describe('native messaging host', () => {
     const token = paired.data.token as string;
     const [submitted] = await exchange([{ id: 's', op: 'submit', token, clientRequestId: 'click-host-0002', instruction: 'Build a thing' }]);
     const [res] = await exchange([{ id: 'd', op: 'dispatch', token, taskId: submitted.data.taskId, executor: 'claude', consent: { externalTransfer: true, confidentialOverride: true } }]);
-    expect(res).toMatchObject({ ok: false, status: 403, reason: 'external_consent_required' });
+    // The smuggled consent is dropped; the browser can only ASK, so the answer is "approval pending" and nothing started.
+    expect(res).toMatchObject({ ok: true, data: { started: false, approval: { executor: 'claude', agentLabel: 'Claude Code' } } });
+    expect(getBridgeTask(db, submitted.data.taskId)).toMatchObject({ status: 'awaiting_executor', executor: null, externalConsent: null });
   });
 
   it('answers “Pandesh is not running” instead of failing when Core is unreachable', async () => {
