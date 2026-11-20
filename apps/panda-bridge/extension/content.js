@@ -102,8 +102,12 @@
 
   // ---------------------------------------------------------------- UI (shadow DOM keeps page CSS out)
   const host = document.createElement('div');
+  // A closed shadow root is not a security boundary (page script can still see the host element, its size and position).
+  // Nothing sensitive is ever placed in the page's DOM: task text, status and results live only inside the shadow tree, and
+  // the only text that reaches the page is a report the person previewed and chose to insert. No fixed id: nothing for page
+  // script to look for beyond this element itself (its presence also reveals that the extension is installed; accepted).
   host.id = 'panda-bridge-root';
-  const shadow = host.attachShadow({ mode: 'open' });
+  const shadow = host.attachShadow({ mode: 'closed' });
   shadow.innerHTML = `
     <style>
       :host { all: initial; }
@@ -261,14 +265,16 @@
   // ---------------------------------------------------------------- interception: registered only while Panda Mode is on
   function onKeydown(e) {
     if (e.key !== 'Enter' || e.shiftKey || e.isComposing || !isComposerTarget(e.target)) return;
+    // Always block the page's own send while Panda Mode is on, but only a real keypress/click from the person may start a
+    // submission to Pandesh: page script can fabricate events, and must not be able to trigger a send by itself.
     e.preventDefault(); e.stopImmediatePropagation();
-    void sendDraft('panda_mode');
+    if (e.isTrusted) void sendDraft('panda_mode');
   }
   function onClick(e) {
     const btn = e.target && e.target.closest && e.target.closest(SEND_BUTTON);
     if (!btn || host.contains(btn)) return;
     e.preventDefault(); e.stopImmediatePropagation();
-    void sendDraft('panda_mode');
+    if (e.isTrusted) void sendDraft('panda_mode');
   }
   function onSubmit(e) {
     const c = findComposer();
