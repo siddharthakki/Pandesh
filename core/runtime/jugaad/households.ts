@@ -15,7 +15,15 @@ import { CoreError } from '../../domain/errors';
 export const HOUSEHOLD_ID = /^hh_[a-f0-9]{12}$/;
 
 export interface Household { id: string; name: string; createdAt: string }
-export interface HouseholdRegistry { version: 1; households: Household[]; devices: Record<string, string> }
+export interface HouseholdRegistry {
+  version: 1; households: Household[]; devices: Record<string, string>;
+  /**
+   * The household that owns the records created before households existed (important dates, briefings...). Never set automatically:
+   * until the owner names one, those records are visible only to phones that belong to no household (the way they always worked), and
+   * to no household's phone.
+   */
+  legacyOwner: string | null;
+}
 
 const FILE = path.join('jugaad', 'households.json');
 
@@ -24,8 +32,10 @@ export function jugaadRoot(dataDir: string): string { return path.join(dataDir, 
 export function loadHouseholds(dataDir: string): HouseholdRegistry {
   try {
     const raw = JSON.parse(fs.readFileSync(path.join(dataDir, FILE), 'utf8')) as Partial<HouseholdRegistry>;
-    return { version: 1, households: Array.isArray(raw.households) ? raw.households.filter(h => HOUSEHOLD_ID.test(String(h?.id))) : [], devices: raw.devices && typeof raw.devices === 'object' ? raw.devices as Record<string, string> : {} };
-  } catch { return { version: 1, households: [], devices: {} }; }
+    const households = Array.isArray(raw.households) ? raw.households.filter(h => HOUSEHOLD_ID.test(String(h?.id))) : [];
+    const legacy = typeof raw.legacyOwner === 'string' && households.some(h => h.id === raw.legacyOwner) ? raw.legacyOwner : null;
+    return { version: 1, households, devices: raw.devices && typeof raw.devices === 'object' ? raw.devices as Record<string, string> : {}, legacyOwner: legacy };
+  } catch { return { version: 1, households: [], devices: {}, legacyOwner: null }; }
 }
 
 function save(dataDir: string, reg: HouseholdRegistry): void {
@@ -58,6 +68,16 @@ export function attachDevice(dataDir: string, deviceId: string, householdId: str
   reg.devices[deviceId] = householdId;
   save(dataDir, reg);
 }
+
+/** Explicitly assigns (or clears) the household that owns the pre-household records. Host only; nothing ever does this by itself. */
+export function setLegacyOwner(dataDir: string, householdId: string | null): void {
+  const reg = loadHouseholds(dataDir);
+  if (householdId !== null && !reg.households.some(h => h.id === householdId)) throw new CoreError('not_found', 'household not found');
+  reg.legacyOwner = householdId;
+  save(dataDir, reg);
+}
+
+export function legacyOwnerOf(dataDir: string): string | null { return loadHouseholds(dataDir).legacyOwner; }
 
 export function detachDevice(dataDir: string, deviceId: string): boolean {
   const reg = loadHouseholds(dataDir);
