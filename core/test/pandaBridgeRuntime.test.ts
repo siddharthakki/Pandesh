@@ -170,6 +170,23 @@ describe('native Pandesh capabilities as an executor', () => {
     expect(calls).toContain(`cancel:${linked.attemptId}`);
   });
 
+  it('a finished native task carries the answer, redacted, labelled as the executor own report and never verified', async () => {
+    const { code } = createPairingCode(db);
+    const { pairing } = redeemPairingCode(db, { code, label: 'Chrome' });
+    const { task } = submitBridgeTask(db, pairing, { clientRequestId: 'req-0000009', instruction: 'List the filenames' });
+    const rt = { db, kandev: fakeKandev({ up: false }), dataDir: dir, executor: { execute: async () => undefined, cancel: () => undefined } as unknown as NonNullable<Parameters<typeof dispatchBridgeTask>[0]['executor']> };
+    await dispatchBridgeTask(rt, task.id, { executor: 'native', decidedBy: 'host', authority: 'host' });
+    const linked = getBridgeTask(db, task.id);
+    db.run("UPDATE attempts SET status = 'completed' WHERE id = ?", [linked.attemptId]);
+    db.run("INSERT INTO conversation_messages (id, conversationId, role, content, createdAt) VALUES (?, ?, 'assistant', ?, ?)", ['msg_ans_1', linked.conversationId, 'There are 2 files in C:/Users/me/work: a.txt and b.txt. Hidden entries exist.', new Date().toISOString()]);
+    const done = await refreshBridgeTask(rt, task.id);
+    expect(done.status).toBe('completed');
+    expect(done.result?.verification).toBe('worker-only');
+    expect(done.result?.evidence).toContain('There are 2 files');
+    expect(done.result?.evidence).toContain('Hidden entries exist');
+    expect(done.result?.evidence).not.toContain('C:/Users');
+  });
+
   it('refuses native dispatch when this Core has no runtime executor', async () => {
     const { code } = createPairingCode(db);
     const { pairing } = redeemPairingCode(db, { code, label: 'Chrome' });

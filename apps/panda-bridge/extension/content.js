@@ -68,7 +68,8 @@
     if (t.completedAt) lines.push('Completed: ' + scrub(t.completedAt));
     if (t.statusDetail) lines.push('Detail: ' + scrub(t.statusDetail).slice(0, 300));
     if (t.result) {
-      if (t.result.verification) lines.push('Verification: ' + scrub(t.result.verification));
+      if (t.result.evidence) lines.push('Result: ' + scrub(String(t.result.evidence).replace(/\s+/g, ' ')).slice(0, 700));
+      if (t.result.verification) lines.push('Verification: ' + ({ independent: 'verified independently by Pandesh', 'human-reviewed': 'reviewed by a person', 'worker-only': 'the executor’s own report, not independently verified' }[t.result.verification] || scrub(t.result.verification)));
       if (Array.isArray(t.result.changedFiles) && t.result.changedFiles.length) lines.push('Changed files: ' + t.result.changedFiles.slice(0, 30).map(scrub).join(', '));
       if (t.result.commit) lines.push('Commit: ' + scrub(t.result.commit));
     }
@@ -240,7 +241,7 @@
     if (t.status === 'paused') actions.append(el('button', { textContent: 'Resume', onclick: () => control('resume', t.id) }));
     if (!TERMINAL.has(t.status)) actions.append(el('button', { textContent: 'Cancel', onclick: () => control('cancel', t.id) }));
     if (t.status === 'completed' && t.result) {
-      const v = t.result.verification ? `Verified (${t.result.verification}).` : 'Finished.';
+      const v = t.result.verification === 'independent' ? 'Verified independently.' : t.result.verification === 'human-reviewed' ? 'Reviewed by a person.' : t.result.verification === 'worker-only' ? 'Not independently verified (the executor’s own report).' : 'Finished.';
       const files = t.result.changedFiles && t.result.changedFiles.length ? ` Files: ${t.result.changedFiles.slice(0, 6).join(', ')}.` : '';
       box.append(el('div', { className: 'detail', textContent: v + files }));
     }
