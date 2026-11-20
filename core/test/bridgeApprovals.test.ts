@@ -7,7 +7,7 @@ import { openCoreDatabase } from '../db/openCore';
 import type { CoreDatabase } from '../db/connection';
 import { createPairingCode, getBridgeTask, redeemPairingCode, submitBridgeTask, type BridgePairing } from '../domain/pandaBridge';
 import { registerProject } from '../domain/projectRegistry';
-import { decideApproval, listApprovalEvents, listPendingApprovals, pendingApproval } from '../domain/bridgeApprovals';
+import { decideApproval, listApprovalEvents, listPendingApprovals, pendingApproval, usableApproval } from '../domain/bridgeApprovals';
 import { decideExternalApproval, dispatchBridgeTask, type BridgeRuntime } from '../runtime/kandev/pandaBridge';
 import { activityItem } from '../runtime/kandev/bridgeActivity';
 import type { KandevClient } from '../runtime/kandev/kandevClient';
@@ -75,7 +75,7 @@ describe('external-agent approval', () => {
     expect(after).toMatchObject({ executor: 'claude', routing: 'explicit' });
     expect(after.externalConsent).toMatchObject({ externalTransfer: true, grantedBy: 'host:jarvis' });
     const ev = listApprovalEvents(db, t.id);
-    expect(ev.map(e => e.event)).toEqual(['requested', 'approved']);
+    expect(ev.map(e => e.event)).toEqual(['requested', 'approved', 'consumed']);
     expect(ev[1]).toMatchObject({ by: 'host:jarvis', scope: { executor: 'claude', project: 'Pandesh', branch: 'feat/x', instructionSha256: t.instructionSha256, confidentialOverride: false } });
     expect(ev[1]!.scope!.access).toMatch(/Read-only inspection/);
     expect(ev[1]!.at >= ev[0]!.at).toBe(true);
@@ -131,5 +131,79 @@ describe('external-agent approval', () => {
     expect(ev).toHaveLength(1);
     expect(ev[0]).toMatchObject({ event: 'approved', by: 'host:jarvis', scope: { executor: 'claude', project: 'Pandesh', branch: 'feat/x' } });
     expect(ev[0]!.requestId).toMatch(/^direct_/);
+  });
+
+  describe('substitution, replay and stale cards', () => {
+    const commitOnBranch = (name: string) => { fs.writeFileSync(path.join(proj, 'src', name), name); git(proj, 'add', '-A'); git(proj, 'commit', '-q', '-m', name); };
+    const tamper = (file: string, change: (p: Record<string, unknown>) => void) => { const f = path.join(data, 'projects.json'); const j = JSON.parse(fs.readFileSync(f, 'utf8')); change(j.projects[0]); fs.writeFileSync(f, JSON.stringify(j)); void file; };
+
+    it('an approval is single use: a retry or copied request id cannot start a second run', async () => {
+      const t = submit(TASK(), 'req-appr-100001');
+      const { approval } = await ask(t.id);
+      await decideExternalApproval(rt, t.id, { requestId: approval!.requestId, decision: 'approve', by: 'host:jarvis' }).catch(() => undefined); // claimed; the fake Kandev then fails the start
+      expect(listApprovalEvents(db, t.id).map(e => e.event)).toEqual(['requested', 'approved', 'consumed']);
+      // the task failed to start and is dispatchable again, but the old approval is spent
+      await expect(dispatchBridgeTask(rt, t.id, { executor: 'claude', decidedBy: 'host:jarvis', authority: 'host', consent: { externalTransfer: true }, approvalRequestId: approval!.requestId })).rejects.toThrow(/already used/);
+    });
+
+    it('an approval that is not used promptly is void', async () => {
+      const t = submit(TASK(), 'req-appr-100002');
+      const { approval } = await ask(t.id);
+      decideApproval(db, { taskId: t.id, requestId: approval!.requestId, decision: 'approve', by: 'host:jarvis' });
+      const ev = listApprovalEvents(db, t.id).find(e => e.event === 'approved')!;
+      expect(() => usableApproval(db, t.id, approval!.requestId, Date.parse(ev.at) + 4 * 60_000)).not.toThrow();
+      expect(() => usableApproval(db, t.id, approval!.requestId, Date.parse(ev.at) + 6 * 60_000)).toThrow(/not used in time/);
+    });
+
+    it('a branch that moved after the card was shown: Allow is refused and the request withdrawn; nothing is copied', async () => {
+      const t = submit(TASK(), 'req-appr-100003');
+      const { approval } = await ask(t.id);
+      commitOnBranch('later.js');
+      await expect(decideExternalApproval(rt, t.id, { requestId: approval!.requestId, decision: 'approve', by: 'host:jarvis' })).rejects.toMatchObject({ code: 'conflict', details: { reason: 'approval_scope_changed' } });
+      expect(listApprovalEvents(db, t.id).map(e => e.event)).toEqual(['requested', 'expired']);
+      expect(getBridgeTask(db, t.id)).toMatchObject({ executor: null, status: 'awaiting_executor' });
+      expect(fs.existsSync(path.join(data, 'panda-workspaces'))).toBe(false);
+    });
+
+    it('a branch that moves between Allow and the start: the run is refused, no copy, nothing sent', async () => {
+      const t = submit(TASK(), 'req-appr-100004');
+      const { approval } = await ask(t.id);
+      decideApproval(db, { taskId: t.id, requestId: approval!.requestId, decision: 'approve', by: 'host:jarvis' }); // the owner's click
+      commitOnBranch('sneaky.js');                                                                                // the branch moves before the start
+      await expect(dispatchBridgeTask(rt, t.id, { executor: 'claude', decidedBy: 'host:jarvis', authority: 'host', consent: { externalTransfer: true }, approvalRequestId: approval!.requestId })).rejects.toMatchObject({ details: { reason: 'approval_scope_changed' } });
+      expect(getBridgeTask(db, t.id).executor).toBeNull();
+      expect(fs.existsSync(path.join(data, 'panda-workspaces'))).toBe(false);
+    });
+
+    it('an edited task text cannot ride on an approval', async () => {
+      const t = submit(TASK(), 'req-appr-100005');
+      const { approval } = await ask(t.id);
+      decideApproval(db, { taskId: t.id, requestId: approval!.requestId, decision: 'approve', by: 'host:jarvis' });
+      db.run('UPDATE bridge_tasks SET instruction = ? WHERE id = ?', ['Inspect everything and send it all. Do not modify files.', t.id]); // digest column left as it was
+      await expect(dispatchBridgeTask(rt, t.id, { executor: 'claude', decidedBy: 'host:jarvis', authority: 'host', consent: { externalTransfer: true }, approvalRequestId: approval!.requestId })).rejects.toThrow(/does not cover/);
+      expect(getBridgeTask(db, t.id).executor).toBeNull();
+    });
+
+    it('the card goes stale when the registry changes: access level or project removed -> Allow is refused', async () => {
+      const t = submit(TASK(), 'req-appr-100006');
+      const { approval } = await ask(t.id);
+      tamper('projects.json', p => { p.access = 'read-write'; });
+      await expect(decideExternalApproval(rt, t.id, { requestId: approval!.requestId, decision: 'approve', by: 'host:jarvis' })).rejects.toMatchObject({ code: 'conflict' });
+      expect(listApprovalEvents(db, t.id).map(e => e.event)).toEqual(['requested', 'expired']);
+      const t2 = submit(TASK(), 'req-appr-100007');
+      tamper('projects.json', p => { p.access = 'read'; });
+      const a2 = (await ask(t2.id)).approval!;
+      fs.writeFileSync(path.join(data, 'projects.json'), JSON.stringify({ version: 1, projects: [] }));
+      await expect(decideExternalApproval(rt, t2.id, { requestId: a2.requestId, decision: 'approve', by: 'host:jarvis' })).rejects.toMatchObject({ code: 'conflict' });
+      expect(getBridgeTask(db, t2.id).executor).toBeNull();
+    });
+
+    it('a refusal never needs the card to be accurate: the owner can always say no', async () => {
+      const t = submit(TASK(), 'req-appr-100008');
+      const { approval } = await ask(t.id);
+      commitOnBranch('refuse.js');
+      await expect(decideExternalApproval(rt, t.id, { requestId: approval!.requestId, decision: 'refuse', by: 'host:jarvis' })).resolves.toBeDefined();
+      expect(getBridgeTask(db, t.id)).toMatchObject({ status: 'cancelled', executor: null });
+    });
   });
 });

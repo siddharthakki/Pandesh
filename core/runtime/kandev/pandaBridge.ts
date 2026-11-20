@@ -7,6 +7,7 @@
  * approvals, independent verification, integration and restart recovery. Pandesh's own Windows capabilities run through the
  * ordinary request/attempt path. This module only chooses, gates (consent, confidentiality) and mirrors.
  */
+import * as crypto from 'node:crypto';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import type { CoreDatabase } from '../../db/connection';
@@ -14,7 +15,7 @@ import { CoreError } from '../../domain/errors';
 import { runHardenedGit } from '../../security/hardenedGit';
 import { getStory } from '../../domain/stories';
 import { loadProjects, projectAllows, resolveProject, type ProjectRecord } from '../../domain/projectRegistry';
-import { decideApproval, listApprovalEvents, recordDirectApproval, requestApproval, type ExternalApprovalRequest } from '../../domain/bridgeApprovals';
+import { consumeApproval, decideApproval, pendingApproval, recordDirectApproval, requestApproval, usableApproval, withdrawApproval, type ExternalApprovalRequest } from '../../domain/bridgeApprovals';
 import { getAttempt, requestCancelAttempt } from '../../domain/attempts';
 import { isTerminalAttemptStatus } from '../../domain/attemptTransitions';
 import { submitRequest } from '../../domain/submission';
@@ -197,7 +198,7 @@ export interface InspectionPlan {
  * project's own node_modules, and KKD proves afterwards that the owner's checkout was not touched. Uncommitted work in the
  * owner's checkout is NOT part of the snapshot, and the report says so.
  */
-export function prepareProjectInspection(dataDir: string, taskId: string, project: ProjectRecord, sourcePath: string, requestedRef: string | null): InspectionPlan {
+export function prepareProjectInspection(dataDir: string, taskId: string, project: ProjectRecord, sourcePath: string, requestedRef: string | null, expectCommit: string | null = null): InspectionPlan {
   const fp = checkoutFingerprint(sourcePath);
   if (!fp) throw new CoreError('invalid_request', `'${project.name}' is not a readable git checkout at its registered path`);
   const run = (args: string[], cwd: string) => runHardenedGit(args, { cwd, encoding: 'utf8', windowsHide: true, timeout: 120_000 });
@@ -213,6 +214,10 @@ export function prepareProjectInspection(dataDir: string, taskId: string, projec
     const clone = run(['clone', '--quiet', '--no-hardlinks', '--single-branch', '--branch', ref, sourcePath, cloneDir], path.dirname(cloneDir));
     if (clone.status !== 0) throw new CoreError('internal_error', `could not prepare the inspection copy: ${String(clone.stderr ?? '').trim().slice(0, 200)}`);
     run(['remote', 'remove', 'origin'], cloneDir); // nothing in the copy can reach the owner's repository
+    if (expectCommit) {
+      const head = String(run(['rev-parse', 'HEAD'], cloneDir).stdout ?? '').trim();
+      if (!head.startsWith(expectCommit)) { fs.rmSync(cloneDir, { recursive: true, force: true }); throw new CoreError('conflict', `the branch moved while it was being copied (expected ${expectCommit}); nothing was sent. Ask again.`, { reason: 'approval_scope_changed' }); }
+    }
     const deps = path.join(sourcePath, 'node_modules');
     if (fs.existsSync(deps) && !fs.existsSync(path.join(cloneDir, 'node_modules'))) fs.symlinkSync(deps, path.join(cloneDir, 'node_modules'), 'junction');
   }
@@ -363,8 +368,10 @@ export async function dispatchBridgeTask(rt: BridgeRuntime, taskId: string, req:
     }
     // An external agent started with consent must be the one the owner approved, for this very instruction.
     if (transferInfo(req.executor, model).external && req.approvalRequestId) {
-      const ev = listApprovalEvents(db, taskId).find(e => e.event === 'approved' && e.requestId === req.approvalRequestId);
-      if (!ev?.scope || ev.scope.executor !== req.executor || ev.scope.model !== model || ev.scope.instructionSha256 !== task.instructionSha256) {
+      const ev = usableApproval(db, taskId, req.approvalRequestId);
+      // The instruction is checked against its CONTENT, not only the stored digest: an edited task text cannot ride on an old approval.
+      const actual = crypto.createHash('sha256').update(task.instruction).digest('hex');
+      if (ev.scope.executor !== req.executor || ev.scope.model !== model || ev.scope.instructionSha256 !== task.instructionSha256 || actual !== ev.scope.instructionSha256) {
         throw new CoreError('forbidden', 'this approval does not cover that executor, model or instruction; nothing was started');
       }
     }
@@ -416,7 +423,16 @@ export async function dispatchBridgeTask(rt: BridgeRuntime, taskId: string, req:
   // project never runs a task that may change files. Ambiguous or unauthorized means ask; no permission is widened.
   let inspection: InspectionPlan | null = null;
   const intent = gateProject(rt, task, chosen);
-  if (intent) inspection = prepareProjectInspection(rt.dataDir, task.id, intent.project, intent.path, intent.ref);
+  if (intent && transferInfo(chosen.id, model).external && req.approvalRequestId) {
+    // What the owner approved is what runs: same project, branch AND commit. A moved branch, an edited registry entry or a swapped
+    // checkout since the card was shown means the card no longer describes this run.
+    const approved = usableApproval(db, taskId, req.approvalRequestId).scope;
+    const now = previewInspection(intent);
+    if (approved.project !== intent.project.name || approved.branch !== now.branch || (approved.commit ?? null) !== now.commit || !approved.access.startsWith('Read-only') || intent.project.access !== 'read') {
+      throw new CoreError('conflict', `'${intent.project.name}' changed since you approved this (now ${now.branch} at ${now.commit}); nothing was copied or sent. Ask again to see the new details.`, { reason: 'approval_scope_changed' });
+    }
+    inspection = prepareProjectInspection(rt.dataDir, task.id, intent.project, intent.path, now.branch, now.commit);
+  } else if (intent) inspection = prepareProjectInspection(rt.dataDir, task.id, intent.project, intent.path, intent.ref);
   const info = transferInfo(chosen.id, model);
   if (routing === 'auto' && info.external) {
     // A routed (not hand-picked) external executor still needs the host's explicit consent for this task.
@@ -428,6 +444,7 @@ export async function dispatchBridgeTask(rt: BridgeRuntime, taskId: string, req:
     return { task: getBridgeTask(db, taskId), started: false };
   }
   const includeContext = task.contextConfirmed && (!info.external || consent?.includeContext === true);
+  if (info.external && req.approvalRequestId) consumeApproval(db, taskId, req.approvalRequestId, req.decidedBy);
   // A host-authorised external start that did not come through an approval card is still put in the audit trail, with who and what scope.
   if (info.external && !req.approvalRequestId) {
     recordDirectApproval(db, taskId, { executor: chosen.id, model, project: inspection?.project.name ?? null, branch: inspection?.ref ?? null, access: inspection ? 'read-only inspection' : 'isolated workspace', instructionSha256: task.instructionSha256, confidentialOverride: consent?.confidentialOverride === true, includeContext }, req.decidedBy);
@@ -722,6 +739,32 @@ export function startPandaBridgeLoop(rt: BridgeRuntime, intervalMs = 5_000): () 
 }
 
 
+
+/**
+ * Before "Allow" is recorded: is the card the owner is looking at still true? The task text, its sensitivity, the shared-context flag and
+ * the project, branch and commit it would copy must match the request. If anything changed, the request is withdrawn (not approved) and the
+ * owner is told to ask again, so an approval can never describe something other than what would run.
+ */
+function assertCardStillAccurate(rt: BridgeRuntime, task: BridgeTaskRecord, requestId: string): void {
+  const request = pendingApproval(rt.db, task.id);
+  if (!request || request.requestId !== requestId) return; // decideApproval reports the missing/stale request itself
+  const withdraw = (why: string): never => { withdrawApproval(rt.db, task.id, requestId, why); throw new CoreError('conflict', `${why} Nothing was sent. Ask again from the browser to see the new details.`, { reason: 'approval_scope_changed' }); };
+  if (crypto.createHash('sha256').update(task.instruction).digest('hex') !== request.instructionSha256) withdraw('The task text changed since the card was shown.');
+  if (task.sensitivity !== request.sensitivity) withdraw('The task\'s sensitivity changed since the card was shown.');
+  if (task.contextConfirmed !== request.includeContext) withdraw('What conversation context is shared changed since the card was shown.');
+  const shown = request.project;
+  let intent: ProjectIntent | null = null;
+  try { intent = gateProject(rt, task, { id: request.executor, label: request.agentLabel, kind: 'acp' } as BridgeExecutor); }
+  catch { withdraw('The project this task refers to can no longer be resolved.'); }
+  if (!shown && intent) withdraw(`The task now refers to the project '${intent!.project.name}', which the card did not show.`);
+  if (shown) {
+    if (!intent || intent.project.name !== shown.name) withdraw('The project changed since the card was shown.');
+    if (intent!.project.access !== shown.access) withdraw(`The access level of '${shown.name}' changed since the card was shown.`);
+    const now = previewInspection(intent!);
+    if (now.branch !== shown.branch || now.commit !== shown.commit) withdraw(`'${shown.name}' moved from ${shown.branch} at ${shown.commit} to ${now.branch} at ${now.commit} since the card was shown.`);
+  }
+}
+
 // ------------------------------------------------------------------ the owner's decision on an external-agent request
 
 /**
@@ -731,6 +774,7 @@ export function startPandaBridgeLoop(rt: BridgeRuntime, intervalMs = 5_000): () 
 export async function decideExternalApproval(rt: BridgeRuntime, taskId: string, input: { requestId: string; decision: 'approve' | 'refuse'; by: string; confidentialOverride?: boolean }): Promise<{ task: BridgeTaskRecord; started: boolean }> {
   const task = getBridgeTask(rt.db, taskId);
   if (task.control === 'cancelled' || TERMINAL_BRIDGE_STATUSES.has(task.status)) throw new CoreError('conflict', `task is ${task.status}`);
+  if (input.decision === 'approve') assertCardStillAccurate(rt, task, input.requestId);
   const { request } = decideApproval(rt.db, { taskId, requestId: input.requestId, decision: input.decision, by: input.by, confidentialOverride: input.confidentialOverride });
   if (input.decision === 'refuse') {
     setBridgeControl(rt.db, taskId, 'cancelled');
