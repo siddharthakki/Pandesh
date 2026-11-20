@@ -80,6 +80,11 @@ export const AUTHORITATIVE_PROCESS_SPAWN_ALLOWLIST: ReadonlySet<string> = new Se
   // document path the caller already had to be authorized for.
   'core/runtime/documentOcr.ts',
 
+  // Tailscale status, read-only: starts the installed tailscale.exe directly (no shell) with the single fixed argv
+  // `status --json` (nothing from a task, user or model), an 8 s timeout and a field allow-list on the output (no keys,
+  // auth URLs or user profiles leave the module). No other Tailscale command is expressible in this file.
+  'core/runtime/tailscaleStatus.ts',
+
   // Runs the Agent Reach command-line tool the person installed (<data dir>/tools/agent-reach.json) for read-only public
   // lookups: the program starts directly with a fixed argv (no shell), only (channel, action) pairs on a login-free
   // allowlist, an isolated home folder, a 90 s timeout, and a capped, untrusted-labelled result. Consent is asked by the caller.

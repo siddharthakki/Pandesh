@@ -9,6 +9,7 @@ import type { BridgeService, ServiceContext, ServiceOutput } from './bridgeServi
 import { resolveInsideRoots } from './bridgeServices';
 import { extractPdfTextLayer, hasPdfMagic, ocrFile, pdfPageCount, resolveOcrTools } from '../documentOcr';
 import { runMagika, type MagikaResult } from './magikaEngine';
+import { readTailscaleStatus } from '../tailscaleStatus';
 import { searchBrain } from '../../domain/secondBrain';
 import { searchConversations } from '../../domain/workbench';
 import { DEFAULT_OLLAMA_URL } from '../modelBackend';
@@ -212,6 +213,22 @@ export function healthService(): BridgeService {
   };
 }
 
+/** Tailscale connection and peer reachability, via the dedicated status-only adapter (`tailscale status --json`, nothing else). */
+export function tailscaleService(options: { exe?: string | null } = {}): BridgeService {
+  return {
+    id: 'net.tailscale-status', label: 'Tailscale status (read-only)', readOnly: true, taskClasses: ['network.status'], roots: [],
+    async run({ signal }): Promise<ServiceOutput> {
+      const s = await readTailscaleStatus({ exe: options.exe, signal });
+      const online = s.peers.filter(p => p.online);
+      const up = s.backendState === 'Running';
+      return {
+        summary: up ? `Tailscale is connected${s.tailnet ? ` (${s.tailnet})` : ''}: ${online.length} of ${s.peers.length} peer(s) online` : `Tailscale is not connected (${s.backendState})`,
+        evidence: { kind: 'tailscale-status', ...s, onlinePeers: online.length, checkedAt: new Date().toISOString() },
+      };
+    },
+  };
+}
+
 /** Full-text search over Pandesh's own records, through the existing indexes. */
 export function searchRecordsService(): BridgeService {
   return {
@@ -253,7 +270,7 @@ export function workflowRunService(): BridgeService {
 }
 
 export function coreServices(roots: string[]): BridgeService[] {
-  return [fsListService(roots), detectTypeService(roots), ...pdfServices(roots), healthService(), searchRecordsService(), workflowRunService()];
+  return [fsListService(roots), detectTypeService(roots), ...pdfServices(roots), healthService(), tailscaleService(), searchRecordsService(), workflowRunService()];
 }
 
 export type { ServiceContext };
