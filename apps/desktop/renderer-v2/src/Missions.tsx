@@ -5,7 +5,7 @@ import { describeStep, missionActiveMs, missionHeadline, missionHeartbeatMs, mis
 
 /** One task relayed from the browser (Panda bridge), as Core's activity feed reports it. Same vocabulary as missions. */
 export interface BridgeActivityItem {
-  id: string; origin: { client: string; title: string | null; via: string | null }; instruction: string; executor: string | null;
+  id: string; origin: { kind?: string; client: string; title: string | null; via: string | null }; instruction: string; executor: string | null;
   state: string; stateLabel: string; reason: string; progress: string | null; elapsedMs: number | null; heartbeatAgeMs: number | null;
   verification: string | null; conversationId: string | null; createdAt: string;
 }
@@ -85,7 +85,7 @@ export function MissionDock({ conversationId, narrow, onReport }: { conversation
           <header className="mission-head">
             <span className="mission-toggle">
               <span className={`dot ${b.state === 'failed' || b.state === 'stalled' ? 'danger' : b.state === 'completed' ? 'done' : ['running'].includes(b.state) ? 'live' : 'attention'}`} aria-hidden="true" />
-              <span className="mission-title"><strong>From ChatGPT · {b.stateLabel}</strong><span className="mission-objective">{b.instruction}</span></span>
+              <span className="mission-title"><strong>{b.origin.kind === 'workflow' ? 'Workflow step' : 'From ChatGPT'} · {b.stateLabel}</strong><span className="mission-objective">{b.instruction}</span></span>
             </span>
             <span className="mission-meta">{b.executor ?? 'no executor yet'}{b.elapsedMs !== null && !BRIDGE_DONE.has(b.state) ? ` · active ${elapsed(b.elapsedMs)}` : ''}{b.heartbeatAgeMs !== null && !BRIDGE_DONE.has(b.state) ? ` · heartbeat ${elapsed(b.heartbeatAgeMs)} ago` : ''}</span>
             {b.conversationId && <button type="button" className="btn small" onClick={() => void openTask(b)}>Open</button>}

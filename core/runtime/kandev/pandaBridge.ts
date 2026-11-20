@@ -372,7 +372,7 @@ function startService(rt: BridgeRuntime, task: BridgeTaskRecord, serviceId: stri
       const out = await svc.run({ args: derived?.args ?? parseServiceArgs(task.instruction), signal: ac.signal, db: rt.db, host });
       if (ac.signal.aborted || getBridgeTask(rt.db, task.id).control === 'cancelled') return;
       recordBridgeStatus(rt.db, task.id, 'completed', out.summary, {
-        ...base, verification: 'independent', evidence: redactPaths(JSON.stringify(out.evidence)).slice(0, 3_000), changedFiles: out.files ?? [],
+        ...base, verification: out.verification ?? 'independent', evidence: redactPaths(JSON.stringify(out.evidence)).slice(0, 3_000), changedFiles: out.files ?? [],
         timeline: [log('service', `${svc.id}: ${out.summary}`)],
       });
     } catch (err) {

@@ -7,7 +7,7 @@ import type { CoreDatabase } from '../db/connection';
 import { createPairingCode, getBridgeTask, redeemPairingCode, submitBridgeTask, type BridgePairing } from '../domain/pandaBridge';
 import { dispatchBridgeTask, type BridgeRuntime } from '../runtime/kandev/pandaBridge';
 import { defaultServiceRegistry, ServiceRegistry } from '../runtime/kandev/bridgeServices';
-import { coreServices, detectFileType } from '../runtime/kandev/bridgeCoreServices';
+import { coreServices, detectFileType, weakestVerification } from '../runtime/kandev/bridgeCoreServices';
 import { dailyBriefService } from '../runtime/kandev/bridgeBriefService';
 import { classifyInstruction, WORKSPACE_MARKER } from '../runtime/kandev/intentRouter';
 import type { KandevClient } from '../runtime/kandev/kandevClient';
@@ -101,6 +101,15 @@ describe('deterministic services', () => {
       expect(out.evidence).toMatchObject({ database: 'ok', ollama: { reachable: false }, kandev: { running: false } });
       expect(out.summary).toMatch(/Needs attention: ollama/);
     } finally { if (prev === undefined) delete process.env.KARKEDIKHA_OLLAMA_URL; else process.env.KARKEDIKHA_OLLAMA_URL = prev; db.close(); }
+  });
+});
+
+describe('workflow verification level', () => {
+  it('is the weakest completed step: a model summary keeps the whole run at worker-only; skipped steps do not count', () => {
+    expect(weakestVerification([{ status: 'completed', verification: 'independent' }, { status: 'completed', verification: 'independent' }])).toBe('independent');
+    expect(weakestVerification([{ status: 'completed', verification: 'independent' }, { status: 'completed', verification: 'worker-only' }])).toBe('worker-only');
+    expect(weakestVerification([{ status: 'completed', verification: 'independent' }, { status: 'refused', verification: null }])).toBe('independent');
+    expect(weakestVerification([{ status: 'completed', verification: null }])).toBe('worker-only');
   });
 });
 

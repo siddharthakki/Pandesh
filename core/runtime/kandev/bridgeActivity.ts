@@ -90,7 +90,7 @@ export function deriveExecutionState(sig: ActivitySignals): DerivedState {
 
 export interface ActivityItem {
   id: string;
-  origin: { kind: 'chatgpt'; client: string; title: string | null; url: string | null; via: string | null };
+  origin: { kind: 'chatgpt' | 'workflow'; client: string; title: string | null; url: string | null; via: string | null };
   instruction: string;
   executor: string | null;
   model: string | null;
@@ -124,6 +124,7 @@ export function activityItem(db: CoreDatabase, task: BridgeTaskRecord, clientLab
   const storyWaitingForSlot = running && Boolean(task.storyId) && /free worker slot/i.test(task.statusDetail ?? '');
   const d = deriveExecutionState({ now, task, attempt, model, storyWaitingForSlot, lastActivityAt });
 
+  const workflowStep = /^(wf-|wfrun)/.test(task.clientRequestId);
   const cps = listCheckpoints(db, task.id);
   const start = cps.find(c => c.status === 'dispatching') ?? null;
   const startedMs = ms(start?.createdAt);
@@ -131,8 +132,9 @@ export function activityItem(db: CoreDatabase, task: BridgeTaskRecord, clientLab
   const latest = result?.activity?.length ? result.activity[result.activity.length - 1] : null;
   return {
     id: task.id,
-    origin: { kind: 'chatgpt', client: clientLabel, title: task.sourceRef.title ?? null, url: task.sourceRef.url ?? null, via: task.sourceRef.via ?? null },
-    instruction: task.instruction.slice(0, 500),
+    // Steps a workflow created for itself are shown as steps, with the service that ran them, not as the raw JSON arguments they carry.
+    origin: { kind: workflowStep ? 'workflow' : 'chatgpt', client: clientLabel, title: task.sourceRef.title ?? null, url: task.sourceRef.url ?? null, via: task.sourceRef.via ?? null },
+    instruction: workflowStep ? `Workflow step · ${task.executor ?? 'not started'}` : task.instruction.slice(0, 500),
     executor: task.executor, model: task.model, routing: task.routing,
     state: d.state, stateLabel: STATE_LABEL[d.state], reason: d.reason,
     progress: latest ? latest.text.slice(0, 200) : null,
