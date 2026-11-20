@@ -36,6 +36,12 @@ ordinary development story, so isolated worktrees, approvals, independent verifi
    node scripts/panda-bridge/install-native-host.mjs --data-dir "%LOCALAPPDATA%\KarkeDikha" --browser chrome --pandesh-exe "<path to Pandesh.exe>"
    ```
    `--data-dir` is mandatory: it decides which Pandesh the browser can reach. `--uninstall` removes it.
+
+   **Run it from an ordinary terminal.** A process started by a packaged (MSIX/Store) app gets that app's private copy of
+   `HKCU\Software`: the write succeeds and even reads back, but Chrome never sees it and reports "Specified native messaging
+   host not found". The installer walks its parent chain, refuses (exit 3, nothing changed) when a packaged app started it,
+   and `--check` prints the verdict without installing. `--allow-packaged-parent` overrides the refusal for a terminal you know
+   is not virtualized. Either way, confirm in Chrome: the extension popup must stop reporting the host as missing.
 2. Load `apps/panda-bridge/extension/` as an unpacked extension (`chrome://extensions` → Developer mode). Its id is pinned by the
    manifest key to `emejmmocdfgfigdlekonndnmpjfdjimm`, which is the only origin the host manifest allows.
 3. Pair: `node scripts/panda-bridge/panda-cli.mjs --data-dir <dir> pair-code`, then enter the code in the extension popup.

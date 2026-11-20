@@ -21,7 +21,18 @@ const HERE = path.dirname(fileURLToPath(import.meta.url));
 const REPO = path.resolve(HERE, '..', '..');
 const DATA = path.resolve(process.env.PANDA_E2E_DATA_DIR || '');
 const WORK = path.resolve(process.env.PANDA_E2E_WORK || '');
-const EXT = path.join(REPO, 'apps', 'panda-bridge', 'extension');
+// The shipped content script uses a CLOSED shadow root, which Playwright cannot read. The test loads a copy with only that
+// one option changed to 'open', so the e2e can inspect the card text; nothing else differs from the shipped extension.
+const EXT_SRC = path.join(REPO, 'apps', 'panda-bridge', 'extension');
+const EXT = path.join(WORK, 'extension-open-shadow');
+fs.rmSync(EXT, { recursive: true, force: true });
+fs.cpSync(EXT_SRC, EXT, { recursive: true });
+{
+  const f = path.join(EXT, 'content.js');
+  const src = fs.readFileSync(f, 'utf8');
+  if (!src.includes("attachShadow({ mode: 'closed' })")) throw new Error('content.js no longer uses a closed shadow root; update this test copy step');
+  fs.writeFileSync(f, src.replace("attachShadow({ mode: 'closed' })", "attachShadow({ mode: 'open' })"));
+}
 const FIXTURE = fs.readFileSync(path.join(REPO, 'apps', 'panda-bridge', 'test', 'chatgpt-like.html'), 'utf8');
 const EXTENSION_ID = 'emejmmocdfgfigdlekonndnmpjfdjimm';
 const PROMPT = 'Build a simple calculator app';
