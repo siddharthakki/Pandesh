@@ -176,6 +176,23 @@ describe('JUGAAD documents over the real companion protocol', () => {
     expect(JSON.stringify(item)).not.toContain(hh.id);
   }, 60_000);
 
+  it('a very long statement (over the parse limit) is read as beginning and end, so the total at the bottom is found', async () => {
+    const hh = createHousehold(dir, 'Huge'); const p = await phone('phone-huge-000001', hh.id);
+    const body = Array.from({ length: 60000 }, (_, i) => `Zeile ${i}: Abschlag Zaehler Verbrauch Summe EUR ${i % 90 + 10},50`).join('\n');
+    const bytes = Buffer.from(`Stadtwerke Beispielstadt
+Rechnung
+Rechnungsnummer: SW-99001
+Datum: 06.11.2026
+${body}
+Gesamtbetrag 4.321,09 EUR
+`);
+    expect(bytes.length).toBeGreaterThan(2_000_000);
+    const done = await p.upload('upl-huge-00000001', 'big.txt', bytes, { chunk: 64_000 });
+    const fin = await p.waitTask(done.taskId, 60_000);
+    expect(fin.status).toBe('completed');
+    expect((await p.call('doc.get', { documentId: fin.documentId })).result.document.fields).toMatchObject({ totalCents: 432109, invoiceNumber: 'SW-99001', date: '2026-11-06' });
+  }, 120_000);
+
   it('limits: oversize, oversize chunk, empty and malformed ids are refused', async () => {
     const hh = createHousehold(dir, 'Limits'); const p = await phone('phone-limits-0001', hh.id);
     const base = { uploadId: 'upl-limits-001', name: 'x.bin', sha256: 'a'.repeat(64), offset: 0 };
