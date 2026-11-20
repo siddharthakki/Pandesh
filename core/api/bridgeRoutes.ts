@@ -26,6 +26,7 @@ import { activityItem } from '../runtime/kandev/bridgeActivity';
 import { allDeclarations, BUILTIN_WORKFLOWS, routeTask, trackRecords } from '../runtime/kandev/capabilityRegistry';
 import { planWorkflow, runWorkflow } from '../runtime/kandev/workflowRouter';
 import { newId } from '../domain/ids';
+import { loadProjects, registerProject, removeProject, resolveProject } from '../domain/projectRegistry';
 import type { RuntimeExecutor } from '../runtime/executor';
 
 export interface BridgeRouteOptions {
@@ -101,6 +102,31 @@ export function registerBridgeRoutes(router: Router<ApiContext, ApiResult>, opti
       paired: true, caller: c.kind, pairing: c.kind === 'extension' ? { id: c.pairing.id, label: c.pairing.label } : null,
       executors: listing.executors.filter(e => e.available).length, kandevRunning: listing.kandev.running,
     });
+  });
+
+  // --- authorized projects (the owner's registry; only the Pandesh app reads or changes it) ---
+  router.get('/v1/bridge/projects', (ctx) => {
+    requireHost(ctx);
+    return ok(200, { projects: loadProjects(options.dataDir) });
+  });
+  router.post('/v1/bridge/projects', (ctx) => {
+    requireHost(ctx);
+    const b = body(ctx);
+    const list = (v: unknown) => (Array.isArray(v) ? v.map(String) : undefined);
+    const project = registerProject(options.dataDir, {
+      name: String(b.name ?? ''), path: String(b.path ?? ''), aliases: list(b.aliases), capabilities: list(b.capabilities), preferredAgents: list(b.preferredAgents),
+      access: b.access === 'read-write' ? 'read-write' : 'read', asAdditionalPath: b.asAdditionalPath === true, authorizedBy: ctx.principal.id,
+    });
+    return ok(201, { project });
+  });
+  router.delete('/v1/bridge/projects/:id', (ctx, match) => {
+    requireHost(ctx);
+    if (!removeProject(options.dataDir, match.params.id)) throw new CoreError('not_found', 'project not found');
+    return ok(200, { removed: true });
+  });
+  router.post('/v1/bridge/projects/resolve', (ctx) => {
+    requireHost(ctx);
+    return ok(200, resolveProject(loadProjects(options.dataDir), String(body(ctx).instruction ?? '')));
   });
 
   // --- executors ---
