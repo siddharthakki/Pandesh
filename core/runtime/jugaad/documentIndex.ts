@@ -16,6 +16,12 @@ CREATE TABLE IF NOT EXISTS documents (
   id TEXT PRIMARY KEY, sha256 TEXT NOT NULL UNIQUE, name TEXT NOT NULL, mime TEXT NOT NULL, typeLabel TEXT NOT NULL, bytes INTEGER NOT NULL,
   storedName TEXT NOT NULL, source TEXT NOT NULL, addedAt TEXT NOT NULL, textChars INTEGER NOT NULL, textSource TEXT NOT NULL, fieldsJson TEXT NOT NULL, textBody TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS processing_runs (
+  id INTEGER PRIMARY KEY AUTOINCREMENT, documentId TEXT NOT NULL, startedAt TEXT NOT NULL, trigger TEXT NOT NULL, byWho TEXT NOT NULL,
+  pipelineVersion TEXT NOT NULL, status TEXT NOT NULL, typeLabel TEXT NOT NULL, textSource TEXT NOT NULL, textChars INTEGER NOT NULL,
+  fieldsJson TEXT NOT NULL, stepsJson TEXT NOT NULL, changesJson TEXT NOT NULL, note TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_runs_doc ON processing_runs(documentId, id);
 CREATE VIRTUAL TABLE IF NOT EXISTS documents_fts USING fts5(name, body, merchant, tokenize = 'unicode61 remove_diacritics 2');
 `;
 
@@ -84,4 +90,49 @@ export function searchDocuments(db: CoreDatabase, text: string, limit = 10): Sea
 
 export function listDocuments(db: CoreDatabase, limit = 50): IndexedDocument[] {
   return db.all<Record<string, unknown>>('SELECT * FROM documents ORDER BY addedAt DESC LIMIT ?', [Math.min(200, Math.max(1, limit))]).map(rowToDoc);
+}
+
+// ---------------------------------------------------------------- processing history
+
+export interface ProcessingRun {
+  id: number; documentId: string; at: string; trigger: 'intake' | 'reprocess'; by: string; pipelineVersion: string;
+  status: 'applied' | 'unchanged' | 'kept-previous'; typeLabel: string; textSource: string; textChars: number;
+  fields: Record<string, unknown>; steps: unknown[]; changes: Array<{ field: string; before: unknown; after: unknown }>; note: string | null;
+}
+
+/** Appends one run to the document's history. History is append-only: nothing here updates or deletes a row. */
+export function addRun(db: CoreDatabase, r: Omit<ProcessingRun, 'id' | 'at'>): ProcessingRun {
+  const at = new Date().toISOString();
+  const ins = db.run(
+    'INSERT INTO processing_runs (documentId, startedAt, trigger, byWho, pipelineVersion, status, typeLabel, textSource, textChars, fieldsJson, stepsJson, changesJson, note) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+    [r.documentId, at, r.trigger, r.by, r.pipelineVersion, r.status, r.typeLabel, r.textSource, r.textChars, JSON.stringify(r.fields), JSON.stringify(r.steps), JSON.stringify(r.changes), r.note],
+  );
+  return { ...r, id: Number(ins.lastInsertRowid), at };
+}
+
+export function listRuns(db: CoreDatabase, documentId: string): ProcessingRun[] {
+  return db.all<Record<string, unknown>>('SELECT * FROM processing_runs WHERE documentId = ? ORDER BY id ASC', [documentId]).map(x => ({
+    id: Number(x.id), documentId: String(x.documentId), at: String(x.startedAt), trigger: x.trigger as ProcessingRun['trigger'], by: String(x.byWho), pipelineVersion: String(x.pipelineVersion),
+    status: x.status as ProcessingRun['status'], typeLabel: String(x.typeLabel), textSource: String(x.textSource), textChars: Number(x.textChars),
+    fields: JSON.parse(String(x.fieldsJson)), steps: JSON.parse(String(x.stepsJson)), changes: JSON.parse(String(x.changesJson)), note: (x.note as string) ?? null,
+  }));
+}
+
+/** Replaces the document's CURRENT result (text, fields, search entry). The original file and the earlier runs are not touched. */
+export function replaceDocumentProcessing(db: CoreDatabase, id: string, p: { typeLabel: string; mime: string; textSource: IndexedDocument['textSource']; textChars: number; fields: Record<string, unknown>; text: string }): void {
+  const body = p.text.slice(0, 400_000);
+  db.transaction(() => {
+    const row = db.get<{ rowid: number; name: string }>('SELECT rowid AS rowid, name FROM documents WHERE id = ?', [id]);
+    if (!row) throw new Error('document not found');
+    db.run('UPDATE documents SET typeLabel = ?, mime = ?, textSource = ?, textChars = ?, fieldsJson = ?, textBody = ? WHERE id = ?', [p.typeLabel, p.mime, p.textSource, p.textChars, JSON.stringify(p.fields), body, id]);
+    db.run('DELETE FROM documents_fts WHERE rowid = ?', [Number(row.rowid)]);
+    db.run('INSERT INTO documents_fts (rowid, name, body, merchant) VALUES (?, ?, ?, ?)', [Number(row.rowid), row.name, body, String(p.fields.merchant ?? '')]);
+  });
+}
+
+/** Documents whose newest run was made by an older pipeline (or that have no run at all): candidates for an owner-authorised reprocess. */
+export function listOutdated(db: CoreDatabase, currentVersion: string, limit = 200): Array<{ id: string; name: string; pipelineVersion: string | null }> {
+  return db.all<{ id: string; name: string; pv: string | null }>(
+    `SELECT d.id AS id, d.name AS name, (SELECT r.pipelineVersion FROM processing_runs r WHERE r.documentId = d.id ORDER BY r.id DESC LIMIT 1) AS pv FROM documents d ORDER BY d.addedAt ASC`,
+  ).filter(x => x.pv !== currentVersion).slice(0, limit).map(x => ({ id: x.id, name: x.name, pipelineVersion: x.pv }));
 }

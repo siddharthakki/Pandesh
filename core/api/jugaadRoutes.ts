@@ -7,7 +7,9 @@ import type { ApiContext, ApiResult } from './context';
 import { CoreError } from '../domain/errors';
 import { listCompanionDevices } from '../domain/companionSync';
 import { attachDevice, createHousehold, detachDevice, HOUSEHOLD_ID, legacyOwnerOf, loadHouseholds, setLegacyOwner } from '../runtime/jugaad/households';
-import { listDocuments, openHouseholdIndex, searchDocuments } from '../runtime/jugaad/documentIndex';
+import { getDocument, listDocuments, listOutdated, listRuns, openHouseholdIndex, searchDocuments } from '../runtime/jugaad/documentIndex';
+import { PIPELINE_VERSION } from '../runtime/jugaad/documentIntake';
+import { startReprocess } from '../runtime/jugaad/jugaadGateway';
 
 export interface JugaadRouteOptions { dataDir: string }
 
@@ -65,5 +67,37 @@ export function registerJugaadRoutes(router: Router<ApiContext, ApiResult>, opti
     requireHost(ctx);
     const hid = household(options.dataDir, match.params.id);
     return ok(200, { hits: searchDocuments(openHouseholdIndex(options.dataDir, hid), String(body(ctx).q ?? ''), Number(body(ctx).limit) || 10) });
+  });
+  // --- reprocessing: the owner decides; the original is preserved; every run stays in the history ---
+  router.get('/v1/jugaad/households/:id/documents/outdated', (ctx, match) => {
+    requireHost(ctx);
+    const hid = household(options.dataDir, match.params.id);
+    return ok(200, { pipelineVersion: PIPELINE_VERSION, outdated: listOutdated(openHouseholdIndex(options.dataDir, hid), PIPELINE_VERSION) });
+  });
+  router.get('/v1/jugaad/households/:id/documents/:docId/history', (ctx, match) => {
+    requireHost(ctx);
+    const hid = household(options.dataDir, match.params.id);
+    const index = openHouseholdIndex(options.dataDir, hid);
+    const doc = getDocument(index, match.params.docId);
+    if (!doc) throw new CoreError('not_found', 'document not found');
+    return ok(200, { document: { id: doc.id, name: doc.name, sha256: doc.sha256, storedName: doc.storedName, currentFields: doc.fields }, runs: listRuns(index, doc.id) });
+  });
+  router.post('/v1/jugaad/households/:id/reprocess', async (ctx, match) => {
+    requireHost(ctx);
+    const hid = household(options.dataDir, match.params.id);
+    const b = body(ctx);
+    const index = openHouseholdIndex(options.dataDir, hid);
+    // Exactly what the owner named: a list of documents, or "outdated" (those made by an older pipeline). Never "everything" by default.
+    const ids: string[] = Array.isArray(b.documentIds) ? b.documentIds.map(String) : b.scope === 'outdated' ? listOutdated(index, PIPELINE_VERSION, 50).map(d => d.id) : [];
+    if (!ids.length) throw new CoreError('invalid_request', 'name documentIds, or scope "outdated"');
+    if (ids.length > 50) throw new CoreError('invalid_request', 'at most 50 documents per request');
+    const reason = typeof b.reason === 'string' ? b.reason.slice(0, 300) : null;
+    const started: Array<{ documentId: string; taskId?: string; error?: string }> = [];
+    for (const id of ids) {
+      if (!getDocument(index, id)) { started.push({ documentId: id, error: 'document not found in this household' }); continue; }
+      try { started.push({ documentId: id, taskId: (await startReprocess({ db: ctx.db, dataDir: options.dataDir }, hid, id, ctx.principal.id, reason)).taskId }); }
+      catch (err) { started.push({ documentId: id, error: err instanceof Error ? err.message : String(err) }); }
+    }
+    return ok(202, { pipelineVersion: PIPELINE_VERSION, started });
   });
 }

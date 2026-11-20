@@ -18,7 +18,7 @@ import { createPairingCode, getBridgeTask, listBridgeTasks, listPairings, redeem
 import { dispatchBridgeTask, type BridgeRuntime } from '../kandev/pandaBridge';
 import { bridgeServices } from '../kandev/bridgeServices';
 import { KandevClient } from '../kandev/kandevClient';
-import { getDocument, listDocuments, openHouseholdIndex, searchDocuments } from './documentIndex';
+import { getDocument, listDocuments, listRuns, openHouseholdIndex, searchDocuments } from './documentIndex';
 import { householdOfDevice, loadHouseholds } from './households';
 import { putChunk, type UploadParams } from './uploads';
 
@@ -45,6 +45,18 @@ export async function startIntake(ctx: GatewayContext, deviceId: string, househo
     sourceRef: { kind: 'chatgpt', title: 'JUGAAD document intake' },
   });
   const { task: running } = await dispatchBridgeTask(runtimeOf(ctx), task.id, { executor: 'service:jugaad.ingest', decidedBy: `jugaad:${deviceId}`, taskClass: 'document.ingest', authority: 'host' });
+  return { taskId: running.id, state: running.status };
+}
+
+/** Starts (as a tracked task, by the owner) a reprocess of one document. The task belongs to the host's own internal pairing. */
+export async function startReprocess(ctx: GatewayContext, householdId: string, documentId: string, by: string, reason: string | null): Promise<{ taskId: string; state: string }> {
+  const pairing = devicePairing(ctx.db, 'host-reprocess');
+  const { task } = submitBridgeTask(ctx.db, pairing, {
+    clientRequestId: `reprocess:${householdId}:${documentId}:${Date.now()}`.slice(0, 100),
+    instruction: JSON.stringify({ householdId, documentId, by, reason }),
+    sourceRef: { kind: 'chatgpt', title: 'JUGAAD document reprocess' },
+  });
+  const { task: running } = await dispatchBridgeTask(runtimeOf(ctx), task.id, { executor: 'service:jugaad.reprocess', decidedBy: by, taskClass: 'document.reprocess', authority: 'host' });
   return { taskId: running.id, state: running.status };
 }
 
@@ -78,9 +90,14 @@ export async function handleJugaadRpc(ctx: GatewayContext, deviceId: string, met
       if (!d) throw new CoreError('not_found', 'document not found');
       return { document: { id: d.id, name: d.name, type: d.typeLabel, bytes: d.bytes, addedAt: d.addedAt, textSource: d.textSource, textChars: d.textChars, fields: d.fields } };
     }
+    case 'doc.history': {
+      const id = String(params.documentId ?? '');
+      if (!getDocument(index, id)) throw new CoreError('not_found', 'document not found');
+      return { runs: listRuns(index, id).map(r => ({ id: r.id, at: r.at, trigger: r.trigger, status: r.status, pipelineVersion: r.pipelineVersion, textSource: r.textSource, changes: r.changes, note: r.note })) };
+    }
     case 'tasks.recent': return { tasks: listBridgeTasks(ctx.db, { pairingId: devicePairing(ctx.db, deviceId).id, limit: 20 }).map(t => ({ taskId: t.id, status: t.status, detail: t.statusDetail, updatedAt: t.updatedAt })) };
     default: throw new CoreError('invalid_request', `unknown method ${method}`);
   }
 }
 
-export const JUGAAD_METHODS = new Set(['household.info', 'doc.put', 'doc.status', 'doc.search', 'doc.list', 'doc.get', 'tasks.recent']);
+export const JUGAAD_METHODS = new Set(['household.info', 'doc.put', 'doc.status', 'doc.search', 'doc.list', 'doc.get', 'doc.history', 'tasks.recent']);
