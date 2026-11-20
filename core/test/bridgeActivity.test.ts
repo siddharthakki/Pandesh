@@ -108,3 +108,17 @@ describe('activity item for a real bridge task', () => {
     expect(activityItem(db, getBridgeTask(db, t.id), 'x').state).toBe('cancelled');
   });
 });
+
+describe('workflow steps in the activity feed', () => {
+  it('shows a workflow-created task as a step with its service, not as raw JSON arguments', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'panda-wfact-'));
+    const db = openCoreDatabase(path.join(dir, 'core.db')).db;
+    try {
+      const pairing = redeemPairingCode(db, { code: createPairingCode(db).code, label: 'Chrome' }).pairing;
+      const { task } = submitBridgeTask(db, pairing, { clientRequestId: 'wf-ptask_parent-1-collect', instruction: '{}' });
+      const item = activityItem(db, getBridgeTask(db, task.id), 'Chrome');
+      expect(item.origin.kind).toBe('workflow');
+      expect(item.instruction).toMatch(/^Workflow step/);
+    } finally { db.close(); fs.rmSync(dir, { recursive: true, force: true }); }
+  });
+});

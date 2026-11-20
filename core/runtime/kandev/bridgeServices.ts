@@ -23,7 +23,11 @@ export interface ServiceContext {
   db?: CoreDatabase;
   host?: ServiceHost;
 }
-export interface ServiceOutput { summary: string; evidence: Record<string, unknown>; files?: string[]; }
+export interface ServiceOutput {
+  summary: string; evidence: Record<string, unknown>; files?: string[];
+  /** Defaults to 'independent' (plain code, reproducible). A service that composed other work reports the weakest level among its parts. */
+  verification?: 'independent' | 'worker-only';
+}
 
 export interface BridgeService {
   id: string;

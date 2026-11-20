@@ -187,6 +187,11 @@ export function searchRecordsService(): BridgeService {
   };
 }
 
+/** A workflow is only as verified as its weakest completed step: a model's summary does not become 'independent' by sitting next to plain-code steps. */
+export function weakestVerification(steps: Array<{ status: string; verification: string | null }>): 'independent' | 'worker-only' {
+  return steps.filter(s => s.status === 'completed').every(s => s.verification === 'independent') ? 'independent' : 'worker-only';
+}
+
 /** Runs a registered workflow as child bridge tasks (same lifecycle, receipts and permissions); the parent task mirrors the result. */
 export function workflowRunService(): BridgeService {
   return {
@@ -198,7 +203,7 @@ export function workflowRunService(): BridgeService {
       const run = await host.runWorkflow(id, input, signal);
       const summary = `${id}: ${run.status} (${run.steps.map(s => `${s.name}=${s.status}`).join(', ')})`;
       if (run.status !== 'completed') throw new Error(summary);
-      return { summary, evidence: { kind: 'workflow-run', workflow: id, status: run.status, steps: run.steps } };
+      return { summary, verification: weakestVerification(run.steps), evidence: { kind: 'workflow-run', workflow: id, status: run.status, steps: run.steps } };
     },
   };
 }
