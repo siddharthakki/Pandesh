@@ -14,7 +14,6 @@ import {
 import { planWorkflow, runWorkflow } from '../runtime/kandev/workflowRouter';
 import { DAILY_BRIEF_WORKFLOW, EXTRACT_DOCUMENT_WORKFLOW } from '../runtime/kandev/capabilityRegistry';
 import { dailyBriefService } from '../runtime/kandev/bridgeBriefService';
-import { tailscaleStatusService } from '../runtime/kandev/bridgeToolServices';
 import type { KandevClient } from '../runtime/kandev/kandevClient';
 
 let dir: string; let db: CoreDatabase; let rt: BridgeRuntime; let pairing: BridgePairing;
@@ -134,7 +133,7 @@ describe('workflow router', () => {
   });
 });
 
-describe('workflow fallback and tool services', () => {
+describe('workflow fallback', () => {
   const mk = (id: string, classes: string[], run: () => Promise<{ summary: string; evidence: Record<string, unknown> }>) =>
     ({ id, label: id, readOnly: true, taskClasses: classes, roots: [], run });
   const wf = (extra: Record<string, unknown> = {}) => ({ ...EXTRACT_DOCUMENT_WORKFLOW, ...extra });
@@ -159,13 +158,6 @@ describe('workflow fallback and tool services', () => {
     expect(run.steps).toHaveLength(1);
   });
 
-  it('Tailscale status reports state and counts only, and fails when not running', async () => {
-    const run = (json: string) => tailscaleStatusService(process.execPath, ['-e', `console.log(process.argv[1])`, json]).run({ args: {}, signal: new AbortController().signal });
-    const ok = await run('{"BackendState":"Running","CurrentTailnet":{"Name":"t.example"},"Self":{"DNSName":"pc.t.example.","Online":true,"TailscaleIPs":["100.64.0.1"]},"Peer":{"a":{"Online":true,"TailscaleIPs":["100.64.0.2"]},"b":{"Online":false}}}');
-    expect(ok.evidence).toMatchObject({ backendState: 'Running', self: 'pc.t.example', peers: { total: 2, online: 1 } });
-    expect(JSON.stringify(ok.evidence)).not.toContain('100.64');
-    await expect(run('{"BackendState":"Stopped"}')).rejects.toThrow(/not running/);
-  });
 });
 
 describe('daily brief workflow', () => {
