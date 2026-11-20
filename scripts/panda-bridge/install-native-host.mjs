@@ -10,6 +10,7 @@
  * --data-dir is required on purpose: it decides which Pandesh the browser can reach, so it is never guessed.
  */
 import * as fs from 'node:fs';
+import * as os from 'node:os';
 import * as path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
@@ -44,6 +45,58 @@ for (const b of browsers) if (!REG_ROOTS[b]) { console.error(`Unknown --browser 
 const installDir = path.resolve(String(args['install-dir'] || path.join(process.env.LOCALAPPDATA || '', 'Pandesh', 'PandaBridge')));
 
 function reg(...a) { return spawnSync('reg.exe', a, { encoding: 'utf8', windowsHide: true }); }
+
+/**
+ * Registry virtualization guard. Processes started by a packaged (MSIX/Store) app get that app's private, copy-on-write view
+ * of HKCU\Software: `reg add` succeeds and even reads back, but Chrome never sees the key and reports "Specified native
+ * messaging host not found". The packaged app is an ancestor, not the installer itself, so we walk the parent chain looking
+ * for package identity (GetPackageFullName). We refuse by default instead of working around it: no scheduled task, no elevation.
+ */
+const ANCESTRY_PS = String.raw`Add-Type -Namespace W -Name K -MemberDefinition @'
+[System.Runtime.InteropServices.DllImport("kernel32.dll")] public static extern System.IntPtr OpenProcess(int a, bool b, int pid);
+[System.Runtime.InteropServices.DllImport("kernel32.dll")] public static extern bool CloseHandle(System.IntPtr h);
+[System.Runtime.InteropServices.DllImport("kernel32.dll", CharSet = System.Runtime.InteropServices.CharSet.Unicode)] public static extern int GetPackageFullName(System.IntPtr h, ref int n, System.Text.StringBuilder s);
+'@
+$procs = @{}; Get-CimInstance Win32_Process | ForEach-Object { $procs[[int]$_.ProcessId] = $_ }
+$out = @(); $cur = [int]$PID; $seen = @{}
+while ($cur -and $procs.ContainsKey($cur) -and -not $seen.ContainsKey($cur)) {
+  $seen[$cur] = $true
+  $h = [W.K]::OpenProcess(0x1000, $false, $cur)
+  if ($h -ne [IntPtr]::Zero) {
+    $n = 0; $sb = New-Object System.Text.StringBuilder 512
+    $rc = [W.K]::GetPackageFullName($h, [ref]$n, $sb)
+    if ($rc -eq 122) { $n = 512; [void][W.K]::GetPackageFullName($h, [ref]$n, $sb); $out += [pscustomobject]@{ pid = $cur; name = $procs[$cur].Name; package = $sb.ToString() } }
+    [void][W.K]::CloseHandle($h)
+  }
+  $cur = [int]$procs[$cur].ParentProcessId
+}
+ConvertTo-Json -InputObject @($out) -Compress
+`;
+function packagedAncestors() {
+  // A script file (not -EncodedCommand): the here-string inside it does not survive command-line encoding.
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'panda-anc-'));
+  const file = path.join(dir, 'ancestry.ps1');
+  fs.writeFileSync(file, ANCESTRY_PS);
+  const r = spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', file], { encoding: 'utf8', windowsHide: true });
+  fs.rmSync(file, { force: true });
+  if (r.status !== 0) return { error: `powershell exited ${r.status}: ${String(r.stderr).slice(0, 200)}`, list: [] };
+  try { const v = JSON.parse(String(r.stdout).trim() || '[]'); return { error: null, list: Array.isArray(v) ? v : [v] }; }
+  catch (e) { return { error: `could not read the process-ancestry answer: ${e.message}`, list: [] }; }
+}
+const ancestry = packagedAncestors();
+const packaged = ancestry.list.map((a) => `${a.name} (pid ${a.pid}, package ${a.package})`);
+if (args.check) {
+  if (ancestry.error) { console.log(`UNKNOWN: ${ancestry.error}`); process.exit(3); }
+  console.log(packaged.length ? `NOT SAFE: started under a packaged app: ${packaged.join('; ')}` : 'ok: no packaged ancestor; HKCU writes are real');
+  process.exit(packaged.length ? 3 : 0);
+}
+if ((ancestry.error || packaged.length) && !args['allow-packaged-parent']) {
+  console.error(ancestry.error
+    ? `Cannot tell whether this process runs under a packaged app (${ancestry.error}). Registry writes might be virtualized. Nothing was changed.`
+    : `This installer was started under a packaged app: ${packaged.join('; ')}. Windows gives such processes a private copy of HKCU\\Software, so Chrome would never see the registration and would report "Specified native messaging host not found". Nothing was changed.`);
+  console.error('Run it from an ordinary terminal that no packaged app started (for example cmd.exe from the Start menu), then confirm in Chrome. If you know your terminal is not virtualized, pass --allow-packaged-parent.');
+  process.exit(3);
+}
 
 if (args.uninstall) {
   for (const b of browsers) {
