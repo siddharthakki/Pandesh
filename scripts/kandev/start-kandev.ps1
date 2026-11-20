@@ -91,6 +91,9 @@ if (-not (Test-Path $exe)) { throw "kandev runtime missing at $exe" }
 
 # The user's OpenCode binary, resolved before APPDATA is redirected (used by shim\opencode.cmd).
 $opencodeExe = Join-Path $env:APPDATA 'npm\node_modules\@opencode\cli\bin\opencode.exe'
+# The user's Hermes binary, resolved before LOCALAPPDATA is redirected (used by shim\hermes.cmd).
+$hermesCmd = Get-Command hermes.exe -ErrorAction SilentlyContinue
+$hermesExe = if ($hermesCmd) { $hermesCmd.Source } else { '' }
 
 # --- clean, allow-listed environment for Kandev and its workers ---
 $keep = @('SystemRoot', 'SystemDrive', 'windir', 'ComSpec', 'PATHEXT', 'PATH', 'OS', 'NUMBER_OF_PROCESSORS',
@@ -129,6 +132,17 @@ $env:KANDEV_HOME_DIR = $KandevHome
 # OpenCode workers ask before edits/commands/MCP calls, so every action goes through KKD's permission broker.
 $env:OPENCODE_CONFIG = Join-Path $here 'opencode-worker.json'
 $env:KKD_OPENCODE_EXE = $opencodeExe
+if ($hermesExe) { $env:KKD_HERMES_EXE = $hermesExe }
+$env:KKD_SHIM_LOG = Join-Path $KandevHome 'shim.log'
+# Run the real "hermes acp --check" once, under the isolated worker profile, so the shim can answer Kandev's short-timeout probe.
+$hermesOk = Join-Path $KandevHome 'hermes-acp-check.ok'
+Remove-Item $hermesOk -Force -ErrorAction SilentlyContinue
+$env:KKD_HERMES_CHECK_OK = $hermesOk
+if ($hermesExe) {
+  & $hermesExe acp --check *> $null
+  if ($LASTEXITCODE -eq 0) { (Get-Date).ToString('o') | Out-File -Encoding ascii $hermesOk }
+  else { Write-Output "Hermes ACP check failed (exit $LASTEXITCODE); Hermes stays unavailable in Kandev." }
+}
 # OpenCode v2 compatibility shim for Kandev v0.97.0 (see shim\opencode.cmd).
 $env:PATH = (Join-Path $here 'shim') + ';' + $env:PATH
 
