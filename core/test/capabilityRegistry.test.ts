@@ -12,7 +12,8 @@ import {
   allDeclarations, routeTask, trackRecords, VERIFY_FILE_WORKFLOW, type ExecutorDeclaration, type TrackRecord,
 } from '../runtime/kandev/capabilityRegistry';
 import { planWorkflow, runWorkflow } from '../runtime/kandev/workflowRouter';
-import { EXTRACT_DOCUMENT_WORKFLOW } from '../runtime/kandev/capabilityRegistry';
+import { DAILY_BRIEF_WORKFLOW, EXTRACT_DOCUMENT_WORKFLOW } from '../runtime/kandev/capabilityRegistry';
+import { dailyBriefService } from '../runtime/kandev/bridgeBriefService';
 import { tailscaleStatusService } from '../runtime/kandev/bridgeToolServices';
 import type { KandevClient } from '../runtime/kandev/kandevClient';
 
@@ -164,5 +165,31 @@ describe('workflow fallback and tool services', () => {
     expect(ok.evidence).toMatchObject({ backendState: 'Running', self: 'pc.t.example', peers: { total: 2, online: 1 } });
     expect(JSON.stringify(ok.evidence)).not.toContain('100.64');
     await expect(run('{"BackendState":"Stopped"}')).rejects.toThrow(/not running/);
+  });
+});
+
+describe('daily brief workflow', () => {
+  it('collects deterministically from Pandesh records, starts no mission, and still completes when no model can summarise', async () => {
+    const services = new ServiceRegistry().register(dailyBriefService());
+    const run = await runWorkflow({ ...rt, services }, pairing, DAILY_BRIEF_WORKFLOW, {}, { runId: 'run-brief-0001', decidedBy: 'test', pollMs: 10 });
+    expect(run.status).toBe('completed');
+    expect(run.steps[0]).toMatchObject({ name: 'collect', executor: 'service:brief.daily', status: 'completed', verification: 'independent' });
+    expect(run.steps[0]!.evidence).toMatchObject({ kind: 'daily-brief' });
+    expect(run.steps[1]).toMatchObject({ name: 'summarize', status: 'refused' });
+    expect(run.steps[1]!.detail).toMatch(/skipped \(optional\)/);
+    expect(db.get<{ n: number }>('SELECT COUNT(*) AS n FROM missions')!.n).toBe(0);
+  });
+
+  it('gives the summariser exactly the collected data and nothing else', async () => {
+    let seen = '';
+    const services = new ServiceRegistry().register(dailyBriefService()).register({
+      id: 'sum', label: 'Fake summariser', readOnly: true, taskClasses: ['text.summarize'], roots: [],
+      run: async ({ args }) => { seen = String(args.text ?? ''); return { summary: 'ok', evidence: { kind: 'summary' } }; },
+    });
+    const run = await runWorkflow({ ...rt, services }, pairing, DAILY_BRIEF_WORKFLOW, {}, { runId: 'run-brief-0002', decidedBy: 'test', pollMs: 10 });
+    expect(run.status).toBe('completed');
+    expect(run.steps[1]).toMatchObject({ status: 'completed', executor: 'service:sum' });
+    expect(seen).toContain('do not browse, search, run tools or invent anything');
+    expect(seen).toContain('"kind":"daily-brief"');
   });
 });

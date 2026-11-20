@@ -6,9 +6,11 @@
 import * as crypto from 'node:crypto';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
+import type { CoreDatabase } from '../../db/connection';
 import { registerToolServices } from './bridgeToolServices';
+import { dailyBriefService } from './bridgeBriefService';
 
-export interface ServiceContext { args: Record<string, unknown>; signal: AbortSignal; }
+export interface ServiceContext { args: Record<string, unknown>; signal: AbortSignal; /** The Core database, for services that only project records Core already holds. */ db?: CoreDatabase; }
 export interface ServiceOutput { summary: string; evidence: Record<string, unknown>; files?: string[]; }
 
 export interface BridgeService {
@@ -103,5 +105,6 @@ export function bridgeServices(dataDir: string): ServiceRegistry {
   fs.mkdirSync(root, { recursive: true });
   const reg = defaultServiceRegistry([root]);
   registerToolServices(reg, [root]);
+  reg.register(dailyBriefService());
   return (cachedRegistry = reg);
 }
