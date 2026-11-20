@@ -407,7 +407,7 @@
     render();
   });
 
-  chrome.storage.onChanged.addListener((changes, area) => { if (area === 'local' && changes.pandaBridge) { void loadState().then(() => { if (state.paired) void loadTasks(); }); } });
+  chrome.storage.onChanged.addListener((changes, area) => { if (area === 'local' && Object.keys(changes).some((k) => k.startsWith('pandaBridge'))) { void loadState().then(() => { if (state.paired) void loadTasks(); }); } });
   new MutationObserver(() => { if (!host.isConnected) attach(); }).observe(document.documentElement, { childList: true, subtree: true });
 
   attach();

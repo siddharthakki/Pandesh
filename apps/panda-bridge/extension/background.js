@@ -1,8 +1,16 @@
 // Pandesh Panda Bridge — service worker.
 // The only component that talks to the native host. The page (content script) and the popup ask it; it adds the pairing
 // token, which therefore never reaches the web page.
-const HOST = 'com.pandesh.panda_bridge';
-const STORE = 'pandaBridge';
+const DEFAULT_HOST = 'com.pandesh.panda_bridge';
+let HOST = DEFAULT_HOST;
+let STORE = 'pandaBridge';
+// A second Pandesh (for example an isolated development build) can be reached by naming its native host in
+// chrome.storage.local.pandaBridgeHost. Each host keeps its own pairing state under its own key, so using one never touches
+// the other's pairing. Only this service worker reads it; a web page cannot reach extension storage.
+const hostReady = chrome.storage.local.get('pandaBridgeHost').then((o) => {
+  const h = o && o.pandaBridgeHost;
+  if (typeof h === 'string' && h !== DEFAULT_HOST && /^com\.pandesh\.panda_bridge_[a-z0-9_]{1,40}$/.test(h)) { HOST = h; STORE = 'pandaBridge:' + h; }
+}).catch(() => undefined);
 
 async function load() {
   const o = await chrome.storage.local.get(STORE);
@@ -27,6 +35,7 @@ function nativeCall(message) {
 const TOKEN_OPS = new Set(['status', 'executors', 'submit', 'tasks', 'task', 'dispatch', 'pause', 'resume', 'cancel']);
 
 async function handle(msg) {
+  await hostReady;
   const state = await load();
   switch (msg.op) {
     case 'state':
