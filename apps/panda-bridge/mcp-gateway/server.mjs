@@ -17,13 +17,22 @@
  *   PANDESH_MCP_PUBLIC_URL (the https URL ChatGPT uses; default http://127.0.0.1:<port>).
  */
 import http from 'node:http';
+import https from 'node:https';
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 
 const DATA_DIR = process.env.PANDESH_DATA_DIR || path.join(process.env.LOCALAPPDATA || '', 'KarkeDikha', 'desktop');
 const PORT = Number(process.env.PANDESH_MCP_PORT || 3973);
-const PUBLIC = (process.env.PANDESH_MCP_PUBLIC_URL || `http://127.0.0.1:${PORT}`).replace(/\/+$/, '');
+// Optional loopback TLS mode (off unless PANDESH_MCP_TLS_PORT is set). Why: the Secure MCP Tunnel only forwards OAuth endpoints (/register, /token) that
+// sit on an approved HTTPS origin; an http://127.0.0.1 endpoint is called directly by OpenAI's OAuth caller, which cannot reach loopback. In this mode the
+// MCP resource, metadata, /register and /token are served over HTTPS on 127.0.0.1:<TLS_PORT> with a self-signed certificate that only tunnel-client trusts
+// (--ca-bundle); the plain-HTTP listener on PORT then serves only /authorize (the owner's own browser on this PC goes there directly) and /healthz.
+// Both listeners stay on 127.0.0.1. Nothing is public.
+const TLS_PORT = process.env.PANDESH_MCP_TLS_PORT ? Number(process.env.PANDESH_MCP_TLS_PORT) : 0;
+const TLS_DIR = process.env.PANDESH_MCP_TLS_DIR || path.join(process.env.PANDESH_DATA_DIR || '', 'mcp-gateway-tls');
+const PUBLIC = (process.env.PANDESH_MCP_PUBLIC_URL || (TLS_PORT ? `https://127.0.0.1:${TLS_PORT}` : `http://127.0.0.1:${PORT}`)).replace(/\/+$/, '');
+const AUTHORIZE_URL = TLS_PORT ? `http://127.0.0.1:${PORT}/authorize` : `${PUBLIC}/authorize`;
 const PRODUCTION_PORTS = new Set([3030, 9333, 11434, 3991, 3992, 9481, 3993]);
 if (PRODUCTION_PORTS.has(PORT)) { console.error('REFUSED: that port belongs to something else'); process.exit(2); }
 const STATE_FILE = path.join(DATA_DIR, 'mcp-gateway.json');
@@ -132,14 +141,15 @@ const redirectOk = (uri) => { try { const u = new URL(uri); return u.protocol ==
 function metadata() {
   return {
     resource: { resource: `${PUBLIC}/mcp`, authorization_servers: [PUBLIC], bearer_methods_supported: ['header'], scopes_supported: ['pandesh.tasks'] },
-    server: { issuer: PUBLIC, authorization_endpoint: `${PUBLIC}/authorize`, token_endpoint: `${PUBLIC}/token`, registration_endpoint: `${PUBLIC}/register`, response_types_supported: ['code'], grant_types_supported: ['authorization_code', 'refresh_token'], code_challenge_methods_supported: ['S256'], token_endpoint_auth_methods_supported: ['none'], scopes_supported: ['pandesh.tasks'] },
+    server: { issuer: PUBLIC, authorization_endpoint: AUTHORIZE_URL, token_endpoint: `${PUBLIC}/token`, registration_endpoint: `${PUBLIC}/register`, response_types_supported: ['code'], grant_types_supported: ['authorization_code', 'refresh_token'], code_challenge_methods_supported: ['S256'], token_endpoint_auth_methods_supported: ['none'], scopes_supported: ['pandesh.tasks'] },
   };
 }
 const challenge = (res) => json(res, 401, { error: 'unauthorized' }, { 'www-authenticate': `Bearer resource_metadata="${PUBLIC}/.well-known/oauth-protected-resource"` });
 const page = (res, status, html) => { res.writeHead(status, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store', 'content-security-policy': "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'", 'x-frame-options': 'DENY' }); res.end(`<!doctype html><meta charset=utf-8><title>Connect ChatGPT to Pandesh</title><body style="font:16px system-ui;max-width:34em;margin:3em auto;padding:0 1em">${html}`); };
 
-async function handle(req, res) {
+async function handle(req, res, secure = true) {
   const url = new URL(req.url, PUBLIC); const p = url.pathname;
+  if (TLS_PORT && !secure && p !== '/authorize' && p !== '/healthz') return json(res, 404, { error: 'not_found' });   // plain listener: browser consent page only
   if (p === '/.well-known/oauth-protected-resource' || p === '/.well-known/oauth-protected-resource/mcp') return json(res, 200, metadata().resource);
   if (p === '/.well-known/oauth-authorization-server') return json(res, 200, metadata().server);
   if (p === '/register' && req.method === 'POST') {
@@ -200,5 +210,11 @@ async function handle(req, res) {
   json(res, 404, { error: 'not_found' });
 }
 
-const server = http.createServer((req, res) => { handle(req, res).catch((e) => { try { json(res, 500, { error: 'server_error' }); } catch { /* closed */ } audit(`error ${e instanceof Error ? e.message : e}`); }); });
-server.listen(PORT, '127.0.0.1', () => { console.log(JSON.stringify({ gateway: 'pandesh-mcp', listening: `127.0.0.1:${PORT}`, publicUrl: PUBLIC, dataDir: DATA_DIR })); });
+const onRequest = (secure) => (req, res) => { handle(req, res, secure).catch((e) => { try { json(res, 500, { error: 'server_error' }); } catch { /* closed */ } audit(`error ${e instanceof Error ? e.message : e}`); }); };
+const server = http.createServer(onRequest(false));
+server.listen(PORT, '127.0.0.1', () => { console.log(JSON.stringify({ gateway: 'pandesh-mcp', listening: `127.0.0.1:${PORT}`, publicUrl: PUBLIC, authorizeUrl: AUTHORIZE_URL, tls: TLS_PORT || false, dataDir: DATA_DIR })); });
+if (TLS_PORT) {
+  if (PRODUCTION_PORTS.has(TLS_PORT) || TLS_PORT === PORT) { console.error('REFUSED: bad TLS port'); process.exit(2); }
+  let tlsOpts; try { tlsOpts = { key: fs.readFileSync(path.join(TLS_DIR, 'gateway-key.pem')), cert: fs.readFileSync(path.join(TLS_DIR, 'gateway-cert.pem')), minVersion: 'TLSv1.2' }; } catch { console.error(`REFUSED: TLS mode needs gateway-key.pem and gateway-cert.pem in ${TLS_DIR}`); process.exit(2); }
+  https.createServer(tlsOpts, onRequest(true)).listen(TLS_PORT, '127.0.0.1', () => audit(`tls listener 127.0.0.1:${TLS_PORT}`));
+}
