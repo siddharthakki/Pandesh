@@ -15,6 +15,7 @@ import { KandevClient } from '../runtime/kandev/kandevClient';
 import { registerBridgeRoutes } from './bridgeRoutes';
 import { registerOperatorRoutes } from './operatorRoutes';
 import { registerHouseholdRoutes } from './householdRoutes';
+import { registerJugaadRoutes } from './jugaadRoutes';
 import { registerSoftwareRoutes } from './softwareRoutes';
 import { registerMailRoutes } from './mailRoutes';
 import { registerBotRoutes } from './botRoutes';
@@ -544,6 +545,8 @@ export function buildRouter(
   if (bridge) registerOperatorRoutes(router, { dataDir: bridge.dataDir, executor, kandev: kandevClient });
   // --- Household OS: PC organization, routines, obligations, JUGAAD phone (core/api/householdRoutes.ts) ---
   if (bridge) registerHouseholdRoutes(router, { dataDir: bridge.dataDir, connectors, broadcaster });
+  // --- JUGAAD households: documents, receipts and search, isolated per household (core/api/jugaadRoutes.ts) ---
+  if (bridge) registerJugaadRoutes(router, { dataDir: bridge.dataDir });
   // --- Software & Services, read-only inventory and update discovery (core/api/softwareRoutes.ts) ---
   if (bridge) registerSoftwareRoutes(router, { dataDir: bridge.dataDir });
   // --- My Bots and Automations: Hermes profiles as Bots, run read-only by Core (core/api/botRoutes.ts) ---

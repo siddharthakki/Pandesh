@@ -175,6 +175,7 @@ function workerPrompt(story: StoryRecord, spec: DevStorySpec): string {
     return [
       `Task: ${story.title}`,
       story.description ? `\n${story.description}` : '',
+      `\nThe repository to inspect is your CURRENT WORKING DIRECTORY: a private copy of ${spec.inspect?.projectName ?? 'the project'} at branch ${spec.inspect?.ref ?? 'the requested branch'}. If the task names a path on this PC, that is the owner's own checkout: do not read it, use relative paths in your working directory instead.`,
       '\nThis is a READ-ONLY inspection. Rules: read and search files freely; run the existing tests with single plain commands (for example `npx vitest run <test files>`); do NOT create, edit or delete any file, do NOT commit, push, switch branches, install packages or change any Kandev task state.',
       'Run commands one at a time (no `&&` chains, no `cd`). When you are done, stop and write the final report as your last message: what you inspected, which tests you ran with their exact results, and each defect you found with file and line, or state plainly that you found none.',
     ].join('\n');
@@ -446,6 +447,13 @@ export function permissionDecision(p: KandevPermission, worktree: string | undef
   if (spec.mode === 'inspect' && (a.type === 'file_write' || a.type === 'file_edit' || a.type === 'file_delete')) {
     return { allow: false, reject: true, reason: 'this is a read-only inspection: files may not be created, edited or deleted' };
   }
+  if (spec.mode === 'inspect' && a.type === 'file_read' && a.path && worktree) {
+    // The task text names the owner's checkout by path; the agent must read its private copy (its working directory) instead.
+    const target = path.resolve(a.path).toLowerCase();
+    const root = path.resolve(worktree).toLowerCase();
+    if (target === root || target.startsWith(root + path.sep)) return { allow: true, reason: `read ${path.relative(worktree, a.path)}` };
+    return { allow: false, reject: true, reason: `read outside your working directory refused: ${a.path}. The repository to inspect is your current working directory (a private copy); use relative paths there.` };
+  }
   if ((a.type === 'file_write' || a.type === 'file_edit') && a.path && worktree) {
     const target = path.resolve(a.path).toLowerCase();
     const root = path.resolve(worktree).toLowerCase() + path.sep;
@@ -572,10 +580,13 @@ const AGENT_OWN_FILES = /(^|\/)\.(?:claude|aider|codex|cline)[^/]*(\/|$)|(^|\/)n
 async function finishInspection(db: CoreDatabase, kandev: KandevClient, story: StoryRecord, spec: DevStorySpec, taskId: string, worktree: string, sessionId: string): Promise<void> {
   const changed = changedFiles(worktree, spec.integrationBranch).filter(f => !AGENT_OWN_FILES.test(f.replace(/\\/g, '/')));
   const src = spec.inspect ? checkoutFingerprint(spec.inspect.sourcePath) : null;
-  const sourceUnchanged = spec.inspect ? Boolean(src && src.head === spec.inspect.sourceHead && src.statusSha === spec.inspect.sourceStatusSha) : null;
-  if (changed.length || sourceUnchanged === false) {
+  // The owner may legitimately edit or commit in their checkout while an inspection runs, so a different source state is reported,
+  // not treated as the agent's doing. What can block is the one thing KKD can attribute: a change inside the private copy. The agent
+  // cannot write outside the copy (the permission policy rejects every write and every absolute path outside it).
+  const sourceMoved = spec.inspect ? !(src && src.head === spec.inspect.sourceHead && src.statusSha === spec.inspect.sourceStatusSha) : false;
+  if (changed.length) {
     walk(db, getStory(db, story.id), ['blocked'], 'the read-only inspection changed files');
-    addComment(db, story.id, { author: DEV_ACTOR, body: `[kkd-dev:needs-human] A read-only inspection changed files: ${changed.slice(0, 10).join(', ') || '(none in the clone)'}${sourceUnchanged === false ? '; the source checkout no longer matches its state at the start' : ''}. Nothing was accepted.` });
+    addComment(db, story.id, { author: DEV_ACTOR, body: `[kkd-dev:needs-human] A read-only inspection changed files in its private copy: ${changed.slice(0, 10).join(', ')}. Nothing was accepted.` });
     return;
   }
   const messages = await kandev.agentMessages(sessionId, 60).catch(() => []);
@@ -590,7 +601,7 @@ async function finishInspection(db: CoreDatabase, kandev: KandevClient, story: S
   addComment(db, story.id, {
     author: DEV_ACTOR,
     body: [
-      `[kkd-dev:inspected] level=worker-only; read-only checked by KKD: no file changed in the clone${spec.inspect ? ` and the source checkout (${spec.inspect.projectName} @ ${spec.inspect.sourceHead.slice(0, 8)}, branch ${spec.inspect.ref}) is exactly as it was` : ''}.`,
+      `[kkd-dev:inspected] level=worker-only; read-only checked by KKD: no file changed in the agent's private copy of ${spec.inspect?.projectName ?? 'the project'} (branch ${spec.inspect?.ref ?? '?'} @ ${spec.inspect?.sourceHead.slice(0, 8) ?? '?'}); every write and every path outside the copy was refused by policy.${sourceMoved ? ' Note: your own checkout changed while this ran (you edited or committed there); the agent never had access to it.' : spec.inspect ? ' Your checkout is exactly as it was.' : ''}`,
       `Commands the worker ran (${tools.length}): ${tools.slice(-8).join(' | ') || 'none recorded'}`,
       '--- worker report (its own words; test results are as the worker reported them) ---',
       report.slice(0, 7_000),

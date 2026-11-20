@@ -120,7 +120,7 @@ describe('read-only inspection story', () => {
     await run(id);
     expect(getStory(db, id).status).toBe('done');
     const body = listComments(db, id).map(c => c.body).find(b => b.startsWith('[kkd-dev:inspected]'))!;
-    expect(body).toMatch(/level=worker-only; read-only checked by KKD/);
+    expect(body).toMatch(/level=worker-only; read-only checked by KKD/); expect(body).toMatch(/Your checkout is exactly as it was/);
     expect(body).toMatch(/12 passed/);
     expect(body).toMatch(/npx vitest run/);
     expect(states).toContain('COMPLETED');
@@ -130,15 +130,15 @@ describe('read-only inspection story', () => {
     const id = story(); fs.writeFileSync(path.join(wt, 'new.txt'), 'oops');
     await run(id);
     expect(getStory(db, id).status).toBe('blocked');
-    expect(listComments(db, id).map(c => c.body).join('\n')).toMatch(/read-only inspection changed files: new\.txt/);
+    expect(listComments(db, id).map(c => c.body).join('\n')).toMatch(/read-only inspection changed files in its private copy: new\.txt/);
     expect(states).not.toContain('COMPLETED');
   });
 
-  it('a changed source checkout blocks it', async () => {
-    const id = story(); fs.writeFileSync(path.join(repo, 'a.txt'), 'changed under us');
+  it('the owner editing their own checkout while it runs is reported, not blamed on the agent', async () => {
+    const id = story(); fs.writeFileSync(path.join(repo, 'a.txt'), 'owner edit during the run');
     await run(id);
-    expect(getStory(db, id).status).toBe('blocked');
-    expect(listComments(db, id).map(c => c.body).join('\n')).toMatch(/source checkout no longer matches/);
+    expect(getStory(db, id).status).toBe('done');
+    expect(listComments(db, id).map(c => c.body).join('\n')).toMatch(/your own checkout changed while this ran/);
   });
 
   it('a worker that wrote no report is not accepted', async () => {
@@ -161,5 +161,8 @@ describe('read-only inspection story', () => {
     expect(permissionDecision(p({ type: 'execute', command: 'npx vitest run core/test/deterministicRouting.test.ts' }), wt, spec)).toMatchObject({ allow: true });
     expect(permissionDecision(p({ type: 'execute', command: 'git log --oneline' }), wt, spec)).toMatchObject({ allow: true });
     expect(permissionDecision(p({ type: 'execute', command: 'git push origin main' }), wt, spec)).toMatchObject({ allow: false });
+    // Reading: inside the private copy is fine; the owner's checkout (named in the task text) is refused with a pointer to the copy.
+    expect(permissionDecision(p({ type: 'file_read', path: path.join(wt, 'a.txt') }), wt, spec)).toMatchObject({ allow: true });
+    expect(permissionDecision(p({ type: 'file_read', path: path.join(repo, 'a.txt') }), wt, spec)).toMatchObject({ allow: false, reject: true, reason: expect.stringMatching(/working directory/) });
   });
 });
