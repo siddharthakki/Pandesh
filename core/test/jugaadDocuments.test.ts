@@ -222,6 +222,32 @@ describe('JUGAAD documents over the real companion protocol', () => {
     expect(reuse.ok).toBe(false); expect(reuse.error).toMatch(/different file/);
   }, 60_000);
 
+  it('the same bytes arriving while the first copy is still being processed are a duplicate, found by content in the inbox', async () => {
+    const hh = createHousehold(dir, 'Race'); const p = await phone('phone-race-000001', hh.id);
+    const bytes = Buffer.from(RECEIPT); const sha = crypto.createHash('sha256').update(bytes).digest('hex');
+    fs.writeFileSync(path.join(householdDirs(dir, hh.id).inbox, `${sha.slice(0, 8)}-first.txt`), bytes); // accepted, not yet indexed
+    const r = await p.call('doc.put', { uploadId: 'upl-race-0000001', name: 'again.txt', size: bytes.length, sha256: sha, offset: 0, data: bytes.toString('base64') });
+    expect(r.result).toEqual({ status: 'duplicate', documentId: null, processing: true });
+    expect(fs.readdirSync(householdDirs(dir, hh.id).uploads)).toEqual([]);
+    expect(fs.readdirSync(householdDirs(dir, hh.id).inbox)).toHaveLength(1);
+  });
+
+  it('a long statement: the total at the END is still parsed (fields come from the whole text; only the index is capped), and the host feed labels it JUGAAD', async () => {
+    const hh = createHousehold(dir, 'Long'); const p = await phone('phone-long-0000001', hh.id);
+    const body = Array.from({ length: 12000 }, (_, i) => `Zeile ${i}: Abschlag Summe EUR ${i % 90 + 10},50`).join('\n');
+    const bytes = Buffer.from(`Stadtwerke Musterstadt\nRechnung\nRechnungsnummer: SW-77120\nDatum: 05.11.2026\n${body}\nGesamtbetrag 948,70 EUR\n`);
+    expect(bytes.length).toBeGreaterThan(400_000);
+    const done = await p.upload('upl-long-00000001', 'abrechnung.txt', bytes, { chunk: 60_000 });
+    const fin = await p.waitTask(done.taskId);
+    const doc = (await p.call('doc.get', { documentId: fin.documentId })).result.document;
+    expect(doc.fields).toMatchObject({ kind: 'invoice', totalCents: 94870, invoiceNumber: 'SW-77120' });
+    expect(doc.textChars).toBe(400_000);
+    const { activityItem } = await import('../runtime/kandev/bridgeActivity');
+    const item = activityItem(db, getBridgeTask(db, done.taskId), 'JUGAAD:phone-long-0000001');
+    expect(item).toMatchObject({ instruction: 'JUGAAD document intake', origin: { kind: 'jugaad', client: 'JUGAAD phone' } });
+    expect(JSON.stringify(item)).not.toContain(hh.id);
+  }, 60_000);
+
   it('limits: oversize, oversize chunk, empty and malformed ids are refused', async () => {
     const hh = createHousehold(dir, 'Limits'); const p = await phone('phone-limits-0001', hh.id);
     const base = { uploadId: 'upl-limits-001', name: 'x.bin', sha256: 'a'.repeat(64), offset: 0 };

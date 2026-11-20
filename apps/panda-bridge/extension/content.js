@@ -68,7 +68,12 @@
     if (t.completedAt) lines.push('Completed: ' + scrub(t.completedAt));
     if (t.statusDetail) lines.push('Detail: ' + scrub(t.statusDetail).slice(0, 300));
     if (t.result) {
-      if (t.result.evidence) lines.push('Result: ' + scrub(String(t.result.evidence).replace(/\s+/g, ' ')).slice(0, 700));
+      if (t.result.evidence) {
+        // A read-only inspection's evidence IS the report: keep its line breaks and give it room. Other evidence stays a short one-liner.
+        const ev = String(t.result.evidence);
+        if (ev.startsWith('[kkd-dev:inspected]')) lines.push('Result:\n' + scrub(ev.replace(/[ \t]+/g, ' ').replace(/\n{3,}/g, '\n\n')).slice(0, 5000));
+        else lines.push('Result: ' + scrub(ev.replace(/\s+/g, ' ')).slice(0, 700));
+      }
       if (t.result.verification) lines.push('Verification: ' + ({ independent: 'verified independently by Pandesh', 'human-reviewed': 'reviewed by a person', 'worker-only': 'the executor’s own report, not independently verified' }[t.result.verification] || scrub(t.result.verification)));
       if (Array.isArray(t.result.changedFiles) && t.result.changedFiles.length) lines.push('Changed files: ' + t.result.changedFiles.slice(0, 30).map(scrub).join(', '));
       if (t.result.commit) lines.push('Commit: ' + scrub(t.result.commit));

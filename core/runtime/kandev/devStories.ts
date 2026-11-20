@@ -602,9 +602,10 @@ async function finishInspection(db: CoreDatabase, kandev: KandevClient, story: S
     author: DEV_ACTOR,
     body: [
       `[kkd-dev:inspected] level=worker-only; read-only checked by KKD: no file changed in the agent's private copy of ${spec.inspect?.projectName ?? 'the project'} (branch ${spec.inspect?.ref ?? '?'} @ ${spec.inspect?.sourceHead.slice(0, 8) ?? '?'}); every write and every path outside the copy was refused by policy.${sourceMoved ? ' Note: your own checkout changed while this ran (you edited or committed there); the agent never had access to it.' : spec.inspect ? ' Your checkout is exactly as it was.' : ''}`,
-      `Commands the worker ran (${tools.length}): ${tools.slice(-8).join(' | ') || 'none recorded'}`,
       '--- worker report (its own words; test results are as the worker reported them) ---',
-      report.slice(0, 7_000),
+      report.slice(0, 6_000),
+      `--- commands the worker ran (${tools.length}) ---`,
+      tools.slice(-8).join(' | ') || 'none recorded',
     ].join('\n'),
   });
   walk(db, getStory(db, story.id), ['validation', 'delivery_approval', 'merge_queue'], 'inspection verified read-only');
@@ -1234,6 +1235,20 @@ export async function verifyExistingDevStory(db: CoreDatabase, kandev: KandevCli
     if (!task || task.external_id !== storyId) return stay('this story has no Kandev task bound to it');
     // Every worker this story ever had (a reassign or retry may have replaced the task that holds the work): all must be gone.
     const taskIds = [...new Set([task.id, ...listComments(db, storyId).flatMap(c => [...c.body.matchAll(/Kandev task ([0-9a-f-]{36})/g)].map(m => m[1]))])];
+    if (spec.mode === 'inspect') {
+      // An inspection leaves no changes by design: what is preserved is the worker's report. Accept it under the same read-only checks.
+      for (const id of taskIds) {
+        const session = (await kandev.sessions(id).catch(() => []))[0];
+        if (!session?.worktree_path) continue;
+        if (!['CANCELLED', 'COMPLETED', 'FAILED'].includes(session.state)) {
+          const s = await confirmWorkerStopped(kandev, id, session.id);
+          if (!s.stopped) return stay(`a worker could not be confirmed stopped (${s.detail})`);
+        }
+        await verifyAndIntegrate(db, kandev, getStory(db, storyId), spec, task.id, session.worktree_path, session.id, false, { recovery: true });
+        return outcomeOf();
+      }
+      return stay('the inspection has no preserved worker session');
+    }
     const found: Array<{ taskId: string; session: KandevSession; facts: ReconciledWorktree }> = [];
     let stopped = { stopped: true, detail: 'no live agent' };
     let lastError = 'the story never started a worker, so there is no work to verify';

@@ -22,7 +22,7 @@ export interface UploadParams { uploadId: string; name: string; size: number; sh
 export type UploadReply =
   | { status: 'continue'; received: number }
   | { status: 'resume'; received: number }
-  | { status: 'duplicate'; documentId: string }
+  | { status: 'duplicate'; documentId: string | null; processing?: true }
   | { status: 'complete'; received: number; inboxName: string };
 
 interface Meta { name: string; size: number; sha256: string; received: number; createdAt: number }
@@ -37,6 +37,21 @@ function sweep(uploadsDir: string, now: number): void {
   }
 }
 
+function discardPartial(uploadsDir: string, uploadId: string): void {
+  if (!ID.test(String(uploadId))) return;
+  fs.rmSync(path.join(uploadsDir, `${uploadId}.part`), { force: true });
+  fs.rmSync(path.join(uploadsDir, `${uploadId}.json`), { force: true });
+}
+
+/** True when the inbox already holds a file with exactly this content (names start with the first 8 hex digits of the hash; the hash is then checked in full). */
+function inboxHolds(inbox: string, sha256: string): boolean {
+  for (const f of fs.readdirSync(inbox)) {
+    if (!f.startsWith(`${sha256.slice(0, 8)}-`)) continue;
+    try { if (crypto.createHash('sha256').update(fs.readFileSync(path.join(inbox, f))).digest('hex') === sha256) return true; } catch { /* being moved */ }
+  }
+  return false;
+}
+
 export function putChunk(db: CoreDatabase, dataDir: string, householdId: string, p: UploadParams, now = Date.now()): UploadReply {
   const dirs = householdDirs(dataDir, householdId);
   if (!ID.test(String(p.uploadId))) throw new CoreError('invalid_request', 'uploadId must be 8-64 letters, digits, - or _');
@@ -49,7 +64,9 @@ export function putChunk(db: CoreDatabase, dataDir: string, householdId: string,
 
   // The same content is never stored twice, and the phone learns that before sending any bytes.
   const known = findBySha(openHouseholdIndex(dataDir, householdId), p.sha256);
-  if (known) return { status: 'duplicate', documentId: known.id };
+  if (known) { discardPartial(dirs.uploads, p.uploadId); return { status: 'duplicate', documentId: known.id }; }
+  // The same bytes may already be accepted and still being processed (in the inbox, not yet indexed): also a duplicate, found by content.
+  if (inboxHolds(dirs.inbox, p.sha256)) { discardPartial(dirs.uploads, p.uploadId); return { status: 'duplicate', documentId: null, processing: true }; }
 
   const metaFile = path.join(dirs.uploads, `${p.uploadId}.json`);
   const partFile = path.join(dirs.uploads, `${p.uploadId}.part`);
