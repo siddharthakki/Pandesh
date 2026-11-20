@@ -117,3 +117,22 @@ Before: Core idle and no user message in the last 5 minutes (`idle-check.mjs`); 
 - D3. Legacy household records: name a `legacyOwner` household, or choose default-deny for unassigned phones. Recommended: name the owner household.
 - D4. Approve the `.gitattributes` and build-number fixes (already in the candidate).
 - D5. The scratch extension key `pandaBridge:com.pandesh.panda_bridge_dev` is still untouched; say when its identity may be verified and removed.
+
+## 9. Qualification result (2026-11-20, after the owner approved the build and isolated smoke)
+
+Final candidate: `release/b188-candidate` at **d1b94da** = the reviewed 806e8c6 plus one owner-requested commit: legacy household records are **default-deny** (a phone without a household sees none; nothing is migrated, assigned or deleted; the owner names a `legacyOwner` to expose them). Nothing was installed, merged or changed in production (production still running, 11 processes, untouched).
+
+- Package: built from d1b94da, `clean`, identity build 188; Pandesh-Setup.exe produced and its SHA-256 matches the published value (the Inno step worked this time); staged payload = portable tree (3,000 files; `runtime/core.js` byte-identical, 6,357,877 bytes, hash equals build-fingerprint). The shipped Core contains the single-use approval, scope-changed refusal, Tailscale status, households and pipeline v4 code, and the default-deny rule.
+- Package smoke on ports 3961/3962: ok, ten steps (api-ready … question-completed).
+- Full suites on d1b94da: **core 3,674 passed, 1 failed** (`bots.test.ts` "stays quiet on a scheduled run", present on Build 187 too), 35 skipped; **apps 979 passed, 0 failed**, 3 skipped. `hostLaunchConfig` and `buildIdentity` pass.
+- Acceptance on the isolated packaged build (script `rel188\accept188.mjs`, paired-browser contract over HTTP):
+  - Claude Code request → card for the owner naming project, branch, commit, read-only access and what leaves the PC; nothing started.
+  - A paired browser cannot read approvals (403) or approve (403).
+  - Owner approved → task completed read-only; the source checkout unchanged (HEAD same, status clean); the audit shows requested → approved → consumed; a second approve of the same request is refused (409).
+  - Refusal → task cancelled, audit requested → refused.
+  - Branch moved after the card → Allow refused with `approval_scope_changed`; audit requested → expired.
+  - A write-capable wording against a read-only project is refused with a clear message.
+- **Not achieved: the real-Chrome run against the isolated build.** The extension's host switch needs the extension service-worker DevTools, which opened blank on this PC, and the URL tools mangle `chrome://` addresses. I closed what I opened and changed nothing in the extension. The same code path was exercised in real Chrome with ChatGPT on the dev build earlier today (approval card, Allow, refusal), and the packaged build passed the identical contract over HTTP. A real-Chrome pass on the installed build is still part of the post-install check (section 6).
+- Android: see `JUGAAD_ANDROID_RELEASE_REVIEW.md` (combined tree builds, unit tests pass, installs and launches on the emulator).
+
+Updated verdict: **GO for owner approval to install Build 188**, subject to the real-Chrome check after install and D3 (name the legacy owner household; until then phones see no legacy records).
