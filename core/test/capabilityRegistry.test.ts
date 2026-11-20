@@ -14,6 +14,7 @@ import {
 import { planWorkflow, runWorkflow } from '../runtime/kandev/workflowRouter';
 import { DAILY_BRIEF_WORKFLOW, EXTRACT_DOCUMENT_WORKFLOW } from '../runtime/kandev/capabilityRegistry';
 import { dailyBriefService } from '../runtime/kandev/bridgeBriefService';
+import { coreServices } from '../runtime/kandev/bridgeCoreServices';
 import type { KandevClient } from '../runtime/kandev/kandevClient';
 
 let dir: string; let db: CoreDatabase; let rt: BridgeRuntime; let pairing: BridgePairing;
@@ -189,10 +190,11 @@ describe('daily brief workflow', () => {
 const dir0 = () => dir;
 describe('deterministic routing for listing work (input from the 156 s native task)', () => {
   it('a list-files request routes to the deterministic filesystem service, not a model', async () => {
-    const l = await discoverExecutors(kandev, { services: rt.services! });
-    const d = routeTask({ taskClass: 'filesystem.list', readOnly: true }, l, allDeclarations(rt.services), none);
-    expect(d.selected).toBe('service:fs.inspect');
-    const dir = await rt.services!.get('fs.inspect')!.run({ args: { path: path.join(dir0(), 'allowed') }, signal: new AbortController().signal });
-    expect(dir.evidence).toMatchObject({ kind: 'directory' });
+    const services = defaultServiceRegistry([path.join(dir0(), 'allowed')]); for (const x of coreServices([path.join(dir0(), 'allowed')])) services.register(x);
+    const l = await discoverExecutors(kandev, { services });
+    const d = routeTask({ taskClass: 'filesystem.list', readOnly: true }, l, allDeclarations(services), none);
+    expect(d.selected).toBe('service:fs.list');
+    const out = await services.get('fs.list')!.run({ args: { path: path.join(dir0(), 'allowed') }, signal: new AbortController().signal });
+    expect(out.evidence).toMatchObject({ kind: 'directory-listing' });
   });
 });

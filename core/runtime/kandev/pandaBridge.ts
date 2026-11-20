@@ -18,15 +18,16 @@ import { isTerminalAttemptStatus } from '../../domain/attemptTransitions';
 import { submitRequest } from '../../domain/submission';
 import { newId } from '../../domain/ids';
 import {
-  attachBridgeExecution, claimBridgeDispatch, evaluateTransferPolicy, getBridgeTask, listBridgeTasks, recordBridgeStatus,
+  attachBridgeExecution, claimBridgeDispatch, evaluateTransferPolicy, getBridgeTask, getPairing, listBridgeTasks, recordBridgeStatus,
   setBridgeControl, TERMINAL_BRIDGE_STATUSES,
   type BridgeTaskRecord, type BridgeTaskResult, type BridgeTaskStatus, type BridgeTransferConsent,
 } from '../../domain/pandaBridge';
 import { detectGpu, gpuLaneLimit, type GpuInfo } from '../hardwareCapacity';
 import type { RuntimeExecutor } from '../executor';
 import { KandevClient, KandevUnavailableError } from './kandevClient';
-import { parseServiceArgs, type ServiceRegistry } from './bridgeServices';
-import { allDeclarations, routeTask, trackRecords } from './capabilityRegistry';
+import { parseServiceArgs, type ServiceHost, type ServiceRegistry } from './bridgeServices';
+import { classifyInstruction, WORKSPACE_MARKER } from './intentRouter';
+import { allDeclarations, BUILTIN_WORKFLOWS, routeTask, trackRecords } from './capabilityRegistry';
 import {
   AGENT_IDS, devSpec, devStoryDetail, dispatchDevStories, planDevStories, retryDevStory, stopDevStory, usesLocalGpu, type DevAgent,
 } from './devStories';
@@ -239,6 +240,7 @@ export async function dispatchBridgeTask(rt: BridgeRuntime, taskId: string, req:
   const listing = await discoverExecutors(rt.kandev, { nativeAvailable: Boolean(rt.executor), ...(rt.services ? { services: rt.services } : {}) });
   let routing: 'explicit' | 'auto' = 'explicit';
   let chosen: BridgeExecutor | undefined;
+  let derived: { taskClass: string; reason: string; args: Record<string, unknown> } | null = null;
   if (req.executor === 'auto') {
     // Automatic routing is only ever offered when the user selected it, and only among local executors.
     routing = 'auto';
@@ -246,7 +248,25 @@ export async function dispatchBridgeTask(rt: BridgeRuntime, taskId: string, req:
       const decision = routeTask({ taskClass: req.taskClass, allowExternal: req.allowExternal === true }, listing, allDeclarations(rt.services), trackRecords(db));
       chosen = decision.selected ? listing.executors.find(e => e.id === decision.selected) : undefined;
       if (!chosen) throw new CoreError('invalid_request', `automatic routing: ${decision.refusal ?? 'no executor selected'}`);
-    } else chosen = chooseAuto(listing) ?? undefined;
+    } else {
+      // Routine operations go to the registered deterministic service; anything that needs interpretation, or that no service
+      // can do, goes to the local model as before. Both paths stay local and explicit about what ran.
+      const intent = classifyInstruction(task.instruction);
+      if (intent) {
+        const cls = intent.kind === 'workflow' ? 'workflow.run' : intent.taskClass;
+        const decision = routeTask({ taskClass: cls, deterministicOnly: true }, listing, allDeclarations(rt.services), trackRecords(db));
+        const svcExecutor = decision.selected ? listing.executors.find(e => e.id === decision.selected) : undefined;
+        if (svcExecutor) {
+          chosen = svcExecutor;
+          const workspace = () => prepareTaskWorkspace(rt.dataDir, task.id);
+          const fill = (o: Record<string, unknown>) => (o.path === WORKSPACE_MARKER ? { ...o, path: workspace() } : o);
+          derived = intent.kind === 'workflow'
+            ? { taskClass: cls, reason: intent.reason, args: { workflow: intent.workflowId, input: fill(intent.input) } }
+            : { taskClass: cls, reason: intent.reason, args: fill(intent.args) };
+        }
+      }
+      if (!chosen) chosen = chooseAuto(listing) ?? undefined;
+    }
     if (!chosen) throw new CoreError('invalid_request', 'automatic routing found no available local executor; choose one explicitly');
   } else {
     chosen = listing.executors.find(e => e.id === req.executor);
@@ -261,13 +281,13 @@ export async function dispatchBridgeTask(rt: BridgeRuntime, taskId: string, req:
     if (!decision.allowed) throw new CoreError('forbidden', decision.message, { reason: decision.code });
   }
 
-  if (!claimBridgeDispatch(db, taskId, { executor: chosen.id, model, routing, consent: info.external ? (consent ?? null) : null, grantedBy: req.decidedBy, ...(req.taskClass ? { taskClass: req.taskClass } : {}) })) {
+  if (!claimBridgeDispatch(db, taskId, { executor: chosen.id, model, routing, consent: info.external ? (consent ?? null) : null, grantedBy: req.decidedBy, ...((req.taskClass ?? derived?.taskClass) ? { taskClass: (req.taskClass ?? derived?.taskClass) as string } : {}) })) {
     return { task: getBridgeTask(db, taskId), started: false };
   }
   const includeContext = task.contextConfirmed && (!info.external || consent?.includeContext === true);
 
   try {
-    if (chosen.kind === 'service') startService(rt, getBridgeTask(db, taskId), chosen.id.slice('service:'.length));
+    if (chosen.kind === 'service') startService(rt, getBridgeTask(db, taskId), chosen.id.slice('service:'.length), derived ?? undefined);
     else if (chosen.id === 'native') await startNative(rt, getBridgeTask(db, taskId));
     else await startAcp(rt, getBridgeTask(db, taskId), chosen.id as DevAgent, model, includeContext);
   } catch (err) {
@@ -330,17 +350,26 @@ async function dispatchWhenKandevIsReady(rt: BridgeRuntime, projectId: string, s
 const activeServices = new Map<string, AbortController>();
 
 /** Runs a registered deterministic service in the background; status, cancel and the deadline reuse the bridge lifecycle. */
-function startService(rt: BridgeRuntime, task: BridgeTaskRecord, serviceId: string): void {
+function startService(rt: BridgeRuntime, task: BridgeTaskRecord, serviceId: string, derived?: { reason: string; args: Record<string, unknown> }): void {
   const svc = rt.services?.get(serviceId);
   if (!svc) throw new CoreError('invalid_request', `unknown service '${serviceId}'`);
   const ac = new AbortController();
   activeServices.set(task.id, ac);
   const base: BridgeTaskResult = { verification: null, evidence: null, changedFiles: [], commit: null, pendingApprovals: [], activity: [], timeline: [] };
   const log = (event: string, text: string) => ({ at: new Date().toISOString(), event, text });
-  recordBridgeStatus(rt.db, task.id, 'running', `${svc.label} is running (no model involved).`);
+  recordBridgeStatus(rt.db, task.id, 'running', derived ? `Routed to ${svc.label}, no model involved: ${derived.reason}.` : `${svc.label} is running (no model involved).`);
   void (async () => {
     try {
-      const out = await svc.run({ args: parseServiceArgs(task.instruction), signal: ac.signal, db: rt.db });
+      const host: ServiceHost = {
+        kandevRunning: () => rt.kandev.healthy(),
+        runWorkflow: async (workflowId, input) => {
+          const { runWorkflow } = await import('./workflowRouter');
+          const def = BUILTIN_WORKFLOWS.find(w => w.id === workflowId);
+          if (!def) throw new Error(`unknown workflow '${workflowId}'`);
+          return runWorkflow(rt, getPairing(rt.db, task.pairingId), def, input, { runId: `wf-${task.id}`.slice(0, 60), decidedBy: 'bridge:intent-router' });
+        },
+      };
+      const out = await svc.run({ args: derived?.args ?? parseServiceArgs(task.instruction), signal: ac.signal, db: rt.db, host });
       if (ac.signal.aborted || getBridgeTask(rt.db, task.id).control === 'cancelled') return;
       recordBridgeStatus(rt.db, task.id, 'completed', out.summary, {
         ...base, verification: 'independent', evidence: redactPaths(JSON.stringify(out.evidence)).slice(0, 3_000), changedFiles: out.files ?? [],
