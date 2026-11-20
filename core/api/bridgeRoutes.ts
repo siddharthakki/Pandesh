@@ -169,7 +169,11 @@ export function registerBridgeRoutes(router: Router<ApiContext, ApiResult>, opti
     caller(ctx);
     const root = process.env.KARKEDIKHA_DESKTOP_PRODUCT_ROOT?.trim();
     const exe = root ? path.join(root, 'electron', 'Pandesh.exe') : null;
-    return ok(200, { exe: exe && fs.existsSync(exe) ? exe : null });
+    // The packaged executable is Electron itself: it needs the app directory as its first argument, or the relaunch never reaches
+    // the single-instance handler (found on the Build 187 install: Open in Pandesh did nothing).
+    const appDir = root ? path.join(root, 'app') : null;
+    const found = exe && fs.existsSync(exe) && appDir && fs.existsSync(appDir);
+    return ok(200, { exe: found ? exe : null, args: found ? [appDir] : [] });
   });
 
   // --- tasks ---
