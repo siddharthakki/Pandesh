@@ -91,7 +91,7 @@ export function MissionDock({ conversationId, narrow, onReport }: { conversation
             {b.conversationId && <button type="button" className="btn small" onClick={() => void openTask(b)}>Open</button>}
             {BRIDGE_DONE.has(b.state) && <button type="button" className="ghost-icon" title="Hide this card" aria-label="Hide task card" onClick={() => setHidden({ ...hidden, [b.id]: true })}>×</button>}
           </header>
-          <div className="mission-body"><p className="mission-summary">{b.reason}{b.progress ? ` Latest: ${b.progress}` : ''}{b.verification ? ` Verified (${b.verification}).` : ''}</p>{note?.id === b.id && <p className="mission-note error" role="alert">{note.text}</p>}</div>
+          <div className="mission-body"><p className="mission-summary">{b.reason}{b.progress ? ` Latest: ${b.progress}` : ''}{b.verification === 'independent' ? ' Verified independently.' : b.verification === 'human-reviewed' ? ' Reviewed by a person.' : b.verification === 'worker-only' ? ' Not independently verified (the executor’s own report).' : ''}</p>{note?.id === b.id && <p className="mission-note error" role="alert">{note.text}</p>}</div>
         </section>
       ))}
       {shown.map((m) => {

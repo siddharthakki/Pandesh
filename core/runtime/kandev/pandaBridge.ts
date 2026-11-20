@@ -424,7 +424,14 @@ export async function refreshBridgeTask(rt: BridgeRuntime, taskId: string): Prom
       cancelling: ['running', 'Cancelling.'], completed: ['completed', 'Finished.'], failed: ['failed', 'The attempt failed.'], cancelled: ['cancelled', 'Cancelled.'],
     };
     const [status, detail] = map[attempt.status] ?? ['running', 'Working.'];
-    recordBridgeStatus(db, taskId, task.control === 'cancelled' && isTerminalAttemptStatus(attempt.status) ? 'cancelled' : status, detail);
+    // A finished native task carries what Pandesh actually answered, so a report and the activity view show the outcome and not just "Finished".
+    // It is the model's own answer: labelled worker-only, never "verified".
+    let result: BridgeTaskResult | undefined;
+    if (attempt.status === 'completed' && task.conversationId) {
+      const row = db.get<{ content: string }>("SELECT content FROM conversation_messages WHERE conversationId = ? AND role = 'assistant' ORDER BY seq DESC LIMIT 1", [task.conversationId]);
+      if (row?.content) result = { verification: 'worker-only', evidence: redactPaths(row.content).slice(0, 3_000), changedFiles: [], commit: null, pendingApprovals: [], activity: [], timeline: [] };
+    }
+    recordBridgeStatus(db, taskId, task.control === 'cancelled' && isTerminalAttemptStatus(attempt.status) ? 'cancelled' : status, detail, result);
   }
   return getBridgeTask(db, taskId);
 }

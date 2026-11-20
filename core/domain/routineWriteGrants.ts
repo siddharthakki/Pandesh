@@ -200,11 +200,23 @@ export function verifyGrantRun(db: CoreDatabase, attemptId: string): { uses: num
 export { sha as grantContentDigest };
 
 /** Deterministic counts for a directory listing, so a routine that has to count files never tallies them itself. */
-export function countDirectoryEntries(entries: Array<{ name: string; isFile(): boolean; isDirectory(): boolean }>, includeHidden = false): { fileCount: number; folderCount: number; countNote: string } {
-  const shown = entries.filter((e) => includeHidden || !e.name.startsWith('.'));
+export function countDirectoryEntries(entries: Array<{ name: string; isFile(): boolean; isDirectory(): boolean }>, includeHidden = false): { fileCount: number; folderCount: number; hiddenFileCount: number; hiddenFolderCount: number; countNote: string } {
+  const isHidden = (e: { name: string }) => e.name.startsWith('.');
+  const shown = entries.filter((e) => includeHidden || !isHidden(e));
   const fileCount = shown.filter((e) => e.isFile()).length;
   const folderCount = shown.filter((e) => e.isDirectory()).length;
-  return { fileCount, folderCount, countNote: `Exact counts computed by the tool${includeHidden ? '' : ' (hidden entries excluded)'}: ${fileCount} file(s), ${folderCount} folder(s). Use these numbers; do not count the items yourself.` };
+  // Hidden entries (names starting with ".") are left out of the listing and the counts by default. They exist, so the tool says how
+  // many there are: an answer that says "no other files" while a .gitignore or .git sits next to them would be wrong.
+  const hidden = includeHidden ? [] : entries.filter(isHidden);
+  const hiddenFileCount = hidden.filter((e) => e.isFile()).length;
+  const hiddenFolderCount = hidden.filter((e) => e.isDirectory()).length;
+  const hiddenNote = hidden.length
+    ? ` NOT counted: ${hiddenFileCount} hidden file(s) and ${hiddenFolderCount} hidden folder(s) (names starting with "."). When you report the count, say that hidden entries exist; never say there is nothing else here.`
+    : '';
+  return {
+    fileCount, folderCount, hiddenFileCount, hiddenFolderCount,
+    countNote: `Exact counts computed by the tool${includeHidden ? '' : ' (hidden entries excluded)'}: ${fileCount} file(s), ${folderCount} folder(s).${hiddenNote} Use these numbers; do not count the items yourself.`,
+  };
 }
 
 /**
