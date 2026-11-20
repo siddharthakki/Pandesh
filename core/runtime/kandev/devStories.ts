@@ -57,6 +57,21 @@ export interface DevStorySpec {
   paths?: string[];
   /** KKD-owned acceptance checks. They live on the story in KKD's database, never in a worktree, and the worker never sees them. */
   acceptance?: AcceptanceCheck[];
+  /**
+   * `inspect`: a read-only look at an authorized project. The repoPath is a private clone of it; the worker may read and run
+   * the tests but not change files. KKD verifies nothing changed (in the clone and in the source checkout) and the worker's
+   * final report is the result, labelled worker-only. There is no diff, no integration and no merge.
+   */
+  mode?: 'inspect';
+  inspect?: { projectName: string; sourcePath: string; ref: string; sourceHead: string; sourceStatusSha: string };
+}
+
+/** Fingerprint of a checkout's HEAD and working-tree state (read-only git), used to prove an inspection did not touch it. */
+export function checkoutFingerprint(dir: string): { head: string; statusSha: string } | null {
+  const head = runHardenedGit(['rev-parse', 'HEAD'], { cwd: dir, encoding: 'utf8', windowsHide: true });
+  const status = runHardenedGit(['status', '--porcelain', '--untracked-files=all'], { cwd: dir, encoding: 'utf8', windowsHide: true });
+  if (head.status !== 0 || status.status !== 0) return null;
+  return { head: String(head.stdout).trim(), statusSha: createHash('sha256').update(String(status.stdout)).digest('hex') };
 }
 
 export function devSpec(story: StoryRecord): DevStorySpec | null {
@@ -84,6 +99,9 @@ export interface PlanInput {
     dependsOn?: string[];
     /** Independently prepared checks KKD runs against the worker's result (see storyAcceptance.ts). */
     acceptanceChecks?: unknown[];
+    /** Read-only inspection of an authorized project (see DevStorySpec.mode). */
+    mode?: 'inspect';
+    inspect?: DevStorySpec['inspect'];
   }>;
 }
 
@@ -108,6 +126,7 @@ export function planDevStories(db: CoreDatabase, input: PlanInput): { projectId:
         kind: 'kkd-dev-story', repoPath, baseBranch, integrationBranch, verify: s.verify?.length ? s.verify : input.verify,
         agent: s.agent, model: s.model, paths: s.paths,
         ...(acceptance[s.key].length ? { acceptance: acceptance[s.key] } : {}),
+        ...(s.mode === 'inspect' ? { mode: 'inspect' as const, ...(s.inspect ? { inspect: s.inspect } : {}) } : {}),
       };
       const story = createStory(db, {
         projectId: project.id, title: s.title, description: s.description ?? '', acceptanceCriteria: s.acceptanceCriteria ?? [],
@@ -152,6 +171,14 @@ function overlaps(a: string[] = [], b: string[] = []): string[] {
 }
 
 function workerPrompt(story: StoryRecord, spec: DevStorySpec): string {
+  if (spec.mode === 'inspect') {
+    return [
+      `Task: ${story.title}`,
+      story.description ? `\n${story.description}` : '',
+      '\nThis is a READ-ONLY inspection. Rules: read and search files freely; run the existing tests with single plain commands (for example `npx vitest run <test files>`); do NOT create, edit or delete any file, do NOT commit, push, switch branches, install packages or change any Kandev task state.',
+      'Run commands one at a time (no `&&` chains, no `cd`). When you are done, stop and write the final report as your last message: what you inspected, which tests you ran with their exact results, and each defect you found with file and line, or state plainly that you found none.',
+    ].join('\n');
+  }
   return [
     `Story: ${story.title}`,
     story.description ? `\n${story.description}` : '',
@@ -416,6 +443,9 @@ export function permissionDecision(p: KandevPermission, worktree: string | undef
   if (a.type === 'other' && !a.command && !a.path && /^execute$/i.test(String(a.description ?? p.title ?? '').trim())) {
     return { allow: false, reject: true, reason: 'opaque code-mode "execute" action rejected; use the edit/shell tools so KKD can review each action' };
   }
+  if (spec.mode === 'inspect' && (a.type === 'file_write' || a.type === 'file_edit' || a.type === 'file_delete')) {
+    return { allow: false, reject: true, reason: 'this is a read-only inspection: files may not be created, edited or deleted' };
+  }
   if ((a.type === 'file_write' || a.type === 'file_edit') && a.path && worktree) {
     const target = path.resolve(a.path).toLowerCase();
     const root = path.resolve(worktree).toLowerCase() + path.sep;
@@ -531,6 +561,47 @@ async function sendFeedback(db: CoreDatabase, kandev: KandevClient, storyId: str
   }
 }
 
+/** Files an agent keeps for itself (its own history/cache); never the user's work. */
+const AGENT_OWN_FILES = /(^|\/)\.(?:claude|aider|codex|cline)[^/]*(\/|$)|(^|\/)node_modules(\/|$)/i;
+
+/**
+ * Completes a read-only inspection. KKD checks what it can check itself: the private clone has no change, and the source
+ * checkout's HEAD and working tree are exactly what they were when the task started. The worker's own report (its last message)
+ * is the finding and is labelled worker-only: test results in it are what the worker says it ran, not an independent re-run.
+ */
+async function finishInspection(db: CoreDatabase, kandev: KandevClient, story: StoryRecord, spec: DevStorySpec, taskId: string, worktree: string, sessionId: string): Promise<void> {
+  const changed = changedFiles(worktree, spec.integrationBranch).filter(f => !AGENT_OWN_FILES.test(f.replace(/\\/g, '/')));
+  const src = spec.inspect ? checkoutFingerprint(spec.inspect.sourcePath) : null;
+  const sourceUnchanged = spec.inspect ? Boolean(src && src.head === spec.inspect.sourceHead && src.statusSha === spec.inspect.sourceStatusSha) : null;
+  if (changed.length || sourceUnchanged === false) {
+    walk(db, getStory(db, story.id), ['blocked'], 'the read-only inspection changed files');
+    addComment(db, story.id, { author: DEV_ACTOR, body: `[kkd-dev:needs-human] A read-only inspection changed files: ${changed.slice(0, 10).join(', ') || '(none in the clone)'}${sourceUnchanged === false ? '; the source checkout no longer matches its state at the start' : ''}. Nothing was accepted.` });
+    return;
+  }
+  const messages = await kandev.agentMessages(sessionId, 60).catch(() => []);
+  const prose = messages.filter(m => m.kind === 'message' && m.text.trim().length > 40);
+  const report = (prose[prose.length - 1]?.text ?? '').trim();
+  if (!report) {
+    walk(db, getStory(db, story.id), ['blocked'], 'the worker finished without writing a report');
+    addComment(db, story.id, { author: DEV_ACTOR, body: '[kkd-dev:needs-human] The worker finished without a final report. Retry to ask again.' });
+    return;
+  }
+  const tools = messages.filter(m => m.kind === 'tool_execute').map(m => m.text.replace(/\s+/g, ' ').slice(0, 140));
+  addComment(db, story.id, {
+    author: DEV_ACTOR,
+    body: [
+      `[kkd-dev:inspected] level=worker-only; read-only checked by KKD: no file changed in the clone${spec.inspect ? ` and the source checkout (${spec.inspect.projectName} @ ${spec.inspect.sourceHead.slice(0, 8)}, branch ${spec.inspect.ref}) is exactly as it was` : ''}.`,
+      `Commands the worker ran (${tools.length}): ${tools.slice(-8).join(' | ') || 'none recorded'}`,
+      '--- worker report (its own words; test results are as the worker reported them) ---',
+      report.slice(0, 7_000),
+    ].join('\n'),
+  });
+  walk(db, getStory(db, story.id), ['validation', 'delivery_approval', 'merge_queue'], 'inspection verified read-only');
+  walk(db, getStory(db, story.id), ['done'], 'read-only inspection completed');
+  await kandev.stopTask(taskId, 'KKD completed the inspection').catch(() => { /* already idle */ });
+  await kandev.setTaskState(taskId, 'COMPLETED');
+}
+
 let integrating = false;
 
 /**
@@ -549,6 +620,7 @@ export interface VerifyOptions {
 
 export async function verifyAndIntegrate(db: CoreDatabase, kandev: KandevClient, story: StoryRecord, spec: DevStorySpec, taskId: string, worktree: string, sessionId: string, reviewApproved = false, opts: VerifyOptions = {}): Promise<void> {
   if (!reviewApproved) story = walk(db, story, ['review'], 'worker turn finished; KKD review started');
+  if (spec.mode === 'inspect') return finishInspection(db, kandev, story, spec, taskId, worktree, sessionId);
   const files = changedFiles(worktree, spec.integrationBranch);
   const unsafe = findUnsafeDeliveryPaths(files);
   // Failures since dispatch or since a human last pressed retry.
@@ -676,7 +748,7 @@ export async function reconcileDevStories(db: CoreDatabase, kandev: KandevClient
     const spec = devSpec(story)!;
     const task = await kandev.taskByExternalId(workspaceId, story.id);
     if (!task) continue;
-    const isIntegrated = listComments(db, story.id).some(c => c.body.startsWith('[kkd-dev:integrated]'));
+    const isIntegrated = listComments(db, story.id).some(c => c.body.startsWith('[kkd-dev:integrated]') || c.body.startsWith('[kkd-dev:inspected]'));
     if (task.state === 'COMPLETED' && !isIntegrated) {
       // Something other than KKD (e.g. the worker via Kandev's task MCP) completed it: undo, so dependents stay gated.
       await kandev.setTaskState(task.id, 'REVIEW');
@@ -1409,8 +1481,8 @@ export async function devStoryStatus(db: CoreDatabase, kandev: KandevClient, pro
       id: s.id, title: s.title, agent: devSpec(s)!.agent, status: s.status, phase, waitingReason: waiting,
       dependsOn: deps.map(d => titles.get(d) ?? d), createdAt: s.createdAt, updatedAt: s.updatedAt, kandevTaskId: task?.id ?? null,
       branch: session?.worktree_branch ?? null, commit: last('integrated')?.match(/\] (\w+)/)?.[1] ?? null,
-      evidence: last('integrated') ?? last('awaiting-review') ?? last('verified') ?? last('verify-failed'),
-      verification: verificationOf(last('integrated') ?? last('verified'), s.status === 'done'),
+      evidence: last('integrated') ?? last('inspected') ?? last('awaiting-review') ?? last('verified') ?? last('verify-failed'),
+      verification: verificationOf(last('integrated') ?? last('inspected') ?? last('verified'), s.status === 'done'),
       acceptanceChecks: automatedChecks(devSpec(s)!.acceptance ?? []).length,
       deviceVerification: deviceVerificationOf(s, devSpec(s)!, comments),
       attempts: { failedVerifications: comments.filter(c => c.body.startsWith('[kkd-dev:verify-failed]')).length, maxCorrections: MAX_VERIFY_RETRIES },
@@ -1432,7 +1504,7 @@ export async function devStoryStatus(db: CoreDatabase, kandev: KandevClient, pro
   return { available, counts, stories: views };
 }
 
-const TIMELINE_EVENTS = new Set(['dispatched', 'verify-failed', 'verified', 'integrated', 'awaiting-review', 'needs-human', 'stopped', 'retry', 'reassigned', 'decided', 'device-verified', 'device-failed']);
+const TIMELINE_EVENTS = new Set(['dispatched', 'verify-failed', 'verified', 'integrated', 'inspected', 'awaiting-review', 'needs-human', 'stopped', 'retry', 'reassigned', 'decided', 'device-verified', 'device-failed']);
 
 /** Worktrees and home folders are private to this PC: absolute paths never leave Core in a task detail. */
 function redactPrivatePaths(text: string): string {
