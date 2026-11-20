@@ -20,7 +20,7 @@ describe('tool-backed services', () => {
     const reg = new ServiceRegistry();
     const r = registerToolServices(reg, [path.join(dir, 'root')], () => null);
     expect(r.registered).toEqual([]);
-    expect(r.skipped).toHaveLength(2);
+    expect(r.skipped).toHaveLength(4);
     expect(reg.list()).toHaveLength(0);
   });
 

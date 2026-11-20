@@ -7,11 +7,13 @@ import { openCoreDatabase } from '../db/openCore';
 import type { CoreDatabase } from '../db/connection';
 import { createPairingCode, getBridgeTask, redeemPairingCode, submitBridgeTask, type BridgePairing } from '../domain/pandaBridge';
 import { discoverExecutors, dispatchBridgeTask, type BridgeRuntime, type ExecutorListing } from '../runtime/kandev/pandaBridge';
-import { defaultServiceRegistry } from '../runtime/kandev/bridgeServices';
+import { defaultServiceRegistry, ServiceRegistry } from '../runtime/kandev/bridgeServices';
 import {
   allDeclarations, routeTask, trackRecords, VERIFY_FILE_WORKFLOW, type ExecutorDeclaration, type TrackRecord,
 } from '../runtime/kandev/capabilityRegistry';
 import { planWorkflow, runWorkflow } from '../runtime/kandev/workflowRouter';
+import { EXTRACT_DOCUMENT_WORKFLOW } from '../runtime/kandev/capabilityRegistry';
+import { tailscaleStatusService } from '../runtime/kandev/bridgeToolServices';
 import type { KandevClient } from '../runtime/kandev/kandevClient';
 
 let dir: string; let db: CoreDatabase; let rt: BridgeRuntime; let pairing: BridgePairing;
@@ -128,5 +130,39 @@ describe('workflow router', () => {
     const run = await runWorkflow(rt, pairing, VERIFY_FILE_WORKFLOW, { path: path.join(dir, 'data') }, { runId: 'run-0003', decidedBy: 'test', pollMs: 10 });
     expect(run.status).toBe('failed');
     expect(run.steps).toHaveLength(1);
+  });
+});
+
+describe('workflow fallback and tool services', () => {
+  const mk = (id: string, classes: string[], run: () => Promise<{ summary: string; evidence: Record<string, unknown> }>) =>
+    ({ id, label: id, readOnly: true, taskClasses: classes, roots: [], run });
+  const wf = (extra: Record<string, unknown> = {}) => ({ ...EXTRACT_DOCUMENT_WORKFLOW, ...extra });
+
+  it('runs the OCR fallback as its own task only when the first step failed for the declared reason', async () => {
+    const services = new ServiceRegistry()
+      .register(mk('text', ['document.extract'], async () => { throw new Error('no text layer found (a scan?)'); }))
+      .register(mk('ocr', ['ocr.pdf'], async () => ({ summary: 'ok', evidence: { kind: 'pdf-ocr', chars: 5 } })));
+    const run = await runWorkflow({ ...rt, services }, pairing, wf(), { path: 'x.pdf' }, { runId: 'run-fb-0001', decidedBy: 'test', pollMs: 10 });
+    expect(run.status).toBe('completed');
+    expect(run.steps.map(s => `${s.name}:${s.status}`)).toEqual(['extract:failed', 'extract:fallback:completed']);
+    expect(run.steps[1]!.executor).toBe('service:ocr');
+    expect(getBridgeTask(db, run.steps[0]!.taskId!).status).toBe('failed'); // the failure stays on record
+  });
+
+  it('does not fall back on an unrelated failure', async () => {
+    const services = new ServiceRegistry()
+      .register(mk('text', ['document.extract'], async () => { throw new Error('disk exploded'); }))
+      .register(mk('ocr', ['ocr.pdf'], async () => ({ summary: 'ok', evidence: {} })));
+    const run = await runWorkflow({ ...rt, services }, pairing, wf(), { path: 'x.pdf' }, { runId: 'run-fb-0002', decidedBy: 'test', pollMs: 10 });
+    expect(run.status).toBe('failed');
+    expect(run.steps).toHaveLength(1);
+  });
+
+  it('Tailscale status reports state and counts only, and fails when not running', async () => {
+    const run = (json: string) => tailscaleStatusService(process.execPath, ['-e', `console.log(process.argv[1])`, json]).run({ args: {}, signal: new AbortController().signal });
+    const ok = await run('{"BackendState":"Running","CurrentTailnet":{"Name":"t.example"},"Self":{"DNSName":"pc.t.example.","Online":true,"TailscaleIPs":["100.64.0.1"]},"Peer":{"a":{"Online":true,"TailscaleIPs":["100.64.0.2"]},"b":{"Online":false}}}');
+    expect(ok.evidence).toMatchObject({ backendState: 'Running', self: 'pc.t.example', peers: { total: 2, online: 1 } });
+    expect(JSON.stringify(ok.evidence)).not.toContain('100.64');
+    await expect(run('{"BackendState":"Stopped"}')).rejects.toThrow(/not running/);
   });
 });

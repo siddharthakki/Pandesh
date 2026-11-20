@@ -9,7 +9,7 @@ import { getBridgeTask, submitBridgeTask } from '../../domain/pandaBridge';
 import { CoreError } from '../../domain/errors';
 import { discoverExecutors, dispatchBridgeTask, refreshBridgeTask, type BridgeRuntime } from './pandaBridge';
 import {
-  allDeclarations, parseEvidenceJson, routeTask, trackRecords, type RouteDecision, type WorkflowDefinition,
+  allDeclarations, parseEvidenceJson, routeTask, trackRecords, type RouteDecision, type WorkflowDefinition, type WorkflowStep,
 } from './capabilityRegistry';
 
 export interface WorkflowStepRun {
@@ -54,38 +54,48 @@ export async function runWorkflow(
   const previous: Array<{ name: string; evidence: Record<string, unknown> | null }> = [];
   const deadline = Date.now() + timeoutMs;
 
-  for (let i = 0; i < def.steps.length; i++) {
-    const step = def.steps[i]!;
+  const execute = async (step: WorkflowStep, name: string, i: number): Promise<WorkflowStepRun> => {
     const listing = await discoverExecutors(rt.kandev, { nativeAvailable: Boolean(rt.executor), ...(rt.services ? { services: rt.services } : {}) });
     const route = routeTask(
       { taskClass: step.taskClass, ...(step.readOnly ? { readOnly: true } : {}), ...(step.deterministicOnly ? { deterministicOnly: true } : {}) },
       listing, allDeclarations(rt.services), trackRecords(rt.db),
     );
-    const rec: WorkflowStepRun = { name: step.name, taskClass: step.taskClass, route, taskId: null, executor: route.selected, status: 'refused', detail: route.refusal, verification: null, evidence: null };
+    const rec: WorkflowStepRun = { name, taskClass: step.taskClass, route, taskId: null, executor: route.selected, status: 'refused', detail: route.refusal, verification: null, evidence: null };
     run.steps.push(rec);
-    if (!route.selected) { run.status = 'refused'; return run; }
+    if (!route.selected) return rec;
 
     let task: BridgeTaskRecord;
     try {
-      ({ task } = submitBridgeTask(rt.db, pairing, { clientRequestId: `${opts.runId}-${i + 1}-${step.name}`.slice(0, 100), instruction: step.instruction(input, previous) }));
+      ({ task } = submitBridgeTask(rt.db, pairing, { clientRequestId: `${opts.runId}-${i + 1}-${name}`.slice(0, 100), instruction: step.instruction(input, previous) }));
       rec.taskId = task.id;
       await dispatchBridgeTask(rt, task.id, { executor: route.selected, taskClass: step.taskClass, decidedBy: opts.decidedBy, authority: 'extension' });
     } catch (err) {
-      rec.status = 'refused'; rec.detail = err instanceof CoreError ? err.message : err instanceof Error ? err.message : String(err);
-      run.status = 'refused'; return run;
+      rec.status = 'refused'; rec.detail = err instanceof Error ? err.message : String(err);
+      return rec;
     }
-
     for (;;) {
       task = await refreshBridgeTask(rt, task.id);
       if (TERMINAL.has(task.status)) break;
-      if (Date.now() > deadline) { rec.status = task.status; rec.detail = 'the workflow timeout passed; the task keeps its own deadline and can still be cancelled'; run.status = 'timeout'; return run; }
+      if (Date.now() > deadline) { rec.status = 'timeout'; rec.detail = 'the workflow timeout passed; the task keeps its own deadline and can still be cancelled'; return rec; }
       await new Promise(r => setTimeout(r, pollMs));
     }
     task = getBridgeTask(rt.db, task.id);
     rec.status = task.status; rec.detail = task.statusDetail; rec.verification = task.result?.verification ?? null;
     rec.evidence = parseEvidenceJson(task.result?.evidence ?? null);
+    return rec;
+  };
+
+  for (let i = 0; i < def.steps.length; i++) {
+    const step = def.steps[i]!;
+    let rec = await execute(step, step.name, i);
+    // A declared fallback runs only when the step FAILED with a matching reason; it is another ordinary bridge task, never a silent retry.
+    if (rec.status === 'failed' && step.fallback && step.fallback.when.test(rec.detail ?? '')) {
+      rec = await execute(step.fallback.step, `${step.name}:fallback`, i);
+    }
+    if (rec.status === 'refused') { run.status = 'refused'; return run; }
+    if (rec.status === 'timeout') { run.status = 'timeout'; return run; }
     previous.push({ name: step.name, evidence: rec.evidence });
-    if (task.status !== 'completed') { run.status = 'failed'; return run; }
+    if (rec.status !== 'completed') { run.status = 'failed'; return run; }
   }
   return run;
 }
