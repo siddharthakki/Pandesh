@@ -270,8 +270,32 @@ describe('HTTP surface', () => {
     expect(noConsent.json.error.details.reason).toBe('external_consent_required');
     // the extension claims consent in its own request body: ignored
     const forged = await call('POST', `/v1/bridge/tasks/${id}/dispatch`, { pairing: token, body: { executor: 'claude', consent: { externalTransfer: true, confidentialOverride: true } } });
-    expect(forged.status).toBe(403);
-    expect(getBridgeTask(db, id)).toMatchObject({ status: 'awaiting_executor', executor: null, storyId: null });
+    // A browser may ASK for a cloud agent (the owner decides in Pandesh); its own consent claim is ignored and nothing starts.
+    expect(forged.status).toBe(200);
+    expect(forged.json.started).toBe(false);
+    expect(forged.json.approval).toMatchObject({ executor: 'claude', agentLabel: 'Claude Code' });
+    expect(getBridgeTask(db, id)).toMatchObject({ status: 'awaiting_executor', executor: null, storyId: null, externalConsent: null });
+    expect(listStories(db, { limit: 50 })).toHaveLength(0);
+  });
+
+  it('only the Pandesh app can see approvals and decide them; a paired browser cannot, and cannot approve its own request', async () => {
+    const { token } = await pairOver();
+    const t = await call('POST', '/v1/bridge/tasks', { pairing: token, body: { clientRequestId: 'click-000000002', instruction: 'Build a simple calculator app' } });
+    const id = t.json.taskId as string;
+    const asked = await call('POST', `/v1/bridge/tasks/${id}/dispatch`, { pairing: token, body: { executor: 'claude' } });
+    const requestId = asked.json.approval.requestId as string;
+    expect(asked.json.approval).not.toHaveProperty('project'); // the browser learns only that an approval is pending, not what it contains
+    expect((await call('GET', '/v1/bridge/approvals', { pairing: token })).status).toBe(403);
+    expect((await call('POST', `/v1/bridge/tasks/${id}/approval`, { pairing: token, body: { requestId, decision: 'approve' } })).status).toBe(403);
+    expect((await call('GET', `/v1/bridge/tasks/${id}/audit`, { pairing: token })).status).toBe(403);
+    const list = await call('GET', '/v1/bridge/approvals', { host: true });
+    expect(list.json.approvals.map((a: { taskId: string }) => a.taskId)).toEqual([id]);
+    expect(list.json.approvals[0]).toMatchObject({ agentLabel: 'Claude Code', instruction: 'Build a simple calculator app', accessLevel: expect.stringMatching(/Isolated task workspace/) });
+    // the owner refuses: the task ends, nothing else starts
+    const refused = await call('POST', `/v1/bridge/tasks/${id}/approval`, { host: true, body: { requestId, decision: 'refuse' } });
+    expect(refused.status).toBe(200);
+    expect(getBridgeTask(db, id)).toMatchObject({ status: 'cancelled', executor: null, storyId: null });
+    expect((await call('GET', `/v1/bridge/tasks/${id}/audit`, { host: true })).json.approvalEvents.map((e: { event: string }) => e.event)).toEqual(['requested', 'refused']);
     expect(listStories(db, { limit: 50 })).toHaveLength(0);
   });
 
