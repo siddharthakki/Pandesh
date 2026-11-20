@@ -8,6 +8,8 @@
  * - the Pandesh host (verified host token): creates pairing codes, revokes pairings, sees every task, and is the only
  *   caller whose consent counts for an external executor.
  */
+import * as fs from 'node:fs';
+import * as path from 'node:path';
 import type { Router } from './router';
 import type { ApiContext, ApiResult } from './context';
 import { CoreError } from '../domain/errors';
@@ -20,6 +22,7 @@ import {
   cancelBridgeTask, discoverExecutors, dispatchBridgeTask, pauseBridgeTask, refreshBridgeTask, resumeBridgeTask, type BridgeRuntime,
 } from '../runtime/kandev/pandaBridge';
 import { bridgeServices } from '../runtime/kandev/bridgeServices';
+import { activityItem } from '../runtime/kandev/bridgeActivity';
 import { allDeclarations, BUILTIN_WORKFLOWS, routeTask, trackRecords } from '../runtime/kandev/capabilityRegistry';
 import { planWorkflow, runWorkflow } from '../runtime/kandev/workflowRouter';
 import { newId } from '../domain/ids';
@@ -148,6 +151,24 @@ export function registerBridgeRoutes(router: Router<ApiContext, ApiResult>, opti
     const runId = typeof b.runId === 'string' && /^[\w.:-]{6,60}$/.test(b.runId) ? b.runId : newId('wfrun');
     const run = await runWorkflow(runtime(ctx), c.pairing, workflowById(match.params.id), input, { runId, decidedBy: `extension:${c.pairing.id}` });
     return ok(200, run);
+  });
+
+  // --- unified activity: the host (Pandesh UI) sees every relayed task in one list, in the same vocabulary as missions ---
+  router.get('/v1/bridge/activity', (ctx) => {
+    requireHost(ctx);
+    const labels = new Map(listPairings(ctx.db).map(p => [p.id, p.label]));
+    const items = listBridgeTasks(ctx.db, { limit: 50 }).map(t => activityItem(ctx.db, t, labels.get(t.pairingId) ?? 'Browser'));
+    const live = (i: { state: string }) => !['completed', 'failed', 'cancelled'].includes(i.state);
+    items.sort((a, b) => (Number(live(b)) - Number(live(a))) || b.createdAt.localeCompare(a.createdAt));
+    return ok(200, { items });
+  });
+  // Where the running Pandesh application lives, so "Open in Pandesh" works without per-install configuration. The Core
+  // inherits this from the desktop host that started it; nothing is guessed from the file system.
+  router.get('/v1/bridge/app-target', (ctx) => {
+    caller(ctx);
+    const root = process.env.KARKEDIKHA_DESKTOP_PRODUCT_ROOT?.trim();
+    const exe = root ? path.join(root, 'electron', 'Pandesh.exe') : null;
+    return ok(200, { exe: exe && fs.existsSync(exe) ? exe : null });
   });
 
   // --- tasks ---

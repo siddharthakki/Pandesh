@@ -77,8 +77,18 @@ const OPERATIONS = {
   // Brings the Pandesh window to the task. Pandesh is single-instance, so a second launch with this argument is handed to the running app.
   open: async (cfg, m) => {
     need(ID.test(String(m.conversationId)), 'conversationId');
-    if (!cfg.pandeshExe || !fs.existsSync(cfg.pandeshExe)) return { ok: false, code: 'app_not_found', message: 'The Pandesh application path is not configured for the browser bridge.' };
-    spawn(cfg.pandeshExe, [`--panda-open=${m.conversationId}`], { detached: true, stdio: 'ignore' }).unref();
+    // Configured path first; otherwise ask the running Core where its desktop application lives (it inherits that from the app
+    // that started it), so "Open in Pandesh" needs no per-install setup. The running app is focused through its single-instance
+    // handler, which navigates to this conversation.
+    let exe = cfg.pandeshExe && fs.existsSync(cfg.pandeshExe) ? cfg.pandeshExe : null;
+    if (!exe) {
+      const t = await call(cfg, 'GET', '/v1/bridge/app-target', { pairing: m.token });
+      if (!t.ok && t.code === 'core_unavailable') return t;
+      const found = t.ok && t.data && typeof t.data.exe === 'string' ? t.data.exe : null;
+      exe = found && fs.existsSync(found) ? found : null;
+    }
+    if (!exe) return { ok: false, code: 'app_not_found', message: 'Pandesh is running, but its application path is unknown. Open Pandesh from its shortcut; the task is in its activity list.' };
+    spawn(exe, [`--panda-open=${m.conversationId}`], { detached: true, stdio: 'ignore' }).unref();
     return { ok: true, data: { opened: true } };
   },
 };

@@ -5,6 +5,8 @@ describe('interactive lane', () => {
   it('classifies chat as interactive and coding, autonomous and scheduled work as background', () => {
     expect(classifyAttemptLane({ kind: 'baat_kar', clientId: 'desktop' })).toBe('interactive');
     expect(classifyAttemptLane({ kind: 'saath_kar' })).toBe('background');
+    expect(classifyAttemptLane({ kind: 'saath_kar', clientId: 'panda-bridge' })).toBe('interactive');
+    expect(classifyAttemptLane({ kind: 'saath_kar', clientId: 'core:scheduler' })).toBe('background');
     expect(classifyAttemptLane({ kind: 'karke_dikha' })).toBe('background');
     expect(classifyAttemptLane({ kind: 'baat_kar', clientId: 'core:scheduler' })).toBe('background');
   });
