@@ -50,7 +50,7 @@ function checkAbort(signal: AbortSignal) { if (signal.aborted) throw new Error('
 /** Native filesystem read-only inspection: stat + SHA-256 (+ directory listing). */
 export function fsInspectService(roots: string[]): BridgeService {
   return {
-    id: 'fs.inspect', label: 'Filesystem inspect (read-only)', readOnly: true, taskClasses: ['filesystem.inspect'], roots,
+    id: 'fs.inspect', label: 'Filesystem inspect (read-only)', readOnly: true, taskClasses: ['filesystem.inspect', 'filesystem.list'], roots,
     async run({ args, signal }) {
       const p = resolveInsideRoots(args.path, roots);
       const st = fs.statSync(p);
