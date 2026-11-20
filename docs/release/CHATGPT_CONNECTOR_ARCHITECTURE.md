@@ -71,6 +71,23 @@ Done, against the isolated packaged Build 188 on port 3962 with the gateway on 3
 3. Creating the connector in ChatGPT (workspace permission, plan) and testing it, including voice mode.
 4. The single unresolved technical risk: **where ChatGPT's browser-side OAuth redirect lands.** The authorize page is opened by the owner's browser, which runs on this PC, so `http://127.0.0.1:3973/authorize` works for it, but the metadata advertises one `PANDESH_MCP_PUBLIC_URL`. If the tunnel passes OAuth discovery only, the token endpoint (called by ChatGPT's servers) must be reachable through the tunnel path while the authorize endpoint may be loopback. This needs one live test. The fallback is the documented public-HTTPS-proxy option with the same gateway, which needs a separate approval because it exposes an endpoint.
 
+## 6a. Finding 2026-11-20: OAuth through the tunnel (live test, isolated Build 188)
+
+**Symptom.** ChatGPT: "Couldn't discover OAuth settings", then "The MCP server denied access". Tunnel healthy; ChatGPT's `server/discover` reached `main` and got the intended 401; 4 commands hit the `harpoon` channel and were refused (`unsupported_channel`, harpoon disabled).
+
+**Cause: configuration, not a tunnel limit.** Sources: `tunnel-client help oauth`, OpenAI's tunnel guide, `openai/tunnel-client` docs/configuration.md and connectors.md, and live client state.
+- Discovery (401 challenge, protected-resource metadata, authorization-server metadata) is run by tunnel-client on this PC. It worked (`oauth: complete`).
+- Endpoints in the metadata are then handled in one of two ways. An endpoint on an **approved HTTPS forward origin** (`--harpoon.oauth-forward-origin`, HTTPS only, exact scheme/host/port) is rewritten to a `harpoon://` shim, so `/register` and `/token` POSTs travel **through the tunnel** to the local server. Any other http(s) endpoint is "called by the product OAuth caller" directly, which cannot reach `http://127.0.0.1`.
+- `authorization_endpoint` is never rewritten: the owner's browser goes to it directly, so a loopback URL is correct there.
+- My gateway advertised `http://127.0.0.1:3973/...` for everything and no forward origin was approved. (OpenAI's own `dev mcp-stub` advertises the same loopback http URLs, so the advertisement alone was not the defect; the missing HTTPS forward origin was.)
+- The flag rejects `http://` origins even with `--harpoon.allow-plaintext-http` (verified with `doctor`), so the endpoint must be HTTPS.
+
+**Fix (smallest, off by default).** `PANDESH_MCP_TLS_PORT=3974`: the gateway also listens with TLS on `127.0.0.1:3974` using a self-signed leaf (SAN `127.0.0.1`, CA:FALSE, 90 days, key in the isolated profile, ACL limited to the owner). MCP, metadata, `/register`, `/token` are served there; issuer = `https://127.0.0.1:3974`. The plain listener on 3973 then serves only `/authorize` and `/healthz`. tunnel-client runs with `--ca-bundle <that cert>`, `--mcp.server-url url=https://127.0.0.1:3974/mcp`, `--harpoon.oauth-forward-origin https://127.0.0.1:3974`. No no-auth path, no public listener, no system trust-store change, no permission change.
+
+**Evidence (without ChatGPT, scratch ports 3983/3984, then removed).** Strict-TLS client: connection without the pinned cert is refused; PRMD `resource`/`authorization_servers` and AS `issuer` all equal `https://127.0.0.1:3974`-origin (RFC 8414 §3.3, RFC 9728); only S256 advertised; DCR accepts the ChatGPT redirect and refuses a non-HTTPS one; `/token` returns `invalid_grant` with `Cache-Control: no-store` for a bad code; the plain listener returns 404 for `/mcp`, `/token`, `/register` and metadata. `tunnel-client doctor`: with `--ca-bundle` all checks pass (MCP 401 reachable, OAuth metadata 200 over HTTPS); without it, `x509: certificate signed by unknown authority`, so verification is not disabled. **Not yet verified:** ChatGPT completing the flow, in particular whether it accepts an `http://127.0.0.1` authorization endpoint beside an HTTPS issuer. Needs one live attempt by the owner.
+
+**If ChatGPT rejects that authorization endpoint,** the next step (needs approval) is to serve `/authorize` over the same HTTPS origin and let the owner's browser trust that certificate once; still no public exposure.
+
 ## 7. Decisions for the owner
 
 - C1. Approve creating a tunnel and runtime key on your OpenAI Platform organization, and downloading `tunnel-client` from `github.com/openai/tunnel-client/releases` (I would check its hash and publisher first and run it only with `--mcp-server-url http://127.0.0.1:3973/mcp`).
