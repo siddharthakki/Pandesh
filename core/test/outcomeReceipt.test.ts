@@ -103,7 +103,7 @@ describe('buildOutcomeReceipt', () => {
     expect(receipt.independentlyReviewed).toBe(true);
     // Operations
     const ops = Object.fromEntries(receipt.operations.map((o) => [o.label, o.count]));
-    expect(ops['files changed']).toBe(2);
+    expect(ops['files written']).toBe(2);
     expect(ops['tests passed']).toBe(1);
     expect(ops['checks run']).toBe(1);
     // Artifacts

@@ -26,6 +26,7 @@ import { detectGpu, gpuLaneLimit, type GpuInfo } from '../hardwareCapacity';
 import type { RuntimeExecutor } from '../executor';
 import { KandevClient, KandevUnavailableError } from './kandevClient';
 import { parseServiceArgs, type ServiceRegistry } from './bridgeServices';
+import { allDeclarations, routeTask, trackRecords } from './capabilityRegistry';
 import {
   AGENT_IDS, devSpec, devStoryDetail, dispatchDevStories, planDevStories, retryDevStory, stopDevStory, usesLocalGpu, type DevAgent,
 } from './devStories';
@@ -197,6 +198,10 @@ export interface DispatchRequest {
   model?: string | null;
   consent?: BridgeTransferConsent;
   decidedBy: string;
+  /** What kind of work this is. With `auto` the capability registry picks the executor for it; it is also recorded so reliability is demonstrated per class. */
+  taskClass?: string;
+  /** `auto` only: allow external executors to be considered (the transfer-consent gate still applies). */
+  allowExternal?: boolean;
   /** What the caller is allowed to authorise. An extension can never grant an external transfer. */
   authority: 'host' | 'extension';
 }
@@ -237,7 +242,11 @@ export async function dispatchBridgeTask(rt: BridgeRuntime, taskId: string, req:
   if (req.executor === 'auto') {
     // Automatic routing is only ever offered when the user selected it, and only among local executors.
     routing = 'auto';
-    chosen = chooseAuto(listing) ?? undefined;
+    if (req.taskClass) {
+      const decision = routeTask({ taskClass: req.taskClass, allowExternal: req.allowExternal === true }, listing, allDeclarations(rt.services), trackRecords(db));
+      chosen = decision.selected ? listing.executors.find(e => e.id === decision.selected) : undefined;
+      if (!chosen) throw new CoreError('invalid_request', `automatic routing: ${decision.refusal ?? 'no executor selected'}`);
+    } else chosen = chooseAuto(listing) ?? undefined;
     if (!chosen) throw new CoreError('invalid_request', 'automatic routing found no available local executor; choose one explicitly');
   } else {
     chosen = listing.executors.find(e => e.id === req.executor);
@@ -246,8 +255,13 @@ export async function dispatchBridgeTask(rt: BridgeRuntime, taskId: string, req:
     if (!chosen.available) throw new CoreError('conflict', `${chosen.label} is not available: ${chosen.reason ?? 'unavailable'}`);
   }
   const info = transferInfo(chosen.id, model);
+  if (routing === 'auto' && info.external) {
+    // A routed (not hand-picked) external executor still needs the host's explicit consent for this task.
+    const decision = evaluateTransferPolicy(task, info, consent);
+    if (!decision.allowed) throw new CoreError('forbidden', decision.message, { reason: decision.code });
+  }
 
-  if (!claimBridgeDispatch(db, taskId, { executor: chosen.id, model, routing, consent: info.external ? (consent ?? null) : null, grantedBy: req.decidedBy })) {
+  if (!claimBridgeDispatch(db, taskId, { executor: chosen.id, model, routing, consent: info.external ? (consent ?? null) : null, grantedBy: req.decidedBy, ...(req.taskClass ? { taskClass: req.taskClass } : {}) })) {
     return { task: getBridgeTask(db, taskId), started: false };
   }
   const includeContext = task.contextConfirmed && (!info.external || consent?.includeContext === true);

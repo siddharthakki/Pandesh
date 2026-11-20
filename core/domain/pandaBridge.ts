@@ -378,7 +378,7 @@ export function setBridgeControl(db: CoreDatabase, taskId: string, control: Brid
  * Claims the right to dispatch. Exactly one caller wins; a retry, a double click or a second browser sees `false`
  * and must not start another execution.
  */
-export function claimBridgeDispatch(db: CoreDatabase, taskId: string, routing: { executor: string; model: string | null; routing: 'explicit' | 'auto'; consent: BridgeTransferConsent | null; grantedBy: string }): boolean {
+export function claimBridgeDispatch(db: CoreDatabase, taskId: string, routing: { executor: string; model: string | null; routing: 'explicit' | 'auto'; consent: BridgeTransferConsent | null; grantedBy: string; taskClass?: string }): boolean {
   const now = nowIso();
   const res = db.run(
     `UPDATE bridge_tasks SET status = 'dispatching', statusDetail = ?, executor = ?, model = ?, routing = ?, externalConsent = ?, updatedAt = ?
@@ -386,7 +386,7 @@ export function claimBridgeDispatch(db: CoreDatabase, taskId: string, routing: {
     [`Starting ${routing.executor}.`, routing.executor, routing.model, routing.routing, routing.consent ? JSON.stringify({ ...routing.consent, grantedBy: routing.grantedBy, grantedAt: now }) : null, now, taskId],
   );
   const won = Number(res.changes) === 1;
-  if (won) addCheckpoint(db, taskId, 'dispatching', `Starting ${routing.executor}${routing.model ? ` (${routing.model})` : ''}.`);
+  if (won) addCheckpoint(db, taskId, 'dispatching', `Starting ${routing.executor}${routing.model ? ` (${routing.model})` : ''}.`, routing.taskClass ? { taskClass: routing.taskClass } : undefined);
   return won;
 }
 

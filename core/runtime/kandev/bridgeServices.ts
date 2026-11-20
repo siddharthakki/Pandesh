@@ -15,6 +15,8 @@ export interface BridgeService {
   label: string;
   /** Read-only services never write; anything else must be registered explicitly by the host. */
   readOnly: boolean;
+  /** Task classes this service handles; the capability registry routes by them. */
+  taskClasses?: string[];
   /** Filesystem roots this service may touch. Empty = no filesystem access. */
   roots: string[];
   run(ctx: ServiceContext): Promise<ServiceOutput>;
@@ -45,7 +47,7 @@ function checkAbort(signal: AbortSignal) { if (signal.aborted) throw new Error('
 /** Native filesystem read-only inspection: stat + SHA-256 (+ directory listing). */
 export function fsInspectService(roots: string[]): BridgeService {
   return {
-    id: 'fs.inspect', label: 'Filesystem inspect (read-only)', readOnly: true, roots,
+    id: 'fs.inspect', label: 'Filesystem inspect (read-only)', readOnly: true, taskClasses: ['filesystem.inspect'], roots,
     async run({ args, signal }) {
       const p = resolveInsideRoots(args.path, roots);
       const st = fs.statSync(p);
@@ -69,7 +71,7 @@ export function fsInspectService(roots: string[]): BridgeService {
 export function verifyHashWorkflow(roots: string[]): BridgeService {
   const inner = fsInspectService(roots);
   return {
-    id: 'workflow.verify-hash', label: 'Workflow: verify file hash', readOnly: true, roots,
+    id: 'workflow.verify-hash', label: 'Workflow: verify file hash', readOnly: true, taskClasses: ['integrity.verify'], roots,
     async run(ctx) {
       const expected = String(ctx.args.sha256 ?? '').toLowerCase();
       if (!/^[0-9a-f]{64}$/.test(expected)) throw new Error('args.sha256 must be a 64-char hex digest');
