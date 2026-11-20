@@ -149,6 +149,8 @@ export interface WorkflowStep {
   deterministicOnly?: boolean;
   /** The instruction for this step, built from the workflow input and the evidence of earlier steps. */
   instruction(input: Record<string, unknown>, previous: Array<{ name: string; evidence: Record<string, unknown> | null }>): string;
+  /** Runs instead of this step, as its own bridge task, only when this step failed and its failure detail matches `when`. */
+  fallback?: { when: RegExp; step: Omit<WorkflowStep, 'fallback'> };
 }
 
 export interface WorkflowDefinition { id: string; label: string; steps: WorkflowStep[] }
@@ -173,4 +175,17 @@ export const VERIFY_FILE_WORKFLOW: WorkflowDefinition = {
   ],
 };
 
-export const BUILTIN_WORKFLOWS: WorkflowDefinition[] = [VERIFY_FILE_WORKFLOW];
+/** Extract the text of a PDF: the text layer first, OCR of the page images only when the PDF has no text layer. */
+export const EXTRACT_DOCUMENT_WORKFLOW: WorkflowDefinition = {
+  id: 'extract-document', label: 'Extract text from a PDF (text layer, else OCR)',
+  steps: [{
+    name: 'extract', taskClass: 'document.extract', readOnly: true, deterministicOnly: true,
+    instruction: (i) => JSON.stringify({ path: i.path }),
+    fallback: {
+      when: /no text layer/i,
+      step: { name: 'ocr', taskClass: 'ocr.pdf', readOnly: true, deterministicOnly: true, instruction: (i) => JSON.stringify({ path: i.path, pages: i.pages, lang: i.lang }) },
+    },
+  }],
+};
+
+export const BUILTIN_WORKFLOWS: WorkflowDefinition[] = [VERIFY_FILE_WORKFLOW, EXTRACT_DOCUMENT_WORKFLOW];
