@@ -678,3 +678,11 @@ button.tl-row:hover { background: var(--raised); }
 .mh-log::before { content: ""; position: absolute; left: -20px; top: 6px; width: 7px; height: 7px; background: var(--verified); border-radius: 50%; }
 .mh-table td { overflow-wrap: anywhere; }
 .mh-table td:nth-child(2) { max-width: 46vw; }
+
+/* External-agent approval card (Missions dock): the facts the owner decides on. */
+.approval-facts { display: grid; grid-template-columns: max-content 1fr; gap: 6px 14px; margin: 8px 0; font-size: 0.92em; }
+.approval-facts dt { color: var(--muted, #6b7280); font-weight: 600; }
+.approval-facts dd { margin: 0; min-width: 0; }
+.approval-facts ul { margin: 0; padding-left: 18px; }
+.approval-instruction { margin: 0; white-space: pre-wrap; word-break: break-word; max-height: 9em; overflow: auto; padding: 6px 8px; border-radius: 8px; background: color-mix(in srgb, currentColor 6%, transparent); font: inherit; }
+.approval-override { display: flex; gap: 8px; align-items: flex-start; margin: 6px 0; font-size: 0.92em; }
