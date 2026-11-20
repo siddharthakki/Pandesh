@@ -6,6 +6,7 @@
 import * as crypto from 'node:crypto';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
+import { registerToolServices } from './bridgeToolServices';
 
 export interface ServiceContext { args: Record<string, unknown>; signal: AbortSignal; }
 export interface ServiceOutput { summary: string; evidence: Record<string, unknown>; files?: string[]; }
@@ -100,5 +101,7 @@ export function bridgeServices(dataDir: string): ServiceRegistry {
   if (cachedRegistry) return cachedRegistry;
   const root = path.join(dataDir, 'panda-workspaces');
   fs.mkdirSync(root, { recursive: true });
-  return (cachedRegistry = defaultServiceRegistry([root]));
+  const reg = defaultServiceRegistry([root]);
+  registerToolServices(reg, [root]);
+  return (cachedRegistry = reg);
 }
