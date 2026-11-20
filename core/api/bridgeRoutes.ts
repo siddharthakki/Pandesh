@@ -67,7 +67,8 @@ const ok = (status: number, payload: unknown): ApiResult => ({ status, body: pay
 export function registerBridgeRoutes(router: Router<ApiContext, ApiResult>, options: BridgeRouteOptions): void {
   const kandev = options.kandev ?? new KandevClient();
   const runtime = (ctx: ApiContext): BridgeRuntime => ({ db: ctx.db, kandev, dataDir: options.dataDir, executor: options.executor, services: bridgeServices(options.dataDir) });
-  const view = (ctx: ApiContext, task: BridgeTaskRecord) => toBridgeTaskView(task, listCheckpoints(ctx.db, task.id));
+  // The browser card shows the same real state, reason, active time and heartbeat as Pandesh's own activity list.
+  const view = (ctx: ApiContext, task: BridgeTaskRecord) => ({ ...toBridgeTaskView(task, listCheckpoints(ctx.db, task.id)), activity: activityItem(ctx.db, task, 'Browser') });
 
   // --- pairing ---
   router.post('/v1/bridge/pairing-codes', (ctx) => {

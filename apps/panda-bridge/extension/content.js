@@ -13,7 +13,7 @@
   const TERMINAL = new Set(['completed', 'cancelled']);
   const POLL_MS = 3000;
 
-  const state = { paired: false, label: null, pandaMode: false, busy: false, tasks: new Map(), mine: new Set(), executors: [], pending: null };
+  const state = { paired: false, label: null, pandaMode: false, busy: false, tasks: new Map(), mine: new Set(), executors: [], pending: null, choice: new Map() };
 
   const send = (message) => new Promise((resolve) => {
     try { chrome.runtime.sendMessage(message, (r) => resolve(chrome.runtime.lastError ? { ok: false, message: chrome.runtime.lastError.message } : (r || { ok: false, message: 'no answer' }))); }
@@ -129,7 +129,7 @@
       .grow { flex:1 1 auto; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
       .chip { font-size:12px; padding:1px 8px; border-radius:999px; background:#e5e7eb; color:#374151; }
       .chip.completed { background:#16a34a; color:#fff; } .chip.running,.chip.verifying,.chip.dispatching { background:#2563eb; color:#fff; }
-      .chip.awaiting_approval,.chip.needs_attention,.chip.paused { background:#d97706; color:#fff; } .chip.failed,.chip.cancelled { background:#b91c1c; color:#fff; }
+      .chip.awaiting_approval,.chip.waiting_for_approval,.chip.needs_attention,.chip.paused,.chip.waiting_for_model,.chip.waiting_for_executor { background:#d97706; color:#fff; } .chip.failed,.chip.cancelled,.chip.stalled { background:#b91c1c; color:#fff; }
       .detail { margin-top:4px; opacity:.85; white-space:pre-wrap; word-break:break-word; }
       select { font:inherit; padding:3px 6px; border-radius:8px; }
       .modal { position:fixed; inset:0; background:rgba(0,0,0,.45); display:flex; align-items:center; justify-content:center; z-index:2147483647; }
@@ -173,6 +173,8 @@
 
   function renderCards() {
     const cards = $('cards');
+    // Never rebuild the cards under an open/focused dropdown: the popup would close before a choice could be made.
+    if (shadow.activeElement && shadow.activeElement.tagName === 'SELECT') return;
     cards.replaceChildren();
     // Work in progress always comes first; finished work follows. A burst of newer, cancelled tasks never hides a running one.
     const newestFirst = (a, b) => b.createdAt.localeCompare(a.createdAt);
@@ -194,29 +196,42 @@
 
   function card(t) {
     const row = el('div', { className: 'row' },
-      el('span', { className: 'chip ' + t.status, textContent: t.status.replace(/_/g, ' ') }),
+      el('span', { className: 'chip ' + (t.activity && t.activity.state ? t.activity.state : t.status), textContent: t.activity && t.activity.stateLabel ? t.activity.stateLabel : t.status.replace(/_/g, ' ') }),
       el('span', { className: 'grow', textContent: t.instruction.replace(/\s+/g, ' ').slice(0, 90), title: t.instruction.slice(0, 400) }));
     const box = el('div', { className: 'card' }, row);
-    if (t.statusDetail) box.append(el('div', { className: 'detail', textContent: t.statusDetail }));
+    const act = t.activity;
+    const dur = (n) => (n == null ? '' : n >= 3600000 ? `${Math.floor(n / 3600000)} h ${Math.round((n % 3600000) / 60000)} min` : n >= 60000 ? `${Math.round(n / 60000)} min` : `${Math.round(n / 1000)} s`);
+    if (act && act.reason) box.append(el('div', { className: 'detail', textContent: act.reason }));
+    else if (t.statusDetail) box.append(el('div', { className: 'detail', textContent: t.statusDetail }));
+    if (act && !TERMINAL.has(t.status) && (act.elapsedMs != null || act.heartbeatAgeMs != null)) {
+      box.append(el('div', { className: 'detail', textContent: [act.executor ? `Executor: ${act.executor}` : '', act.elapsedMs != null ? `Active ${dur(act.elapsedMs)}` : '', act.heartbeatAgeMs != null ? `last heartbeat ${dur(act.heartbeatAgeMs)} ago` : ''].filter(Boolean).join(' · ') }));
+    }
     const actions = el('div', { className: 'row' });
     actions.style.marginTop = '6px';
 
     if (t.status === 'awaiting_executor') {
+      // The executor is the person's explicit choice: nothing is preselected, a remembered choice survives card rebuilds, and if the
+      // chosen executor stops being available the card says so and waits; it never substitutes another one (e.g. native -> OpenCode).
       const sel = el('select');
+      sel.append(el('option', { value: '', textContent: 'Choose an executor…' }));
       for (const e of state.executors) {
         const o = el('option', { value: e.id, textContent: e.label + (e.external ? ' — cloud (approve in Pandesh)' : ''), disabled: !e.available || !e.dispatchable || e.external });
         sel.append(o);
       }
-      if (![...sel.options].some((o) => !o.disabled)) sel.append(el('option', { textContent: 'No local executor available', disabled: true }));
-      const first = [...sel.options].find((o) => !o.disabled);
-      if (first) sel.value = first.value;
-      const start = el('button', { className: 'primary', textContent: 'Start', onclick: async () => {
+      const kept = state.choice.get(t.id);
+      const wanted = kept ? [...sel.options].find((o) => o.value === kept) : null;
+      const usable = Boolean(wanted && !wanted.disabled);
+      if (usable) sel.value = kept;
+      else if (kept) sel.options[0].textContent = `${kept} is not available now — choose another`;
+      const start = el('button', { className: 'primary', textContent: 'Start', disabled: !usable, onclick: async () => {
+        if (!sel.value) { note('Choose an executor first.', true); return; }
         start.disabled = true;
         const r = await send({ op: 'dispatch', taskId: t.id, executor: sel.value });
         if (!r.ok) note(r.message || 'Could not start the task.', true); else upsert(r.data.task);
-        start.disabled = false;
+        start.disabled = !sel.value;
         renderCards();
       } });
+      sel.addEventListener('change', () => { state.choice.set(t.id, sel.value); start.disabled = !sel.value; });
       actions.append(sel, start);
     }
     if (['running', 'awaiting_approval', 'verifying', 'needs_attention'].includes(t.status) && t.executor && t.executor !== 'native') {

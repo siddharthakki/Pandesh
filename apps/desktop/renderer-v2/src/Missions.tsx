@@ -1,7 +1,15 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { api, errorText, onDesktopEvent } from './bridge';
 import { elapsed } from './ui';
-import { describeStep, missionHeadline, missionProgress, visibleMissions, type MissionView, type StepView } from './missionModel';
+import { describeStep, missionActiveMs, missionHeadline, missionHeartbeatMs, missionProgress, visibleMissions, type MissionView, type StepView } from './missionModel';
+
+/** One task relayed from the browser (Panda bridge), as Core's activity feed reports it. Same vocabulary as missions. */
+export interface BridgeActivityItem {
+  id: string; origin: { client: string; title: string | null; via: string | null }; instruction: string; executor: string | null;
+  state: string; stateLabel: string; reason: string; progress: string | null; elapsedMs: number | null; heartbeatAgeMs: number | null;
+  verification: string | null; conversationId: string | null; createdAt: string;
+}
+const BRIDGE_DONE = new Set(['completed', 'failed', 'cancelled']);
 
 /**
  * Missions in the conversation: background work Core is running (or ran) for this chat, shown where the person is
@@ -16,6 +24,7 @@ export function MissionDock({ conversationId, narrow, onReport }: { conversation
   const [busy, setBusy] = useState<string | null>(null);
   const [note, setNote] = useState<{ id: string; text: string; error?: boolean } | null>(null);
   const [now, setNow] = useState(Date.now());
+  const [bridge, setBridge] = useState<BridgeActivityItem[]>([]);
   const lastStatus = useRef<Record<string, string>>({});
 
   const load = async () => {
@@ -30,9 +39,13 @@ export function MissionDock({ conversationId, narrow, onReport }: { conversation
       }
       setMissions(list);
     } catch { /* Core is restarting; the next tick reads it again */ }
+    try {
+      const b = await api.household('bridgeActivity') as { items: BridgeActivityItem[] };
+      setBridge(b.items ?? []);
+    } catch { /* an older Core has no activity feed; the missions above still show */ }
   };
 
-  const anyRunning = missions.some((m) => m.status === 'running');
+  const anyRunning = missions.some((m) => m.status === 'running') || bridge.some((b) => !BRIDGE_DONE.has(b.state));
   useEffect(() => { void load(); }, [conversationId]);
   useEffect(() => {
     const t = setInterval(() => { setNow(Date.now()); void load(); }, anyRunning ? 2000 : 15000);
@@ -58,10 +71,29 @@ export function MissionDock({ conversationId, narrow, onReport }: { conversation
   };
 
   const shown = visibleMissions(missions, conversationId, now).filter((m) => !hidden[m.id]);
-  if (!shown.length) return null;
+  const bridgeShown = [...bridge.filter((b) => !BRIDGE_DONE.has(b.state)), ...bridge.filter((b) => BRIDGE_DONE.has(b.state)).slice(0, 2)].filter((b) => !hidden[b.id]);
+  if (!shown.length && !bridgeShown.length) return null;
+  const openTask = async (b: BridgeActivityItem) => {
+    if (!b.conversationId) return;
+    try { await api.openConversation(b.conversationId, true); } catch (err) { setNote({ id: b.id, text: errorText(err), error: true }); }
+  };
 
   return (
     <div className="missions" aria-label="Missions">
+      {bridgeShown.map((b) => (
+        <section key={b.id} className={`mission bridge ${b.state}`} aria-label={`From ${b.origin.client}: ${b.instruction}`}>
+          <header className="mission-head">
+            <span className="mission-toggle">
+              <span className={`dot ${b.state === 'failed' || b.state === 'stalled' ? 'danger' : b.state === 'completed' ? 'done' : ['running'].includes(b.state) ? 'live' : 'attention'}`} aria-hidden="true" />
+              <span className="mission-title"><strong>From ChatGPT · {b.stateLabel}</strong><span className="mission-objective">{b.instruction}</span></span>
+            </span>
+            <span className="mission-meta">{b.executor ?? 'no executor yet'}{b.elapsedMs !== null && !BRIDGE_DONE.has(b.state) ? ` · active ${elapsed(b.elapsedMs)}` : ''}{b.heartbeatAgeMs !== null && !BRIDGE_DONE.has(b.state) ? ` · heartbeat ${elapsed(b.heartbeatAgeMs)} ago` : ''}</span>
+            {b.conversationId && <button type="button" className="btn small" onClick={() => void openTask(b)}>Open</button>}
+            {BRIDGE_DONE.has(b.state) && <button type="button" className="ghost-icon" title="Hide this card" aria-label="Hide task card" onClick={() => setHidden({ ...hidden, [b.id]: true })}>×</button>}
+          </header>
+          <div className="mission-body"><p className="mission-summary">{b.reason}{b.progress ? ` Latest: ${b.progress}` : ''}{b.verification ? ` Verified (${b.verification}).` : ''}</p>{note?.id === b.id && <p className="mission-note error" role="alert">{note.text}</p>}</div>
+        </section>
+      ))}
       {shown.map((m) => {
         const progress = missionProgress(m);
         const expanded = open[m.id] ?? (m.status === 'running' || m.pendingApprovals.length > 0);
@@ -76,7 +108,7 @@ export function MissionDock({ conversationId, narrow, onReport }: { conversation
                 <span className={`dot ${m.pendingApprovals.length ? 'attention' : m.status === 'failed' ? 'danger' : m.status === 'running' ? 'live' : m.status === 'completed' ? 'done' : 'attention'}`} aria-hidden="true" />
                 <span className="mission-title"><strong>{missionHeadline(m)}</strong><span className="mission-objective">{m.objective}</span></span>
               </button>
-              <span className="mission-meta">{progress.done}/{progress.total}{m.status === 'running' ? ` · ${elapsed(now - Date.parse(m.createdAt))}` : ''}{elsewhere ? ' · other chat' : ''}</span>
+              <span className="mission-meta">{progress.done}/{progress.total}{m.status === 'running' ? ` · ${missionActiveMs(m, now) === null ? 'between steps' : `active ${elapsed(missionActiveMs(m, now) as number)}`} · last activity ${elapsed(missionHeartbeatMs(m, now))} ago` : ''}{elsewhere ? ' · other chat' : ''}</span>
               {m.status === 'running' && <button type="button" className="btn small" disabled={busy === m.id || Boolean(m.cancelRequestedAt)} onClick={() => void act(m, 'missionCancel')}>{m.cancelRequestedAt ? 'Stopping…' : 'Stop'}</button>}
               {(m.status === 'failed' || m.status === 'cancelled' || m.status === 'interrupted') && <button type="button" className="btn small" disabled={busy === m.id} onClick={() => void act(m, 'missionContinue')}>Continue</button>}
               {m.status !== 'running' && <button type="button" className="ghost-icon" title="Hide this card (the report stays in the chat)" aria-label="Hide mission card" onClick={() => setHidden({ ...hidden, [m.id]: true })}>×</button>}

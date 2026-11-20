@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { describeStep, missionHeadline, missionProgress, toolWords, visibleMissions, type MissionView, type StepView } from '../renderer-v2/src/missionModel';
+import { describeStep, missionActiveMs, missionHeadline, missionHeartbeatMs, missionProgress, toolWords, visibleMissions, type MissionView, type StepView } from '../renderer-v2/src/missionModel';
 import { detectVideoGenerationIntent, isVideoProductionRequest } from '../src/host/desktopInteractionRouting';
 import { isLoadFailure, LOAD_FAILURE } from '../renderer-v2/src/composerModel';
 
@@ -91,5 +91,14 @@ describe('the "could not load this chat" notice', () => {
     expect(isLoadFailure('Not sent: Core is not connected')).toBe(false);
     expect(isLoadFailure('Stop requested — waiting for the worker to confirm.')).toBe(false);
     expect(isLoadFailure(null)).toBe(false);
+  });
+});
+
+describe('mission clock', () => {
+  it('charges a resumed mission only for the time its running steps have been running, not since it was created', () => {
+    const m = mission({ createdAt: '2026-11-14T10:00:00.000Z', updatedAt: '2026-11-16T10:00:40.000Z', steps: [step({ status: 'running', startedAt: '2026-11-16T10:00:08.000Z' }), step({ id: 'b', idx: 1, status: 'running', startedAt: '2026-11-16T10:00:30.000Z' })] });
+    expect(missionActiveMs(m, NOW)).toBe(52_000);
+    expect(missionHeartbeatMs(m, NOW)).toBe(20_000);
+    expect(missionActiveMs(mission({ steps: [step({ status: 'pending' })] }), NOW)).toBeNull();
   });
 });
