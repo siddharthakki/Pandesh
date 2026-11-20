@@ -88,7 +88,10 @@ const OPERATIONS = {
       exe = found && fs.existsSync(found) ? found : null;
     }
     if (!exe) return { ok: false, code: 'app_not_found', message: 'Pandesh is running, but its application path is unknown. Open Pandesh from its shortcut; the task is in its activity list.' };
-    spawn(exe, [`--panda-open=${m.conversationId}`], { detached: true, stdio: 'ignore' }).unref();
+    // Optional per-install launch details (an isolated development Pandesh needs its own data dir in the environment).
+    const extraArgs = Array.isArray(cfg.pandeshArgs) ? cfg.pandeshArgs.map(String) : [];
+    const env = cfg.pandeshEnv && typeof cfg.pandeshEnv === 'object' ? { ...process.env, ...cfg.pandeshEnv } : process.env;
+    spawn(exe, [...extraArgs, `--panda-open=${m.conversationId}`], { detached: true, stdio: 'ignore', env }).unref();
     return { ok: true, data: { opened: true } };
   },
 };
