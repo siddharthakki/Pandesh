@@ -50,7 +50,7 @@ async function handle(msg) {
       return { ok: true, data: { paired: false, revokedInPandesh: revoked } };
     }
     case 'open':
-      return nativeCall({ op: 'open', conversationId: msg.conversationId });
+      return nativeCall({ op: 'open', conversationId: msg.conversationId, token: state.token });
     default: {
       if (!TOKEN_OPS.has(msg.op)) return { ok: false, code: 'unknown_operation', message: `unknown operation ${msg.op}` };
       if (!state.paired || !state.token) return { ok: false, code: 'not_paired', message: 'Pair this browser with Pandesh first.' };

@@ -17,6 +17,7 @@ import {
   type CloudCredentialStore,
   type CloudProviderCredential,
 } from './cloudCredentials';
+import { modelCallTracker } from './modelCallTracker';
 import { ProviderCatalog } from '../platform/providerCatalog';
 import { spendVerdict } from '../platform/cloudRouting';
 import { CostGuard } from '../platform/cloudSkills';
@@ -164,7 +165,7 @@ export function refuseOpenRouterBeforeFetch(context: AttemptContextRecord, db: C
   }
 }
 
-export function resolveAttemptModelBackend(input: ResolveAttemptModelBackendInput): ModelBackend {
+function resolveAttemptModelBackendUntracked(input: ResolveAttemptModelBackendInput): ModelBackend {
   const { context, db } = input;
   const provider = context.selectedProvider;
   if (provider === 'ollama') {
@@ -199,4 +200,9 @@ export function resolveAttemptModelBackend(input: ResolveAttemptModelBackendInpu
     provider: 'openrouter',
     fetchFn: input.fetchFn,
   });
+}
+
+/** The backend for one attempt, observed by the model-call tracker (in-flight, first token, contention) so activity views can say what the attempt is really waiting for. */
+export function resolveAttemptModelBackend(input: ResolveAttemptModelBackendInput): ModelBackend {
+  return modelCallTracker.wrap(input.context.attemptId, resolveAttemptModelBackendUntracked(input));
 }
