@@ -6,7 +6,7 @@ import type { Router } from './router';
 import type { ApiContext, ApiResult } from './context';
 import { CoreError } from '../domain/errors';
 import { listCompanionDevices } from '../domain/companionSync';
-import { attachDevice, createHousehold, detachDevice, HOUSEHOLD_ID, loadHouseholds } from '../runtime/jugaad/households';
+import { attachDevice, createHousehold, detachDevice, HOUSEHOLD_ID, legacyOwnerOf, loadHouseholds, setLegacyOwner } from '../runtime/jugaad/households';
 import { listDocuments, openHouseholdIndex, searchDocuments } from '../runtime/jugaad/documentIndex';
 
 export interface JugaadRouteOptions { dataDir: string }
@@ -33,7 +33,7 @@ export function registerJugaadRoutes(router: Router<ApiContext, ApiResult>, opti
   router.get('/v1/jugaad/households', (ctx) => {
     requireHost(ctx);
     const reg = loadHouseholds(options.dataDir);
-    return ok(200, { households: reg.households.map(h => ({ ...h, devices: Object.entries(reg.devices).filter(([, hid]) => hid === h.id).map(([d]) => d) })) });
+    return ok(200, { legacyOwner: reg.legacyOwner, households: reg.households.map(h => ({ ...h, devices: Object.entries(reg.devices).filter(([, hid]) => hid === h.id).map(([d]) => d), ownsLegacyRecords: reg.legacyOwner === h.id })) });
   });
   router.post('/v1/jugaad/households', (ctx) => { requireHost(ctx); return ok(201, { household: createHousehold(options.dataDir, String(body(ctx).name ?? '')) }); });
   router.post('/v1/jugaad/households/:id/devices', (ctx, match) => {
@@ -43,7 +43,17 @@ export function registerJugaadRoutes(router: Router<ApiContext, ApiResult>, opti
     const device = listCompanionDevices(ctx.db).find(d => d.id === deviceId);
     if (!device || device.revokedAt) throw new CoreError('not_found', 'that phone is not paired (or its pairing was revoked)');
     attachDevice(options.dataDir, deviceId, hid);
-    return ok(200, { attached: true, householdId: hid, deviceId });
+    // Records from before households existed (important dates, briefings) are NOT given to this household automatically.
+    return ok(200, { attached: true, householdId: hid, deviceId, legacyRecordsVisible: legacyOwnerOf(options.dataDir) === hid });
+  });
+  // The household that owns the records created before households existed. Only the owner sets it, never automatically; null clears it.
+  router.post('/v1/jugaad/legacy-owner', (ctx) => {
+    requireHost(ctx);
+    const b = body(ctx);
+    const hid = b.householdId === null ? null : household(options.dataDir, String(b.householdId ?? ''));
+    setLegacyOwner(options.dataDir, hid);
+    console.log(`[karkedikha-core ${new Date().toISOString()}] jugaad: legacy records now owned by ${hid ?? 'no household'} (set by ${ctx.principal.id})`);
+    return ok(200, { legacyOwner: hid });
   });
   router.delete('/v1/jugaad/devices/:deviceId', (ctx, match) => { requireHost(ctx); return ok(200, { detached: detachDevice(options.dataDir, match.params.deviceId) }); });
   router.get('/v1/jugaad/households/:id/documents', (ctx, match) => {

@@ -29,7 +29,7 @@ import { CompanionVault, migrateCompanionDeviceKeys } from '../runtime/companion
 import { defaultSecretProtector, type SecretProtector } from '../platform/osSecretProtector';
 import { formatFingerprint } from '../platform/selfSignedCert';
 import { handleJugaadRpc, JUGAAD_METHODS } from '../runtime/jugaad/jugaadGateway';
-import { householdOfDevice } from '../runtime/jugaad/households';
+import { householdOfDevice, legacyOwnerOf } from '../runtime/jugaad/households';
 
 export const COMPANION_DEFAULT_PORT = 47821;
 // A document chunk is at most 64 KB; base64 inside JSON inside a sealed, base64 envelope is about 2.3x that.
@@ -80,10 +80,18 @@ export interface CompanionServerHandle { port: number; host: string; close(): Pr
 export interface CompanionLog { (line: string): void }
 
 /** Handles one decrypted call. The full list of what a paired phone can do. */
-/** Household-scoped records (`hh_xxxxxxxxxxxx:...`) are visible only to phones of that household; older, unscoped records keep their single-household behaviour. */
-export function visibleToDevice(recordId: string, householdId: string | null): boolean {
+/**
+ * Who may see (and act on) a record.
+ *  - `hh_xxxxxxxxxxxx:...` records: only phones of that household.
+ *  - older records (important dates, briefings, ...): never copied or reassigned automatically. While the owner has named no
+ *    household for them they are visible only to phones that belong to no household (as before households existed); once the owner
+ *    names one, only that household's phones see them. A household's phone never sees another's, and never sees legacy records unless
+ *    its household is the named owner.
+ */
+export function visibleToDevice(recordId: string, householdId: string | null, legacyOwner: string | null = null): boolean {
   const m = /^(hh_[a-f0-9]{12}):/.exec(recordId);
-  return !m || m[1] === householdId;
+  if (m) return m[1] === householdId;
+  return householdId === legacyOwner;
 }
 
 async function rpc(db: CoreDatabase, deviceId: string, method: string, params: Record<string, unknown>, dataDir: string | null): Promise<unknown> {
@@ -98,13 +106,20 @@ async function rpc(db: CoreDatabase, deviceId: string, method: string, params: R
       // The cursor advances over everything read, so records of other households (which this phone never sees) cannot stall it.
       const nextSince = changes.length ? changes[changes.length - 1].revision : since;
       const hid = dataDir ? householdOfDevice(dataDir, deviceId) : null;
+      const legacy = dataDir ? legacyOwnerOf(dataDir) : null;
       touchCompanionDevice(db, deviceId, nextSince);
-      return { records: changes.filter(r => visibleToDevice(r.recordId, hid)), nextSince, latestRevision: latestCompanionRevision(db), more: nextSince < latestCompanionRevision(db) };
+      return { records: changes.filter(r => visibleToDevice(r.recordId, hid, legacy)), nextSince, latestRevision: latestCompanionRevision(db), more: nextSince < latestCompanionRevision(db) };
     }
     case 'push': {
       const ops = Array.isArray(params.ops) ? params.ops as CompanionOp[] : [];
       touchCompanionDevice(db, deviceId);
-      return { results: handleCompanionOps(db, deviceId, ops) };
+      // A phone can only act on records it is allowed to see; for any other record the answer is the same as for one that does not exist.
+      const hid = dataDir ? householdOfDevice(dataDir, deviceId) : null;
+      const legacy = dataDir ? legacyOwnerOf(dataDir) : null;
+      const allowed = ops.filter(o => visibleToDevice(String(o?.recordId ?? ''), hid, legacy));
+      const applied = handleCompanionOps(db, deviceId, allowed);
+      let i = 0;
+      return { results: ops.map(o => (allowed.includes(o) ? applied[i++]! : { opId: String(o?.opId ?? ''), result: 'rejected' as const, detail: 'unknown or removed record' })) };
     }
     default:
       throw new CoreError('invalid_request', `unknown method ${method}`);
