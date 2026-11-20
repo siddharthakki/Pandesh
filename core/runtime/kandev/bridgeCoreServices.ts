@@ -8,6 +8,7 @@ import * as path from 'node:path';
 import type { BridgeService, ServiceContext, ServiceOutput } from './bridgeServices';
 import { resolveInsideRoots } from './bridgeServices';
 import { extractPdfTextLayer, hasPdfMagic, ocrFile, pdfPageCount, resolveOcrTools } from '../documentOcr';
+import { runMagika, type MagikaResult } from './magikaEngine';
 import { searchBrain } from '../../domain/secondBrain';
 import { searchConversations } from '../../domain/workbench';
 import { DEFAULT_OLLAMA_URL } from '../modelBackend';
@@ -91,18 +92,61 @@ export function detectFileType(head: Buffer, fileName: string): { label: string;
   return { label: 'Unknown binary', mime: 'application/octet-stream', basis: 'unknown', nameMatches: null };
 }
 
-export function detectTypeService(roots: string[]): BridgeService {
+/** Magika must be at least this sure, and the file at least this long, before it may override the signature table. */
+const MAGIKA_MIN_SCORE = 0.9;
+const MAGIKA_MIN_BYTES = 64;
+/** Signatures that only identify a container; Magika may refine these (a ZIP is a DOCX, an OLE2 file is a DOC). */
+const CONTAINER_SIGNATURES = new Set(['application/zip', 'application/x-ole-storage']);
+
+export interface MergedDetection {
+  label: string; mime: string; basis: 'signature' | 'text-heuristic' | 'unknown' | 'magika'; nameMatches: boolean | null;
+  engine: 'signature-table' | 'magika'; engines: { signature: { label: string; mime: string; basis: string }; magika: { label: string; mime: string; score: number | null } | null; agree: boolean | null };
+}
+
+/**
+ * Hybrid policy. The signature table is the fallback and the authority for hard magic numbers; Magika is preferred only
+ * where it adds something: refining a container signature, or classifying content that has no signature (text formats,
+ * source code, unknown binaries) when it is confident and the file is long enough for its model to mean something.
+ * Both verdicts are always reported, and disagreement is flagged rather than hidden.
+ */
+export function mergeDetections(sig: ReturnType<typeof detectFileType>, magika: MagikaResult | null, size: number, fileName: string, head?: Buffer): MergedDetection {
+  // Measured: Magika answers "iso" with score 1.00 for a file of nothing but zero bytes. Degenerate content is never overridden.
+  if (head && head.length > 0 && head.every(b => b === 0)) magika = null;
+  const sigInfo = { label: sig.label, mime: sig.mime, basis: sig.basis };
+  const base = { label: sig.label, mime: sig.mime, basis: sig.basis, nameMatches: sig.nameMatches, engine: 'signature-table' as const };
+  if (!magika) return { ...base, engines: { signature: sigInfo, magika: null, agree: null } };
+  const mg = { label: magika.label, mime: magika.mime, score: magika.score };
+  const agree = magika.mime === sig.mime || (sig.basis !== 'signature' && sig.mime === 'text/plain' && magika.isText);
+  const confident = (magika.score ?? 0) >= MAGIKA_MIN_SCORE && size >= MAGIKA_MIN_BYTES && magika.label !== 'unknown';
+  const refinesContainer = sig.basis === 'signature' && CONTAINER_SIGNATURES.has(sig.mime) && confident && magika.mime !== sig.mime && magika.group === 'document';
+  const noSignature = sig.basis !== 'signature' && confident;
+  if (refinesContainer || noSignature) {
+    const family = EXTENSION_FAMILY[path.extname(fileName).toLowerCase()] ?? null;
+    const ext = path.extname(fileName).toLowerCase().slice(1);
+    return {
+      label: magika.description, mime: magika.mime, basis: 'magika', engine: 'magika',
+      nameMatches: ext ? (ext === magika.label || (family ? magika.description.toUpperCase().includes(family.toUpperCase()) : null)) : null,
+      engines: { signature: sigInfo, magika: mg, agree },
+    };
+  }
+  return { ...base, engines: { signature: sigInfo, magika: mg, agree } };
+}
+
+export function detectTypeService(roots: string[], options: { magikaExe?: string | null } = {}): BridgeService {
   return {
     id: 'doc.detect-type', label: 'File type from content (read-only)', readOnly: true, taskClasses: ['document.detect'], roots,
-    async run({ args }): Promise<ServiceOutput> {
+    async run({ args, signal }): Promise<ServiceOutput> {
       const p = resolveInsideRoots(args.path, roots);
       const st = fs.statSync(p);
       if (!st.isFile()) throw new Error('args.path is not a file');
       const fd = fs.openSync(p, 'r');
       let head: Buffer;
       try { head = Buffer.alloc(Math.min(4096, st.size)); fs.readSync(fd, head, 0, head.length, 0); } finally { fs.closeSync(fd); }
-      const t = detectFileType(head, p);
-      return { summary: `${t.label} (${t.basis})`, evidence: { kind: 'file-type', ...t, extension: path.extname(p).toLowerCase() || null, bytes: st.size, engine: 'signature-table' } };
+      const sig = detectFileType(head, p);
+      const magika = st.size === 0 ? null : await runMagika(p, { exe: options.magikaExe, signal });
+      const t = mergeDetections(sig, magika, st.size, p, head);
+      const { engines, engine, ...rest } = t;
+      return { summary: `${t.label} (${t.basis})`, evidence: { kind: 'file-type', ...rest, extension: path.extname(p).toLowerCase() || null, bytes: st.size, engine, engines } };
     },
   };
 }
