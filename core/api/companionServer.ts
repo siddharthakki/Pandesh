@@ -83,15 +83,15 @@ export interface CompanionLog { (line: string): void }
 /**
  * Who may see (and act on) a record.
  *  - `hh_xxxxxxxxxxxx:...` records: only phones of that household.
- *  - older records (important dates, briefings, ...): never copied or reassigned automatically. While the owner has named no
- *    household for them they are visible only to phones that belong to no household (as before households existed); once the owner
- *    names one, only that household's phones see them. A household's phone never sees another's, and never sees legacy records unless
- *    its household is the named owner.
+ *  - older records (important dates, briefings, ...): never copied or reassigned automatically, and DEFAULT-DENY. Until the owner
+ *    names a household for them, no phone sees them (records are preserved untouched on the PC); once the owner names one, only that
+ *    household's phones do. A phone without a household never sees them.
  */
 export function visibleToDevice(recordId: string, householdId: string | null, legacyOwner: string | null = null): boolean {
   const m = /^(hh_[a-f0-9]{12}):/.exec(recordId);
   if (m) return m[1] === householdId;
-  return householdId === legacyOwner;
+  // Default-deny: with no named legacy owner nobody sees legacy records, and a phone without a household never does.
+  return legacyOwner !== null && householdId !== null && householdId === legacyOwner;
 }
 
 async function rpc(db: CoreDatabase, deviceId: string, method: string, params: Record<string, unknown>, dataDir: string | null): Promise<unknown> {
