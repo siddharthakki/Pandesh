@@ -38,8 +38,8 @@ describe('household isolation: legacy and new records follow one rule', () => {
     expect(visibleToDevice('hh_aaaaaaaaaaaa:doc_1', 'hh_aaaaaaaaaaaa', null)).toBe(true);
     expect(visibleToDevice('hh_aaaaaaaaaaaa:doc_1', 'hh_bbbbbbbbbbbb', null)).toBe(false);
     expect(visibleToDevice('hh_aaaaaaaaaaaa:doc_1', null, null)).toBe(false);
-    // legacy, no owner named: only a phone with no household (as before households existed)
-    expect(visibleToDevice('obligation:x', null, null)).toBe(true);
+    // legacy, no owner named: default-deny, nobody (an unassigned phone too)
+    expect(visibleToDevice('obligation:x', null, null)).toBe(false);
     expect(visibleToDevice('obligation:x', 'hh_aaaaaaaaaaaa', null)).toBe(false);
     // legacy, owner named: only that household
     expect(visibleToDevice('obligation:x', 'hh_aaaaaaaaaaaa', 'hh_aaaaaaaaaaaa')).toBe(true);
@@ -56,11 +56,12 @@ describe('household isolation: legacy and new records follow one rule', () => {
     expect(loadHouseholds(dir).legacyOwner).toBeNull();
   });
 
-  it('with no owner named, household phones see none of the legacy records; a phone in no household keeps working as before', async () => {
+  it('with no owner named (default-deny), no phone sees the legacy records, an unassigned phone included; they stay on the PC untouched', async () => {
     const a = createHousehold(dir, 'Alpha'); const b = createHousehold(dir, 'Bravo');
     const pa = await phone('phone-alpha-0001', a.id); const pb = await phone('phone-bravo-0001', b.id); const old = await phone('phone-legacy-0001');
     expect(await ids(pa)).toEqual([]); expect(await ids(pb)).toEqual([]);
-    expect(await ids(old)).toEqual(LEGACY);
+    expect(await ids(old)).toEqual([]);
+    expect(getCompanionRecord(db, 'obligation:ob_telekom')).toBeTruthy();   // preserved, not deleted
   });
 
   it('once the owner names a household, only its phones see the legacy records', async () => {
@@ -72,7 +73,7 @@ describe('household isolation: legacy and new records follow one rule', () => {
     expect(await ids(old)).toEqual([]);   // naming an owner takes them away from the unattached phone: no one else can read them
     setLegacyOwner(dir, null);
     expect(await ids(pa)).toEqual([]);
-    expect(await ids(old)).toEqual(LEGACY);
+    expect(await ids(old)).toEqual([]);   // back to default-deny
   });
 
   it('a phone cannot act on a record it cannot see: legacy or another household\'s, the answer is the same as for a record that does not exist', async () => {
