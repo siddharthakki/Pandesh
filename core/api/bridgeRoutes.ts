@@ -18,8 +18,9 @@ import {
   submitBridgeTask, toBridgeTaskView, type BridgePairing, type BridgeTaskRecord, type BridgeTransferConsent,
 } from '../domain/pandaBridge';
 import { KandevClient } from '../runtime/kandev/kandevClient';
+import { listApprovalEvents, listPendingApprovals, pendingApproval, type ExternalApprovalRequest } from '../domain/bridgeApprovals';
 import {
-  cancelBridgeTask, discoverExecutors, dispatchBridgeTask, pauseBridgeTask, refreshBridgeTask, resumeBridgeTask, type BridgeRuntime,
+  cancelBridgeTask, decideExternalApproval, discoverExecutors, dispatchBridgeTask, pauseBridgeTask, refreshBridgeTask, resumeBridgeTask, type BridgeRuntime,
 } from '../runtime/kandev/pandaBridge';
 import { bridgeServices } from '../runtime/kandev/bridgeServices';
 import { activityItem } from '../runtime/kandev/bridgeActivity';
@@ -65,11 +66,17 @@ function owned(c: Caller, task: BridgeTaskRecord): BridgeTaskRecord {
 
 const ok = (status: number, payload: unknown): ApiResult => ({ status, body: payload });
 
+/** What a paired browser may know about an approval waiting in Pandesh: that it exists and for which agent, nothing about the project or paths. */
+const approvalSummary = (a: ExternalApprovalRequest) => ({ requestId: a.requestId, executor: a.executor, agentLabel: a.agentLabel, expiresAt: a.expiresAt });
+
 export function registerBridgeRoutes(router: Router<ApiContext, ApiResult>, options: BridgeRouteOptions): void {
   const kandev = options.kandev ?? new KandevClient();
   const runtime = (ctx: ApiContext): BridgeRuntime => ({ db: ctx.db, kandev, dataDir: options.dataDir, executor: options.executor, services: bridgeServices(options.dataDir) });
   // The browser card shows the same real state, reason, active time and heartbeat as Pandesh's own activity list.
-  const view = (ctx: ApiContext, task: BridgeTaskRecord) => ({ ...toBridgeTaskView(task, listCheckpoints(ctx.db, task.id)), activity: activityItem(ctx.db, task, 'Browser') });
+  const view = (ctx: ApiContext, task: BridgeTaskRecord) => {
+    const pending = task.status === 'awaiting_executor' ? pendingApproval(ctx.db, task.id) : null;
+    return { ...toBridgeTaskView(task, listCheckpoints(ctx.db, task.id)), activity: activityItem(ctx.db, task, 'Browser'), ...(pending ? { approval: approvalSummary(pending) } : {}) };
+  };
 
   // --- pairing ---
   router.post('/v1/bridge/pairing-codes', (ctx) => {
@@ -241,7 +248,7 @@ export function registerBridgeRoutes(router: Router<ApiContext, ApiResult>, opti
         }
       : undefined;
     try {
-      const { task, started } = await dispatchBridgeTask(runtime(ctx), match.params.id, {
+      const { task, started, approval } = await dispatchBridgeTask(runtime(ctx), match.params.id, {
         executor: String(b.executor ?? ''),
         model: typeof b.model === 'string' && b.model ? b.model : null,
         consent,
@@ -251,11 +258,33 @@ export function registerBridgeRoutes(router: Router<ApiContext, ApiResult>, opti
         decidedBy: c.kind === 'host' ? ctx.principal.id : `extension:${c.pairing.id}`,
         authority: c.kind === 'host' ? 'host' : 'extension',
       });
-      return ok(started ? 202 : 200, { started, task: view(ctx, task) });
+      // `approval`: a cloud agent was requested; the owner decides in the Pandesh app. Nothing has started.
+      return ok(started ? 202 : 200, { started, task: view(ctx, task), ...(approval ? { approval: approvalSummary(approval) } : {}) });
     } catch (err) {
       if (!(err instanceof CoreError)) console.error(`[karkedikha-core ${new Date().toISOString()}] panda-bridge dispatch ${match.params.id} failed:`, err instanceof Error ? err.stack ?? err.message : err);
       throw err;
     }
+  });
+  // --- external-agent approvals: the owner's decision, made in the Pandesh app only ---
+  router.get('/v1/bridge/approvals', (ctx) => { requireHost(ctx); return ok(200, { approvals: listPendingApprovals(ctx.db) }); });
+  router.post('/v1/bridge/tasks/:id/approval', async (ctx, match) => {
+    requireHost(ctx);
+    getBridgeTask(ctx.db, match.params.id);
+    const b = body(ctx);
+    const decision = b.decision === 'approve' ? 'approve' : b.decision === 'refuse' ? 'refuse' : null;
+    if (!decision) throw new CoreError('invalid_request', "decision must be 'approve' or 'refuse'");
+    try {
+      const { task, started } = await decideExternalApproval(runtime(ctx), match.params.id, { requestId: String(b.requestId ?? ''), decision, by: ctx.principal.id, confidentialOverride: b.confidentialOverride === true });
+      return ok(started ? 202 : 200, { started, task: view(ctx, task) });
+    } catch (err) {
+      if (!(err instanceof CoreError)) console.error(`[karkedikha-core ${new Date().toISOString()}] panda-bridge approval ${match.params.id} failed:`, err instanceof Error ? err.stack ?? err.message : err);
+      throw err;
+    }
+  });
+  router.get('/v1/bridge/tasks/:id/audit', (ctx, match) => {
+    requireHost(ctx);
+    getBridgeTask(ctx.db, match.params.id);
+    return ok(200, { taskId: match.params.id, approvalEvents: listApprovalEvents(ctx.db, match.params.id), checkpoints: listCheckpoints(ctx.db, match.params.id) });
   });
   const control = (action: 'pause' | 'resume' | 'cancel') => async (ctx: ApiContext, match: { params: Record<string, string> }) => {
     const c = caller(ctx);

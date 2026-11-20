@@ -13,6 +13,7 @@
 import type { CoreDatabase } from '../../db/connection';
 import { getAttempt } from '../../domain/attempts';
 import { listCheckpoints, type BridgeTaskRecord } from '../../domain/pandaBridge';
+import { pendingApproval } from '../../domain/bridgeApprovals';
 import { modelCallTracker, type ModelWait } from '../modelCallTracker';
 
 export type ExecutionState =
@@ -40,6 +41,8 @@ export interface ActivitySignals {
   storyWaitingForSlot?: boolean;
   /** Latest time anything was observed from the executor (ms epoch). */
   lastActivityAt?: number | null;
+  /** A cloud agent was requested and the owner has not decided yet: its name. */
+  approvalFor?: string | null;
 }
 
 export interface DerivedState { state: ExecutionState; reason: string; heartbeatAt: number | null; heartbeatAgeMs: number | null }
@@ -62,7 +65,9 @@ export function deriveExecutionState(sig: ActivitySignals): DerivedState {
     case 'needs_attention': return done('needs_attention', task.statusDetail ?? 'Needs attention in Pandesh.');
     case 'awaiting_approval': return done('waiting_for_approval', task.statusDetail ?? 'Waiting for your approval in Pandesh.');
     case 'received': return done('queued', 'Received; not yet routed.');
-    case 'awaiting_executor': return done('waiting_for_executor', 'Received. Choose an executor to start the work.');
+    case 'awaiting_executor':
+      if (sig.approvalFor) return done('waiting_for_approval', `Waiting for your approval in Pandesh to send this task to ${sig.approvalFor}. Nothing has been sent.`);
+      return done('waiting_for_executor', 'Received. Choose an executor to start the work.');
     case 'dispatching': return done('queued', task.statusDetail ?? `Starting ${task.executor ?? 'the executor'}.`);
     default: break; // running / verifying
   }
@@ -122,7 +127,8 @@ export function activityItem(db: CoreDatabase, task: BridgeTaskRecord, clientLab
   const result = task.result;
   const lastActivityAt = Math.max(0, ...(result?.activity ?? []).map(a => ms(a.at) ?? 0), ...(result?.timeline ?? []).map(t => ms(t.at) ?? 0)) || null;
   const storyWaitingForSlot = running && Boolean(task.storyId) && /free worker slot/i.test(task.statusDetail ?? '');
-  const d = deriveExecutionState({ now, task, attempt, model, storyWaitingForSlot, lastActivityAt });
+  const approvalFor = task.status === 'awaiting_executor' ? pendingApproval(db, task.id, now)?.agentLabel ?? null : null;
+  const d = deriveExecutionState({ now, task, attempt, model, storyWaitingForSlot, lastActivityAt, approvalFor });
 
   const workflowStep = /^(wf-|wfrun)/.test(task.clientRequestId);
   // A phone's document upload is not a ChatGPT message: say what it is and keep the household id and file name out of the line.
