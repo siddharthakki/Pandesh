@@ -6,3 +6,6 @@ src/coding/ChangeScopeReconciliation.ts diff
 
 # Git hooks must keep LF line endings to run under Git for Windows.
 .githooks/* text eol=lf
+
+# Node scripts with a shebang line must keep LF (a CR after "node" breaks the import under vitest/Node on Windows checkouts).
+scripts/panda-bridge/*.mjs text eol=lf
