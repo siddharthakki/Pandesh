@@ -185,3 +185,14 @@ describe('daily brief workflow', () => {
     expect(seen).toContain('"kind":"daily-brief"');
   });
 });
+
+const dir0 = () => dir;
+describe('deterministic routing for listing work (input from the 156 s native task)', () => {
+  it('a list-files request routes to the deterministic filesystem service, not a model', async () => {
+    const l = await discoverExecutors(kandev, { services: rt.services! });
+    const d = routeTask({ taskClass: 'filesystem.list', readOnly: true }, l, allDeclarations(rt.services), none);
+    expect(d.selected).toBe('service:fs.inspect');
+    const dir = await rt.services!.get('fs.inspect')!.run({ args: { path: path.join(dir0(), 'allowed') }, signal: new AbortController().signal });
+    expect(dir.evidence).toMatchObject({ kind: 'directory' });
+  });
+});
