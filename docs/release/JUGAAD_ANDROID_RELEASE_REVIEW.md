@@ -62,3 +62,9 @@ Back up before install: `adb backup` is not reliable here, so rely on the app's 
 - A2. Approve an emulator run of the combined tree (needs the dev Core started briefly).
 - A3. Owner (or explicit authorisation) for the signed build, and the version number.
 - A4. Separate approval to install on the real phone.
+
+## 8. Update 2026-11-20 (after the owner's go-ahead for integration preparation and emulator testing)
+
+- The combined tree (the owner's working tree plus the patch, in the private copy `D:\PandeshJugaadRC`) assembles as an emulator debug build and passes the full unit-test suite. It was installed on `emulator-5554` only (package `com.jugaad.home.pandeshdev`, separate from the installed app) and launches without a crash. Nothing was signed; the NAS checkout and the real phone were not touched.
+- Default-deny for legacy records is implemented on the Pandesh side (Build 188 candidate d1b94da): a phone without a household now sees no legacy records until the owner names a `legacyOwner`. The app needs no change; its household document search is unaffected.
+- Not re-run: the full pairing, upload, search and history flow of the combined build against the Build 188 Core on the emulator. That flow was demonstrated earlier on the patch branch; the on-device history button remains untapped. This is the remaining emulator item before any signed build.
