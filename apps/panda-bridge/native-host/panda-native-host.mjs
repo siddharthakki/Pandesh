@@ -81,15 +81,17 @@ const OPERATIONS = {
     // that started it), so "Open in Pandesh" needs no per-install setup. The running app is focused through its single-instance
     // handler, which navigates to this conversation.
     let exe = cfg.pandeshExe && fs.existsSync(cfg.pandeshExe) ? cfg.pandeshExe : null;
+    let launchArgs = [];
     if (!exe) {
       const t = await call(cfg, 'GET', '/v1/bridge/app-target', { pairing: m.token });
       if (!t.ok && t.code === 'core_unavailable') return t;
       const found = t.ok && t.data && typeof t.data.exe === 'string' ? t.data.exe : null;
       exe = found && fs.existsSync(found) ? found : null;
+      if (exe && Array.isArray(t.data.args)) launchArgs = t.data.args.map(String);
     }
     if (!exe) return { ok: false, code: 'app_not_found', message: 'Pandesh is running, but its application path is unknown. Open Pandesh from its shortcut; the task is in its activity list.' };
     // Optional per-install launch details (an isolated development Pandesh needs its own data dir in the environment).
-    const extraArgs = Array.isArray(cfg.pandeshArgs) ? cfg.pandeshArgs.map(String) : [];
+    const extraArgs = Array.isArray(cfg.pandeshArgs) ? cfg.pandeshArgs.map(String) : launchArgs;
     const env = cfg.pandeshEnv && typeof cfg.pandeshEnv === 'object' ? { ...process.env, ...cfg.pandeshEnv } : process.env;
     spawn(exe, [...extraArgs, `--panda-open=${m.conversationId}`], { detached: true, stdio: 'ignore', env }).unref();
     return { ok: true, data: { opened: true } };
