@@ -91,12 +91,14 @@ export async function ingestDocument(db: CoreDatabase, dataDir: string, househol
     const ocr = await timed('text', 'tesseract', () => ocrFile(real, { tools, signal: opts.signal }));
     if (ocr) { text = ocr.sections.map(s => s.text).join('\n\n'); textSource = text.trim() ? 'ocr' : 'none'; }
   } else if (type.mime.startsWith('text/') || type.mime === 'application/json' || type.mime === 'application/xml' || TEXT_EXT.has(path.extname(real).toLowerCase())) {
-    const raw = await timed('text', 'utf8', () => fs.readFileSync(real, 'utf8').slice(0, 400_000));
+    // Fields are parsed from the whole text (a total sits at the END of a long statement); only the search index is capped.
+    const raw = await timed('text', 'utf8', () => fs.readFileSync(real, 'utf8').slice(0, 2_000_000));
     if (raw) { text = raw; textSource = 'plain'; }
   } else {
     steps.push({ step: 'text', engine: 'none', ok: false, ms: 0, note: `no text extractor for ${type.label}; the file is stored and indexed by name only` });
   }
 
+  text = text.replace(/\r\n?/g, '\n'); // Poppler and Tesseract emit CRLF on Windows; keep stored text and snippets clean
   const receipt = text.trim() ? parseReceiptText(text) : null;
   if (receipt) steps.push({ step: 'fields', engine: 'rule-parser', ok: receipt.matchedBy.length > 0, ms: 0, note: receipt.matchedBy.join(', ') || 'no field matched' });
 
