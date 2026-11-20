@@ -27,7 +27,7 @@ import { newId } from '../../domain/ids';
 
 export const MAX_DOCUMENT_BYTES = 25 * 1024 * 1024;
 /** Bump when the text extraction or the field parser changes in a way that can change results: older documents then show as "outdated". */
-export const PIPELINE_VERSION = 'jugaad-intake-3';
+export const PIPELINE_VERSION = 'jugaad-intake-4';
 const TEXT_EXT = new Set(['.txt', '.md', '.csv', '.json', '.xml', '.html', '.htm', '.log', '.eml']);
 const IMAGE_MIME = /^image\/(png|jpeg|tiff|bmp|webp|gif)/;
 
@@ -49,6 +49,20 @@ function sha256File(file: string): string {
   const fd = fs.openSync(file, 'r');
   try { const buf = Buffer.alloc(1 << 20); let n: number; while ((n = fs.readSync(fd, buf, 0, buf.length, null)) > 0) h.update(buf.subarray(0, n)); } finally { fs.closeSync(fd); }
   return h.digest('hex');
+}
+
+const TEXT_PARSE_LIMIT = 2_000_000;
+const TEXT_TAIL = 500_000;
+function readHeadAndTail(file: string, size: number): string {
+  if (size <= TEXT_PARSE_LIMIT) return fs.readFileSync(file, 'utf8');
+  const fd = fs.openSync(file, 'r');
+  try {
+    const head = Buffer.alloc(TEXT_PARSE_LIMIT - TEXT_TAIL); fs.readSync(fd, head, 0, head.length, 0);
+    const tail = Buffer.alloc(TEXT_TAIL); fs.readSync(fd, tail, 0, tail.length, size - TEXT_TAIL);
+    // The cut may land inside a line: drop the partial first line of the tail and the partial last line of the head.
+    const h = head.toString('utf8'); const t = tail.toString('utf8');
+    return h.slice(0, h.lastIndexOf('\n') + 1) + t.slice(t.indexOf('\n') + 1);
+  } finally { fs.closeSync(fd); }
 }
 
 const clean = (name: string) => path.basename(name).replace(/[^\w.\- äöüÄÖÜß()]/g, '_').slice(0, 120) || 'document';
@@ -94,7 +108,8 @@ async function analyzeFile(real: string, opts: IntakeOptions, steps: IntakeStep[
     if (ocr) { text = ocr.sections.map(s => s.text).join('\n\n'); textSource = text.trim() ? 'ocr' : 'none'; }
   } else if (type.mime.startsWith('text/') || type.mime === 'application/json' || type.mime === 'application/xml' || TEXT_EXT.has(path.extname(real).toLowerCase())) {
     // Fields are parsed from the whole text (a total sits at the END of a long statement); only the search index is capped.
-    const raw = await timed('text', 'utf8', () => fs.readFileSync(real, 'utf8').slice(0, 2_000_000));
+    // A statement longer than that is read as its beginning and its END, so a total or a due date at the bottom is never cut off.
+    const raw = await timed('text', 'utf8', () => readHeadAndTail(real, st.size));
     if (raw) { text = raw; textSource = 'plain'; }
   } else {
     steps.push({ step: 'text', engine: 'none', ok: false, ms: 0, note: `no text extractor for ${type.label}; the file is stored and indexed by name only` });
