@@ -54,6 +54,11 @@ export function classifyInstruction(instruction: string): DeterministicIntent | 
     return { kind: 'service', taskClass: 'service.health', args: {}, reason: 'a health check reads state; nothing to interpret' };
   }
 
+  // Tailscale connection state (read-only status; never up/down/login).
+  if (/\b(?:is )?tailscale\b.*\b(?:up|connected|running|online|status|reachable)\b|\b(?:tailscale|tailnet) status\b|\bwhich (?:tailscale )?(?:peers|devices) are (?:online|connected)\b/i.test(text)) {
+    return { kind: 'service', taskClass: 'network.status', args: {}, reason: 'Tailscale status is read from the local client; nothing to interpret' };
+  }
+
   // Search over Pandesh's own records.
   const search = /\bsearch (?:my |the |pandesh'?s? )?(conversations?|chats?|notes?|second brain|brain|memory|records)(?: for| about)?\s+(.{2,120})$/i.exec(text);
   if (search) {
