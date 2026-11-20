@@ -7,10 +7,22 @@ import * as crypto from 'node:crypto';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import type { CoreDatabase } from '../../db/connection';
-import { registerToolServices } from './bridgeToolServices';
 import { dailyBriefService } from './bridgeBriefService';
+import { coreServices } from './bridgeCoreServices';
 
-export interface ServiceContext { args: Record<string, unknown>; signal: AbortSignal; /** The Core database, for services that only project records Core already holds. */ db?: CoreDatabase; }
+/** What a service may ask of the bridge runtime (never the runtime itself): keeps services plain and cycle-free. */
+export interface ServiceHost {
+  kandevRunning(): Promise<boolean>;
+  /** Runs a registered workflow as child bridge tasks owned by the parent task's pairing. */
+  runWorkflow(workflowId: string, input: Record<string, unknown>, signal: AbortSignal): Promise<{ status: string; steps: Array<{ name: string; status: string; executor: string | null; taskId: string | null; verification: string | null }> }>;
+}
+export interface ServiceContext {
+  args: Record<string, unknown>;
+  signal: AbortSignal;
+  /** The Core database, for services that only project records Core already holds. */
+  db?: CoreDatabase;
+  host?: ServiceHost;
+}
 export interface ServiceOutput { summary: string; evidence: Record<string, unknown>; files?: string[]; }
 
 export interface BridgeService {
@@ -50,7 +62,7 @@ function checkAbort(signal: AbortSignal) { if (signal.aborted) throw new Error('
 /** Native filesystem read-only inspection: stat + SHA-256 (+ directory listing). */
 export function fsInspectService(roots: string[]): BridgeService {
   return {
-    id: 'fs.inspect', label: 'Filesystem inspect (read-only)', readOnly: true, taskClasses: ['filesystem.inspect', 'filesystem.list'], roots,
+    id: 'fs.inspect', label: 'Filesystem inspect (read-only)', readOnly: true, taskClasses: ['filesystem.inspect', 'filesystem.hash', 'filesystem.metadata'], roots,
     async run({ args, signal }) {
       const p = resolveInsideRoots(args.path, roots);
       const st = fs.statSync(p);
@@ -65,7 +77,7 @@ export function fsInspectService(roots: string[]): BridgeService {
         let n: number;
         while ((n = fs.readSync(fd, buf, 0, buf.length, null)) > 0) { checkAbort(signal); hash.update(buf.subarray(0, n)); }
       } finally { fs.closeSync(fd); }
-      return { summary: `File ${st.size} bytes`, evidence: { kind: 'file', bytes: st.size, sha256: hash.digest('hex') } };
+      return { summary: `File ${st.size} bytes`, evidence: { kind: 'file', bytes: st.size, modifiedAt: st.mtime.toISOString(), sha256: hash.digest('hex') } };
     },
   };
 }
@@ -104,7 +116,7 @@ export function bridgeServices(dataDir: string): ServiceRegistry {
   const root = path.join(dataDir, 'panda-workspaces');
   fs.mkdirSync(root, { recursive: true });
   const reg = defaultServiceRegistry([root]);
-  registerToolServices(reg, [root]);
+  for (const svc of coreServices([root])) reg.register(svc);
   reg.register(dailyBriefService());
   return (cachedRegistry = reg);
 }

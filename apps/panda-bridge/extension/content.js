@@ -215,6 +215,9 @@
       // chosen executor stops being available the card says so and waits; it never substitutes another one (e.g. native -> OpenCode).
       const sel = el('select');
       sel.append(el('option', { value: '', textContent: 'Choose an executor…' }));
+      // The person's explicit choice of automatic routing: routine operations (listing, hashing, PDF text, health, daily brief...) run as
+      // deterministic services with no model; anything needing interpretation goes to a local agent. Never a cloud executor.
+      sel.append(el('option', { value: 'auto', textContent: 'Automatic — deterministic service first, else local agent' }));
       for (const e of state.executors) {
         const o = el('option', { value: e.id, textContent: e.label + (e.external ? ' — cloud (approve in Pandesh)' : ''), disabled: !e.available || !e.dispatchable || e.external });
         sel.append(o);

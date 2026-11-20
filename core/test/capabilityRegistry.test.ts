@@ -14,7 +14,7 @@ import {
 import { planWorkflow, runWorkflow } from '../runtime/kandev/workflowRouter';
 import { DAILY_BRIEF_WORKFLOW, EXTRACT_DOCUMENT_WORKFLOW } from '../runtime/kandev/capabilityRegistry';
 import { dailyBriefService } from '../runtime/kandev/bridgeBriefService';
-import { tailscaleStatusService } from '../runtime/kandev/bridgeToolServices';
+import { coreServices } from '../runtime/kandev/bridgeCoreServices';
 import type { KandevClient } from '../runtime/kandev/kandevClient';
 
 let dir: string; let db: CoreDatabase; let rt: BridgeRuntime; let pairing: BridgePairing;
@@ -134,7 +134,7 @@ describe('workflow router', () => {
   });
 });
 
-describe('workflow fallback and tool services', () => {
+describe('workflow fallback', () => {
   const mk = (id: string, classes: string[], run: () => Promise<{ summary: string; evidence: Record<string, unknown> }>) =>
     ({ id, label: id, readOnly: true, taskClasses: classes, roots: [], run });
   const wf = (extra: Record<string, unknown> = {}) => ({ ...EXTRACT_DOCUMENT_WORKFLOW, ...extra });
@@ -159,13 +159,6 @@ describe('workflow fallback and tool services', () => {
     expect(run.steps).toHaveLength(1);
   });
 
-  it('Tailscale status reports state and counts only, and fails when not running', async () => {
-    const run = (json: string) => tailscaleStatusService(process.execPath, ['-e', `console.log(process.argv[1])`, json]).run({ args: {}, signal: new AbortController().signal });
-    const ok = await run('{"BackendState":"Running","CurrentTailnet":{"Name":"t.example"},"Self":{"DNSName":"pc.t.example.","Online":true,"TailscaleIPs":["100.64.0.1"]},"Peer":{"a":{"Online":true,"TailscaleIPs":["100.64.0.2"]},"b":{"Online":false}}}');
-    expect(ok.evidence).toMatchObject({ backendState: 'Running', self: 'pc.t.example', peers: { total: 2, online: 1 } });
-    expect(JSON.stringify(ok.evidence)).not.toContain('100.64');
-    await expect(run('{"BackendState":"Stopped"}')).rejects.toThrow(/not running/);
-  });
 });
 
 describe('daily brief workflow', () => {
@@ -197,10 +190,11 @@ describe('daily brief workflow', () => {
 const dir0 = () => dir;
 describe('deterministic routing for listing work (input from the 156 s native task)', () => {
   it('a list-files request routes to the deterministic filesystem service, not a model', async () => {
-    const l = await discoverExecutors(kandev, { services: rt.services! });
-    const d = routeTask({ taskClass: 'filesystem.list', readOnly: true }, l, allDeclarations(rt.services), none);
-    expect(d.selected).toBe('service:fs.inspect');
-    const dir = await rt.services!.get('fs.inspect')!.run({ args: { path: path.join(dir0(), 'allowed') }, signal: new AbortController().signal });
-    expect(dir.evidence).toMatchObject({ kind: 'directory' });
+    const services = defaultServiceRegistry([path.join(dir0(), 'allowed')]); for (const x of coreServices([path.join(dir0(), 'allowed')])) services.register(x);
+    const l = await discoverExecutors(kandev, { services });
+    const d = routeTask({ taskClass: 'filesystem.list', readOnly: true }, l, allDeclarations(services), none);
+    expect(d.selected).toBe('service:fs.list');
+    const out = await services.get('fs.list')!.run({ args: { path: path.join(dir0(), 'allowed') }, signal: new AbortController().signal });
+    expect(out.evidence).toMatchObject({ kind: 'directory-listing' });
   });
 });
