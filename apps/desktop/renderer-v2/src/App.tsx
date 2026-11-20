@@ -121,6 +121,17 @@ export function App() {
   // back, where the Workshop carries it out and confirms what it really shows (like navigate_to).
   useEffect(() => startWorkshopIntake(() => { setPop(null); setView('chat'); }), []);
 
+  // "Open in Pandesh" from the browser bridge: the single-instance handler focuses the window and sends this event with the task's
+  // conversation id; the window opens exactly that conversation (the one holding the task's instruction, progress and result).
+  useEffect(() => onDesktopEvent((e) => {
+    if (e.eventType !== 'panda_bridge_open') return;
+    const id = (e.text ?? '').trim();
+    if (!/^[\w-]{1,80}$/.test(id)) return;
+    setPop(null);
+    setView('chat');
+    void api.openConversation(id, true).then(() => setOpenConversationId(id)).catch(() => undefined);
+  }), []);
+
   // navigate_to: the assistant asked this window to open a registered place. The app's own navigation does it, and the
   // window confirms only what it then really shows, so Pandesh never says "opened" when it was not. A running task is
   // not touched: only the view changes.
