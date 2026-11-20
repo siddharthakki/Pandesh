@@ -215,7 +215,12 @@
     const actions = el('div', { className: 'row' });
     actions.style.marginTop = '6px';
 
-    if (t.status === 'awaiting_executor') {
+    // A cloud agent was requested: only the owner can approve it, in the Pandesh app. The card says so and offers no way around it.
+    const pendingApproval = t.status === 'awaiting_executor' && t.approval;
+    if (pendingApproval) {
+      box.append(el('div', { className: 'detail', textContent: `Waiting for your approval in Pandesh to send this to ${t.approval.agentLabel}. Nothing has been sent, and no other agent will be used in its place.` }));
+    }
+    if (t.status === 'awaiting_executor' && !pendingApproval) {
       // The executor is the person's explicit choice: nothing is preselected, a remembered choice survives card rebuilds, and if the
       // chosen executor stops being available the card says so and waits; it never substitutes another one (e.g. native -> OpenCode).
       const sel = el('select');
@@ -224,7 +229,8 @@
       // deterministic services with no model; anything needing interpretation goes to a local agent. Never a cloud executor.
       sel.append(el('option', { value: 'auto', textContent: 'Automatic — deterministic service first, else local agent' }));
       for (const e of state.executors) {
-        const o = el('option', { value: e.id, textContent: e.label + (e.external ? ' — cloud (approve in Pandesh)' : ''), disabled: !e.available || !e.dispatchable || e.external });
+        // A cloud agent can be chosen here but not authorised: choosing it asks the owner in Pandesh.
+        const o = el('option', { value: e.id, textContent: e.label + (e.external ? ' — cloud, needs your approval in Pandesh' : ''), disabled: !e.available || !e.dispatchable });
         sel.append(o);
       }
       const kept = state.choice.get(t.id);
@@ -236,7 +242,11 @@
         if (!sel.value) { note('Choose an executor first.', true); return; }
         start.disabled = true;
         const r = await send({ op: 'dispatch', taskId: t.id, executor: sel.value });
-        if (!r.ok) note(r.message || 'Could not start the task.', true); else upsert(r.data.task);
+        if (!r.ok) note(r.message || 'Could not start the task.', true);
+        else {
+          upsert(r.data.task);
+          if (r.data.approval) note(`Approval requested: open Pandesh to review and allow ${r.data.approval.agentLabel}. Nothing has been sent.`, false);
+        }
         start.disabled = !sel.value;
         renderCards();
       } });

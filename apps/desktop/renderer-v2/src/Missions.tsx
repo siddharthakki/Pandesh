@@ -11,6 +11,14 @@ export interface BridgeActivityItem {
 }
 const BRIDGE_DONE = new Set(['completed', 'failed', 'cancelled']);
 
+/** A cloud agent the browser asked for, waiting for the owner. Everything the owner needs to decide is here, from Core's own record. */
+export interface BridgeApproval {
+  requestId: string; taskId: string; executor: string; agentLabel: string; provider: string; model: string | null;
+  project: { name: string; branch: string; commit: string; access: string; uncommittedFiles: number } | null;
+  accessLevel: string; exposure: string[]; instruction: string; sensitivity: 'normal' | 'confidential'; sensitivityReasons: string[];
+  includeContext: boolean; requestedBy: string; requestedAt: string; expiresAt: string;
+}
+
 /**
  * Missions in the conversation: background work Core is running (or ran) for this chat, shown where the person is
  * talking. One card per mission: which specialist is on which step, the tool it is running right now, what needs the
@@ -25,6 +33,8 @@ export function MissionDock({ conversationId, narrow, onReport }: { conversation
   const [note, setNote] = useState<{ id: string; text: string; error?: boolean } | null>(null);
   const [now, setNow] = useState(Date.now());
   const [bridge, setBridge] = useState<BridgeActivityItem[]>([]);
+  const [approvals, setApprovals] = useState<BridgeApproval[]>([]);
+  const [override, setOverride] = useState<Record<string, boolean>>({});
   const lastStatus = useRef<Record<string, string>>({});
 
   const load = async () => {
@@ -43,6 +53,22 @@ export function MissionDock({ conversationId, narrow, onReport }: { conversation
       const b = await api.household('bridgeActivity') as { items: BridgeActivityItem[] };
       setBridge(b.items ?? []);
     } catch { /* an older Core has no activity feed; the missions above still show */ }
+    try {
+      const a = await api.household('bridgeApprovals') as { approvals: BridgeApproval[] };
+      setApprovals(a.approvals ?? []);
+    } catch { /* an older Core has no approvals; nothing is waiting */ }
+  };
+
+  /** The owner's decision. Allow starts exactly this agent for exactly this task; Don't allow ends the task and nothing else runs in its place. */
+  const decideApproval = async (a: BridgeApproval, decision: 'approve' | 'refuse') => {
+    setBusy(a.requestId);
+    setNote(null);
+    try {
+      await api.household('bridgeApprove', { id: a.taskId, requestId: a.requestId, decision, confidentialOverride: override[a.requestId] === true });
+      setNote({ id: a.taskId, text: decision === 'approve' ? `Allowed. ${a.agentLabel} is starting on this task only.` : `Not allowed. Nothing was sent to ${a.agentLabel} and the task was stopped.` });
+      await load();
+    } catch (err) { setNote({ id: a.taskId, text: `Not recorded: ${errorText(err)}`, error: true }); await load(); }
+    finally { setBusy(null); }
   };
 
   const anyRunning = missions.some((m) => m.status === 'running') || bridge.some((b) => !BRIDGE_DONE.has(b.state));
@@ -72,7 +98,7 @@ export function MissionDock({ conversationId, narrow, onReport }: { conversation
 
   const shown = visibleMissions(missions, conversationId, now).filter((m) => !hidden[m.id]);
   const bridgeShown = [...bridge.filter((b) => !BRIDGE_DONE.has(b.state)), ...bridge.filter((b) => BRIDGE_DONE.has(b.state)).slice(0, 2)].filter((b) => !hidden[b.id]);
-  if (!shown.length && !bridgeShown.length) return null;
+  if (!shown.length && !bridgeShown.length && !approvals.length && !note) return null;
   const openTask = async (b: BridgeActivityItem) => {
     if (!b.conversationId) return;
     try { await api.openConversation(b.conversationId, true); } catch (err) { setNote({ id: b.id, text: errorText(err), error: true }); }
@@ -80,6 +106,37 @@ export function MissionDock({ conversationId, narrow, onReport }: { conversation
 
   return (
     <div className="missions" aria-label="Missions">
+      {approvals.map((a) => (
+        <section key={a.requestId} className="mission bridge attention approval-card" aria-label={`Approval needed: send a task to ${a.agentLabel}`}>
+          <header className="mission-head">
+            <span className="mission-toggle">
+              <span className="dot attention" aria-hidden="true" />
+              <span className="mission-title"><strong>Allow {a.agentLabel} to work on this task?</strong><span className="mission-objective">Asked from your browser · nothing has been sent yet</span></span>
+            </span>
+          </header>
+          <div className="mission-body">
+            <dl className="approval-facts">
+              <dt>Agent</dt><dd>{a.agentLabel}{a.model ? ` (${a.model})` : ''}</dd>
+              <dt>Receives your data</dt><dd>{a.provider}</dd>
+              <dt>Project</dt><dd>{a.project ? `${a.project.name} · branch ${a.project.branch} at ${a.project.commit}` : 'none (an empty isolated workspace)'}</dd>
+              {a.project && (<><dt>Project access</dt><dd>{a.project.access === 'read' ? 'Read-only' : 'Read and write'}</dd></>)}
+              <dt>What it may do</dt><dd>{a.accessLevel}</dd>
+              <dt>What leaves this PC</dt><dd><ul>{a.exposure.map((line, i) => <li key={i}>{line}</li>)}</ul></dd>
+              <dt>Task</dt><dd><pre className="approval-instruction">{a.instruction}</pre></dd>
+            </dl>
+            <p className="mission-summary">Your decision applies to this task only and expires {new Date(a.expiresAt).toLocaleTimeString()}. If you do not allow it, the task stops: no other agent is tried.</p>
+            {a.sensitivity === 'confidential' && (
+              <label className="approval-override"><input type="checkbox" checked={override[a.requestId] === true} onChange={(e) => setOverride({ ...override, [a.requestId]: e.target.checked })} /> This task looks confidential ({a.sensitivityReasons.join(', ')}). I confirm sending it to {a.provider}.</label>
+            )}
+            {note?.id === a.taskId && <p className={`mission-note${note.error ? ' error' : ''}`} role={note.error ? 'alert' : 'status'}>{note.text}</p>}
+            <div className="mission-approval-actions">
+              <button type="button" className="btn primary small" disabled={busy === a.requestId || (a.sensitivity === 'confidential' && override[a.requestId] !== true)} onClick={() => void decideApproval(a, 'approve')}>Allow {a.agentLabel} for this task</button>
+              <button type="button" className="btn small" disabled={busy === a.requestId} onClick={() => void decideApproval(a, 'refuse')}>Don't allow</button>
+            </div>
+          </div>
+        </section>
+      ))}
+      {note && !approvals.length && !shown.length && !bridgeShown.length && <p className={`mission-note${note.error ? ' error' : ''}`} role="status">{note.text}</p>}
       {bridgeShown.map((b) => (
         <section key={b.id} className={`mission bridge ${b.state}`} aria-label={`From ${b.origin.client}: ${b.instruction}`}>
           <header className="mission-head">
