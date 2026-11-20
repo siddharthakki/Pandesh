@@ -52,7 +52,6 @@ export async function runWorkflow(
   const timeoutMs = opts.timeoutMs ?? 120_000, pollMs = opts.pollMs ?? 100;
   const run: WorkflowRun = { workflow: def.id, runId: opts.runId, status: 'completed', steps: [] };
   const previous: Array<{ name: string; evidence: Record<string, unknown> | null }> = [];
-  const deadline = Date.now() + timeoutMs;
 
   const execute = async (step: WorkflowStep, name: string, i: number): Promise<WorkflowStepRun> => {
     const listing = await discoverExecutors(rt.kandev, { nativeAvailable: Boolean(rt.executor), ...(rt.services ? { services: rt.services } : {}) });
@@ -60,6 +59,8 @@ export async function runWorkflow(
       { taskClass: step.taskClass, ...(step.readOnly ? { readOnly: true } : {}), ...(step.deterministicOnly ? { deterministicOnly: true } : {}) },
       listing, allDeclarations(rt.services), trackRecords(rt.db),
     );
+    // Each step has its own time limit (a model summary legitimately takes minutes; a hash check takes milliseconds).
+    const deadline = Date.now() + (step.timeoutMs ?? timeoutMs);
     const rec: WorkflowStepRun = { name, taskClass: step.taskClass, route, taskId: null, executor: route.selected, status: 'refused', detail: route.refusal, verification: null, evidence: null };
     run.steps.push(rec);
     if (!route.selected) return rec;
@@ -93,7 +94,7 @@ export async function runWorkflow(
       rec = await execute(step.fallback.step, `${step.name}:fallback`, i);
     }
     // An optional step that was refused or failed is simply absent from the result; the run still completes.
-    if (step.optional && ['refused', 'failed', 'cancelled', 'timeout'].includes(rec.status)) { rec.detail = `skipped (optional): ${rec.detail ?? rec.status}`; continue; }
+    if (step.optional && ['refused', 'failed', 'cancelled'].includes(rec.status)) { rec.detail = `skipped (optional): ${rec.detail ?? rec.status}`; continue; }
     if (rec.status === 'refused') { run.status = 'refused'; return run; }
     if (rec.status === 'timeout') { run.status = 'timeout'; return run; }
     previous.push({ name: step.name, evidence: rec.evidence });
