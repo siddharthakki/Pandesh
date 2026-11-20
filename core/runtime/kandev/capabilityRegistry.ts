@@ -151,6 +151,8 @@ export interface WorkflowStep {
   instruction(input: Record<string, unknown>, previous: Array<{ name: string; evidence: Record<string, unknown> | null }>): string;
   /** A refused or failed optional step does not fail the run: its result is simply absent (e.g. an AI summary on top of collected data). */
   optional?: boolean;
+  /** Time limit for this step in ms (default: the run's limit). A timed-out step ends the run as `timeout`; its task keeps running under its own deadline. */
+  timeoutMs?: number;
   /** Runs instead of this step, as its own bridge task, only when this step failed and its failure detail matches `when`. */
   fallback?: { when: RegExp; step: Omit<WorkflowStep, 'fallback'> };
 }
@@ -199,7 +201,7 @@ export const DAILY_BRIEF_WORKFLOW: WorkflowDefinition = {
   steps: [
     { name: 'collect', taskClass: 'brief.daily', readOnly: true, deterministicOnly: true, instruction: () => '{}' },
     {
-      name: 'summarize', taskClass: 'text.summarize', optional: true,
+      name: 'summarize', taskClass: 'text.summarize', optional: true, timeoutMs: 15 * 60_000,
       instruction: (_i, prev) => 'Summarise this daily brief for the owner in at most 8 short bullet points. Use only the data below; do not browse, search, run tools or invent anything. If a section is unavailable, say so.\n\n'
         + JSON.stringify(prev.find(p => p.name === 'collect')?.evidence ?? {}).slice(0, 6000),
     },
