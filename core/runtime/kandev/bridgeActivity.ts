@@ -132,7 +132,7 @@ export function activityItem(db: CoreDatabase, task: BridgeTaskRecord, clientLab
 
   const workflowStep = /^(wf-|wfrun)/.test(task.clientRequestId);
   // A phone's document upload is not a ChatGPT message: say what it is and keep the household id and file name out of the line.
-  const jugaadIntake = /^intake:hh_/.test(task.clientRequestId);
+  const jugaadIntake = /^(intake|reprocess):hh_/.test(task.clientRequestId);
   const cps = listCheckpoints(db, task.id);
   const start = cps.find(c => c.status === 'dispatching') ?? null;
   const startedMs = ms(start?.createdAt);
@@ -142,7 +142,7 @@ export function activityItem(db: CoreDatabase, task: BridgeTaskRecord, clientLab
     id: task.id,
     // Steps a workflow created for itself are shown as steps, with the service that ran them, not as the raw JSON arguments they carry.
     origin: { kind: jugaadIntake ? 'jugaad' : workflowStep ? 'workflow' : 'chatgpt', client: jugaadIntake ? 'JUGAAD phone' : clientLabel, title: task.sourceRef.title ?? null, url: task.sourceRef.url ?? null, via: jugaadIntake ? null : task.sourceRef.via ?? null },
-    instruction: jugaadIntake ? 'JUGAAD document intake' : workflowStep ? `Workflow step · ${task.executor ?? 'not started'}` : task.instruction.slice(0, 500),
+    instruction: jugaadIntake ? (task.clientRequestId.startsWith('reprocess:') ? 'JUGAAD document reprocess' : 'JUGAAD document intake') : workflowStep ? `Workflow step · ${task.executor ?? 'not started'}` : task.instruction.slice(0, 500),
     executor: task.executor, model: task.model, routing: task.routing,
     state: d.state, stateLabel: STATE_LABEL[d.state], reason: d.reason,
     progress: latest ? latest.text.slice(0, 200) : null,
