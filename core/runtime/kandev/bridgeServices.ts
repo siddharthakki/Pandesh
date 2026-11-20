@@ -9,6 +9,7 @@ import * as path from 'node:path';
 import type { CoreDatabase } from '../../db/connection';
 import { dailyBriefService } from './bridgeBriefService';
 import { coreServices } from './bridgeCoreServices';
+import { jugaadServices } from '../jugaad/jugaadServices';
 
 /** What a service may ask of the bridge runtime (never the runtime itself): keeps services plain and cycle-free. */
 export interface ServiceHost {
@@ -22,6 +23,10 @@ export interface ServiceContext {
   /** The Core database, for services that only project records Core already holds. */
   db?: CoreDatabase;
   host?: ServiceHost;
+  /** The bridge task this run belongs to. */
+  taskId?: string;
+  /** Core's data directory for this run (the service registry is cached per process, so a service must not capture its own). */
+  dataDir?: string;
 }
 export interface ServiceOutput {
   summary: string; evidence: Record<string, unknown>; files?: string[];
@@ -38,6 +43,8 @@ export interface BridgeService {
   taskClasses?: string[];
   /** Filesystem roots this service may touch. Empty = no filesystem access. */
   roots: string[];
+  /** Internal services handle private data (a household's documents). Only the Pandesh app or Core itself may start them, never a paired browser. */
+  internal?: boolean;
   run(ctx: ServiceContext): Promise<ServiceOutput>;
 }
 
@@ -122,5 +129,6 @@ export function bridgeServices(dataDir: string): ServiceRegistry {
   const reg = defaultServiceRegistry([root]);
   for (const svc of coreServices([root])) reg.register(svc);
   reg.register(dailyBriefService());
+  for (const svc of jugaadServices(dataDir)) reg.register(svc);
   return (cachedRegistry = reg);
 }

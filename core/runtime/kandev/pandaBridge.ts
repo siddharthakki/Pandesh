@@ -86,7 +86,7 @@ export interface ExecutorListing {
 }
 
 /** What can run a task right now. Passive: it never starts Kandev. */
-export async function discoverExecutors(kandev: KandevClient, opts: { nativeAvailable?: boolean; services?: ServiceRegistry } = {}): Promise<ExecutorListing> {
+export async function discoverExecutors(kandev: KandevClient, opts: { nativeAvailable?: boolean; services?: ServiceRegistry; includeInternal?: boolean } = {}): Promise<ExecutorListing> {
   const running = await kandev.healthy();
   const gpu = detectGpu();
   const executors: BridgeExecutor[] = [];
@@ -129,6 +129,7 @@ export async function discoverExecutors(kandev: KandevClient, opts: { nativeAvai
     external: false, usesLocalGpu: false, models: [],
   });
   for (const svc of opts.services?.list() ?? []) {
+    if (svc.internal && !opts.includeInternal) continue; // private-data services are not advertised to browsers
     executors.push({ id: `service:${svc.id}`, label: svc.label, kind: 'service', dispatchable: true, available: true, reason: null, external: false, usesLocalGpu: false, models: [] });
   }
   return { kandev: { running }, hardware: { gpu, gpuLanes: gpuLaneLimit(gpu) }, executors };
@@ -283,7 +284,7 @@ export async function dispatchBridgeTask(rt: BridgeRuntime, taskId: string, req:
     if (!decision.allowed) throw new CoreError('forbidden', decision.message, { reason: decision.code });
   }
 
-  const listing = await discoverExecutors(rt.kandev, { nativeAvailable: Boolean(rt.executor), ...(rt.services ? { services: rt.services } : {}) });
+  const listing = await discoverExecutors(rt.kandev, { nativeAvailable: Boolean(rt.executor), includeInternal: true, ...(rt.services ? { services: rt.services } : {}) });
   let routing: 'explicit' | 'auto' = 'explicit';
   let chosen: BridgeExecutor | undefined;
   let derived: { taskClass: string; reason: string; args: Record<string, unknown> } | null = null;
@@ -319,6 +320,10 @@ export async function dispatchBridgeTask(rt: BridgeRuntime, taskId: string, req:
     if (!chosen) throw new CoreError('invalid_request', `unknown executor '${req.executor}'`);
     if (!chosen.dispatchable) throw new CoreError('invalid_request', `${chosen.label}: ${chosen.reason}`);
     if (!chosen.available) throw new CoreError('conflict', `${chosen.label} is not available: ${chosen.reason ?? 'unavailable'}`);
+  }
+  // Services that handle private data (a household's documents) are not for a paired browser, however they were chosen (named or routed).
+  if (chosen.kind === 'service' && rt.services?.get(chosen.id.slice('service:'.length))?.internal && req.authority !== 'host') {
+    throw new CoreError('forbidden', `${chosen.label} is internal to Pandesh and cannot be started from a browser`);
   }
   // Project-aware workspace: a task that names an authorized project (by path, or by name together with code words) is resolved
   // against the owner's registry. It is never resolved to whatever workspace is open, never searched for, and a read-only
@@ -452,7 +457,7 @@ function startService(rt: BridgeRuntime, task: BridgeTaskRecord, serviceId: stri
           return runWorkflow(rt, getPairing(rt.db, task.pairingId), def, input, { runId: `wf-${task.id}`.slice(0, 60), decidedBy: 'bridge:intent-router' });
         },
       };
-      const out = await svc.run({ args: derived?.args ?? parseServiceArgs(task.instruction), signal: ac.signal, db: rt.db, host });
+      const out = await svc.run({ args: derived?.args ?? parseServiceArgs(task.instruction), signal: ac.signal, db: rt.db, host, taskId: task.id, dataDir: rt.dataDir });
       if (ac.signal.aborted || getBridgeTask(rt.db, task.id).control === 'cancelled') return;
       recordBridgeStatus(rt.db, task.id, 'completed', out.summary, {
         ...base, verification: out.verification ?? 'independent', evidence: redactPaths(JSON.stringify(out.evidence)).slice(0, 3_000), changedFiles: out.files ?? [],

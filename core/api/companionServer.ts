@@ -28,9 +28,12 @@ import { handleCompanionOps } from '../runtime/householdService';
 import { CompanionVault, migrateCompanionDeviceKeys } from '../runtime/companionVault';
 import { defaultSecretProtector, type SecretProtector } from '../platform/osSecretProtector';
 import { formatFingerprint } from '../platform/selfSignedCert';
+import { handleJugaadRpc, JUGAAD_METHODS } from '../runtime/jugaad/jugaadGateway';
+import { householdOfDevice } from '../runtime/jugaad/households';
 
 export const COMPANION_DEFAULT_PORT = 47821;
-const MAX_BODY = 64 * 1024;
+// A document chunk is at most 64 KB; base64 inside JSON inside a sealed, base64 envelope is about 2.3x that.
+const MAX_BODY = 256 * 1024;
 
 export interface CompanionSettings { enabled: boolean; bind: 'loopback' | 'lan'; port: number }
 
@@ -77,7 +80,14 @@ export interface CompanionServerHandle { port: number; host: string; close(): Pr
 export interface CompanionLog { (line: string): void }
 
 /** Handles one decrypted call. The full list of what a paired phone can do. */
-function rpc(db: CoreDatabase, deviceId: string, method: string, params: Record<string, unknown>): unknown {
+/** Household-scoped records (`hh_xxxxxxxxxxxx:...`) are visible only to phones of that household; older, unscoped records keep their single-household behaviour. */
+export function visibleToDevice(recordId: string, householdId: string | null): boolean {
+  const m = /^(hh_[a-f0-9]{12}):/.exec(recordId);
+  return !m || m[1] === householdId;
+}
+
+async function rpc(db: CoreDatabase, deviceId: string, method: string, params: Record<string, unknown>, dataDir: string | null): Promise<unknown> {
+  if (dataDir && JUGAAD_METHODS.has(method)) { touchCompanionDevice(db, deviceId); return handleJugaadRpc({ db, dataDir }, deviceId, method, params); }
   switch (method) {
     case 'hello':
       touchCompanionDevice(db, deviceId);
@@ -85,9 +95,11 @@ function rpc(db: CoreDatabase, deviceId: string, method: string, params: Record<
     case 'pull': {
       const since = Math.max(0, Math.trunc(Number(params.since) || 0));
       const changes = listCompanionChanges(db, since, Number(params.limit) || 200);
+      // The cursor advances over everything read, so records of other households (which this phone never sees) cannot stall it.
       const nextSince = changes.length ? changes[changes.length - 1].revision : since;
+      const hid = dataDir ? householdOfDevice(dataDir, deviceId) : null;
       touchCompanionDevice(db, deviceId, nextSince);
-      return { records: changes, nextSince, latestRevision: latestCompanionRevision(db), more: nextSince < latestCompanionRevision(db) };
+      return { records: changes.filter(r => visibleToDevice(r.recordId, hid)), nextSince, latestRevision: latestCompanionRevision(db), more: nextSince < latestCompanionRevision(db) };
     }
     case 'push': {
       const ops = Array.isArray(params.ops) ? params.ops as CompanionOp[] : [];
@@ -99,7 +111,7 @@ function rpc(db: CoreDatabase, deviceId: string, method: string, params: Record<
   }
 }
 
-export function startCompanionServer(db: CoreDatabase, vault: CompanionVault, settings: CompanionSettings, log: CompanionLog = () => undefined): Promise<CompanionServerHandle> {
+export function startCompanionServer(db: CoreDatabase, vault: CompanionVault, settings: CompanionSettings, log: CompanionLog = () => undefined, dataDir: string | null = null): Promise<CompanionServerHandle> {
   const host = settings.bind === 'lan' ? '0.0.0.0' : '127.0.0.1';
   const tls = vault.tlsIdentity(`Pandesh companion ${process.env.COMPUTERNAME ?? 'PC'}`);
   const server = https.createServer({ key: tls.keyPem, cert: tls.certPem, minVersion: 'TLSv1.2' }, async (req, res) => {
@@ -130,7 +142,7 @@ export function startCompanionServer(db: CoreDatabase, vault: CompanionVault, se
       return;
     }
     let reply: Record<string, unknown>;
-    try { reply = { ok: true, result: rpc(db, deviceId, String(call.method ?? ''), call.params ?? {}) }; } catch (err) { reply = { ok: false, error: err instanceof Error ? err.message : String(err) }; }
+    try { reply = { ok: true, result: await rpc(db, deviceId, String(call.method ?? ''), call.params ?? {}, dataDir) }; } catch (err) { reply = { ok: false, error: err instanceof Error ? err.message : String(err) }; }
     send(res, 200, { ok: true, sealed: sealCompanionMessage(key, `${deviceId}:resp`, JSON.stringify({ ...reply, ts: Date.now(), nonce: call.nonce })) });
   });
   return new Promise((resolve, reject) => {
@@ -186,7 +198,7 @@ export class CompanionServerController {
     if (!this.handle) {
       try {
         await this.openVault();
-        this.handle = await startCompanionServer(this.db, this.vault, settings, this.log);
+        this.handle = await startCompanionServer(this.db, this.vault, settings, this.log, this.dataDir);
         this.lastError = null;
       } catch (err) { this.lastError = err instanceof Error ? err.message : String(err); this.log(`companion: could not listen: ${this.lastError}`); }
     }
