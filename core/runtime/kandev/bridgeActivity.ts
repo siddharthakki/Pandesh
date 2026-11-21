@@ -114,6 +114,16 @@ export interface ActivityItem {
   verification: string | null;
   conversationId: string | null;
   openTarget: { conversationId: string } | null;
+  /** The worker's newest observed event (Kandev message), not Core's own bookkeeping. */
+  latest: { at: string; kind: string; text: string } | null;
+  /** Time of that event: what "last event N s ago" is measured from. Core's own writes never move it. */
+  lastEventAt: string | null;
+  /** How many worker events are recorded for this task (the full log is on GET /v1/bridge/tasks/:id). */
+  eventCount: number;
+  branch: string | null;
+  /** Actions the worker is waiting on (answered from the Pandesh window only). */
+  pendingWorkerActions: Array<{ pendingId: string; what: string }>;
+  storyId: string | null;
 }
 
 export function activityItem(db: CoreDatabase, task: BridgeTaskRecord, clientLabel: string, now = Date.now()): ActivityItem {
@@ -152,5 +162,11 @@ export function activityItem(db: CoreDatabase, task: BridgeTaskRecord, clientLab
     verification: result?.verification ?? null,
     conversationId: task.conversationId,
     openTarget: task.conversationId ? { conversationId: task.conversationId } : null,
+    latest: latest ? { at: latest.at, kind: latest.kind, text: latest.text.slice(0, 300) } : null,
+    lastEventAt: latest?.at ?? null,
+    eventCount: result?.activity?.length ?? 0,
+    branch: result?.branch ?? null,
+    pendingWorkerActions: running && task.status === 'awaiting_approval' ? (result?.pendingApprovals ?? []) : [],
+    storyId: task.storyId,
   };
 }

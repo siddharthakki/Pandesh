@@ -75,7 +75,10 @@ export function registerBridgeRoutes(router: Router<ApiContext, ApiResult>, opti
   // The browser card shows the same real state, reason, active time and heartbeat as Pandesh's own activity list.
   const view = (ctx: ApiContext, task: BridgeTaskRecord) => {
     const pending = task.status === 'awaiting_executor' ? pendingApproval(ctx.db, task.id) : null;
-    return { ...toBridgeTaskView(task, listCheckpoints(ctx.db, task.id)), activity: activityItem(ctx.db, task, 'Browser'), ...(pending ? { approval: approvalSummary(pending) } : {}) };
+    const base = toBridgeTaskView(task, listCheckpoints(ctx.db, task.id));
+    // The worker's full event log stays on this PC: a paired client (ChatGPT, a browser) gets the last few lines, as before.
+    const forClient = caller(ctx).kind === 'extension' && base.result ? { ...base, result: { ...base.result, activity: base.result.activity.slice(-3) } } : base;
+    return { ...forClient, activity: activityItem(ctx.db, task, 'Browser'), ...(pending ? { approval: approvalSummary(pending) } : {}) };
   };
 
   // --- pairing ---

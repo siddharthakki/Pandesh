@@ -64,6 +64,11 @@ export interface DevStorySpec {
    */
   mode?: 'inspect';
   inspect?: { projectName: string; sourcePath: string; ref: string; sourceHead: string; sourceStatusSha: string };
+  /**
+   * With `mode: 'inspect'`: a task that names no project and only asks for an answer (a reply, a status). The worktree is an empty
+   * folder; the same read-only rules and checks apply, and the worker's final message, however short, is the result.
+   */
+  answerOnly?: true;
 }
 
 /** Fingerprint of a checkout's HEAD and working-tree state (read-only git), used to prove an inspection did not touch it. */
@@ -102,6 +107,8 @@ export interface PlanInput {
     /** Read-only inspection of an authorized project (see DevStorySpec.mode). */
     mode?: 'inspect';
     inspect?: DevStorySpec['inspect'];
+    /** With mode 'inspect': an answer-only task with no project (see DevStorySpec.answerOnly). */
+    answerOnly?: boolean;
   }>;
 }
 
@@ -126,7 +133,7 @@ export function planDevStories(db: CoreDatabase, input: PlanInput): { projectId:
         kind: 'kkd-dev-story', repoPath, baseBranch, integrationBranch, verify: s.verify?.length ? s.verify : input.verify,
         agent: s.agent, model: s.model, paths: s.paths,
         ...(acceptance[s.key].length ? { acceptance: acceptance[s.key] } : {}),
-        ...(s.mode === 'inspect' ? { mode: 'inspect' as const, ...(s.inspect ? { inspect: s.inspect } : {}) } : {}),
+        ...(s.mode === 'inspect' ? { mode: 'inspect' as const, ...(s.inspect ? { inspect: s.inspect } : {}), ...(s.answerOnly ? { answerOnly: true as const } : {}) } : {}),
       };
       const story = createStory(db, {
         projectId: project.id, title: s.title, description: s.description ?? '', acceptanceCriteria: s.acceptanceCriteria ?? [],
@@ -171,6 +178,15 @@ function overlaps(a: string[] = [], b: string[] = []): string[] {
 }
 
 function workerPrompt(story: StoryRecord, spec: DevStorySpec): string {
+  if (spec.mode === 'inspect' && spec.answerOnly) {
+    return [
+      `Task: ${story.title}`,
+      story.description ? `\n${story.description}` : '',
+      '\nThis task needs no project. Your working directory is an empty folder that holds nothing of the owner\'s.',
+      'It is ANSWER-ONLY: do NOT create, edit or delete any file, do NOT commit, push or change any Kandev task state, and do not look outside the working directory.',
+      'Do what the task asks, then write your answer as your last message and stop. If you cannot do it without changing files, say so plainly in that message.',
+    ].join('\n');
+  }
   if (spec.mode === 'inspect') {
     return [
       `Task: ${story.title}`,
@@ -569,6 +585,13 @@ async function sendFeedback(db: CoreDatabase, kandev: KandevClient, storyId: str
   }
 }
 
+/** The worker's last substantial prose message (after `since`, when given): what it says about the turn that just ended. */
+async function workerExplanation(kandev: KandevClient, sessionId: string, since?: string): Promise<string | null> {
+  const messages = await kandev.agentMessages(sessionId, 40).catch(() => []);
+  const prose = messages.filter(m => m.kind === 'message' && m.text.trim().length > 40 && (!since || m.at > since));
+  return prose.length ? prose[prose.length - 1].text.trim() : null;
+}
+
 /** Files an agent keeps for itself (its own history/cache); never the user's work. */
 const AGENT_OWN_FILES = /(^|\/)\.(?:claude|aider|codex|cline)[^/]*(\/|$)|(^|\/)node_modules(\/|$)/i;
 
@@ -590,7 +613,9 @@ async function finishInspection(db: CoreDatabase, kandev: KandevClient, story: S
     return;
   }
   const messages = await kandev.agentMessages(sessionId, 60).catch(() => []);
-  const prose = messages.filter(m => m.kind === 'message' && m.text.trim().length > 40);
+  // An answer may be one short sentence ("Hello from …"); an inspection report is expected to say more than that.
+  const minReport = spec.answerOnly ? 0 : 40;
+  const prose = messages.filter(m => m.kind === 'message' && m.text.trim().length > minReport);
   const report = (prose[prose.length - 1]?.text ?? '').trim();
   if (!report) {
     walk(db, getStory(db, story.id), ['blocked'], 'the worker finished without writing a report');
@@ -598,11 +623,14 @@ async function finishInspection(db: CoreDatabase, kandev: KandevClient, story: S
     return;
   }
   const tools = messages.filter(m => m.kind === 'tool_execute').map(m => m.text.replace(/\s+/g, ' ').slice(0, 140));
+  const header = spec.answerOnly
+    ? '[kkd-dev:inspected] level=worker-only; answer-only task: no project was shared, and KKD checked that no file changed in the worker\'s empty folder; every write and every path outside it was refused by policy.'
+    : `[kkd-dev:inspected] level=worker-only; read-only checked by KKD: no file changed in the agent's private copy of ${spec.inspect?.projectName ?? 'the project'} (branch ${spec.inspect?.ref ?? '?'} @ ${spec.inspect?.sourceHead.slice(0, 8) ?? '?'}); every write and every path outside the copy was refused by policy.${sourceMoved ? ' Note: your own checkout changed while this ran (you edited or committed there); the agent never had access to it.' : spec.inspect ? ' Your checkout is exactly as it was.' : ''}`;
   addComment(db, story.id, {
     author: DEV_ACTOR,
     body: [
-      `[kkd-dev:inspected] level=worker-only; read-only checked by KKD: no file changed in the agent's private copy of ${spec.inspect?.projectName ?? 'the project'} (branch ${spec.inspect?.ref ?? '?'} @ ${spec.inspect?.sourceHead.slice(0, 8) ?? '?'}); every write and every path outside the copy was refused by policy.${sourceMoved ? ' Note: your own checkout changed while this ran (you edited or committed there); the agent never had access to it.' : spec.inspect ? ' Your checkout is exactly as it was.' : ''}`,
-      '--- worker report (its own words; test results are as the worker reported them) ---',
+      header,
+      `--- worker ${spec.answerOnly ? 'answer' : 'report'} (its own words; test results are as the worker reported them) ---`,
       report.slice(0, 6_000),
       `--- commands the worker ran (${tools.length}) ---`,
       tools.slice(-8).join(' | ') || 'none recorded',
@@ -649,7 +677,9 @@ export async function verifyAndIntegrate(db: CoreDatabase, kandev: KandevClient,
     }
     if (retries + 1 > MAX_VERIFY_RETRIES) {
       walk(db, getStory(db, story.id), ['blocked'], `verification failed ${retries + 1} times: ${what}`);
-      addComment(db, story.id, { author: DEV_ACTOR, body: `[kkd-dev:needs-human] Verification failed ${retries + 1} times. Kandev task ${taskId}, worktree ${worktree}.` });
+      // Whatever the worker said last goes with it, so the owner sees its side and not only "failed 3 times".
+      const said = await workerExplanation(kandev, sessionId).catch(() => null);
+      addComment(db, story.id, { author: DEV_ACTOR, body: `[kkd-dev:needs-human] Verification failed ${retries + 1} times (${what}). Kandev task ${taskId}, worktree ${worktree}.${said ? ` The worker's last words: ${said.replace(/\s+/g, ' ').slice(0, 600)}` : ''}` });
       return;
     }
     const now = getStory(db, story.id);
@@ -657,7 +687,19 @@ export async function verifyAndIntegrate(db: CoreDatabase, kandev: KandevClient,
     const delivered = await sendFeedback(db, kandev, story.id, taskId, sessionId, `KarkeDikha verification failed: ${what}\n\n${detail.slice(-2_000)}\n\nFix it, re-run ${spec.verify.join(' ')}, and stop. Do not commit.`);
     if (!delivered) await repairOrPark(db, kandev, story.id, 'the correction was not accepted by the worker session');
   };
-  if (!files.length) return fail('the worker made no changes', 'git reports no changed files in the worktree');
+  if (!files.length) {
+    // A worker that changed nothing but explained itself (the task cannot be done here, it is not allowed, it needs a decision) is
+    // not sent back with "make changes": that pressures it into a diff it already said it should not make, three times in a minute
+    // (seen 2026-11-21). Its explanation is kept and the story goes to the owner. Only a silent worker gets the usual correction.
+    const explanation = opts.recovery ? null : await workerExplanation(kandev, sessionId, handOffEpoch(history, true));
+    if (explanation) {
+      addComment(db, story.id, { author: DEV_ACTOR, body: `[kkd-dev:verify-failed] the worker made no changes and explained why\n--- worker explanation (its own words) ---\n${explanation.slice(0, 2_000)}` });
+      walk(db, getStory(db, story.id), ['blocked'], 'the worker made no changes and explained why; not sent back for repair');
+      addComment(db, story.id, { author: DEV_ACTOR, body: `[kkd-dev:needs-human] The worker made no changes and explained why (not sent back for repair): ${explanation.replace(/\s+/g, ' ').slice(0, 600)}` });
+      return;
+    }
+    return fail('the worker made no changes', 'git reports no changed files in the worktree');
+  }
   if (unsafe.length) return fail('protected or credential-adjacent files changed', unsafe.map(u => `${u.path}: ${u.reason}`).join('\n'));
   const outOfScope = spec.paths?.length ? files.filter(f => !overlaps([f], spec.paths).length) : [];
   if (outOfScope.length) {
@@ -1469,13 +1511,14 @@ function verificationOf(evidence: string | null, done: boolean): DevStoryView['v
   return done || /level=worker-only/.test(evidence) ? 'worker-only' : null;
 }
 
-export async function devStoryStatus(db: CoreDatabase, kandev: KandevClient, projectId?: string): Promise<{ available: boolean; counts: Record<string, number>; stories: DevStoryView[] }> {
+export async function devStoryStatus(db: CoreDatabase, kandev: KandevClient, projectId?: string, onlyStoryId?: string): Promise<{ available: boolean; counts: Record<string, number>; stories: DevStoryView[] }> {
   const stories = listStories(db, { projectId, limit: 200 }).filter(s => devSpec(s) && !s.archivedAt);
   const available = await kandev.healthy();
   const workspaceId = available ? await kandev.defaultWorkspaceId().catch(() => null) : null;
   const titles = new Map(stories.map(s => [s.id, s.title]));
   const views: DevStoryView[] = [];
-  for (const s of stories) {
+  // One story's detail (a relayed task refreshed every few seconds) must not query Kandev for every other story too.
+  for (const s of onlyStoryId ? stories.filter(x => x.id === onlyStoryId) : stories) {
     const comments = listComments(db, s.id);
     const last = (tag: string) => [...comments].reverse().find(c => c.body.startsWith(`[kkd-dev:${tag}]`))?.body ?? null;
     const task = workspaceId ? await kandev.taskByExternalId(workspaceId, s.id).catch(() => null) : null;
@@ -1538,8 +1581,35 @@ function redactPrivatePaths(text: string): string {
 }
 
 /** One story for the phone: the status view plus a chronological timeline and the files the last verification saw changed. */
+/** Kandev message kinds that are observable worker events (its prose, tool calls, permission requests, session status). */
+const WORKER_EVENT = /^(message|tool_[a-z_]+|permission_request|status)$/;
+
+/**
+ * The worker's recent observable events for one story, newest last, straight from Kandev: what it said, the tools it called, the
+ * permissions it asked for. Nothing is invented or summarised; text is whitespace-collapsed, capped and stripped of private paths.
+ * Returns null when there is no Kandev task or session yet (or Kandev is unreachable).
+ */
+export async function devStoryWorkerEvents(kandev: KandevClient, storyId: string, limit = 50): Promise<{ branch: string | null; events: Array<{ id: string; at: string; kind: string; text: string; status?: string }> } | null> {
+  try {
+    const workspaceId = await kandev.defaultWorkspaceId();
+    const task = await kandev.taskByExternalId(workspaceId, storyId);
+    if (!task) return null;
+    const session = (await kandev.sessions(task.id))[0];
+    if (!session) return null;
+    const messages = await kandev.agentMessages(session.id, limit);
+    return {
+      branch: session.worktree_branch ?? null,
+      events: messages.filter(m => m.id && WORKER_EVENT.test(m.kind)).map(m => ({
+        id: m.id, at: m.at, kind: m.kind, text: redactPrivatePaths(m.text.replace(/\s+/g, ' ').trim()).slice(0, 400), ...(m.status ? { status: m.status } : {}),
+      })),
+    };
+  } catch {
+    return null;
+  }
+}
+
 export async function devStoryDetail(db: CoreDatabase, kandev: KandevClient, storyId: string): Promise<{ story: DevStoryView; timeline: Array<{ at: string; event: string; text: string }>; changedFiles: string[] }> {
-  const found = (await devStoryStatus(db, kandev)).stories.find(v => v.id === storyId);
+  const found = (await devStoryStatus(db, kandev, undefined, storyId)).stories.find(v => v.id === storyId);
   if (!found) throw new CoreError('not_found', 'task not found');
   // No Kandev identifiers, worker configuration or private filesystem locations in the detail.
   const story: DevStoryView = {

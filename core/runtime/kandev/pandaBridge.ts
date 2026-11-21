@@ -15,6 +15,7 @@ import { CoreError } from '../../domain/errors';
 import { runHardenedGit } from '../../security/hardenedGit';
 import { getStory } from '../../domain/stories';
 import { loadProjects, projectAllows, resolveProject, type ProjectRecord } from '../../domain/projectRegistry';
+import { asksForChange, deriveMutationPolicy } from '../../domain/mutationPolicy';
 import { consumeApproval, decideApproval, pendingApproval, recordDirectApproval, requestApproval, usableApproval, withdrawApproval, type ExternalApprovalRequest } from '../../domain/bridgeApprovals';
 import { getAttempt, requestCancelAttempt } from '../../domain/attempts';
 import { isTerminalAttemptStatus } from '../../domain/attemptTransitions';
@@ -22,7 +23,7 @@ import { submitRequest } from '../../domain/submission';
 import { newId } from '../../domain/ids';
 import {
   attachBridgeExecution, claimBridgeDispatch, evaluateTransferPolicy, getBridgeTask, getPairing, listBridgeTasks, recordBridgeStatus,
-  setBridgeControl, TERMINAL_BRIDGE_STATUSES,
+  setBridgeControl, TERMINAL_BRIDGE_STATUSES, BRIDGE_ACTIVITY_LIMIT,
   type BridgeTaskRecord, type BridgeTaskResult, type BridgeTaskStatus, type BridgeTransferConsent,
 } from '../../domain/pandaBridge';
 import { detectGpu, gpuLaneLimit, type GpuInfo } from '../hardwareCapacity';
@@ -32,7 +33,7 @@ import { parseServiceArgs, type ServiceHost, type ServiceRegistry } from './brid
 import { classifyInstruction, WORKSPACE_MARKER } from './intentRouter';
 import { allDeclarations, BUILTIN_WORKFLOWS, routeTask, trackRecords } from './capabilityRegistry';
 import {
-  AGENT_IDS, checkoutFingerprint, devSpec, devStoryDetail, dispatchDevStories, planDevStories, retryDevStory, stopDevStory, usesLocalGpu, type DevAgent,
+  AGENT_IDS, checkoutFingerprint, devSpec, devStoryDetail, devStoryWorkerEvents, dispatchDevStories, planDevStories, retryDevStory, stopDevStory, usesLocalGpu, type DevAgent,
 } from './devStories';
 
 export type BridgeExecutorId = DevAgent | 'native';
@@ -173,15 +174,11 @@ export const TESTS_PRESENT_CHECK = [
   "process.exit(fail > 0 || pass < 1 ? 1 : 0);",
 ].join('\n');
 
-function workerDescription(task: BridgeTaskRecord, includeContext: boolean): string {
+function answerDescription(task: BridgeTaskRecord, includeContext: boolean): string {
   const parts = [task.instruction];
   if (includeContext && task.contextText) {
     parts.push('', 'Conversation context the user chose to share (background only; the instruction above is the task):', task.contextText);
   }
-  parts.push(
-    '', 'Deliver working code in this repository together with automated tests using the Node.js built-in test runner',
-    '(files named *.test.js; `npm test` runs them). Run the tests and make them pass before you stop.',
-  );
   return parts.join('\n');
 }
 
@@ -232,7 +229,20 @@ function needsClarification(db: CoreDatabase, taskId: string, question: string):
 }
 
 /** Words that make a bare project NAME a reference to its code rather than to the product ("ask Pandesh for my brief"). */
-const CODE_CUE = /\b(repo|repository|codebase|source|implementation|branch|tests?|test suite|module|files?|folder|directory|defects?|bugs?|code)\b/i;
+// "tests" (plural) and "test suite" point at code; a lone "test" usually names the request itself ("an acceptance test").
+const CODE_CUE = /\b(repo|repository|codebase|source|implementation|branch|tests|test suite|test files?|module|files?|folder|directory|defects?|bugs?|code)\b/i;
+
+/**
+ * The part of an instruction that can make a project name a reference to its code. Agent names are not code words ("Claude Code"
+ * contains "code"), and a prohibition is not a reference ("do not read files or repositories"). Without this, a hello that names
+ * Claude Code and Pandesh became a read-only inspection of the Pandesh repository (seen live 2026-11-21).
+ */
+export function codeCueText(instruction: string): string {
+  return instruction
+    .replace(/\b(?:claude[ -]?code|open[ -]?code|antigravity|hermes)\b/gi, ' ')
+    .replace(/\b(?:do not|don't|never|must not|mustn't|without|no)\b[^.!?\n]*/gi, ' ');
+}
+export const refersToCode = (instruction: string): boolean => CODE_CUE.test(codeCueText(instruction));
 
 export interface ProjectIntent { project: ProjectRecord; path: string; ref: string | null; readOnlyRequested: boolean }
 
@@ -245,12 +255,28 @@ function gateProject(rt: BridgeRuntime, task: BridgeTaskRecord, chosen: BridgeEx
   const projects = loadProjects(rt.dataDir);
   const r = projects.length || /[A-Za-z]:[\\/]/.test(task.instruction) ? resolveProject(projects, task.instruction) : ({ status: 'none' } as const);
   if (r.status === 'ambiguous' || r.status === 'unauthorized') needsClarification(rt.db, task.id, r.question);
-  if (r.status !== 'resolved' || !(r.via === 'path' || CODE_CUE.test(task.instruction))) return null;
+  if (r.status !== 'resolved' || !(r.via === 'path' || refersToCode(task.instruction))) return null;
   if (chosen.kind !== 'acp') needsClarification(rt.db, task.id, `This task is about the project '${r.project.name}'. ${chosen.label} cannot be confined to that project yet; choose Claude Code or OpenCode for a read-only inspection.`);
   const allowed = projectAllows(r.project, r.readOnlyRequested);
   if (!allowed.ok) needsClarification(rt.db, task.id, allowed.reason);
   if (!r.readOnlyRequested) needsClarification(rt.db, task.id, `Tasks that change files in '${r.project.name}' are not run from the browser bridge yet. Ask for a read-only inspection (say "do not modify files"), or run the change in Pandesh.`);
   return { project: r.project, path: r.path, ref: r.ref, readOnlyRequested: r.readOnlyRequested };
+}
+
+/**
+ * No registered project resolved. An agent may still answer (a reply, a read-only check of nothing), but Pandesh never hands work that
+ * may change files an empty substitute workspace: that silently swaps the owner's project for a blank folder (seen 2026-11-21, where a
+ * coding task "for the Pandesh source" got a scaffold, the worker found no code and verification failed it three times).
+ */
+function requireAnswerOnly(rt: BridgeRuntime, task: BridgeTaskRecord, chosen: BridgeExecutor): void {
+  if (chosen.kind !== 'acp') return;
+  if (isAnswerOnly(task.instruction)) return;
+  needsClarification(rt.db, task.id, `This task may change files, but it names no registered project, so nothing ran. Pandesh does not run such work in an empty substitute workspace. Register the project in Pandesh and name it in the task, or ask for an answer only (say "do not change any files").`);
+}
+
+/** The instruction asks for an answer or a read-only look, never a change (the same reading Pandesh applies to its own requests). */
+export function isAnswerOnly(instruction: string): boolean {
+  return deriveMutationPolicy(instruction) === 'denied' || !asksForChange(instruction);
 }
 
 /** Read-only look at what an inspection would copy (branch, commit, uncommitted files); copies nothing. */
@@ -285,6 +311,7 @@ async function requestExternalApproval(rt: BridgeRuntime, task: BridgeTaskRecord
   if (!chosen.dispatchable) throw new CoreError('invalid_request', `${chosen.label}: ${chosen.reason}`);
   if (!chosen.available) throw new CoreError('conflict', `${chosen.label} is not available: ${chosen.reason ?? 'unavailable'}`);
   const intent = gateProject(rt, task, chosen);
+  if (!intent) requireAnswerOnly(rt, task, chosen);
   const preview = intent ? previewInspection(intent) : null;
   const provider = providerOf(chosen.id, req.model ?? null);
   const includeContext = task.contextConfirmed;
@@ -292,13 +319,13 @@ async function requestExternalApproval(rt: BridgeRuntime, task: BridgeTaskRecord
     `The task text goes to ${provider}.`,
     preview
       ? `Everything ${chosen.label} reads in a private copy of ${intent!.project.name} (branch ${preview.branch} at ${preview.commit}) goes there too. Your own checkout is not shared${preview.uncommittedFiles ? `, and ${preview.uncommittedFiles} uncommitted or untracked file(s) in it are not part of the copy` : ''}.`
-      : `${chosen.label} works in an empty isolated workspace; only what it reads there goes to ${provider}.`,
+      : `No project is shared: this is an answer-only task. ${chosen.label} gets an empty folder, may not change any file, and only the task text goes to ${provider}.`,
     includeContext ? 'The ChatGPT conversation context you chose to share is included.' : 'No ChatGPT conversation context is included.',
   ];
   const request = requestApproval(rt.db, {
     taskId: task.id, executor: chosen.id, agentLabel: chosen.label, provider, model: req.model ?? null,
     project: intent && preview ? { name: intent.project.name, branch: preview.branch, commit: preview.commit, access: intent.project.access, uncommittedFiles: preview.uncommittedFiles } : null,
-    accessLevel: preview ? 'Read-only inspection of a private copy: it may read files and run existing tests, it cannot change anything' : 'Isolated task workspace: it may create and change files only inside that workspace',
+    accessLevel: preview ? 'Read-only inspection of a private copy: it may read files and run existing tests, it cannot change anything' : 'Answer only: no project is shared and no file may be changed',
     exposure, instruction: task.instruction.slice(0, 2000), instructionSha256: task.instructionSha256,
     sensitivity: task.sensitivity, sensitivityReasons: task.sensitivityReasons, includeContext, requestedBy: req.decidedBy,
   });
@@ -423,6 +450,7 @@ export async function dispatchBridgeTask(rt: BridgeRuntime, taskId: string, req:
   // project never runs a task that may change files. Ambiguous or unauthorized means ask; no permission is widened.
   let inspection: InspectionPlan | null = null;
   const intent = gateProject(rt, task, chosen);
+  if (!intent) requireAnswerOnly(rt, task, chosen);
   if (intent && transferInfo(chosen.id, model).external && req.approvalRequestId) {
     // What the owner approved is what runs: same project, branch AND commit. A moved branch, an edited registry entry or a swapped
     // checkout since the card was shown means the card no longer describes this run.
@@ -488,6 +516,9 @@ async function startAcp(rt: BridgeRuntime, task: BridgeTaskRecord, agent: DevAge
     projectId = plan.projectId;
     attachBridgeExecution(db, task.id, { projectId, storyId, workspacePath: workspace });
   } else if (!storyId) {
+    // No project: an answer-only task (dispatch refused anything that may change files). The worker's working directory is an empty
+    // folder that holds nothing of the owner's; it is verified like an inspection: any changed file fails it, and its own final
+    // message is the result. It is never sent back with "make changes" repair instructions.
     workspace = prepareTaskWorkspace(rt.dataDir, task.id);
     const title = task.instruction.replace(/\s+/g, ' ').trim().slice(0, 80);
     const plan = planDevStories(db, {
@@ -495,12 +526,8 @@ async function startAcp(rt: BridgeRuntime, task: BridgeTaskRecord, agent: DevAge
       repoPath: workspace,
       baseBranch: 'main',
       integrationBranch: `panda/${task.id.slice(-12)}`,
-      verify: ['npm', 'test'],
-      stories: [{
-        key: 'task', title, description: workerDescription(task, includeContext), agent, ...(model ? { model } : {}),
-        acceptanceCriteria: ['The requested behaviour is implemented', 'Automated tests cover it and `npm test` passes'],
-        acceptanceChecks: [{ kind: 'script', name: 'Tests exist and pass', source: TESTS_PRESENT_CHECK }],
-      }],
+      verify: ['git', 'status', '--porcelain'],
+      stories: [{ key: 'task', title, description: answerDescription(task, includeContext), agent, ...(model ? { model } : {}), mode: 'inspect', answerOnly: true }],
     });
     storyId = plan.stories[0].id;
     projectId = plan.projectId;
@@ -509,7 +536,7 @@ async function startAcp(rt: BridgeRuntime, task: BridgeTaskRecord, agent: DevAge
   await dispatchWhenKandevIsReady(rt, projectId!, storyId, task.conversationId);
   recordBridgeStatus(db, task.id, 'running', inspection
     ? `${KNOWN[agent].label} is inspecting a read-only copy of ${inspection.project.name} (branch ${inspection.ref}); your checkout is not touched.`
-    : `${KNOWN[agent].label} is working in an isolated workspace.`);
+    : `${KNOWN[agent].label} is answering. No project is shared and it may not change any file.`);
 }
 
 /**
@@ -597,6 +624,25 @@ function mapPhase(phase: string, storyStatus: string, control: BridgeTaskRecord[
   return { status: 'running', detail: 'Working.' };
 }
 
+/**
+ * Appends newly observed worker events to the recorded log: deduplicated by Kandev message id, in time order, the newest
+ * BRIDGE_ACTIVITY_LIMIT kept. `fresh === null` (Kandev unreachable, no session yet) leaves the log exactly as it was.
+ */
+export function mergeActivity(previous: BridgeTaskResult['activity'], fresh: BridgeTaskResult['activity'] | null): BridgeTaskResult['activity'] {
+  if (!fresh) return previous;
+  // Entries without an id come from builds that kept only the last three lines; the full log replaces them.
+  const byId = new Map(previous.filter(e => e.id).map(e => [e.id!, e]));
+  let changed = byId.size !== previous.length;
+  for (const e of fresh) {
+    if (!e.id) continue;
+    const old = byId.get(e.id);
+    // Kandev streams a message by growing it under the same id: the newer text (or tool status) replaces the fragment.
+    if (!old || old.text !== e.text || old.status !== e.status) { byId.set(e.id, e); changed = true; }
+  }
+  if (!changed) return previous;
+  return [...byId.values()].sort((a, b) => a.at.localeCompare(b.at)).slice(-BRIDGE_ACTIVITY_LIMIT);
+}
+
 /** Brings a relayed task up to date from the work behind it and stores a checkpoint when something changed. */
 export async function refreshBridgeTask(rt: BridgeRuntime, taskId: string): Promise<BridgeTaskRecord> {
   const { db } = rt;
@@ -612,6 +658,7 @@ export async function refreshBridgeTask(rt: BridgeRuntime, taskId: string): Prom
       // Planned but not yet handed to Kandev: the dispatch in progress (or a failed one) owns the status, not the mirror.
       if (view.phase === 'not dispatched' || story.status === 'ready') return getBridgeTask(db, taskId);
       const mapped = mapPhase(view.phase, story.status, task.control);
+      const worker = await devStoryWorkerEvents(rt.kandev, task.storyId);
       const result: BridgeTaskResult = {
         verification: view.verification,
         // An inspection's evidence IS the report; give it room.
@@ -619,9 +666,11 @@ export async function refreshBridgeTask(rt: BridgeRuntime, taskId: string): Prom
         changedFiles: detail.changedFiles,
         commit: view.commit,
         pendingApprovals: view.pendingApprovals,
-        // The worker's own commands and file names can carry local paths; none of them leave this PC.
-        activity: view.activity.map(a => ({ ...a, text: redactPaths(a.text) })),
+        // The worker's own events, appended to what was already recorded (kept after the task ends and across restarts). Commands and
+        // file names can carry local paths; they are redacted, and only the summary line ever leaves this PC (see the extension view).
+        activity: mergeActivity(task.result?.activity ?? [], worker?.events.map(e => ({ ...e, text: redactPaths(e.text) })) ?? null),
         timeline: detail.timeline.slice(-30),
+        branch: worker?.branch ?? task.result?.branch ?? view.branch ?? null,
       };
       // Where the coordinator names a concrete reason (a free slot, a review), show it; for settled states the mapped wording is clearer.
       const settled = mapped.status === 'paused' || mapped.status === 'cancelled' || mapped.status === 'completed';
