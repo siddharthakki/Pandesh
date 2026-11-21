@@ -259,6 +259,8 @@ async function handle(req, res, secure = true) {
     }
     if (b.grant_type === 'refresh_token') {
       const g = state.grants[sha(b.refresh_token ?? '')]; if (!g || g.clientId !== b.client_id) return fail400('invalid_grant');
+      // A refresh must not revive a pairing the owner revoked in Pandesh: ask Core first (a revoked pairing is answered 401 and forgotten).
+      const live = await core('GET', '/v1/bridge/status', null, g.token); if (live.status === 401 || live.status === 403) return fail400('invalid_grant');
       delete state.grants[sha(b.refresh_token)]; return await issue(g.clientId, g.token, g.pairingId);   // rotation: a refresh token works once
     }
     return fail400('unsupported_grant_type');
