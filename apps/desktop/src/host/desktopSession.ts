@@ -3046,6 +3046,10 @@ export class DesktopSession {
       bridgeAudit: { path: `/v1/bridge/tasks/${id}/audit` },
       // One relayed task with the worker's full event log (Core keeps it; it never goes to a paired client).
       bridgeTask: { path: `/v1/bridge/tasks/${id}` },
+      // Agent controls on a worker panel: the same Core lifecycle a paired client uses (pause/resume only for Kandev workers).
+      bridgeCancel: { path: `/v1/bridge/tasks/${id}/cancel`, method: 'POST', body: {} },
+      bridgePause: { path: `/v1/bridge/tasks/${id}/pause`, method: 'POST', body: {} },
+      bridgeResume: { path: `/v1/bridge/tasks/${id}/resume`, method: 'POST', body: {} },
       // A worker action held for a person (Kandev permission). Core accepts this only over the host transport.
       devStoryPermission: { path: `/v1/dev-stories/${encodeURIComponent(String(args.storyId ?? ''))}/permissions/${encodeURIComponent(String(args.pendingId ?? ''))}`, method: 'POST', body: { allow: args.allow === true, via: 'window' } },
       mission: { path: `/v1/missions/${id}` },

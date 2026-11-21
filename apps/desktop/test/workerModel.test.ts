@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { eventAge, eventLabel, groupWorkers, QUIET_MS, type WorkerItem } from '../renderer-v2/src/workerModel';
+import { eventAge, eventLabel, groupWorkers, QUIET_MS, workerControls, type WorkerItem } from '../renderer-v2/src/workerModel';
 
 const item = (o: Partial<WorkerItem> = {}): WorkerItem => ({
   id: 't', executor: 'claude', state: 'running', createdAt: '2026-11-21T10:00:00Z', latest: null, lastEventAt: null, heartbeatAgeMs: null, ...o,
@@ -35,6 +35,13 @@ describe('worker panels', () => {
     const done = eventAge(item({ state: 'completed', lastEventAt: '2026-11-21T09:00:00Z' }), now);
     expect(done.quiet).toBe(false);
     expect(done.text).toMatch(/^Last event at /);
+  });
+
+  it('offers only the controls Core supports for the worker\'s state', () => {
+    expect(workerControls({ state: 'running' }).map(c => c.label)).toEqual(['Pause', 'Stop']);
+    expect(workerControls({ state: 'paused' }).map(c => c.label)).toEqual(['Resume', 'Stop']);
+    expect(workerControls({ state: 'queued' }).map(c => c.label)).toEqual(['Stop']);
+    expect(workerControls({ state: 'completed' })).toEqual([]);
   });
 
   it('labels Kandev event kinds in plain words', () => {

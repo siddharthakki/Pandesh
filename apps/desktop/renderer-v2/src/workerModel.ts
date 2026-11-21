@@ -56,6 +56,17 @@ export function eventAge(b: WorkerItem, now: number): { text: string; quiet: boo
   return { text: `Last event: ${secs(age)} ago`, quiet: false };
 }
 
+/**
+ * The controls a live worker panel offers, matching what Core supports: Stop for any live task; Pause only while a Kandev worker
+ * is at work (Core keeps its worktree for Resume); Resume only for a paused one.
+ */
+export function workerControls(b: Pick<WorkerItem, 'state'>): Array<{ action: 'bridgeCancel' | 'bridgePause' | 'bridgeResume'; label: string }> {
+  if (DONE.has(b.state)) return [];
+  if (b.state === 'paused') return [{ action: 'bridgeResume', label: 'Resume' }, { action: 'bridgeCancel', label: 'Stop' }];
+  const pausable = ['running', 'waiting_for_approval', 'stalled', 'needs_attention', 'waiting_for_model'].includes(b.state);
+  return [...(pausable ? [{ action: 'bridgePause' as const, label: 'Pause' }] : []), { action: 'bridgeCancel', label: 'Stop' }];
+}
+
 const LABELS: Record<string, string> = {
   message: 'Said', tool_execute: 'Ran', tool_read: 'Read', tool_edit: 'Edited', tool_search: 'Searched', tool_fetch: 'Fetched',
   permission_request: 'Asked permission', status: 'Status',

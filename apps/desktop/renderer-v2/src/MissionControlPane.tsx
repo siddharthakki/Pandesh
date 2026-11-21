@@ -4,7 +4,7 @@ import { elapsed } from './ui';
 import { missionHeadline, missionProgress, describeStep } from './missionModel';
 import type { MissionView, StepView } from './missionModel';
 import type { BridgeActivityItem } from './Missions';
-import { eventAge, eventLabel, groupWorkers, type WorkerEvent } from './workerModel';
+import { eventAge, eventLabel, groupWorkers, workerControls, type WorkerEvent } from './workerModel';
 
 const DONE = new Set(['completed', 'failed', 'cancelled']);
 
@@ -27,6 +27,17 @@ export function WorkerPanels({ items, now, onChanged }: { items: BridgeActivityI
       setNote({ id: b.id, text: allow ? 'Allowed once. The worker continues.' : 'Not allowed. The worker was told no.' });
       onChanged();
     } catch (err) { setNote({ id: b.id, text: `Not recorded: ${errorText(err)}`, error: true }); }
+    finally { setBusy(null); }
+  };
+  /** Stop ends the task (nothing else runs in its place); Pause keeps the worktree for Resume. Core decides what is allowed. */
+  const control = async (b: BridgeActivityItem, action: 'bridgeCancel' | 'bridgePause' | 'bridgeResume') => {
+    setBusy(`${b.id}:${action}`);
+    setNote(null);
+    try {
+      await api.household(action, { id: b.id });
+      setNote({ id: b.id, text: action === 'bridgeCancel' ? 'Stopped. The work done so far is kept in its worktree.' : action === 'bridgePause' ? 'Paused. Resume continues from the preserved work.' : 'Resuming.' });
+      onChanged();
+    } catch (err) { setNote({ id: b.id, text: errorText(err), error: true }); }
     finally { setBusy(null); }
   };
   return (
@@ -63,6 +74,13 @@ export function WorkerPanels({ items, now, onChanged }: { items: BridgeActivityI
                     </div>
                   ))}
                   {note?.id === b.id && <p className={`mission-note${note.error ? ' error' : ''}`} role={note.error ? 'alert' : 'status'}>{note.text}</p>}
+                  {live && (
+                    <div className="worker-controls" role="group" aria-label="Worker controls">
+                      {workerControls(b).map((c) => (
+                        <button key={c.action} type="button" className="btn small" disabled={busy === `${b.id}:${c.action}`} onClick={() => void control(b, c.action)}>{c.label}</button>
+                      ))}
+                    </div>
+                  )}
                   <button type="button" className="btn link small" aria-expanded={open[b.id] === true} onClick={() => setOpen({ ...open, [b.id]: !open[b.id] })}>
                     {open[b.id] ? 'Hide execution log' : `Show full execution log (${b.eventCount} event${b.eventCount === 1 ? '' : 's'})`}
                   </button>
