@@ -19,7 +19,7 @@ import {
 import { addComment, getStory, listComments, listStories, transitionStory } from '../domain/stories';
 import { DEV_ACTOR, devSpec, planDevStories, verificationOf, verifyAndIntegrate, waitsOnGpuLane } from '../runtime/kandev/devStories';
 import { dispatchBridgeTask, isAnswerOnly, mergeActivity, prepareTaskWorkspace, refersToCode, refreshBridgeTask, type BridgeRuntime } from '../runtime/kandev/pandaBridge';
-import { activityItem } from '../runtime/kandev/bridgeActivity';
+import { activityItem, deriveExecutionState } from '../runtime/kandev/bridgeActivity';
 import type { KandevClient } from '../runtime/kandev/kandevClient';
 
 const git = (cwd: string, ...a: string[]) => spawnSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@t', ...a], { cwd, encoding: 'utf8' });
@@ -199,6 +199,18 @@ describe('waiting for the local GPU', () => {
       running.clear();
       expect(await waitsOnGpuLane(db, kandev, 'ws', getStory(db, g2!), spec(g2!), 1)).toBe(false);
     } finally { db.close(); fs.rmSync(dir, { recursive: true, force: true }); }
+  });
+});
+
+describe('queued is not stalled', () => {
+  it('a task queued for the GPU lane for ten minutes reads as queued, not stalled; a silent running worker still reads as stalled', () => {
+    const now = Date.parse('2026-11-21T15:30:00Z');
+    const old = '2026-11-21T15:20:00Z';
+    const queued = deriveExecutionState({ now, task: { status: 'running', executor: 'opencode', control: 'none', updatedAt: old, statusDetail: 'Waits for: local GPU lane (1 at a time) after "Inspect Pandesh"', result: null }, storyWaitingForSlot: true, lastActivityAt: null });
+    expect(queued.state).toBe('waiting_for_model');
+    expect(queued.reason).toMatch(/Queued for the local GPU/);
+    const silent = deriveExecutionState({ now, task: { status: 'running', executor: 'claude', control: 'none', updatedAt: old, statusDetail: 'Working.', result: null }, storyWaitingForSlot: false, lastActivityAt: Date.parse(old) });
+    expect(silent.state).toBe('stalled');
   });
 });
 
