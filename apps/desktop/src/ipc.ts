@@ -113,6 +113,14 @@ export const DESKTOP_CHANNELS = {
   forgetMobileDevice: 'desktop:forgetMobileDevice',
   setMobileAccess: 'desktop:setMobileAccess',
   resumeMobilePairing: 'desktop:resumeMobilePairing',
+  /** ChatGPT connector (Connections): status, key (write-only), setup, on/off, pairing code, disconnect. */
+  getChatgptConnector: 'desktop:getChatgptConnector',
+  setChatgptConnectorKey: 'desktop:setChatgptConnectorKey',
+  clearChatgptConnectorKey: 'desktop:clearChatgptConnectorKey',
+  setChatgptConnectorSetup: 'desktop:setChatgptConnectorSetup',
+  setChatgptConnectorEnabled: 'desktop:setChatgptConnectorEnabled',
+  chatgptConnectorPairingCode: 'desktop:chatgptConnectorPairingCode',
+  disconnectChatgptConnector: 'desktop:disconnectChatgptConnector',
   /** Jarvis Conversations rail (Checkpoint 1) — Core-owned, no Desktop database. */
   listConversations: 'desktop:listConversations',
   openConversation: 'desktop:openConversation',
@@ -1303,3 +1311,21 @@ export const RENDERER_VISIBLE_KEYS: readonly (keyof DesktopSnapshot)[] = [
   'workspaceActivities',
   'contextEnvelope',
 ];
+
+/** ChatGPT connector state for the Connections card. Never contains the tunnel key (only a masked hint). */
+export interface ChatgptConnectorView {
+  state: 'off' | 'needs-setup' | 'needs-key' | 'starting' | 'running' | 'degraded' | 'failed';
+  detail: string;
+  enabled: boolean;
+  keyConfigured: boolean;
+  keyHint: string | null;
+  tunnelId: string;
+  clientPath: string;
+  gatewayPath: string;
+  tunnelReachable: boolean;
+  activePairings: number;
+  lastError: string | null;
+  lastFailure: { at: string; message: string } | null;
+  core: { reachable: boolean; port: number | null; profile: string; production: boolean; build: string | null };
+  recentLog: string[];
+}
