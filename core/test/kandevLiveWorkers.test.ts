@@ -17,7 +17,7 @@ import {
   type BridgePairing,
 } from '../domain/pandaBridge';
 import { addComment, getStory, listComments, listStories, transitionStory } from '../domain/stories';
-import { DEV_ACTOR, devSpec, planDevStories, verifyAndIntegrate } from '../runtime/kandev/devStories';
+import { DEV_ACTOR, devSpec, planDevStories, verificationOf, verifyAndIntegrate } from '../runtime/kandev/devStories';
 import { dispatchBridgeTask, isAnswerOnly, mergeActivity, prepareTaskWorkspace, refersToCode, refreshBridgeTask, type BridgeRuntime } from '../runtime/kandev/pandaBridge';
 import { activityItem } from '../runtime/kandev/bridgeActivity';
 import type { KandevClient } from '../runtime/kandev/kandevClient';
@@ -176,6 +176,16 @@ describe('verifying what the worker did', () => {
     expect(getStory(db, id).status).toBe('blocked');
     expect(w.sent).toEqual([]);
     expect(comments(id)).toMatch(/Verification failed 3 times \(the worker made no changes\).*The worker's last words: The scaffold has no source/);
+  });
+});
+
+describe('what the result is called', () => {
+  it('reads the verification level from Pandesh\'s own header, never from words in the worker\'s report', () => {
+    // Live 2026-11-21: Claude inspected this code and quoted "human-reviewed"; the panel then said "reviewed by a person".
+    const report = "[kkd-dev:inspected] level=worker-only; read-only checked by KKD: no file changed.\n--- worker report ---\nverification is 'independent' | 'human-reviewed' | 'worker-only'; level=independent means acceptance passed.";
+    expect(verificationOf(report, true)).toBe('worker-only');
+    expect(verificationOf('[kkd-dev:integrated] abc on panda/x (branch f); level=worker-only (human-reviewed); `npm test` passed after merge.', true)).toBe('human-reviewed');
+    expect(verificationOf('[kkd-dev:integrated] abc on panda/x (branch f); level=independent; passed.', true)).toBe('independent');
   });
 });
 

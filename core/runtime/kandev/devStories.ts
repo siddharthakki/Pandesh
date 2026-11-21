@@ -209,6 +209,9 @@ function workerPrompt(story: StoryRecord, spec: DevStorySpec): string {
   ].join('\n');
 }
 
+/** A worker held on a person's decision for this long, with no live session, stops holding a worker slot. */
+export const STALE_DECISION_MS = 30 * 60_000;
+
 interface KandevContext { workspaceId: string; workflowId: string; executorProfileId: string; backlogStepId?: string; runningStepId?: string }
 
 /**
@@ -217,14 +220,19 @@ interface KandevContext { workspaceId: string; workflowId: string; executorProfi
  * workers ran one at a time. Task REVIEW also means "worker is waiting on a permission", so a task is only moved when it
  * provably holds no worker: no live session and nothing pending. Returns the ids moved.
  */
-export async function reclaimIdleWipSlots(kandev: KandevClient, workflowId: string, runningStepId: string, reviewStepId: string): Promise<string[]> {
-  const { tasks } = await kandev.tool<{ tasks: Array<{ id: string; state: string; workflow_step_id?: string }> }>('list_tasks_kandev', { workflow_id: workflowId });
+export async function reclaimIdleWipSlots(kandev: KandevClient, workflowId: string, runningStepId: string, reviewStepId: string, now = Date.now()): Promise<string[]> {
+  const { tasks } = await kandev.tool<{ tasks: Array<{ id: string; state: string; workflow_step_id?: string; updated_at?: string }> }>('list_tasks_kandev', { workflow_id: workflowId });
   const moved: string[] = [];
   for (const t of tasks.filter(t => t.workflow_step_id === runningStepId && (t.state === 'REVIEW' || t.state === 'COMPLETED'))) {
     const sessions = await kandev.sessions(t.id).catch(() => null);
     if (!sessions || sessions[0]?.state === 'RUNNING' || sessions[0]?.state === 'STARTING') continue; // unknown or live
     const pending = await kandev.pendingPermissions(t.id).catch(() => null);
-    if (!pending || pending.length) continue; // unknown or waiting on a decision: the worker may still be alive
+    if (!pending) continue; // unknown: the worker may still be alive
+    // A recent wait on a decision keeps its slot. One nobody has answered for STALE_DECISION_MS (an abandoned test, a Core that
+    // is gone) is moved out of In Progress: its session and its pending request are left exactly as they are, so a late
+    // decision still reaches the worker, but it no longer takes a slot from new work (seen 2026-11-21: one such task, two days
+    // old, left a two-worker limit running one worker at a time).
+    if (pending.length && !(Date.parse(t.updated_at ?? '') < now - STALE_DECISION_MS)) continue;
     await kandev.tool('move_task_kandev', { task_id: t.id, workflow_id: workflowId, workflow_step_id: reviewStepId });
     moved.push(t.id);
   }
@@ -1504,11 +1512,14 @@ export function confirmDeviceVerification(db: CoreDatabase, storyId: string, ok:
   addComment(db, storyId, { author: 'user', body: ok ? `[kkd-dev:device-verified] ${note ?? 'Verified on the device.'}` : `[kkd-dev:device-failed] ${note ?? 'Failed on the device.'}` });
 }
 
-function verificationOf(evidence: string | null, done: boolean): DevStoryView['verification'] {
+export function verificationOf(evidence: string | null, done: boolean): DevStoryView['verification'] {
   if (!evidence) return null;
-  if (/level=independent/.test(evidence)) return 'independent';
-  if (/human-reviewed/.test(evidence)) return 'human-reviewed';
-  return done || /level=worker-only/.test(evidence) ? 'worker-only' : null;
+  // Only KKD's own header line says what was verified. The rest is the worker's report, which may quote these very words
+  // (seen live 2026-11-21: an inspection of this file was labelled "reviewed by a person").
+  const header = evidence.split('\n', 1)[0];
+  if (/level=independent/.test(header)) return 'independent';
+  if (/human-reviewed/.test(header)) return 'human-reviewed';
+  return done || /level=worker-only/.test(header) ? 'worker-only' : null;
 }
 
 export async function devStoryStatus(db: CoreDatabase, kandev: KandevClient, projectId?: string, onlyStoryId?: string): Promise<{ available: boolean; counts: Record<string, number>; stories: DevStoryView[] }> {
