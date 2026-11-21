@@ -567,6 +567,21 @@ button.tl-row:hover { background: var(--raised); }
 .mission-summary, .mission-note { margin: 0; font-size: 13.5px; color: var(--muted); }
 .mission-note.error { color: var(--danger); }
 
+/* Live Kandev worker panels (MissionControlPane.tsx WorkerPanels) */
+.worker-panels { display: flex; flex-direction: column; gap: 10px; }
+.worker-group { display: flex; flex-direction: column; gap: 6px; }
+.worker-group-head { font-size: 12px; font-weight: 600; letter-spacing: .04em; text-transform: uppercase; color: var(--muted); }
+.worker-latest { margin: 0; font-size: 14px; color: var(--ink); overflow-wrap: anywhere; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+.worker-kind { display: inline-block; min-width: 64px; font-size: 12px; font-weight: 600; color: var(--pulse); }
+.worker-age { margin: 0; font-size: 12.5px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.worker-age.attention { color: var(--attention, var(--danger)); font-weight: 600; }
+.worker-action { display: flex; flex-direction: column; gap: 6px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; }
+.worker-action code { overflow-wrap: anywhere; font-size: 12.5px; }
+.worker-action .btns { display: flex; gap: 8px; }
+.worker-log { margin: 4px 0 0; padding: 8px 10px; list-style: none; max-height: 280px; overflow: auto; border: 1px solid var(--line); border-radius: 8px; font-family: var(--font-mono, ui-monospace, monospace); font-size: 12px; display: flex; flex-direction: column; gap: 3px; }
+.worker-log li { overflow-wrap: anywhere; }
+.worker-log time { color: var(--muted); margin-right: 4px; }
+
 /* My Bots, Automations and provider cards */
 .bot-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 12px; }
 .bot-card { text-align: left; cursor: pointer; font: inherit; color: inherit; align-items: stretch; }

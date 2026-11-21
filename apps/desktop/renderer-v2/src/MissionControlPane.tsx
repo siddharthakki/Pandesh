@@ -1,6 +1,115 @@
-import React from 'react';
+import React, { useEffect, useState } from 'react';
+import { api, errorText } from './bridge';
+import { elapsed } from './ui';
 import { missionHeadline, missionProgress, describeStep } from './missionModel';
 import type { MissionView, StepView } from './missionModel';
+import type { BridgeActivityItem } from './Missions';
+import { eventAge, eventLabel, groupWorkers, type WorkerEvent } from './workerModel';
+
+const DONE = new Set(['completed', 'failed', 'cancelled']);
+
+/**
+ * Live panels for Kandev workers (Claude Code, OpenCode), grouped by agent. Every line is an event Kandev recorded from the worker:
+ * nothing here is simulated or paraphrased. "Running" is never shown without the newest event and its age; a worker that has
+ * been silent for a minute says so. Worker actions held for a person are answered here (Core accepts that from this window only).
+ */
+export function WorkerPanels({ items, now, onChanged }: { items: BridgeActivityItem[]; now: number; onChanged: () => void }) {
+  const [open, setOpen] = useState<Record<string, boolean>>({});
+  const [busy, setBusy] = useState<string | null>(null);
+  const [note, setNote] = useState<{ id: string; text: string; error?: boolean } | null>(null);
+  const groups = groupWorkers(items);
+  if (!groups.length) return null;
+  const decide = async (b: BridgeActivityItem, pendingId: string, allow: boolean) => {
+    setBusy(pendingId);
+    setNote(null);
+    try {
+      await api.household('devStoryPermission', { storyId: b.storyId, pendingId, allow });
+      setNote({ id: b.id, text: allow ? 'Allowed once. The worker continues.' : 'Not allowed. The worker was told no.' });
+      onChanged();
+    } catch (err) { setNote({ id: b.id, text: `Not recorded: ${errorText(err)}`, error: true }); }
+    finally { setBusy(null); }
+  };
+  return (
+    <div className="worker-panels" aria-label="Agent workers">
+      {groups.map((g) => (
+        <div key={g.agent} className="worker-group">
+          <div className="worker-group-head">{g.label} · {g.items.filter((b) => !DONE.has(b.state)).length} active</div>
+          {g.items.map((b) => {
+            const age = eventAge(b, now);
+            const live = !DONE.has(b.state);
+            return (
+              <section key={b.id} className={`mission bridge worker ${b.state}`} aria-label={`${g.label}: ${b.instruction}`}>
+                <header className="mission-head">
+                  <span className="mission-toggle">
+                    <span className={`dot ${b.state === 'failed' || b.state === 'stalled' ? 'danger' : b.state === 'completed' ? 'done' : b.state === 'running' && !age.quiet ? 'live' : 'attention'}`} aria-hidden="true" />
+                    <span className="mission-title"><strong>{g.label} · {b.stateLabel}</strong><span className="mission-objective">{b.instruction}</span></span>
+                  </span>
+                  <span className="mission-meta">{b.elapsedMs !== null && live ? `active ${elapsed(b.elapsedMs)}` : ''}</span>
+                </header>
+                <div className="mission-body">
+                  {b.branch && <p className="worker-age" data-testid="worker-branch">Branch {b.branch} · isolated worktree</p>}
+                  <p className="worker-latest" data-testid="worker-latest">
+                    {b.latest ? <><span className="worker-kind">{eventLabel(b.latest.kind)}</span> {b.latest.text}</> : <span className="muted">No worker event recorded yet.</span>}
+                  </p>
+                  <p className={`worker-age${age.quiet && live ? ' attention' : ''}`} data-testid="worker-age">{age.text}</p>
+                  <p className="mission-summary">{workerOutcome(b)}</p>
+                  {b.pendingWorkerActions.map((p) => (
+                    <div key={p.pendingId} className="approval worker-action" role="group" aria-label={`The worker asks to: ${p.what}`}>
+                      <div className="head"><span className="dot attention" aria-hidden="true" /><span style={{ fontWeight: 600 }}>The worker asks to:</span> <code>{p.what}</code></div>
+                      <div className="btns">
+                        <button type="button" className="btn primary small" disabled={busy === p.pendingId} onClick={() => void decide(b, p.pendingId, true)}>Allow once</button>
+                        <button type="button" className="btn small" disabled={busy === p.pendingId} onClick={() => void decide(b, p.pendingId, false)}>Don't allow</button>
+                      </div>
+                    </div>
+                  ))}
+                  {note?.id === b.id && <p className={`mission-note${note.error ? ' error' : ''}`} role={note.error ? 'alert' : 'status'}>{note.text}</p>}
+                  <button type="button" className="btn link small" aria-expanded={open[b.id] === true} onClick={() => setOpen({ ...open, [b.id]: !open[b.id] })}>
+                    {open[b.id] ? 'Hide execution log' : `Show full execution log (${b.eventCount} event${b.eventCount === 1 ? '' : 's'})`}
+                  </button>
+                  {open[b.id] && <WorkerLog taskId={b.id} eventCount={b.eventCount} />}
+                </div>
+              </section>
+            );
+          })}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+/** What the panel says about the result: exactly what was checked, never "verified" for a worker's own report. */
+function workerOutcome(b: BridgeActivityItem): string {
+  if (b.state === 'completed' && b.verification === 'worker-only') return 'Finished. Pandesh checked that no file changed; the result is the worker’s own report, not independently verified.';
+  if (b.state === 'completed' && b.verification === 'independent') return 'Finished and verified independently by Pandesh.';
+  if (b.state === 'completed' && b.verification === 'human-reviewed') return 'Finished and reviewed by a person.';
+  return b.reason;
+}
+
+/** The recorded event log of one task, read from Core when opened and again whenever a new event is recorded. */
+function WorkerLog({ taskId, eventCount }: { taskId: string; eventCount: number }) {
+  const [events, setEvents] = useState<WorkerEvent[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  useEffect(() => {
+    let alive = true;
+    void (async () => {
+      try {
+        const r = await api.household('bridgeTask', { id: taskId }) as { result?: { activity?: WorkerEvent[] } | null };
+        if (alive) { setEvents(r.result?.activity ?? []); setError(null); }
+      } catch (err) { if (alive) setError(errorText(err)); }
+    })();
+    return () => { alive = false; };
+  }, [taskId, eventCount]);
+  if (error) return <p className="mission-note error" role="alert">{error}</p>;
+  if (!events) return <p className="muted">Loading the log…</p>;
+  if (!events.length) return <p className="muted">No worker events recorded.</p>;
+  return (
+    <ol className="worker-log" aria-label="Execution log">
+      {events.map((e, i) => (
+        <li key={e.id ?? i}><time dateTime={e.at}>{new Date(e.at).toLocaleTimeString()}</time> <span className="worker-kind">{eventLabel(e.kind)}</span> {e.text}</li>
+      ))}
+    </ol>
+  );
+}
 
 interface Props {
   mission: MissionView;
