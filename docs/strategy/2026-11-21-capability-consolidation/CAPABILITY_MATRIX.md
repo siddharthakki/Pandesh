@@ -38,7 +38,7 @@ Production is Build 187/186 at `E:\Pandesh`. Nothing below was installed there.
 | Latest action + last-event age + quiet warning | same | ✔ | ✔ | ✘ | scratch | ✔ live | |
 | Persistent per-task log (200), survives restart | `mergeActivity`, `refreshBridgeTask` | ✔ | ✔ | ✘ | scratch | ✔ live (3 restarts) | |
 | Desktop Allow / Don't allow for worker actions | `devStoryPermission` host route | ✔ | ✔ (route authz) | ✘ | scratch | ✔ live (Don't allow) | Allow-once path not pressed live |
-| Stop / open worktree / view diff on the panel | — | partial (Core cancel/pause exist) | | | | | Not on the panel |
+| Stop / Pause / Resume on the panel | 565b818 `workerControls` | ✔ | ✔ | ✘ | scratch | Stop ✔ Pause ✔ live; Resume ✘ when paused before the first event | Open worktree / view diff not built |
 | Board → Missions, Team → Settings, Processes → Diagnostics | — | ✘ | | | | | Not started |
 
 ## Deterministic services (router: `core/runtime/kandev/intentRouter.ts`)
@@ -50,9 +50,9 @@ Production is Build 187/186 at `E:\Pandesh`. Nothing below was installed there.
 | File type from content (Magika 1.1.0 + signatures) | `doc.detect-type` | ✔ | ✔ | ? | ✔ `D:\PandeshServices\magika` | ✔ 2307 ms (Magika score 1.0) | |
 | PDF text (text layer, else OCR) | workflow `extract-document` | ✔ | ✔ | ? | ✔ Poppler | ✔ 1382 ms | |
 | PDF page count | `doc.pdf-info` | ✔ | ✔ | ? | ✔ | ✔ 1200 ms | |
-| OCR (PDF/image, Tesseract 5.4) | `doc.pdf-ocr` | ✔ | ✔ | ? | ✔ | PDF ✔ earlier builds; image routing fixed in 6f6027f (unit-tested, not live) | |
+| OCR (PDF/image, Tesseract 5.4) | `doc.pdf-ocr` | ✔ | ✔ | ? | ✔ | PDF ✔ earlier builds; image routing fixed in 06de824 (unit-tested, not live) | |
 | Tailscale status | `net.tailscale-status` | ✔ | ✔ | ? | ✔ 1.104.5 | ✔ 555 ms | |
-| Service health | `svc.health` | ✔ | ✔ | ? | ✔ | routing fixed in 6f6027f (unit-tested) | |
+| Service health | `svc.health` | ✔ | ✔ | ? | ✔ | routing fixed in 06de824 (unit-tested) | |
 | Record search | `search.records` | ✔ | ✔ | ? | ✔ | ? | |
 | Daily brief workflow | `brief.daily` | ✔ | ✔ | ? | ✔ | ? | |
 | Hash-verify workflow | `workflow.verify-hash` | ✔ | ✔ | ? | ✔ | ? | |

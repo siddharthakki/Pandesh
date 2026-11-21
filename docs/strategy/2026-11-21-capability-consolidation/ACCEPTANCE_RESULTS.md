@@ -45,8 +45,8 @@
 | fs.inspect SHA-256 | completed | 205 ms |
 | net.tailscale-status | completed: connected | 555 ms |
 | Paths in a registered project | refused: outside service roots (by design) | 217–359 ms |
-| Image OCR request | **failed live** (not routed); fixed in 6f6027f; unit-tested only | — |
-| "Check the health of the local services" | **failed live** (went to OpenCode); fixed in 6f6027f; unit-tested only | — |
+| Image OCR request | **failed live** (not routed); fixed in 06de824; unit-tested only | — |
+| "Check the health of the local services" | **failed live** (went to OpenCode); fixed in 06de824; unit-tested only | — |
 
 ## Model inventory
 - Synthetic tests: 4/4 (GGUF header, Ollama blob mapping, duplicate detection with full hash, read-only check).
@@ -54,7 +54,7 @@
 
 ## Remaining acceptance criteria (not met)
 - A5 scoped coding: not built.
-- Panel Stop / open worktree / view diff.
+- Panel open worktree / view diff (Stop, Pause verified live in 565b818; Resume of a task paused before its first event fails in Kandev: "Agent startup failed").
 - Board / Team / Processes consolidation.
 - Allow-once pressed live.
 - Live run of the two router fixes. They need a rebuild from `feat/capability-consolidation`; the scratch instance runs the main checkout's bundle.

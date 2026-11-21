@@ -80,7 +80,8 @@ A new read-only, cross-engine tool covers Ollama, Hugging Face, Strata and other
 | | 68db6e9 | Release abandoned-decision slots; verification label from KKD's header only |
 | | fc0aa0e | GPU-queued task stays in Backlog |
 | | 6c4146d | GPU-queued reads as queued, not stalled |
-| feat/capability-consolidation (worktree `D:\Projects\Pandesh-consolidation`, based on the branch above) | 6f6027f | Model store inventory; image OCR and health routing |
+| | 565b818 | Stop / Pause / Resume on the worker panels (Stop and Pause verified live) |
+| feat/capability-consolidation (worktree `D:\Projects\Pandesh-consolidation`, based on the branch above) | 06de824 | Model store inventory; image OCR and health routing |
 | | (this commit) | These reports |
 
 Nothing was merged, pushed, installed or deployed. Production (`E:\Pandesh`) was not touched.
@@ -88,7 +89,7 @@ Nothing was merged, pushed, installed or deployed. Production (`E:\Pandesh`) was
 ## Not done / not verified
 - **A5, owner-approved ChatGPT coding in a project.** Proposed in `A5_SCOPED_CODING_PROPOSAL.md`, not built, because it needs your policy decision. Until then, coding tasks from ChatGPT on a registered project are refused by design.
 - **Board → Missions, Team → Settings, Processes → Diagnostics.** Not done (priority 4 of the slice).
-- **Panel controls.** Stop, open worktree and view diff are not on the worker panels yet. Pause/resume exist in Core for ACP tasks.
+- **Panel controls.** Stop and Pause were added (565b818) and verified live. Resume of a task paused before its worker's first event fails in Kandev ("Agent startup failed"); the panel shows it as Needs attention. Open worktree and view diff are not built.
 - **Direct dev stories have no panel.** Stories started from Pandesh itself (not through the bridge) don't appear in the worker panels; their approvals are only answerable from the phone page or the API.
 - **One stale label.** A task completed before the label fix still says "reviewed by a person", because stored results are not recomputed.
 - **Not started:** CI/CD pipelines, NAS backup tooling, JUGAAD work. Phases 3, 4 and 7 were audited only; see the plan documents.
@@ -103,7 +104,7 @@ Nothing was merged, pushed, installed or deployed. Production (`E:\Pandesh`) was
 
 ## Highest-priority next steps
 1. Decide A5, then build it on the existing grant model (the proposal is about a day's work).
-2. Add Stop / open worktree / view diff to the worker panels, and show direct dev stories there.
+2. Fix Resume-before-first-event (start a fresh repair session instead of relaunching); add open worktree / view diff; show direct dev stories in the panels.
 3. Repoint the failing scheduled tasks (after your OK).
 4. Do the Board/Team/Processes consolidation.
 5. Set up a self-hosted runner only after deciding the GPU/test lock policy for CI.

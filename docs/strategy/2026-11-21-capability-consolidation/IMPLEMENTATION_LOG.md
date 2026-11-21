@@ -16,7 +16,8 @@ Not pushed, not merged, not installed.
 | 68db6e9 | `devStories.ts`, tests, panel copy/CSS | `reclaimIdleWipSlots` releases tasks waiting on a decision for over 30 min (`STALE_DECISION_MS`); `verificationOf` reads only the first line; `workerOutcome` wording; latest line clamped | reclaim test, label test |
 | fc0aa0e | `devStories.ts`, test | `waitsOnGpuLane` gates the Backlog → In Progress release, and moves an early-released GPU task back | GPU lane test |
 | 6c4146d | `bridgeActivity.ts`, test | GPU-lane wait derives `waiting_for_model` ("Queued for the local GPU"), not stalled | queued-not-stalled test |
-| 6f6027f | `scripts/inventory/model-store-inventory.mjs`, `core/test/modelStoreInventory.test.ts`, `intentRouter.ts`, `deterministicRouting.test.ts` | Cross-engine model inventory; image OCR and "check the health of …" routing | 4 synthetic inventory tests, 2 routing cases |
+| 06de824 | `scripts/inventory/model-store-inventory.mjs`, `core/test/modelStoreInventory.test.ts`, `intentRouter.ts`, `deterministicRouting.test.ts` | Cross-engine model inventory; image OCR and "check the health of …" routing | 4 synthetic inventory tests, 2 routing cases |
+| 565b818 | `MissionControlPane.tsx`, `workerModel.ts`, `desktopSession.ts`, CSS, test | Stop / Pause / Resume on panels (`workerControls`) | worker model test |
 | (next) | `docs/strategy/2026-11-21-capability-consolidation/*` | These reports | docs |
 
 ## Failures found during live verification, and their fixes
@@ -27,7 +28,7 @@ Not pushed, not merged, not installed.
 5. A Claude story could not start while a GPU task waited: the GPU-queued task held a slot. Fixed in fc0aa0e.
 6. A GPU-queued task was labelled Stalled. Fixed in 6c4146d.
 7. An inspection whose report quoted "human-reviewed" was labelled "reviewed by a person". Fixed in 68db6e9; already-stored results keep the old label.
-8. Image OCR and a health-check phrasing fell through to a model. Fixed in 6f6027f.
+8. Image OCR and a health-check phrasing fell through to a model. Fixed in 06de824.
 
 ## Test runs
 - **Focused** (bridge, Kandev, approvals, inspection, native host, routing, inventory, worker model): all pass. Last runs: 92/92, 65/65, 53/53, 44/44, 39/39, 5/5.

@@ -2,7 +2,7 @@
 
 Hardware: RTX 3090 24 GB, Ryzen 9 5900X, 64 GB RAM.
 
-**Method:** `node scripts/inventory/model-store-inventory.mjs --full-hash` (branch feat/capability-consolidation, 6f6027f).
+**Method:** `node scripts/inventory/model-store-inventory.mjs --full-hash` (branch feat/capability-consolidation, 06de824).
 - Metadata only and read-only.
 - GGUF headers are parsed for architecture and quantization.
 - Duplicates are found by size plus a sampled fingerprint, then confirmed with a full SHA-256.
