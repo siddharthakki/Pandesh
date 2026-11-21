@@ -145,7 +145,9 @@ function metadata() {
   };
 }
 const challenge = (res) => json(res, 401, { error: 'unauthorized' }, { 'www-authenticate': `Bearer resource_metadata="${PUBLIC}/.well-known/oauth-protected-resource"` });
-const page = (res, status, html) => { res.writeHead(status, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store', 'content-security-policy': "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'", 'x-frame-options': 'DENY' }); res.end(`<!doctype html><meta charset=utf-8><title>Connect ChatGPT to Pandesh</title><body style="font:16px system-ui;max-width:34em;margin:3em auto;padding:0 1em">${html}`); };
+// form-action must also name the registered redirect origin: browsers apply it to the redirect that follows the form POST, so with 'self' alone the
+// 302 back to the client (ChatGPT) is blocked and the consent page just stays on screen. The origin comes only from a redirect_uri already matched to a registered client.
+const page = (res, status, html, redirectUri) => { let o = ''; try { if (redirectUri) o = ` ${new URL(redirectUri).origin}`; } catch { /* none */ } res.writeHead(status, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store', 'content-security-policy': `default-src 'none'; style-src 'unsafe-inline'; form-action 'self'${o}`, 'x-frame-options': 'DENY' }); res.end(`<!doctype html><meta charset=utf-8><title>Connect ChatGPT to Pandesh</title><body style="font:16px system-ui;max-width:34em;margin:3em auto;padding:0 1em">${html}`); };
 
 async function handle(req, res, secure = true) {
   const url = new URL(req.url, PUBLIC); const p = url.pathname;
@@ -168,7 +170,7 @@ async function handle(req, res, secure = true) {
     if (q.response_type !== 'code' || q.code_challenge_method !== 'S256' || !q.code_challenge) return page(res, 400, '<h2>Request refused</h2><p>PKCE (S256) is required.</p>');
     const back = (params) => { const u = new URL(q.redirect_uri); for (const [k, v] of Object.entries(params)) u.searchParams.set(k, v); if (q.state) u.searchParams.set('state', q.state); res.writeHead(302, { location: u.toString() }); res.end(); };
     const hidden = ['client_id', 'redirect_uri', 'response_type', 'code_challenge', 'code_challenge_method', 'state', 'scope', 'resource'].map((k) => `<input type=hidden name=${k} value="${esc(q[k] ?? '')}">`).join('');
-    if (req.method !== 'POST') return page(res, 200, `<h2>Let “${esc(c.name)}” use Pandesh?</h2><p>It will be able to give Pandesh tasks, follow them and read their reports. Cloud agents still need your approval in the Pandesh app each time.</p><p>In the Pandesh app, create a <b>browser pairing code</b> and type it here. This proves you are at this PC.</p><form method=post>${hidden}<input name=code autocomplete=off maxlength=8 style="font:20px monospace;width:8em" autofocus> <button>Allow</button> <button name=deny value=1 formnovalidate>Deny</button></form>`);
+    if (req.method !== 'POST') return page(res, 200, `<h2>Let “${esc(c.name)}” use Pandesh?</h2><p>It will be able to give Pandesh tasks, follow them and read their reports. Cloud agents still need your approval in the Pandesh app each time.</p><p>In the Pandesh app, create a <b>browser pairing code</b> and type it here. This proves you are at this PC.</p><form method=post>${hidden}<input name=code autocomplete=off maxlength=8 style="font:20px monospace;width:8em" autofocus> <button>Allow</button> <button name=deny value=1 formnovalidate>Deny</button></form>`, q.redirect_uri);
     if (q.deny) { audit(`deny client=${q.client_id}`); return back({ error: 'access_denied' }); }
     const r = await core('POST', '/v1/bridge/pair', { code: String(q.code ?? '').trim().toUpperCase(), label: `ChatGPT connector (${c.name})`.slice(0, 80), extensionId: null });
     if (r.status >= 300 || !r.body?.token) return page(res, 403, '<h2>That code did not work</h2><p>It may have expired or been used. Create a new one in Pandesh and try again.</p>');
