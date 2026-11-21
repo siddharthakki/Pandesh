@@ -47,3 +47,12 @@ Not pushed, not merged, not installed.
 - Launched via `D:\PandeshP0Dev\safe-launch.mjs` (ports 3991/3992/9481, profile `D:\PandeshP0Dev\profile`).
 
 **Note:** a Stage C dev Core (data `D:\PandeshStageCDev`, pid 37676, started 11-19 by another session) runs from `D:\Projects\Pandesh\out-core\core.js`. It keeps its loaded code until it restarts; after a restart it would run this branch's bundle.
+
+## A5: scoped ChatGPT coding (owner approved, cafb8a0)
+- `gateProject` now decides inspect vs code: a request that asks for a change on a `read-write` project becomes `mode: 'code'`; `read` projects are still refused before any card.
+- The card states the scope (`accessLevelOf`). The dispatch check compares that text and requires `read-write` for code. This also fixed inspection of `read-write` projects through a card.
+- Work runs in `panda-workspaces/<task>-code`, a clone with no remote and no `node_modules` link, through `planDevStories` (integration branch `panda/change-<id>` inside the copy, cap `CODE_CHANGE_MAX_FILES` = 20, checked in `verifyAndIntegrate`).
+- Host-only routes `approve-change` and `deliver`. Delivery is `git fetch <copy> refs/heads/panda/change-<id>:refs/heads/pandesh/chatgpt-<id>` in the owner checkout, with the checkout fingerprinted before and after. It refuses an existing branch and is idempotent.
+- `/v1/dev-stories/:id/approve-review` was callable by paired clients; now host-only.
+- Worker panel: review box with changed files, "Approve change", "Bring into my checkout as a new branch".
+- Live: see `ACCEPTANCE_RESULTS.md` (screens live-15/16/17).

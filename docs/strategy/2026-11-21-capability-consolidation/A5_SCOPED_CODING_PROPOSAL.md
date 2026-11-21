@@ -1,4 +1,6 @@
-# A5: owner-approved ChatGPT coding in one isolated worktree (proposal, not built)
+# A5: owner-approved ChatGPT coding in one isolated worktree
+
+**Status: approved by the owner on 2026-11-21 and built in cafb8a0 (feat/kandev-live-workers); verified live, see ACCEPTANCE_RESULTS.md. As built: the integration branch is `panda/change-<id>` in the copy; delivery creates `pandesh/chatgpt-<id>` in the owner checkout; cap 20 files; no byte cap or expiry beyond the single-use card. The text below is the original proposal.**
 
 ## Today
 - A ChatGPT task that may change files in a registered project is refused at `gateProject` ([pandaBridge.ts](../../../core/runtime/kandev/pandaBridge.ts), "Tasks that change files in … are not run from the browser bridge yet").

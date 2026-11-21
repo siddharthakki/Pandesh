@@ -81,13 +81,14 @@ A new read-only, cross-engine tool covers Ollama, Hugging Face, Strata and other
 | | fc0aa0e | GPU-queued task stays in Backlog |
 | | 6c4146d | GPU-queued reads as queued, not stalled |
 | | 565b818 | Stop / Pause / Resume on the worker panels (Stop and Pause verified live) |
+| | cafb8a0 | A5 (approved by you): ChatGPT coding in an isolated private copy, owner review, delivery as a new branch; verified live end to end |
 | feat/capability-consolidation (worktree `D:\Projects\Pandesh-consolidation`, based on the branch above) | 06de824 | Model store inventory; image OCR and health routing |
 | | (this commit) | These reports |
 
 Nothing was merged, pushed, installed or deployed. Production (`E:\Pandesh`) was not touched.
 
 ## Not done / not verified
-- **A5, owner-approved ChatGPT coding in a project.** Proposed in `A5_SCOPED_CODING_PROPOSAL.md`, not built, because it needs your policy decision. Until then, coding tasks from ChatGPT on a registered project are refused by design.
+- **A5 is built (cafb8a0) and verified live**, see `ACCEPTANCE_RESULTS.md`. Only `read-write` registered projects; the review box lists changed files but has no "View diff" yet.
 - **Board → Missions, Team → Settings, Processes → Diagnostics.** Not done (priority 4 of the slice).
 - **Panel controls.** Stop and Pause were added (565b818) and verified live. Resume of a task paused before its worker's first event fails in Kandev ("Agent startup failed"); the panel shows it as Needs attention. Open worktree and view diff are not built.
 - **Direct dev stories have no panel.** Stories started from Pandesh itself (not through the bridge) don't appear in the worker panels; their approvals are only answerable from the phone page or the API.
@@ -96,14 +97,14 @@ Nothing was merged, pushed, installed or deployed. Production (`E:\Pandesh`) was
 - The 13 test failures in 5 files exist at the base commit (`bde6f7a`) and are not caused by this work.
 
 ## Decisions only you can make
-1. **A5:** allow scoped ChatGPT coding inside one isolated worktree of a registered project? (See the proposal.)
+1. **Which projects to register read-write** for A5. Only those can receive ChatGPT code changes. The scratch test used a synthetic repo only.
 2. **Read-only file services on registered projects.** Today they only read Pandesh's own task workspaces, and their results go back to ChatGPT. Widening them would send project file listings, hashes and text to ChatGPT without a card.
 3. **Repoint the three failing scheduled tasks** to `Z:\Projects\Projects\...`. The DDNS one updates a public DNS record. Exact commands are in `CI_CD_AUTOMATION_PLAN.md`.
 4. **Delete the 74 GB of confirmed duplicate model files.** The list is in `MODEL_INVENTORY.md`.
 5. **Merge order** for `feat/kandev-live-workers` (it is stacked on `feat/stage-c-vertical-slice`, PR siddharthakki/Pandesh#131).
 
 ## Highest-priority next steps
-1. Decide A5, then build it on the existing grant model (the proposal is about a day's work).
+1. A5 follow-up: "View diff" in the review box.
 2. Fix Resume-before-first-event (start a fresh repair session instead of relaunching); add open worktree / view diff; show direct dev stories in the panels.
 3. Repoint the failing scheduled tasks (after your OK).
 4. Do the Board/Team/Processes consolidation.

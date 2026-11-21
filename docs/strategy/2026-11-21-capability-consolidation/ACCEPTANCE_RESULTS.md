@@ -52,8 +52,25 @@
 - Synthetic tests: 4/4 (GGUF header, Ollama blob mapping, duplicate detection with full hash, read-only check).
 - Real run: 312 GB; 6 duplicate groups confirmed by full SHA-256 (74.27 GB).
 
+## A5 scoped coding (owner-approved, cafb8a0), live on the scratch instance
+Task: "Fix the bug in the CalcDemo source code: add() in src/add.js subtracts instead of adding…", sent as a paired ChatGPT client. CalcDemo is a synthetic repo (`D:\PandeshP0Dev\a5-calc`) registered read-write.
+
+| Step | Result | Evidence |
+|---|---|---|
+| Card | Shows "Code change in an isolated worktree of a private copy: at most 20 files… no push, no merge, no install"; Allow pressed in the desktop UI | `evidence/live-15-a5-card.png` |
+| Work | Claude read and edited `src/add.js` in a Kandev worktree of the private copy and ran `npm test` | worker log in the panel |
+| Review | Task reached "awaiting review"; panel listed `src/add.js` with "Approve change"; clicked → completed, verified | `evidence/live-16-a5-review.png` |
+| Copy | Commits 23b08cd (change) and d0144e4 (integration) exist only in the copy | `git log` |
+| Delivery | "Bring into my checkout as a new branch" clicked → branch `pandesh/chatgpt-a0d637406910` in the owner repo | `evidence/live-17-a5-delivered.png` |
+| Owner checkout | Still on `main` at a25faaf; an uncommitted file placed there before delivery was untouched (`git status` identical before/after); no remote | `git status` |
+| Delivered branch | `src/add.js` = `a + b`; the project's tests pass on an export of the branch (1/1) | `npm test` |
+
+Unit tests: `core/test/bridgeCodeChange.test.ts` 7/7 (read-only project refused with no card; card scope; client can't approve; question stays inspection; copy has no remote or node_modules link; file cap fails verification; delivery is a new branch, idempotent, never overwrites). Bridge/worker suites 72/72; `compile` and `typecheck:webview-v2` clean.
+
+Found and fixed on the way: `/v1/dev-stories/:id/approve-review` had no caller check (a paired client could approve a review); it is now host-only. Read-write projects could not be inspected through a card (the scope check required `access==='read'`); fixed.
+
 ## Remaining acceptance criteria (not met)
-- A5 scoped coding: not built.
+- A5: no "View diff" in the review box yet (the changed file list only).
 - Panel open worktree / view diff (Stop, Pause verified live in 565b818; Resume of a task paused before its first event fails in Kandev: "Agent startup failed").
 - Board / Team / Processes consolidation.
 - Allow-once pressed live.

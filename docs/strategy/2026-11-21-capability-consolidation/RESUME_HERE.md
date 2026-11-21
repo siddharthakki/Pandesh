@@ -3,7 +3,7 @@
 **Before pushing:** this folder contains a machine inventory (local paths, NAS share names, model stores). Review it before pushing. The Pandesh repository may be public.
 
 ## Branches and worktrees
-- `feat/kandev-live-workers` in `D:\Projects\Pandesh`: bde6f7a → 7e4536a → d96795d → 68db6e9 → fc0aa0e → 6c4146d → 565b818. Stacked on `feat/stage-c-vertical-slice` (PR siddharthakki/Pandesh#131). Not pushed.
+- `feat/kandev-live-workers` in `D:\Projects\Pandesh`: bde6f7a → 7e4536a → d96795d → 68db6e9 → fc0aa0e → 6c4146d → 565b818 → cafb8a0 (A5). Stacked on `feat/stage-c-vertical-slice` (PR siddharthakki/Pandesh#131). Not pushed.
 - `feat/capability-consolidation` in worktree `D:\Projects\Pandesh-consolidation` (node_modules is a junction to the main checkout's): 06de824 (inventory + routing) and the commit holding these reports + `scripts/lib/resource-lock.mjs`. Not pushed.
 - Nothing merged, nothing installed. Production `E:\Pandesh` untouched.
 
@@ -19,7 +19,7 @@
 - **The Stage C dev Core** (pid 37676, data `D:\PandeshStageCDev`, from 11-19, not mine) runs from `D:\Projects\Pandesh\out-core\core.js`. That bundle now contains this branch's code; the process keeps its old code until it restarts.
 
 ## Scratch data created (all under `D:\PandeshP0Dev`, safe to delete after review)
-- Profile: tasks, a paired test client "ChatGPT (live test)", the registered project "Pandesh" (read-only)
+- Profile: tasks, a paired test client "ChatGPT (live test)", the registered projects "Pandesh" (read-only) and "CalcDemo" (read-write, `a5-calc`, now has branch `pandesh/chatgpt-a0d637406910`)
 - `explain-repo\` (synthetic repo)
 - `shots\` (screenshots)
 - `t*.json`, `*.id`, `pairing.token`
@@ -37,14 +37,14 @@ Kandev worktrees for the live tasks are under `C:\Users\<you>\.kkd-kandev\tasks\
 
 ## Safe next steps (no owner decision needed)
 1. Rebuild from `feat/capability-consolidation` and run the two router fixes live (image OCR, health phrasing).
-2. Worker panel: fix Resume of a task paused before its first event (repro: Pause right after Allow, then Resume → Kandev "Agent startup failed"); add "Open worktree" and "View diff".
+2. Worker panel: fix Resume of a task paused before its first event (repro: Pause right after Allow, then Resume → Kandev "Agent startup failed"); add "Open worktree" and "View diff" (also for the A5 review box).
 3. Show direct dev stories (not only bridge tasks) in the worker panels.
 4. `scripts/ci/local-pipeline.mjs` using `resource-lock.mjs` (`CI_CD_AUTOMATION_PLAN.md`).
 5. Join the model store inventory with the Ollama API inventory (created models' manifests are not on disk).
 6. Board → Missions consolidation.
 
 ## Owner-only actions
-1. **A5 decision** (`A5_SCOPED_CODING_PROPOSAL.md`).
+1. **Register real projects read-write for A5** (only then can ChatGPT change them; tested on synthetic `a5-calc` only).
 2. **Widen read-only file services to registered projects, or not.** Results would go to ChatGPT.
 3. **Repoint the 3 broken scheduled tasks** (commands in `CI_CD_AUTOMATION_PLAN.md`). The DDNS one is outward-facing.
 4. **Delete the confirmed duplicate models** (74.27 GB) and check the hidden Ollama `llamacpp:` blob.

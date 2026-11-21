@@ -28,7 +28,7 @@ Production is Build 187/186 at `E:\Pandesh`. Nothing below was installed there.
 | Worker slot release (abandoned decision, GPU wait) | 68db6e9, fc0aa0e | ✔ | ✔ | ✘ | scratch | ✔ live | |
 | Two concurrent Claude workers | Kandev WIP 2 | ✔ | partial | ✘ | scratch | ✔ live | Overlap 15:09:37–15:09:45 |
 | GPU lane lock | `gpuLaneLimit`, `waitsOnGpuLane` | ✔ | ✔ | ✘ | ✔ | ✔ live | "Waits for: local GPU lane (1 at a time)" |
-| Scoped ChatGPT coding in a project (A5) | — | ✘ | | | | | Proposal only |
+| Scoped ChatGPT coding in a project (A5) | — | ✔ | | | | | Built cafb8a0; verified live on a synthetic read-write repo; no View diff yet |
 
 ## Live agent workspace
 
