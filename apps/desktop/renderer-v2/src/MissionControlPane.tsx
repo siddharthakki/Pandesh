@@ -29,6 +29,17 @@ export function WorkerPanels({ items, now, onChanged }: { items: BridgeActivityI
     } catch (err) { setNote({ id: b.id, text: `Not recorded: ${errorText(err)}`, error: true }); }
     finally { setBusy(null); }
   };
+  /** A5: approve the reviewed change (KKD commits it to a branch in the private copy), or bring an approved one into the checkout. */
+  const changeAction = async (b: BridgeActivityItem, action: 'bridgeApproveChange' | 'bridgeDeliver') => {
+    setBusy(`${b.id}:${action}`);
+    setNote(null);
+    try {
+      const r = await api.household(action, { id: b.id }) as { delivered?: { branch: string } };
+      setNote({ id: b.id, text: action === 'bridgeApproveChange' ? 'Approved. Pandesh is committing the change to a branch in the private copy and checking it again.' : `In your checkout as branch ${r.delivered?.branch ?? ''}: not checked out, not merged, not pushed.` });
+      onChanged();
+    } catch (err) { setNote({ id: b.id, text: errorText(err), error: true }); }
+    finally { setBusy(null); }
+  };
   /** Stop ends the task (nothing else runs in its place); Pause keeps the worktree for Resume. Core decides what is allowed. */
   const control = async (b: BridgeActivityItem, action: 'bridgeCancel' | 'bridgePause' | 'bridgeResume') => {
     setBusy(`${b.id}:${action}`);
@@ -73,6 +84,21 @@ export function WorkerPanels({ items, now, onChanged }: { items: BridgeActivityI
                       </div>
                     </div>
                   ))}
+                  {b.codeChange?.awaitingReview && (
+                    <div className="approval worker-action" role="group" aria-label={`Review the change to ${b.codeChange.project}`}>
+                      <div className="head"><span className="dot attention" aria-hidden="true" /><span style={{ fontWeight: 600 }}>Review the change to {b.codeChange.project} ({b.codeChange.baseRef})</span></div>
+                      <div style={{ fontSize: 13 }}>Changed {b.codeChange.changedFiles.length} file{b.codeChange.changedFiles.length === 1 ? '' : 's'}: <code>{b.codeChange.changedFiles.join(', ') || 'none recorded'}</code>. The execution log below shows what the worker did and ran.</div>
+                      <div className="btns">
+                        <button type="button" className="btn primary small" disabled={busy === `${b.id}:bridgeApproveChange`} onClick={() => void changeAction(b, 'bridgeApproveChange')}>Approve change</button>
+                      </div>
+                    </div>
+                  )}
+                  {b.codeChange?.deliverable && (
+                    <div className="worker-controls" role="group" aria-label="Deliver the change">
+                      <button type="button" className="btn small" disabled={busy === `${b.id}:bridgeDeliver`} onClick={() => void changeAction(b, 'bridgeDeliver')}>Bring into my checkout as a new branch</button>
+                    </div>
+                  )}
+                  {b.codeChange?.delivered && <p className="worker-age" data-testid="worker-delivered">In your checkout as branch <code>{b.codeChange.delivered.branch}</code> ({b.codeChange.delivered.commit.slice(0, 8)}): not checked out, not merged, not pushed.</p>}
                   {note?.id === b.id && <p className={`mission-note${note.error ? ' error' : ''}`} role={note.error ? 'alert' : 'status'}>{note.text}</p>}
                   {live && (
                     <div className="worker-controls" role="group" aria-label="Worker controls">

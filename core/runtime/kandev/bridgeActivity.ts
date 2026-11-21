@@ -124,6 +124,11 @@ export interface ActivityItem {
   /** Actions the worker is waiting on (answered from the Pandesh window only). */
   pendingWorkerActions: Array<{ pendingId: string; what: string }>;
   storyId: string | null;
+  /**
+   * A5 code change: waiting for the owner's review (with the files it changed), or done and ready to be brought into the owner's
+   * checkout as a new branch (or already delivered). Null for every other task.
+   */
+  codeChange: { project: string; baseRef: string; awaitingReview: boolean; changedFiles: string[]; deliverable: boolean; delivered: { branch: string; commit: string } | null } | null;
 }
 
 export function activityItem(db: CoreDatabase, task: BridgeTaskRecord, clientLabel: string, now = Date.now()): ActivityItem {
@@ -170,5 +175,13 @@ export function activityItem(db: CoreDatabase, task: BridgeTaskRecord, clientLab
     branch: result?.branch ?? null,
     pendingWorkerActions: running && task.status === 'awaiting_approval' ? (result?.pendingApprovals ?? []) : [],
     storyId: task.storyId,
+    codeChange: result?.codeChange ? {
+      project: result.codeChange.project, baseRef: result.codeChange.baseRef,
+      // "The work is ready; review and approve it" (no worker action pending) is the review gate; a held worker action is not.
+      awaitingReview: task.status === 'awaiting_approval' && !(result.pendingApprovals ?? []).length,
+      changedFiles: result.changedFiles ?? [],
+      deliverable: task.status === 'completed' && !result.codeChange.delivered,
+      delivered: result.codeChange.delivered ? { branch: result.codeChange.delivered.branch, commit: result.codeChange.delivered.commit } : null,
+    } : null,
   };
 }

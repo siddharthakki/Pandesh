@@ -3050,6 +3050,9 @@ export class DesktopSession {
       bridgeCancel: { path: `/v1/bridge/tasks/${id}/cancel`, method: 'POST', body: {} },
       bridgePause: { path: `/v1/bridge/tasks/${id}/pause`, method: 'POST', body: {} },
       bridgeResume: { path: `/v1/bridge/tasks/${id}/resume`, method: 'POST', body: {} },
+      // A5: the owner approves a reviewed change, then (separately) brings it into the checkout as a new branch.
+      bridgeApproveChange: { path: `/v1/bridge/tasks/${id}/approve-change`, method: 'POST', body: {} },
+      bridgeDeliver: { path: `/v1/bridge/tasks/${id}/deliver`, method: 'POST', body: {} },
       // A worker action held for a person (Kandev permission). Core accepts this only over the host transport.
       devStoryPermission: { path: `/v1/dev-stories/${encodeURIComponent(String(args.storyId ?? ''))}/permissions/${encodeURIComponent(String(args.pendingId ?? ''))}`, method: 'POST', body: { allow: args.allow === true, via: 'window' } },
       mission: { path: `/v1/missions/${id}` },

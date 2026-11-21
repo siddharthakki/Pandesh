@@ -519,6 +519,13 @@ export function buildRouter(
     return { status: 200, body: await devStories.verifyExistingDevStory(ctx.db, kandevClient, match.params.id, typeof body.note === 'string' ? body.note : undefined) };
   });
   router.post('/v1/dev-stories/:id/approve-review', async (ctx, match) => {
+    // Approving integrates the worker's change, so only the Panda host decides, proven by the host transport, exactly as for worker
+    // permissions: a paired client (ChatGPT) or anything else holding the Core token must not approve work it asked for. Found
+    // 2026-11-21 while building A5: this route had no caller check. The phone page reaches it through the desktop session (host).
+    const principal = ctx.principal;
+    if (!principal?.isTrustedHost || principal.source !== 'host_transport' || principal.isModelOrTool) {
+      return { status: 403, body: { error: 'forbidden', reason: 'Changes can only be approved from Panda.' } };
+    }
     const body = asRecord(ctx.body);
     await devStories.approveDevStoryReview(ctx.db, kandevClient, match.params.id, typeof body.note === 'string' ? body.note : undefined);
     return { status: 200, body: { ok: true } };

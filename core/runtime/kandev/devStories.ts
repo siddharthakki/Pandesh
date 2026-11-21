@@ -69,6 +69,13 @@ export interface DevStorySpec {
    * folder; the same read-only rules and checks apply, and the worker's final message, however short, is the result.
    */
   answerOnly?: true;
+  /** Most changed files accepted at verification; more fails it with the list (A5 code changes). */
+  maxFiles?: number;
+  /**
+   * A5: a change requested through the bridge and approved by the owner. repoPath is a private copy (no remote) of this project; the
+   * owner's checkout at sourcePath is never written by KKD or the worker. The result is a branch in the copy.
+   */
+  codeCopy?: { projectName: string; sourcePath: string; ref: string; sourceHead: string; sourceStatusSha: string };
 }
 
 /** Fingerprint of a checkout's HEAD and working-tree state (read-only git), used to prove an inspection did not touch it. */
@@ -109,6 +116,8 @@ export interface PlanInput {
     inspect?: DevStorySpec['inspect'];
     /** With mode 'inspect': an answer-only task with no project (see DevStorySpec.answerOnly). */
     answerOnly?: boolean;
+    maxFiles?: number;
+    codeCopy?: DevStorySpec['codeCopy'];
   }>;
 }
 
@@ -134,6 +143,8 @@ export function planDevStories(db: CoreDatabase, input: PlanInput): { projectId:
         agent: s.agent, model: s.model, paths: s.paths,
         ...(acceptance[s.key].length ? { acceptance: acceptance[s.key] } : {}),
         ...(s.mode === 'inspect' ? { mode: 'inspect' as const, ...(s.inspect ? { inspect: s.inspect } : {}), ...(s.answerOnly ? { answerOnly: true as const } : {}) } : {}),
+        ...(s.mode !== 'inspect' && s.codeCopy ? { codeCopy: s.codeCopy } : {}),
+        ...(Number.isInteger(s.maxFiles) && s.maxFiles! > 0 ? { maxFiles: s.maxFiles } : {}),
       };
       const story = createStory(db, {
         projectId: project.id, title: s.title, description: s.description ?? '', acceptanceCriteria: s.acceptanceCriteria ?? [],
@@ -185,6 +196,15 @@ function workerPrompt(story: StoryRecord, spec: DevStorySpec): string {
       '\nThis task needs no project. Your working directory is an empty folder that holds nothing of the owner\'s.',
       'It is ANSWER-ONLY: do NOT create, edit or delete any file, do NOT commit, push or change any Kandev task state, and do not look outside the working directory.',
       'Do what the task asks, then write your answer as your last message and stop. If you cannot do it without changing files, say so plainly in that message.',
+    ].join('\n');
+  }
+  if (spec.codeCopy) {
+    return [
+      `Task: ${story.title}`,
+      story.description ? `\n${story.description}` : '',
+      `\nYour CURRENT WORKING DIRECTORY is your own worktree of a private copy of ${spec.codeCopy.projectName} at branch ${spec.codeCopy.ref}. Make the change here. If the task names a path on this PC, that is the owner's checkout: never read or write it; use the same relative path in your working directory.`,
+      `\nRules: change at most ${spec.maxFiles ?? 'a few'} files and only what the task needs. Run the existing tests for the code you touch with single plain commands (no \`&&\`, no \`cd\`). Do NOT commit, push, merge, switch branches, add remotes, install packages or change any Kandev task state: KarkeDikha verifies the change, the owner reviews it, and only then is it committed to a branch in this copy.`,
+      'If the change cannot be made here, change nothing and say plainly why in your last message. When done, stop and summarise exactly what you changed and which tests you ran with their results.',
     ].join('\n');
   }
   if (spec.mode === 'inspect') {
@@ -709,6 +729,9 @@ export async function verifyAndIntegrate(db: CoreDatabase, kandev: KandevClient,
     return fail('the worker made no changes', 'git reports no changed files in the worktree');
   }
   if (unsafe.length) return fail('protected or credential-adjacent files changed', unsafe.map(u => `${u.path}: ${u.reason}`).join('\n'));
+  if (spec.maxFiles && files.length > spec.maxFiles) {
+    return fail(`${files.length} files changed; this change was approved for at most ${spec.maxFiles}`, `Changed: ${files.join(', ')}\nRevert (git checkout -- <file>) what the task does not need and keep only the requested change.`);
+  }
   const outOfScope = spec.paths?.length ? files.filter(f => !overlaps([f], spec.paths).length) : [];
   if (outOfScope.length) {
     return fail('files outside the story scope changed', `Allowed: ${spec.paths!.join(', ')}\nRevert (git checkout -- <file>) these out-of-scope changes: ${outOfScope.join(', ')}`);

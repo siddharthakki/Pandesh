@@ -12,6 +12,7 @@ export interface BridgeActivityItem {
   // The worker's own newest event and the log size (Core keeps the log); absent from Cores before the worker panels.
   latest: { at: string; kind: string; text: string } | null; lastEventAt: string | null; eventCount: number; branch: string | null;
   pendingWorkerActions: Array<{ pendingId: string; what: string }>; storyId: string | null;
+  codeChange?: { project: string; baseRef: string; awaitingReview: boolean; changedFiles: string[]; deliverable: boolean; delivered: { branch: string; commit: string } | null } | null;
 }
 /** Tasks a Kandev worker runs get a live worker panel instead of a one-line row. */
 const isWorkerTask = (b: BridgeActivityItem) => Boolean(b.storyId) && ['claude', 'opencode', 'antigravity', 'hermes'].includes(b.executor ?? '');

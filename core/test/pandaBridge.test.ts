@@ -254,6 +254,21 @@ describe('HTTP surface', () => {
     expect(asOwner.json.activity).toMatchObject({ eventCount: 12, lastEventAt: '2026-11-21T10:00:11Z', latest: { kind: 'tool_read', text: 'Read file 11' } });
   });
 
+  it('A5: only the Pandesh window can approve a change or bring it into the checkout; a paired client never can', async () => {
+    const { token } = await pairOver();
+    const t = await call('POST', '/v1/bridge/tasks', { pairing: token, body: { clientRequestId: 'click-000000090', instruction: 'Fix the bug in the code.' } });
+    const id = t.json.taskId as string;
+    expect((await call('POST', `/v1/bridge/tasks/${id}/approve-change`, { pairing: token })).status).toBe(403);
+    expect((await call('POST', `/v1/bridge/tasks/${id}/deliver`, { pairing: token })).status).toBe(403);
+    // The host may call them; this task is not a code change, so Core says so instead of doing anything.
+    expect((await call('POST', `/v1/bridge/tasks/${id}/deliver`, { host: true })).json.error.message).toMatch(/not a code change/);
+  });
+
+  it('approving a dev story\'s review needs an identified interactive client (it had no caller check)', async () => {
+    const { token } = await pairOver();
+    expect((await call('POST', '/v1/dev-stories/story_x/approve-review', { pairing: token, body: {} })).status).toBe(403);
+  });
+
   it('worker actions can only be decided from the Pandesh window, never by a paired client or a bare Core token', async () => {
     const { token } = await pairOver();
     expect((await call('POST', '/v1/dev-stories/story_x/permissions/p-1', { pairing: token, body: { allow: true } })).status).toBe(403);

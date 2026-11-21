@@ -101,6 +101,8 @@ export interface BridgeTaskResult {
   timeline: Array<{ at: string; event: string; text: string }>;
   /** The worker's branch in its private worktree, when known. */
   branch?: string | null;
+  /** A5 code change: which project, and the branch the owner had it delivered to in their checkout (null until asked). */
+  codeChange?: { project: string; baseRef: string; delivered: { branch: string; commit: string; at: string } | null };
 }
 
 /** Most events kept per task. Older ones drop off the front. */
