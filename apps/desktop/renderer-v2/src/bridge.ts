@@ -116,7 +116,7 @@ export interface BriefItem { id: string; kind: string; stance: string; title: st
 export interface Brief { generatedAt: string; home: BriefItem[] }
 
 /** ChatGPT connector as the host reports it (ipc.ts ChatgptConnectorView). Never the tunnel key. */
-export interface ChatgptConnectorView { state: 'off' | 'needs-setup' | 'needs-key' | 'starting' | 'running' | 'degraded' | 'failed'; detail: string; enabled: boolean; keyConfigured: boolean; keyHint: string | null; tunnelId: string; clientPath: string; gatewayPath: string; tunnelReachable: boolean; activePairings: number; lastError: string | null; lastFailure: { at: string; message: string } | null; core: { reachable: boolean; port: number | null; profile: string; production: boolean; build: string | null }; recentLog: string[] }
+export interface ChatgptConnectorView { state: 'off' | 'needs-setup' | 'needs-key' | 'starting' | 'running' | 'degraded' | 'failed'; detail: string; enabled: boolean; keyConfigured: boolean; keyHint: string | null; tunnelId: string; clientPath: string; gatewayPath: string; tunnelReachable: boolean; activePairings: number; lastError: string | null; lastFailure: { at: string; message: string } | null; core: { reachable: boolean; port: number | null; profile: string; production: boolean; build: string | null }; recentLog: string[]; gatewaySource: 'packaged-verified' | 'development-path' | 'tampered' | 'missing' }
 
 /** Who can reach Pandesh Mobile (ipc.ts MobileAccessMode). */
 export type MobileAccess = 'off' | 'lan' | 'tailscale';

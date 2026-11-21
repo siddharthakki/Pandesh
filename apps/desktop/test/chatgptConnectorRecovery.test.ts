@@ -59,7 +59,7 @@ function harness(opts: { pin?: boolean; healthOk?: () => boolean } = {}) {
   const connector = new ChatgptConnector({
     dataDir, getKey: async () => KEY, nodePath: 'node', nodeIsElectron: false, log: () => undefined, spawnFn,
     fetchFn: (async (url: string) => ({ ok: String(url).includes('/v1/health') ? true : (opts.healthOk?.() ?? true), json: async () => ({}) })) as never,
-    portFree: async (port: number) => { if (seenPorts.has(port)) return false; seenPorts.add(port); return true; }, opensslPath: null, startupWaitMs: 0, watchdogMs: 0,
+    portFree: async (port: number) => { if (seenPorts.has(port)) return false; seenPorts.add(port); return true; }, opensslPath: null, startupWaitMs: 0, coreWaitMs: 0, watchdogMs: 0,
     verifyPin: async () => opts.pin ?? true, buildLabel: 'Build test', isProductionProfile: false,
   });
   fs.writeFileSync(path.join(dataDir, 'core.json'), JSON.stringify({ port: 4999 }));
@@ -124,6 +124,52 @@ describe.runIf(haveOpenssl)('failure recovery', () => {
     expect(down.core.reachable).toBe(false);
     expect(down.state).toBe('degraded');
     expect(down.detail).toMatch(/Core is not answering/);
+    await connector.stop('test');
+  });
+});
+
+describe.runIf(haveOpenssl)('managed gateway, client approval and startup order', () => {
+  it('runs only a packaged gateway whose SHA-256 matches the release manifest', async () => {
+    const { locateGateway, sha256OfFile } = await import('../src/host/chatgptConnector');
+    const root = tmp();
+    fs.mkdirSync(path.join(root, 'components', 'mcp-gateway'), { recursive: true });
+    const gw = path.join(root, 'components', 'mcp-gateway', 'server.mjs'); fs.writeFileSync(gw, 'console.log(1)');
+    fs.writeFileSync(path.join(root, 'build-fingerprint.json'), JSON.stringify({ files: { mcpGateway: { sha256: sha256OfFile(gw).toUpperCase() } } }));
+    expect(locateGateway(root, '').source).toBe('packaged-verified');
+    // Any change to the shipped file, or a missing manifest entry, is refused; there is no fallback to another path in a package.
+    fs.writeFileSync(gw, 'console.log(2)');
+    expect(locateGateway(root, 'C:/somewhere/else.mjs').source).toBe('tampered');
+    fs.writeFileSync(path.join(root, 'build-fingerprint.json'), JSON.stringify({ files: {} }));
+    expect(locateGateway(root, '').source).toBe('tampered');
+    // No packaged component = a development checkout: the configured path is used and reported as unverified.
+    const dev = path.join(root, 'dev.mjs'); fs.writeFileSync(dev, 'x');
+    expect(locateGateway(tmp(), dev).source).toBe('development-path');
+    expect(locateGateway(undefined, path.join(root, 'nope.mjs')).source).toBe('missing');
+  });
+
+  it('refuses a tunnel-client.exe that changed after it was approved', async () => {
+    const { connector, dataDir, spawned } = harness();
+    await connector.start();                                  // first start records the approved hash
+    const cfg = JSON.parse(fs.readFileSync(path.join(dataDir, 'chatgpt-connector.json'), 'utf8'));
+    expect(cfg.clientSha256).toMatch(/^[0-9a-f]{64}$/);
+    await connector.stop('test');
+    fs.writeFileSync(cfg.clientPath, 'a different binary');
+    spawned.length = 0;
+    await connector.start();
+    expect(spawned).toHaveLength(0);
+    expect((await connector.status()).lastError).toMatch(/not the file that was approved/);
+  });
+
+  it('opens the tunnel only after Pandesh Core answers (gateway first, tunnel last)', async () => {
+    vi.useFakeTimers();
+    const { connector, dataDir, spawned } = harness();
+    fs.rmSync(path.join(dataDir, 'core.json'));               // Core is not up yet
+    await connector.start();
+    expect(spawned.map((s) => s.name)).toEqual(['gateway']);
+    expect((await connector.status()).lastError).toMatch(/Core is not answering yet/);
+    fs.writeFileSync(path.join(dataDir, 'core.json'), JSON.stringify({ port: 4999 }));
+    await vi.advanceTimersByTimeAsync(200);
+    expect(spawned.map((s) => s.name)).toEqual(['gateway', 'tunnel']);
     await connector.stop('test');
   });
 });

@@ -28,6 +28,7 @@ function setup(opts: { key?: string | null; opensslPath?: string | null; busyPor
   if (fs.existsSync(openssl)) {
     execFileSync(openssl, ['req', '-x509', '-newkey', 'ec', '-pkeyopt', 'ec_paramgen_curve:prime256v1', '-nodes', '-keyout', path.join(tls, 'gateway-key.pem'), '-out', path.join(tls, 'gateway-cert.pem'), '-days', '90', '-subj', '/CN=t', '-addext', 'subjectAltName=IP:127.0.0.1'], { stdio: 'ignore' });
   }
+  fs.writeFileSync(path.join(dataDir, 'core.json'), JSON.stringify({ port: 4999 }));
   const spawned: Array<{ command: string; args: string[]; env: Record<string, string>; child: FakeChild }> = [];
   const fakeSpawn = ((command: string, args: string[], options: { env: Record<string, string> }) => {
     const child = new FakeChild(); spawned.push({ command, args, env: options.env, child }); return child;
@@ -39,7 +40,7 @@ function setup(opts: { key?: string | null; opensslPath?: string | null; busyPor
     spawnFn: fakeSpawn,
     fetchFn: (async () => ({ ok: opts.fetchOk ?? true, json: async () => ({ pairings: [] }) })) as never,
     portFree: async (port) => !(opts.busyPorts ?? []).includes(port),
-    opensslPath: opts.opensslPath ?? null, startupWaitMs: 0,
+    opensslPath: opts.opensslPath ?? null, startupWaitMs: 0, coreWaitMs: 0,
   });
   return { dataDir, connector, spawned, logs };
 }

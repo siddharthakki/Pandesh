@@ -88,7 +88,11 @@ export function ChatgptConnectorCard() {
         <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 8 }}>
           {field('Tunnel id', setup.tunnelId, (v) => setSetup({ ...setup, tunnelId: v }), 'tunnel_…')}
           {field('tunnel-client.exe', setup.clientPath, (v) => setSetup({ ...setup, clientPath: v }), 'D:\\PandeshTunnel\\client\\tunnel-client.exe')}
-          {field('MCP gateway script', setup.gatewayPath, (v) => setSetup({ ...setup, gatewayPath: v }), 'D:\\Projects\\Pandesh\\apps\\panda-bridge\\mcp-gateway\\server.mjs')}
+          {view.gatewaySource === 'packaged-verified'
+            ? <span style={{ fontSize: 14 }}><strong>Gateway</strong><span style={{ color: 'var(--verified)' }}> · included in this Pandesh and verified against its release manifest</span></span>
+            : view.gatewaySource === 'tampered'
+              ? <span role="alert" style={{ fontSize: 14, color: 'var(--danger)' }}>The gateway inside this Pandesh failed its integrity check and will not run. Reinstall Pandesh.</span>
+              : field('MCP gateway script (development only, not verified)', setup.gatewayPath, (v) => setSetup({ ...setup, gatewayPath: v }), 'D:\\Projects\\Pandesh\\apps\\panda-bridge\\mcp-gateway\\server.mjs')}
           <div><button type="button" className="btn small" disabled={Boolean(busy) || !setupDirty} onClick={() => void run('setup', () => api.setChatgptConnectorSetup(setup), 'Setup saved.')}>Save setup</button></div>
 
           <label style={{ display: 'flex', flexDirection: 'column', gap: 2, fontSize: 14 }}>

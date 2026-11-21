@@ -18,6 +18,7 @@
  */
 import http from 'node:http';
 import https from 'node:https';
+import { execFile } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
@@ -43,10 +44,72 @@ const rand = (n = 32) => crypto.randomBytes(n).toString('base64url');
 
 function audit(line) { try { fs.mkdirSync(path.dirname(LOG_FILE), { recursive: true }); fs.appendFileSync(LOG_FILE, `${new Date().toISOString()} ${line}\n`); } catch { /* best effort */ } }
 
-// ------------------------------------------------------------------ state (hashes only)
-let state = { clients: {}, grants: {} };   // grants[hash(refresh)] = { clientId, pairingToken(enc?) ... }
-try { state = JSON.parse(fs.readFileSync(STATE_FILE, 'utf8')); } catch { /* first run */ }
-const save = () => { fs.mkdirSync(DATA_DIR, { recursive: true }); fs.writeFileSync(STATE_FILE, JSON.stringify(state, null, 1), { mode: 0o600 }); };
+// ------------------------------------------------------------------ state (hashes only; pairing tokens protected with Windows DPAPI)
+// In memory: grants[hash(refresh)] = { clientId, pairingId, token (plain, memory only), enc (DPAPI blob or undefined for a legacy plaintext grant) }.
+// On disk:   grants[hash(refresh)] = { clientId, pairingId, pairingTokenEnc: 'dpapi1:<base64>' }. A pairing token is never newly written in plaintext.
+// A legacy file that still holds plaintext pairing tokens keeps working and is converted ONLY by an explicit "node server.mjs --migrate-state".
+// DPAPI (CurrentUser scope, Pandesh-specific entropy) binds the blob to this Windows account on this PC: a copy of the profile folder is useless elsewhere.
+// PANDESH_MCP_STATE_PROTECTION=none exists for tests only; it is audited and never set by the Pandesh host.
+const PROTECTION = process.env.PANDESH_MCP_STATE_PROTECTION === 'none' ? 'none' : 'dpapi';
+const DPAPI_PS = [
+  "$ErrorActionPreference = 'Stop'", 'Add-Type -AssemblyName System.Security',
+  '$in = [Console]::In.ReadToEnd() | ConvertFrom-Json', "$e = [Text.Encoding]::UTF8.GetBytes('pandesh-mcp-gateway-state-v1')", '$out = @()',
+  "foreach ($i in $in.items) { $d = [Convert]::FromBase64String($i); if ($in.op -eq 'protect') { $r = [Security.Cryptography.ProtectedData]::Protect($d, $e, [Security.Cryptography.DataProtectionScope]::CurrentUser) } else { $r = [Security.Cryptography.ProtectedData]::Unprotect($d, $e, [Security.Cryptography.DataProtectionScope]::CurrentUser) }; $out += [Convert]::ToBase64String($r) }",
+  '[Console]::Out.Write((ConvertTo-Json -Compress -InputObject @($out)))',
+].join('; ');
+const dpapi = (op, items) => new Promise((resolve, reject) => {
+  if (!items.length) return resolve([]);
+  const encoded = Buffer.from(DPAPI_PS, 'utf16le').toString('base64');
+  const child = execFile('powershell.exe', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-EncodedCommand', encoded], { windowsHide: true, timeout: 20_000, maxBuffer: 4 * 1024 * 1024 }, (err, stdout) => {
+    if (err) return reject(new Error(`DPAPI ${op} failed`));
+    try { const r = JSON.parse(String(stdout).trim()); resolve(Array.isArray(r) ? r : [r]); } catch { reject(new Error(`DPAPI ${op} returned an unreadable reply`)); }
+  });
+  child.stdin?.end(JSON.stringify({ op, items }));   // secrets travel over stdin only, never the command line
+});
+const protectToken = async (plain) => {
+  const b64 = Buffer.from(plain, 'utf8').toString('base64');
+  if (PROTECTION === 'none') return `none1:${b64}`;
+  return `dpapi1:${(await dpapi('protect', [b64]))[0]}`;
+};
+const unprotectTokens = async (blobs) => {
+  const real = blobs.filter((b) => b.startsWith('dpapi1:')); const out = new Map();
+  const plain = real.length ? await dpapi('unprotect', real.map((b) => b.slice(7))) : [];
+  real.forEach((b, i) => out.set(b, Buffer.from(plain[i], 'base64').toString('utf8')));
+  for (const b of blobs) if (b.startsWith('none1:')) { if (PROTECTION !== 'none') throw new Error('unprotected state refused'); out.set(b, Buffer.from(b.slice(6), 'base64').toString('utf8')); }
+  return out;
+};
+let state = { clients: {}, grants: {} };
+let legacyPlainGrants = 0, droppedGrants = 0;
+async function loadState() {
+  let raw; try { raw = JSON.parse(fs.readFileSync(STATE_FILE, 'utf8')); } catch { return; /* first run */ }
+  state.clients = raw.clients ?? {};
+  const entries = Object.entries(raw.grants ?? {});
+  const blobs = entries.map(([, g]) => g.pairingTokenEnc).filter(Boolean);
+  let opened = new Map();
+  try { opened = await unprotectTokens(blobs); } catch (e) { droppedGrants += blobs.length; audit(`state: could not open protected pairings (${e instanceof Error ? e.message : 'error'}); those pairings must be re-paired`); }
+  for (const [h, g] of entries) {
+    if (g.pairingTokenEnc) { const t = opened.get(g.pairingTokenEnc); if (t) state.grants[h] = { clientId: g.clientId, pairingId: g.pairingId, token: t, enc: g.pairingTokenEnc }; else droppedGrants++; }
+    else if (typeof g.pairingToken === 'string') { state.grants[h] = { clientId: g.clientId, pairingId: g.pairingId, token: g.pairingToken }; legacyPlainGrants++; }
+  }
+  if (PROTECTION === 'none') audit('state protection is OFF (test mode)');
+  if (legacyPlainGrants) audit(`state: ${legacyPlainGrants} legacy plaintext pairing(s) loaded unchanged; run "node server.mjs --migrate-state" to protect them`);
+}
+const persisted = () => ({ clients: state.clients, grants: Object.fromEntries(Object.entries(state.grants).map(([h, g]) => [h, { clientId: g.clientId, pairingId: g.pairingId, ...(g.enc ? { pairingTokenEnc: g.enc } : { pairingToken: g.token }) }])) });
+const save = () => { fs.mkdirSync(DATA_DIR, { recursive: true }); const tmp = `${STATE_FILE}.tmp`; fs.writeFileSync(tmp, JSON.stringify(persisted(), null, 1), { mode: 0o600 }); fs.renameSync(tmp, STATE_FILE); };
+async function migrateState() {
+  let n = 0; for (const g of Object.values(state.grants)) if (!g.enc) { g.enc = await protectToken(g.token); n++; }
+  if (n) save();
+  return n;
+}
+await loadState();
+if (process.argv.includes('--migrate-state')) { const n = await migrateState(); audit(`state: migrated ${n} plaintext pairing(s) to DPAPI (explicit request)`); console.log(JSON.stringify({ migrated: n })); process.exit(0); }
+/** A pairing Core no longer accepts (revoked in Pandesh): forget every grant and access token that carries it, so a refresh cannot revive it. */
+function dropPairing(token) {
+  let n = 0;
+  for (const [h, g] of Object.entries(state.grants)) if (g.token === token) { delete state.grants[h]; n++; }
+  for (const [h, a] of access) if (a.pairingToken === token) { access.delete(h); n++; }
+  if (n) { save(); audit(`pairing no longer accepted by Pandesh; ${n} grant(s) forgotten`); }
+}
 const pending = new Map();   // authorization codes (memory only, 5 minutes)
 const access = new Map();    // access token hash -> { clientId, pairingToken, exp }
 
@@ -58,6 +121,7 @@ async function core(method, p, body, pairingToken) {
   if (pairingToken) headers['x-panda-pairing'] = pairingToken;
   const r = await fetch(`http://127.0.0.1:${port}${p}`, { method, headers, body: body ? JSON.stringify(body) : undefined, signal: AbortSignal.timeout(30_000) });
   const t = await r.text(); let j = null; try { j = JSON.parse(t); } catch { j = t; }
+  if (pairingToken && (r.status === 401 || r.status === 403)) dropPairing(pairingToken);
   return { status: r.status, body: j };
 }
 
@@ -180,20 +244,22 @@ async function handle(req, res, secure = true) {
   }
   if (p === '/token' && req.method === 'POST') {
     const b = form(await readBody(req)); const fail400 = (e) => json(res, 400, { error: e });
-    const issue = (clientId, pairingToken, pairingId) => {
-      const at = rand(32), rt = rand(32); access.set(sha(at), { clientId, pairingToken, exp: Date.now() + ACCESS_TTL * 1000 });
-      state.grants[sha(rt)] = { clientId, pairingToken: pairingToken, pairingId }; save();
+    const issue = async (clientId, pairingToken, pairingId) => {
+      const at = rand(32), rt = rand(32);
+      const enc = await protectToken(pairingToken);   // fail closed: if the token cannot be protected, nothing is issued
+      access.set(sha(at), { clientId, pairingToken, exp: Date.now() + ACCESS_TTL * 1000 });
+      state.grants[sha(rt)] = { clientId, pairingId, token: pairingToken, enc }; save();
       return json(res, 200, { access_token: at, token_type: 'Bearer', expires_in: ACCESS_TTL, refresh_token: rt, scope: 'pandesh.tasks' });
     };
     if (b.grant_type === 'authorization_code') {
       const e = pending.get(sha(b.code ?? '')); pending.delete(sha(b.code ?? ''));
       if (!e || e.exp < Date.now() || e.clientId !== b.client_id || e.redirectUri !== b.redirect_uri) return fail400('invalid_grant');
       if (crypto.createHash('sha256').update(String(b.code_verifier ?? '')).digest('base64url') !== e.challenge) return fail400('invalid_grant');
-      return issue(e.clientId, e.pairingToken, e.pairingId);
+      return await issue(e.clientId, e.pairingToken, e.pairingId);
     }
     if (b.grant_type === 'refresh_token') {
       const g = state.grants[sha(b.refresh_token ?? '')]; if (!g || g.clientId !== b.client_id) return fail400('invalid_grant');
-      delete state.grants[sha(b.refresh_token)]; return issue(g.clientId, g.pairingToken, g.pairingId);   // rotation: a refresh token works once
+      delete state.grants[sha(b.refresh_token)]; return await issue(g.clientId, g.token, g.pairingId);   // rotation: a refresh token works once
     }
     return fail400('unsupported_grant_type');
   }

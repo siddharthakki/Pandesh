@@ -1328,4 +1328,5 @@ export interface ChatgptConnectorView {
   lastFailure: { at: string; message: string } | null;
   core: { reachable: boolean; port: number | null; profile: string; production: boolean; build: string | null };
   recentLog: string[];
+  gatewaySource: 'packaged-verified' | 'development-path' | 'tampered' | 'missing';
 }
