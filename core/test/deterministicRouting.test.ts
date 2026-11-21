@@ -29,6 +29,9 @@ describe('intent router: routine operations vs interpretation', () => {
     expect(svc('OCR the scanned PDF D:/docs/scan.pdf')).toMatchObject({ cls: 'ocr.pdf' });
     expect(svc('health check')).toMatchObject({ cls: 'service.health' });
     expect(svc('Is Ollama running?')).toMatchObject({ cls: 'service.health' });
+    // Live 2026-11-21: these two went to a model (one queued behind the GPU) instead of the service.
+    expect(svc('Check the health of the local services (read only).')).toMatchObject({ cls: 'service.health' });
+    expect(svc('Run OCR on D:/scans/receipt.png and return the text (read only).')).toEqual({ cls: 'ocr.pdf', args: { path: 'D:/scans/receipt.png' } });
     expect(svc('search my conversations for tailscale setup')).toMatchObject({ cls: 'search.records', args: { query: 'tailscale setup', scope: 'conversations' } });
   });
 

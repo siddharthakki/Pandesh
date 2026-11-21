@@ -50,7 +50,7 @@ export function classifyInstruction(instruction: string): DeterministicIntent | 
   if (INTERPRETATION.test(text)) return null;
 
   // Service health.
-  if (/\b(health ?check|service status|status of (?:the )?(?:services|pandesh|core)|is (?:ollama|kandev|pandesh|the core|the model server) (?:up|running|healthy|reachable|ok))\b/i.test(text)) {
+  if (/\b(health ?check|service status|status of (?:the )?(?:local )?(?:services|pandesh|core)|(?:check|show|report) (?:the )?health of (?:the )?(?:local )?(?:services|pandesh|core)|is (?:ollama|kandev|pandesh|the core|the model server) (?:up|running|healthy|reachable|ok))\b/i.test(text)) {
     return { kind: 'service', taskClass: 'service.health', args: {}, reason: 'a health check reads state; nothing to interpret' };
   }
 
@@ -73,6 +73,11 @@ export function classifyInstruction(instruction: string): DeterministicIntent | 
     if (/\b(ocr|scanned?)\b/i.test(text)) return { kind: 'service', taskClass: 'ocr.pdf', args: { path: p }, reason: 'OCR of a PDF through the approved OCR module' };
     if (/\b(how many pages|page count|number of pages|pages? in)\b/i.test(text)) return { kind: 'service', taskClass: 'pdf.info', args: { path: p }, reason: 'page count read by Poppler' };
     if (/\b(text|extract|read|contents?)\b/i.test(text)) return { kind: 'workflow', workflowId: 'extract-document', input: { path: p }, reason: 'text layer first, OCR only if the PDF has none' };
+  }
+
+  // OCR of an image (the OCR service reads images as well as PDFs). Live 2026-11-21: "Run OCR on <image>" was not routed at all.
+  if (p && p !== WORKSPACE_MARKER && /\.(png|jpe?g|tiff?|bmp|webp|gif)$/i.test(p) && /\b(ocr|recogni[sz]e (?:the )?text|text (?:in|from|of) (?:the |this )?(?:image|picture|screenshot|scan))\b/i.test(text)) {
+    return { kind: 'service', taskClass: 'ocr.pdf', args: { path: p }, reason: 'OCR of an image through the approved OCR module' };
   }
 
   // File type detection.
