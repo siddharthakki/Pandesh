@@ -46,6 +46,8 @@ const FINGERPRINT_MANDATORY = {
   whisperConfig: 'models/whisper-base-en/Xenova/whisper-base.en/config.json',
   asrTransformers: 'runtime-assets/node_modules/@xenova/transformers/package.json',
   buildIdentity: 'build-identity.json',
+  // Shipped component the updater never rewrites; kept in the regenerated fingerprint so the host can still verify the ChatGPT gateway after an update.
+  mcpGateway: 'components/mcp-gateway/server.mjs',
 };
 
 export function sha256File(file) {

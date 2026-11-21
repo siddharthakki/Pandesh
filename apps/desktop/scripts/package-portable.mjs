@@ -162,6 +162,8 @@ fs.writeFileSync(path.join(appDir, 'package.json'), `${JSON.stringify({
 }, null, 2)}\n`);
 copyRecursive(path.join(desktopRoot, 'out'), path.join(appDir, 'out'));
 copyRecursive(path.join(desktopRoot, 'renderer'), path.join(appDir, 'renderer'));
+// ChatGPT connector gateway: a managed, hash-verified component (node built-ins only, no dependencies). Never run from a workspace path.
+copyRecursive(path.join(repoRoot, 'apps', 'panda-bridge', 'mcp-gateway'), path.join(outDir, 'components', 'mcp-gateway'));
 copyRecursive(path.join(repoRoot, 'models', 'whisper-base-en'), path.join(outDir, 'models', 'whisper-base-en'));
 if (fs.existsSync(path.join(repoRoot, 'models', 'openwakeword'))) {
   copyRecursive(path.join(repoRoot, 'models', 'openwakeword'), path.join(outDir, 'models', 'openwakeword'));

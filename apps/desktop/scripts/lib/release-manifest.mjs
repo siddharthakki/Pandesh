@@ -33,6 +33,8 @@ export const MANDATORY_BUNDLE_FILES = {
   // shipped file, so a build that shows one version in the UI and ships
   // another cannot pass the manifest check.
   buildIdentity: 'build-identity.json',
+  // The ChatGPT connector's MCP gateway ships inside the package; the host runs it only when its SHA-256 matches this entry.
+  mcpGateway: 'components/mcp-gateway/server.mjs',
 };
 
 export function sha256File(filePath) {

@@ -248,6 +248,7 @@ function ensureChatgptConnector(): ChatgptConnector {
     nodePath: process.execPath,
     nodeIsElectron: Boolean(process.versions.electron),
     log: (message) => hostLog(message),
+    productRoot,
     isProductionProfile: !isTestProfile(dataDir, realDesktopDataDirFromOs()),
     buildLabel: (() => { const b = resolveBuildIdentity(productRoot, String(app.getVersion?.() || '').trim()); return `${b.buildNumber ? `Build ${b.buildNumber}` : `v${b.version}`}${b.commit ? ` (${b.commit.slice(0, 7)})` : ''}`; })(),
   });
@@ -258,7 +259,7 @@ async function chatgptConnectorView(): Promise<import('./ipc').ChatgptConnectorV
   const connector = ensureChatgptConnector();
   const status = await connector.status();
   const cfg = connector.config();
-  return { state: status.state, detail: status.detail, enabled: status.enabled, keyConfigured: status.keyConfigured, keyHint: status.keyHint, tunnelId: cfg.tunnelId, clientPath: cfg.clientPath, gatewayPath: cfg.gatewayPath, tunnelReachable: status.tunnelReachable, activePairings: status.activePairings, lastError: status.lastError, lastFailure: status.lastFailure, core: status.core, recentLog: status.recentLog };
+  return { state: status.state, detail: status.detail, enabled: status.enabled, keyConfigured: status.keyConfigured, keyHint: status.keyHint, tunnelId: cfg.tunnelId, clientPath: cfg.clientPath, gatewayPath: cfg.gatewayPath, tunnelReachable: status.tunnelReachable, activePairings: status.activePairings, lastError: status.lastError, lastFailure: status.lastFailure, core: status.core, recentLog: status.recentLog, gatewaySource: status.gatewaySource };
 }
 let window: BrowserWindow | undefined;
 let popoutWindow: BrowserWindow | undefined;
@@ -1848,7 +1849,8 @@ function registerIpc(): void {
     const input = (setup ?? {}) as Record<string, unknown>;
     writeConnectorConfig(dataDir, {
       ...(typeof input.tunnelId === 'string' ? { tunnelId: input.tunnelId.trim() } : {}),
-      ...(typeof input.clientPath === 'string' ? { clientPath: input.clientPath.trim() } : {}),
+      // A new tunnel-client path is a new file to approve: its SHA-256 is recorded at the next start.
+      ...(typeof input.clientPath === 'string' ? { clientPath: input.clientPath.trim(), clientSha256: '' } : {}),
       ...(typeof input.gatewayPath === 'string' ? { gatewayPath: input.gatewayPath.trim() } : {}),
     });
     return chatgptConnectorView();

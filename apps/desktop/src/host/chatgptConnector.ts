@@ -17,7 +17,7 @@
  *     "Disconnect" revokes every ChatGPT pairing and stops both processes.
  */
 import { execFile, spawn, type ChildProcess } from 'node:child_process';
-import { X509Certificate } from 'node:crypto';
+import { X509Certificate, createHash } from 'node:crypto';
 import * as fs from 'node:fs';
 import * as net from 'node:net';
 import * as tls from 'node:tls';
@@ -43,6 +43,8 @@ export interface ConnectorConfig {
   gatewayPort: number;
   tlsPort: number;
   healthPort: number;
+  /** SHA-256 of tunnel-client.exe as approved when the person saved the setup; a changed file is refused until the setup is saved again. */
+  clientSha256: string;
 }
 
 export const DEFAULT_CONNECTOR_CONFIG: ConnectorConfig = {
@@ -53,6 +55,7 @@ export const DEFAULT_CONNECTOR_CONFIG: ConnectorConfig = {
   gatewayPort: 3973,
   tlsPort: 3974,
   healthPort: 3975,
+  clientSha256: '',
 };
 
 export type ConnectorState = 'off' | 'needs-setup' | 'needs-key' | 'starting' | 'running' | 'degraded' | 'failed';
@@ -78,6 +81,8 @@ export interface ConnectorStatus {
   core: { reachable: boolean; port: number | null; profile: string; production: boolean; build: string | null };
   /** Recent log lines (key redacted). */
   recentLog: string[];
+  /** Where the running gateway comes from: the verified package, a development path, or refused. */
+  gatewaySource: GatewaySource;
 }
 
 export interface ConnectorDeps {
@@ -101,6 +106,10 @@ export interface ConnectorDeps {
   isProductionProfile?: boolean;
   /** "Build 188 (d1b94da)" style label of the running Pandesh, for status. */
   buildLabel?: string;
+  /** The Pandesh install folder (holds components/mcp-gateway and build-fingerprint.json). */
+  productRoot?: string;
+  /** How long to wait for Pandesh Core before opening the tunnel (ms). */
+  coreWaitMs?: number;
   /** Health watchdog period (ms); 0 disables it. */
   watchdogMs?: number;
   /** Checks the gateway presents exactly the certificate on disk. Default: a real TLS handshake with that certificate as the only trust root. */
@@ -144,6 +153,7 @@ export function normalizeConfig(raw: unknown): ConnectorConfig {
     gatewayPort: port(r.gatewayPort, DEFAULT_CONNECTOR_CONFIG.gatewayPort),
     tlsPort: port(r.tlsPort, DEFAULT_CONNECTOR_CONFIG.tlsPort),
     healthPort: port(r.healthPort, DEFAULT_CONNECTOR_CONFIG.healthPort),
+    clientSha256: typeof r.clientSha256 === 'string' && /^[0-9a-fA-F]{64}$/.test(r.clientSha256) ? r.clientSha256.toLowerCase() : '',
   };
 }
 
@@ -184,6 +194,34 @@ export function certificateIsUsable(certPath: string, keyPath: string, now = Dat
   } catch {
     return false;
   }
+}
+
+export type GatewaySource = 'packaged-verified' | 'development-path' | 'tampered' | 'missing';
+
+export function sha256OfFile(file: string): string {
+  return createHash('sha256').update(fs.readFileSync(file)).digest('hex');
+}
+
+/**
+ * The gateway that ships INSIDE the Pandesh package (components/mcp-gateway/server.mjs), checked against the SHA-256 the
+ * release manifest (build-fingerprint.json) recorded at packaging time. A packaged gateway that does not match is never
+ * run, and a packaged install never falls back to an arbitrary path. A development checkout (no manifest entry) may use
+ * the path the person configured and is reported as unverified.
+ */
+export function locateGateway(productRoot: string | undefined, configuredPath: string): { path: string; source: GatewaySource } {
+  if (productRoot) {
+    const packaged = path.join(productRoot, 'components', 'mcp-gateway', 'server.mjs');
+    if (fs.existsSync(packaged)) {
+      try {
+        const manifest = JSON.parse(fs.readFileSync(path.join(productRoot, 'build-fingerprint.json'), 'utf8'));
+        const expected = String(manifest?.files?.mcpGateway?.sha256 ?? '').toLowerCase();
+        if (expected && sha256OfFile(packaged) === expected) return { path: packaged, source: 'packaged-verified' };
+      } catch { /* fall through: unverifiable is tampered */ }
+      return { path: packaged, source: 'tampered' };
+    }
+  }
+  if (configuredPath && fs.existsSync(configuredPath)) return { path: configuredPath, source: 'development-path' };
+  return { path: configuredPath, source: 'missing' };
 }
 
 interface Supervised {
@@ -294,14 +332,49 @@ export class ChatgptConnector {
       }
       this.audit('gateway certificate matches the pinned loopback certificate');
     }
+    // Startup order: Core must answer before ChatGPT can reach the gateway, so the tunnel opens last.
+    if (!(await this.waitForCore(this.deps.coreWaitMs ?? 30_000))) {
+      this.lastError = 'Pandesh Core is not answering yet, so the tunnel stays closed. Retrying.';
+      this.audit(this.lastError);
+      this.scheduleTunnelRetry(0);
+      this.startWatchdog();
+      return;
+    }
     await this.startPart(this.parts.tunnel, cfg);
     this.startWatchdog();
+  }
+
+  private async waitForCore(ms: number): Promise<boolean> {
+    const end = this.now() + ms;
+    for (;;) {
+      if ((await this.coreView()).reachable) return true;
+      if (this.now() >= end) return false;
+      await new Promise((r) => setTimeout(r, 1000));
+    }
+  }
+
+  private coreRetry: NodeJS.Timeout | undefined;
+  private scheduleTunnelRetry(attempt: number): void {
+    if (!this.desired || attempt >= 40) return;
+    this.coreRetry = setTimeout(() => {
+      this.coreRetry = undefined;
+      void (async () => {
+        if (!this.desired || this.parts.tunnel.child) return;
+        if (await this.waitForCore(0)) { this.lastError = null; this.audit('Pandesh Core is answering; opening the tunnel'); await this.startPart(this.parts.tunnel, this.config()); } else this.scheduleTunnelRetry(attempt + 1);
+      })();
+    }, this.deps.coreWaitMs === 0 ? 50 : 15_000);
+    this.coreRetry.unref?.();
   }
 
   private setupProblem(cfg: ConnectorConfig): string | null {
     if (!cfg.tunnelId) return 'Set the tunnel id (tunnel_…) first.';
     if (!cfg.clientPath || !fs.existsSync(cfg.clientPath)) return 'tunnel-client.exe was not found at the configured path.';
-    if (!cfg.gatewayPath || !fs.existsSync(cfg.gatewayPath)) return 'The MCP gateway script was not found at the configured path.';
+    const gw = locateGateway(this.deps.productRoot, cfg.gatewayPath);
+    if (gw.source === 'tampered') return 'The ChatGPT gateway inside the Pandesh package failed its integrity check, so it was not started.';
+    if (gw.source === 'missing') return 'The MCP gateway script was not found (the package has none and no development path is set).';
+    const clientHash = sha256OfFile(cfg.clientPath);
+    if (cfg.clientSha256 && cfg.clientSha256 !== clientHash) return 'tunnel-client.exe is not the file that was approved in setup (its SHA-256 changed). Check it, then save the setup again to approve it.';
+    if (!cfg.clientSha256) { writeConnectorConfig(this.deps.dataDir, { clientSha256: clientHash }); this.audit(`approved tunnel-client.exe sha256 ${clientHash.slice(0, 12)}…`); }
     if (new Set([cfg.gatewayPort, cfg.tlsPort, cfg.healthPort]).size !== 3) return 'The three connector ports must differ.';
     return null;
   }
@@ -343,7 +416,7 @@ export class ChatgptConnector {
     let command: string; let args: string[]; const env = reducedEnvironment();
     if (part.name === 'gateway') {
       command = this.deps.nodePath;
-      args = [cfg.gatewayPath];
+      args = [locateGateway(this.deps.productRoot, cfg.gatewayPath).path];
       if (this.deps.nodeIsElectron) env.ELECTRON_RUN_AS_NODE = '1';
       Object.assign(env, { PANDESH_DATA_DIR: this.deps.dataDir, PANDESH_MCP_PORT: String(cfg.gatewayPort), PANDESH_MCP_TLS_PORT: String(cfg.tlsPort), PANDESH_MCP_TLS_DIR: this.tlsDir() });
     } else {
@@ -418,6 +491,7 @@ export class ChatgptConnector {
   async stop(reason: string): Promise<void> {
     this.desired = false;
     if (this.watchdog) { clearInterval(this.watchdog); this.watchdog = undefined; }
+    if (this.coreRetry) { clearTimeout(this.coreRetry); this.coreRetry = undefined; }
     for (const part of [this.parts.tunnel, this.parts.gateway]) {
       if (part.retry) { clearTimeout(part.retry); part.retry = undefined; }
       const child = part.child;
@@ -494,17 +568,18 @@ export class ChatgptConnector {
     let activePairings = 0;
     if (this.desired) { try { activePairings = (await this.chatgptPairings()).length; } catch { /* Core not ready */ } }
     const failed = this.parts.gateway.failed ?? this.parts.tunnel.failed;
+    const gwSource = locateGateway(this.deps.productRoot, cfg.gatewayPath).source;
     let state: ConnectorState; let detail: string;
     if (!cfg.enabled) { state = 'off'; detail = 'The ChatGPT connector is off. ChatGPT cannot reach Pandesh.'; }
-    else if (!cfg.tunnelId || !cfg.clientPath || !cfg.gatewayPath) { state = 'needs-setup'; detail = this.lastError ?? 'Finish setup: tunnel id and program paths.'; }
+    else if (!cfg.tunnelId || !cfg.clientPath || gwSource === 'missing') { state = 'needs-setup'; detail = this.lastError ?? 'Finish setup: tunnel id and program paths.'; }
     else if (!key) { state = 'needs-key'; detail = 'Store the OpenAI tunnel key to start the connector.'; }
     else if (failed) { state = 'failed'; detail = failed; }
     else if (this.desired && gatewayRunning && tunnelRunning && tunnelReachable) { state = 'running'; detail = activePairings > 0 ? `Connected. ${activePairings} ChatGPT pairing(s) active.` : 'Running. Create a pairing code to connect ChatGPT.'; }
-    else if (this.desired && (gatewayRunning || tunnelRunning)) { state = gatewayRunning && tunnelRunning ? 'starting' : 'degraded'; detail = state === 'starting' ? 'Starting…' : 'One part is restarting.'; }
+    else if (this.desired && (gatewayRunning || tunnelRunning)) { state = gatewayRunning && tunnelRunning ? 'starting' : 'degraded'; detail = state === 'starting' ? 'Starting…' : (this.lastError ?? 'One part is restarting.'); }
     else { state = 'failed'; detail = this.lastError ?? 'The connector is switched on but not running.'; }
     const core = await this.coreView();
     if (state === 'running' && !core.reachable) { state = 'degraded'; detail = 'The tunnel is up, but this Pandesh\'s Core is not answering, so ChatGPT tasks would fail.'; }
-    return { state, detail, enabled: cfg.enabled, keyConfigured: Boolean(key), keyHint: key ? maskedKeyHint(key) : null, tunnelId: cfg.tunnelId, gatewayRunning, tunnelRunning, tunnelReachable, activePairings, lastError: this.lastError, lastFailure: this.lastFailure, core, recentLog: this.lastLines.slice(-12) };
+    return { state, detail, enabled: cfg.enabled, keyConfigured: Boolean(key), keyHint: key ? maskedKeyHint(key) : null, tunnelId: cfg.tunnelId, gatewayRunning, tunnelRunning, tunnelReachable, activePairings, lastError: this.lastError, lastFailure: this.lastFailure, core, recentLog: this.lastLines.slice(-12), gatewaySource: gwSource };
   }
 
   private async coreView(): Promise<ConnectorStatus['core']> {
