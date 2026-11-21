@@ -17,7 +17,7 @@ import {
   type BridgePairing,
 } from '../domain/pandaBridge';
 import { addComment, getStory, listComments, listStories, transitionStory } from '../domain/stories';
-import { DEV_ACTOR, devSpec, planDevStories, verificationOf, verifyAndIntegrate } from '../runtime/kandev/devStories';
+import { DEV_ACTOR, devSpec, planDevStories, verificationOf, verifyAndIntegrate, waitsOnGpuLane } from '../runtime/kandev/devStories';
 import { dispatchBridgeTask, isAnswerOnly, mergeActivity, prepareTaskWorkspace, refersToCode, refreshBridgeTask, type BridgeRuntime } from '../runtime/kandev/pandaBridge';
 import { activityItem } from '../runtime/kandev/bridgeActivity';
 import type { KandevClient } from '../runtime/kandev/kandevClient';
@@ -176,6 +176,29 @@ describe('verifying what the worker did', () => {
     expect(getStory(db, id).status).toBe('blocked');
     expect(w.sent).toEqual([]);
     expect(comments(id)).toMatch(/Verification failed 3 times \(the worker made no changes\).*The worker's last words: The scaffold has no source/);
+  });
+});
+
+describe('waiting for the local GPU', () => {
+  it('a GPU story waits while the lanes are taken; a cloud worker never waits on the GPU', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gpulane-'));
+    const db = openCoreDatabase(path.join(dir, 'core.db')).db;
+    try {
+      const repo = path.join(dir, 'r'); fs.mkdirSync(repo); git(repo, 'init', '-q', '-b', 'main'); fs.writeFileSync(path.join(repo, 'a'), 'a'); git(repo, 'add', '-A'); git(repo, 'commit', '-q', '-m', 'i');
+      const p = planDevStories(db, { projectName: 'P', repoPath: repo, verify: ['git', 'status', '--porcelain'], integrationBranch: 'kkd/int', stories: [
+        { key: 'g1', title: 'gpu one', agent: 'opencode' }, { key: 'g2', title: 'gpu two', agent: 'opencode' }, { key: 'c', title: 'cloud', agent: 'claude' },
+      ] });
+      const [g1, g2, c] = p.stories.map(s => s.id);
+      for (const id of [g1, g2, c]) for (const to of ['assigned', 'planning', 'proposal_approval', 'implementing'] as const) transitionStory(db, id!, { toStatus: to, actor: DEV_ACTOR, reason: 't' });
+      const running = new Set([g1]);
+      const kandev = { taskByExternalId: async (_w: string, id: string) => ({ id }), sessions: async (id: string) => (running.has(id) ? [{ id: 's', state: 'RUNNING' }] : []) } as unknown as KandevClient;
+      const spec = (id: string) => devSpec(getStory(db, id))!;
+      expect(await waitsOnGpuLane(db, kandev, 'ws', getStory(db, g2!), spec(g2!), 1)).toBe(true);
+      expect(await waitsOnGpuLane(db, kandev, 'ws', getStory(db, g2!), spec(g2!), 2)).toBe(false);
+      expect(await waitsOnGpuLane(db, kandev, 'ws', getStory(db, c!), spec(c!), 1)).toBe(false);
+      running.clear();
+      expect(await waitsOnGpuLane(db, kandev, 'ws', getStory(db, g2!), spec(g2!), 1)).toBe(false);
+    } finally { db.close(); fs.rmSync(dir, { recursive: true, force: true }); }
   });
 });
 

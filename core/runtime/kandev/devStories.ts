@@ -798,6 +798,24 @@ async function waitsOnOverlap(db: CoreDatabase, kandev: KandevClient, workspaceI
   return false;
 }
 
+/**
+ * A local-GPU story must stay in Backlog while the GPU lanes are taken. Its Kandev blocked_by keeps it from starting, but released
+ * to "In Progress" it would hold a worker slot the whole time it waits (seen live 2026-11-21: a queued OpenCode task kept a Claude
+ * story that needs no GPU from starting). The GPU is one per machine, so peers are counted across every project.
+ */
+export async function waitsOnGpuLane(db: CoreDatabase, kandev: KandevClient, workspaceId: string, story: StoryRecord, spec: DevStorySpec, lanes = gpuLaneLimit()): Promise<boolean> {
+  if (!usesLocalGpu(spec)) return false;
+  let busy = 0;
+  for (const other of listStories(db, { limit: 200 })) {
+    const ospec = devSpec(other);
+    if (!ospec || other.id === story.id || !ACTIVE.includes(other.status) || !usesLocalGpu(ospec)) continue;
+    const t = await kandev.taskByExternalId(workspaceId, other.id).catch(() => null);
+    const s = t ? (await kandev.sessions(t.id).catch(() => []))[0] : undefined;
+    if (s && (s.state === 'RUNNING' || s.state === 'STARTING')) busy++;
+  }
+  return busy >= lanes;
+}
+
 /** One reconciliation pass over dispatched stories. Safe to call repeatedly and after any restart. */
 export async function reconcileDevStories(db: CoreDatabase, kandev: KandevClient): Promise<void> {
   const stories = listStories(db, { limit: 200 }).filter(s => devSpec(s) && ACTIVE.includes(s.status));
@@ -837,7 +855,7 @@ export async function reconcileDevStories(db: CoreDatabase, kandev: KandevClient
       // A dependent waits in Kandev's Backlog (which never auto-starts, so it holds no worker slot). KKD releases it
       // once KKD itself has verified and integrated every predecessor: moving it to "In Progress" starts the worker.
       const openPreds = predecessors(db, story.id).filter(d => getStory(db, d).status !== 'done');
-      if (story.status === 'implementing' && !openPreds.length && !(await waitsOnOverlap(db, kandev, workspaceId, story, spec))) {
+      if (story.status === 'implementing' && !openPreds.length && !(await waitsOnOverlap(db, kandev, workspaceId, story, spec)) && !(await waitsOnGpuLane(db, kandev, workspaceId, story, spec))) {
         // Kandev must agree the predecessors are complete, or it refuses to start the dependent.
         for (const d of predecessors(db, story.id)) {
           const dt = await kandev.taskByExternalId(workspaceId, d);
@@ -848,6 +866,13 @@ export async function reconcileDevStories(db: CoreDatabase, kandev: KandevClient
         if (ctx.backlogStepId && ctx.runningStepId && task.workflow_step_id === ctx.backlogStepId) {
           await kandev.tool('move_task_kandev', { task_id: task.id, workflow_id: ctx.workflowId, workflow_step_id: ctx.runningStepId });
           addComment(db, story.id, { author: DEV_ACTOR, body: '[kkd-dev:released] All predecessors are verified and integrated; handed to a worker.' });
+        }
+      } else if (usesLocalGpu(spec) && (await waitsOnGpuLane(db, kandev, workspaceId, story, spec))) {
+        // Released earlier (or by an older build) while the GPU is busy: back to Backlog so it stops holding a worker slot.
+        ctx ??= await kandevContext(kandev);
+        if (ctx.backlogStepId && ctx.runningStepId && task.workflow_step_id === ctx.runningStepId) {
+          await kandev.tool('move_task_kandev', { task_id: task.id, workflow_id: ctx.workflowId, workflow_step_id: ctx.backlogStepId });
+          addComment(db, story.id, { author: DEV_ACTOR, body: '[kkd-dev:requeued] Waiting for the local GPU lane in Backlog, so it does not hold a worker slot.' });
         }
       }
       continue; // blocked in Kandev or waiting for a worker slot
