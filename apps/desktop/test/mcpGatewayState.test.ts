@@ -26,6 +26,7 @@ async function fakeCore(dir: string) {
   const server = http.createServer((req, res) => {
     const send = (code: number, body: unknown) => { res.writeHead(code, { 'content-type': 'application/json' }); res.end(JSON.stringify(body)); };
     if (req.url === '/v1/bridge/pair') return send(200, { token: PAIRING_TOKEN, pairingId: 'pair_test' });
+    if (req.url === '/v1/bridge/status') return state.revoked && req.headers['x-panda-pairing'] === PAIRING_TOKEN ? send(401, { error: { message: 'revoked' } }) : send(200, { paired: true });
     if (req.url === '/v1/bridge/executors') return state.revoked && req.headers['x-panda-pairing'] === PAIRING_TOKEN ? send(401, { error: { message: 'this browser pairing was revoked' } }) : send(200, { executors: [] });
     send(404, {});
   });
@@ -126,4 +127,17 @@ describe.runIf(process.platform === 'win32')('gateway state: DPAPI-protected pai
     expect((await refresh(a.base, 'c_x', 'rt-elsewhere')).status).toBe(400);
     expect(fs.readFileSync(path.join(dir, 'logs', 'mcp-gateway.log'), 'utf8')).toMatch(/could not open protected pairings/);
   }, 90_000);
+  it('does not let a refresh revive a pairing that was revoked while the gateway was off (a grant that was never used again)', async () => {
+    const dir = tmp(); const core = await fakeCore(dir);
+    core.revoked = true;   // revoked in Pandesh before this gateway ever saw a request for it
+    const refreshToken = 'stale-refresh-token-0123456789abcdef';
+    const hash = crypto.createHash('sha256').update(refreshToken).digest('hex');
+    fs.writeFileSync(stateFile(dir), JSON.stringify({ clients: { c_stale: { name: 's', redirectUris: [REDIRECT], at: 'now' } }, grants: { [hash]: { clientId: 'c_stale', pairingToken: PAIRING_TOKEN, pairingId: 'p_stale' } } }));
+    const a = await startGateway(dir);
+    expect((await refresh(a.base, 'c_stale', refreshToken)).status).toBe(400);
+    const after = fs.readFileSync(stateFile(dir), 'utf8');
+    expect(after).not.toContain(PAIRING_TOKEN);
+    expect(JSON.parse(after).grants).toEqual({});
+  }, 90_000);
 });
+
