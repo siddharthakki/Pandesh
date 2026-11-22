@@ -1,4 +1,53 @@
-# Resume here (state at the end of 2026-11-21)
+# Resume here
+
+## State at 2026-11-22 ~20:30 UTC (A5 coding fix + supervised missions)
+
+**Branches** (all in `D:\Projects\Pandesh`; nothing pushed, merged or installed):
+- `fix/a5-coding-dispatch`
+  - 18304c4: intent contract, gate, Pandesh's test run, outcome, Don't approve
+  - aad590d: spawn-guard allowlist
+  - 1ac53e6: narrow constraints are not read-only
+  - Cut from `feat/kandev-live-workers` cc79820.
+- `feat/supervised-missions` (on the fix):
+  - 395269d: missions + development grant + MCP updates/projects
+  - eadcdd7: usage-limit / sign-in detection
+- `release/b188f-missions` @ 986be0f, worktree `D:\PandeshRelease188e`. It equals b188d (505746b) plus both branches above. Built by `D:\PandeshAssistantDev\rel188e\rc-build-b188e.ps1`: smoke OK, installer OK.
+
+**Root cause of ptask_c00d7741**:
+- `core/domain/projectRegistry.ts` READ_ONLY regex matched "do not edit" in "do not edit the owner checkout, push, merge…".
+- `gateProject` then chose mode `inspect`, so the card said "Read-only inspection".
+- `mapPhase` reported every done story as "Finished and verified".
+
+**Test instance**:
+- Profile `D:\PandeshB188cAccept` (ports 3963/3964, CDP 9484, connector 3973-3975) runs b188f, pid in `instance-b188e.pid.json`.
+- Switched from b188d at 19:44 UTC. Profile backup: `D:\PandeshBackups\b188d-profile-20261122T194453Z`.
+- Rollback: `D:\PandeshAssistantDev\rel188e\rollback-to-b188d.ps1`.
+
+**Acceptance client**:
+- `D:\PandeshAssistantDev\rel188e\mcp-accept.mjs` speaks to the real gateway (OAuth + PKCE + DCR, then MCP).
+- It is paired as "ChatGPT connector (Acceptance test client …)". Revoke that pairing after the tests and delete `.mcp-accept-state.json`.
+- Request files: `accept-a.json` (Test A), `accept-b.json` (Test B, 3-step mission).
+
+**Live state**:
+- Test A task ptask_cb6e7a0b: the card was shown correctly as a code change (`shots/01-card.png`) and survived a restart (`shots/02-card-after-restart.png`). The owner's Allow had not come before it expired at 20:25 UTC.
+- Test B mission ptask_900a8441: its card is waiting for the owner's Allow.
+- Re-submit Test A with `node mcp-accept.mjs call pandesh_submit_task @accept-a.json`.
+
+**Full suite on 18304c4**:
+- 15 failures in 7 files. The architecture-guard failure was ours, now fixed (aad590d).
+- The others fail on the pre-fix tree too. `desktopConversationSelection` needs a live Ollama; the dead URL in the suite breaks it.
+
+**Next, in order**:
+1. Owner presses Allow on both cards. On the A5 task: View diff, then Approve change (or Don't approve).
+2. Check Test A outcome: divide + tests pass, the add test is reported as pre-existing, the owner checkout is unchanged.
+3. Test B: confirm all 3 steps integrate without further clicks.
+4. Test C:
+   - kill one mission step's Claude process and observe detection;
+   - restart b188f mid-mission and confirm the state survives;
+   - read the result through `pandesh_updates`.
+5. Then the backlog (section 8 of the owner's mission brief).
+
+## Earlier state (end of 2026-11-21)
 
 **Before pushing:** this folder contains a machine inventory (local paths, NAS share names, model stores). Review it before pushing. The Pandesh repository may be public.
 
