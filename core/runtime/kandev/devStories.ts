@@ -81,6 +81,14 @@ export interface DevStorySpec {
     projectName: string; sourcePath: string; ref: string; sourceHead: string; sourceStatusSha: string;
     /** The task asked for tests: at least one new (or newly passing) test is required, as Pandesh's own test run sees it. */
     testsRequested?: boolean;
+    /**
+     * The owner's development grant for a multi-step mission (given once, on the mission's approval card): a step whose change passes
+     * Pandesh's own test run (tests ran, no regression, no failing new test) and whose diff raises no review flag is committed onto the
+     * integration branch IN THE PRIVATE COPY without a further click, so the next step can start. Bounded by expiry and revocable
+     * ([kkd-dev:grant-revoked]); anything else still waits for the owner's review. Delivery into the owner's checkout, push and merge are
+     * never covered.
+     */
+    grant?: { id: string; expiresAt: string; steps: number };
   };
 }
 
@@ -584,6 +592,17 @@ function baselineTests(db: CoreDatabase, storyId: string, spec: DevStorySpec): P
   return run;
 }
 
+/**
+ * The development grant still applies to this story: not expired and not revoked. Revocation is a `[kkd-dev:grant-revoked]` comment on
+ * the story (written by the owner's revoke action or by cancelling the mission); after it every step waits for the owner's review again.
+ */
+export function grantInForce(db: CoreDatabase, storyId: string, grant: NonNullable<NonNullable<DevStorySpec['codeCopy']>['grant']>, now = Date.now()): typeof grant | null {
+  if (!(Date.parse(grant.expiresAt) > now)) return null;
+  if (listComments(db, storyId).some(c => c.body.startsWith(GRANT_REVOKED_TAG))) return null;
+  return grant;
+}
+export const GRANT_REVOKED_TAG = '[kkd-dev:grant-revoked]';
+
 function changedFiles(worktree: string, base: string): string[] {
   const committed = git(worktree, ['diff', '--name-only', `${base}...HEAD`]).out.split('\n');
   // Porcelain lines are "XY path"; parse the raw output (git() trims, which would eat a leading " M").
@@ -786,6 +805,7 @@ export async function verifyAndIntegrate(db: CoreDatabase, kandev: KandevClient,
   // A5: Pandesh runs the project's own tests on the base and on the change and compares them per test. A regression, a failing new test
   // or (when the task asked for tests) no new test sends the work back; tests that were already failing are reported, never hidden.
   let testReport = '';
+  let testsProven = false;
   if (spec.codeCopy) {
     const base = baselineTests(db, story.id, spec);
     const after = runProjectTests(worktree);
@@ -794,14 +814,18 @@ export async function verifyAndIntegrate(db: CoreDatabase, kandev: KandevClient,
     const verdict = judgeTests(cmp, spec.codeCopy.testsRequested === true);
     if (!verdict.ok) return fail(`Pandesh's own test run: ${verdict.what}`, `${after.output}\n\nFix it (do not weaken or delete tests), and stop. Tests that were already failing before your change are not yours to fix unless the task asks.`);
     testReport = verdict.report;
+    // Only a per-test comparison (or a passing suite) is evidence enough to commit without a person looking.
+    testsProven = after.ran && (cmp.perTest || after.ok);
   }
+  const grant = spec.codeCopy?.grant && testsProven && !diff.reviewReasons.length ? grantInForce(db, story.id, spec.codeCopy.grant) : null;
   const level: VerificationLevel = accepted ? 'independent' : 'worker-only';
   addComment(db, story.id, {
     author: DEV_ACTOR,
     body: `[kkd-dev:verified] level=${level}; \`${spec.verify.join(' ')}\` passed in the worktree${accepted ? `; independent acceptance ${accepted.passed}/${accepted.total} (${accepted.names.join(', ')})` : ''}.${testReport ? ` ${testReport}` : ''}\nChanged: ${files.join(', ')}\n${check.out.slice(-600)}`,
   });
   // An A5 change always waits for the owner's review, whatever was verified: only the owner decides what reaches their project.
-  if (!reviewApproved && (level === 'worker-only' || diff.reviewReasons.length || spec.codeCopy)) {
+  const needsReview = spec.codeCopy ? !grant : (level === 'worker-only' || diff.reviewReasons.length > 0);
+  if (!reviewApproved && needsReview) {
     // Nothing independent verifies this result (or the diff looks like it weakened tests): "the worker finished" is not
     // "it is correct". Hold it for a person and keep dependents locked.
     walk(db, story, ['validation', 'delivery_approval'], 'worker finished and its own tests pass; waiting for a human review');
@@ -855,7 +879,7 @@ export async function verifyAndIntegrate(db: CoreDatabase, kandev: KandevClient,
   }
   const sha = git(integ.dir, ['rev-parse', '--short', 'HEAD']).out;
   walk(db, getStory(db, story.id), ['done'], `integrated as ${sha} on ${spec.integrationBranch}`);
-  addComment(db, story.id, { author: DEV_ACTOR, body: `[kkd-dev:integrated] ${sha} on ${spec.integrationBranch} (branch ${branch}); level=${level}${reviewApproved ? ' (human-reviewed)' : ''}${opts.recovery ? ' (verified from preserved worker output; worker not restarted)' : ''}; \`${spec.verify.join(' ')}\`${checks.length ? ' and independent acceptance' : ''} passed after merge.` });
+  addComment(db, story.id, { author: DEV_ACTOR, body: `[kkd-dev:integrated] ${sha} on ${spec.integrationBranch} (branch ${branch}); level=${level}${reviewApproved ? ' (human-reviewed)' : grant ? ` (committed under the owner's development grant ${grant.id} after Pandesh's own test run passed)` : ''}${opts.recovery ? ' (verified from preserved worker output; worker not restarted)' : ''}; \`${spec.verify.join(' ')}\`${checks.length ? ' and independent acceptance' : ''} passed after merge.` });
   // Stop first: Kandev's stop handler moves the task back to REVIEW, which would undo COMPLETED.
   await kandev.stopTask(taskId, 'KKD integrated the story').catch(() => { /* already idle */ });
   await kandev.setTaskState(taskId, 'COMPLETED'); // releases Kandev dependents

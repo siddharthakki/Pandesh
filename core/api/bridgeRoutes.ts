@@ -225,6 +225,7 @@ export function registerBridgeRoutes(router: Router<ApiContext, ApiResult>, opti
       ...(context ? { context: { text: String(context.text ?? ''), userConfirmed: context.userConfirmed === true } } : {}),
       markedConfidential: b.markedConfidential === true,
       ...(typeof b.intent === 'string' ? { intent: b.intent } : {}),
+      ...(b.steps !== undefined ? { steps: b.steps } : {}),
     });
     return ok(duplicate ? 200 : 201, { taskId: task.id, duplicate, task: view(ctx, task) });
   });
@@ -233,6 +234,28 @@ export function registerBridgeRoutes(router: Router<ApiContext, ApiResult>, opti
     const limit = Number(ctx.query.get('limit') ?? 50);
     const tasks = listBridgeTasks(ctx.db, { ...(c.kind === 'extension' ? { pairingId: c.pairing.id } : {}), limit: Number.isFinite(limit) ? limit : 50 });
     return ok(200, { tasks: tasks.map(t => toBridgeTaskView(t)) });
+  });
+  // What a client may work on: registered projects by NAME with their access level (never their paths: those stay on this PC).
+  router.get('/v1/bridge/project-names', (ctx) => {
+    caller(ctx);
+    return ok(200, { projects: loadProjects(options.dataDir).map(p => ({ name: p.name, access: p.access, codeChanges: p.access === 'read-write' ? 'allowed after the owner approves each task or mission' : 'not allowed (read-only inspections only)' })) });
+  });
+  // A compact "what changed since" feed for a supervising client: only tasks whose state changed after `since`, with their outcome and
+  // mission steps, and a cursor for the next call. Nothing changed → an empty list (no repeated reports). Polling, not push.
+  router.get('/v1/bridge/updates', (ctx) => {
+    const c = caller(ctx);
+    const since = ctx.query.get('since');
+    const sinceMs = since && !Number.isNaN(Date.parse(since)) ? Date.parse(since) : 0;
+    const cursor = new Date().toISOString();
+    const tasks = listBridgeTasks(ctx.db, { ...(c.kind === 'extension' ? { pairingId: c.pairing.id } : {}), limit: 100 })
+      .filter(t => Date.parse(t.updatedAt) > sinceMs)
+      .map(t => ({
+        taskId: t.id, status: t.status, detail: t.statusDetail, updatedAt: t.updatedAt, instruction: t.instruction.split('\n')[0]!.slice(0, 160),
+        outcome: t.result?.outcome ? { state: t.result.outcome.state, summary: t.result.outcome.summary } : null,
+        steps: t.result?.steps?.map(s => ({ key: s.key, state: s.state, storyStatus: s.storyStatus })) ?? null,
+        needsOwner: t.status === 'awaiting_approval' || t.status === 'needs_attention' || (t.status === 'awaiting_executor' && Boolean(pendingApproval(ctx.db, t.id))),
+      }));
+    return ok(200, { cursor, changed: tasks.length, tasks });
   });
   router.get('/v1/bridge/tasks/:id', async (ctx, match) => {
     const c = caller(ctx);
