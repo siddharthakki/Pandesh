@@ -65,6 +65,10 @@ export const AUTHORITATIVE_PROCESS_SPAWN_ALLOWLIST: ReadonlySet<string> = new Se
   'core/runtime/kandev/devStories.ts',
   'core/runtime/kandev/kandevClient.ts',
   'core/runtime/kandev/storyAcceptance.ts',
+  // A5: runs a registered project's OWN declared test command (package.json scripts.test) in Pandesh's private copy before and after a
+  // change: `node --test --test-reporter=tap <script's own file args>` (fixed argv, no shell) or `npm test` (fixed argv; shell only for
+  // npm.cmd on Windows), minimal environment, bounded timeout. No model-supplied input reaches the argv.
+  'core/runtime/kandev/projectTests.ts',
   // Runs `node --test` (fixed argv, minimal environment) in a fresh checkout of a delivered deliverable to verify it independently of the worker.
   'core/runtime/operatorTestRun.ts',
   // Runs the reliability watchdog: `node <operator-configured checkout>/scripts/watchdog/run-watchdog.mjs` with a fixed
