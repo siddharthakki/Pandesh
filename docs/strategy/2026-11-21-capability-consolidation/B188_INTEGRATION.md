@@ -38,3 +38,19 @@
   2. your "Approve change" after View diff,
   3. your "Bring into my checkout" press, which delivers it as a new branch only.
 - **Not installed** to production. Installing Build 188 needs your OK and the usual idle check.
+
+## Switched on 2026-11-22 ~10:05 UTC (owner: "Yes, switch it now")
+- Before the switch, b188c was **already down**: no process and no listener on 3963/3964/9484/3973–3975. This session did not stop it. The host log has no exit line, so the cause is unknown. The connector had last polled at 07:18 UTC.
+- `switch-to-b188d.ps1`:
+  1. The recorded b188c pid was gone, so nothing was stopped.
+  2. Profile backed up to `D:\PandeshBackups\b188c-profile-20261122T100518Z` (527 files, count verified).
+  3. b188d started on that profile (pid 56540, Core 3964, CDP 9484).
+- The connector restarted by itself (config `enabled: true`): the gateway on 3973/3974 and tunnel-client health on 3975 both run from the b188d package, and the tunnel is polling.
+- Checks after the switch:
+  - Core health 200
+  - bridge status shows paired and Kandev running
+  - the "ChatGPT connector (ChatGPT)" pairing is kept and not revoked
+  - projects unchanged (only the read-only "connector test workspace")
+  - `/diff` without the host token → 403
+- Not yet verified: a real ChatGPT round trip through the connector on b188d. That needs you in ChatGPT.
+- Undo: `rollback-to-b188c.ps1`.
