@@ -76,3 +76,44 @@ const LABELS: Record<string, string> = {
 export function eventLabel(kind: string): string {
   return LABELS[kind] ?? kind.replace(/^tool_/, '').replace(/_/g, ' ');
 }
+
+/** One file of an A5 change as Core reports it (core/runtime/kandev/changeDiff.ts FileDiff). */
+export interface ChangeFile {
+  path: string; oldPath: string | null; status: string; additions: number | null; deletions: number | null;
+  binary: boolean; patch: string | null; truncated: boolean; note: string | null;
+}
+export interface ChangeDiffView {
+  available: boolean; reason: string | null; source: string | null; base: string | null; head: string | null;
+  files: ChangeFile[]; ignored: string[];
+  summary: { files: number; additions: number; deletions: number; binary: number; large: number; unavailable: number };
+}
+
+const STATUS_LABEL: Record<string, string> = { added: 'Added', modified: 'Modified', deleted: 'Deleted', renamed: 'Renamed', copied: 'Copied', 'type-changed': 'Type changed', untracked: 'New (uncommitted)' };
+export function changeStatusLabel(status: string): string { return STATUS_LABEL[status] ?? status; }
+
+/** "+3 −1", or what is known when Git could not count (binary or not shown). */
+export function changeCounts(f: Pick<ChangeFile, 'additions' | 'deletions' | 'binary'>): string {
+  if (f.binary) return 'binary';
+  if (f.additions === null && f.deletions === null) return 'not counted';
+  return `+${f.additions ?? 0} −${f.deletions ?? 0}`;
+}
+
+/** The flag shown beside a file whose diff is not shown in full. Null when the whole diff is shown. */
+export function changeFlag(f: Pick<ChangeFile, 'binary' | 'truncated' | 'patch' | 'note'>): { kind: 'binary' | 'large' | 'unavailable'; text: string } | null {
+  if (f.binary) return { kind: 'binary', text: 'Binary' };
+  if (f.truncated || /too large|larger than/i.test(f.note ?? '')) return { kind: 'large', text: 'Large diff' };
+  if (f.patch === null) return { kind: 'unavailable', text: 'Diff unavailable' };
+  return null;
+}
+
+/** The one-line summary of a change: files, lines, where it was read from, and the flags that need attention. */
+export function changeSummary(d: ChangeDiffView): string {
+  if (!d.available) return `Diff unavailable: ${d.reason ?? 'unknown reason'}`;
+  const s = d.summary;
+  const parts = [`${s.files} file${s.files === 1 ? '' : 's'} changed`, `+${s.additions} −${s.deletions}`];
+  if (s.binary) parts.push(`${s.binary} binary`);
+  if (s.large) parts.push(`${s.large} large`);
+  if (s.unavailable) parts.push(`${s.unavailable} not shown`);
+  parts.push(`read from the ${d.source ?? 'change'} (${d.base ?? '?'} → ${d.head ?? '?'})`);
+  return parts.join(' · ');
+}

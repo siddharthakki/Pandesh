@@ -4,7 +4,8 @@ import { elapsed } from './ui';
 import { missionHeadline, missionProgress, describeStep } from './missionModel';
 import type { MissionView, StepView } from './missionModel';
 import type { BridgeActivityItem } from './Missions';
-import { eventAge, eventLabel, groupWorkers, workerControls, type WorkerEvent } from './workerModel';
+import { changeCounts, changeFlag, changeStatusLabel, changeSummary, eventAge, eventLabel, groupWorkers, workerControls, type ChangeDiffView, type WorkerEvent } from './workerModel';
+import { DiffView } from './Activity';
 
 const DONE = new Set(['completed', 'failed', 'cancelled']);
 
@@ -15,6 +16,7 @@ const DONE = new Set(['completed', 'failed', 'cancelled']);
  */
 export function WorkerPanels({ items, now, onChanged }: { items: BridgeActivityItem[]; now: number; onChanged: () => void }) {
   const [open, setOpen] = useState<Record<string, boolean>>({});
+  const [diffOpen, setDiffOpen] = useState<Record<string, boolean>>({});
   const [busy, setBusy] = useState<string | null>(null);
   const [note, setNote] = useState<{ id: string; text: string; error?: boolean } | null>(null);
   const groups = groupWorkers(items);
@@ -88,6 +90,7 @@ export function WorkerPanels({ items, now, onChanged }: { items: BridgeActivityI
                     <div className="approval worker-action" role="group" aria-label={`Review the change to ${b.codeChange.project}`}>
                       <div className="head"><span className="dot attention" aria-hidden="true" /><span style={{ fontWeight: 600 }}>Review the change to {b.codeChange.project} ({b.codeChange.baseRef})</span></div>
                       <div style={{ fontSize: 13 }}>Changed {b.codeChange.changedFiles.length} file{b.codeChange.changedFiles.length === 1 ? '' : 's'}: <code>{b.codeChange.changedFiles.join(', ') || 'none recorded'}</code>. The execution log below shows what the worker did and ran.</div>
+                      <ChangeReview taskId={b.id} refreshKey={b.eventCount} open={diffOpen[b.id] === true} onToggle={() => setDiffOpen({ ...diffOpen, [b.id]: !diffOpen[b.id] })} />
                       <div className="btns">
                         <button type="button" className="btn primary small" disabled={busy === `${b.id}:bridgeApproveChange`} onClick={() => void changeAction(b, 'bridgeApproveChange')}>Approve change</button>
                       </div>
@@ -99,6 +102,9 @@ export function WorkerPanels({ items, now, onChanged }: { items: BridgeActivityI
                     </div>
                   )}
                   {b.codeChange?.delivered && <p className="worker-age" data-testid="worker-delivered">In your checkout as branch <code>{b.codeChange.delivered.branch}</code> ({b.codeChange.delivered.commit.slice(0, 8)}): not checked out, not merged, not pushed.</p>}
+                  {b.codeChange && !b.codeChange.awaitingReview && (b.codeChange.deliverable || b.codeChange.delivered) && (
+                    <ChangeReview taskId={b.id} refreshKey={b.eventCount} open={diffOpen[b.id] === true} onToggle={() => setDiffOpen({ ...diffOpen, [b.id]: !diffOpen[b.id] })} />
+                  )}
                   {note?.id === b.id && <p className={`mission-note${note.error ? ' error' : ''}`} role={note.error ? 'alert' : 'status'}>{note.text}</p>}
                   {live && (
                     <div className="worker-controls" role="group" aria-label="Worker controls">
@@ -127,6 +133,73 @@ function workerOutcome(b: BridgeActivityItem): string {
   if (b.state === 'completed' && b.verification === 'independent') return 'Finished and verified independently by Pandesh.';
   if (b.state === 'completed' && b.verification === 'human-reviewed') return 'Finished and reviewed by a person.';
   return b.reason;
+}
+
+interface ChangeTests { pandesh: { level: string | null; detail: string | null }; worker: Array<{ command: string; status: string; at: string }>; workerSummary: string | null }
+
+/**
+ * A5 "View diff": the change as Git sees it, read by Core from the authorized worktree or private copy (host only). Shows the
+ * summary, every file with its status and counts, binary / large / unavailable flags, and the test results with who ran them.
+ * Viewing approves nothing; the Approve button stays the only way to approve.
+ */
+function ChangeReview({ taskId, refreshKey, open, onToggle }: { taskId: string; refreshKey: number; open: boolean; onToggle: () => void }) {
+  const [data, setData] = useState<{ diff: ChangeDiffView; tests: ChangeTests } | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [expanded, setExpanded] = useState<Record<string, boolean>>({});
+  useEffect(() => {
+    if (!open) return;
+    let alive = true;
+    void (async () => {
+      try {
+        const r = await api.household('bridgeDiff', { id: taskId }) as { diff: ChangeDiffView; tests: ChangeTests };
+        if (alive) { setData(r); setError(null); }
+      } catch (err) { if (alive) setError(errorText(err)); }
+    })();
+    return () => { alive = false; };
+  }, [taskId, refreshKey, open]);
+  const files = data?.diff.files ?? [];
+  const allOpen = files.length > 0 && files.every((f) => expanded[f.path]);
+  return (
+    <div className="change-review" data-testid="change-review">
+      <button type="button" className="btn link small" aria-expanded={open} onClick={onToggle}>{open ? 'Hide diff' : 'View diff'}</button>
+      {open && error && <p className="mission-note error" role="alert">Diff not loaded: {error}</p>}
+      {open && !error && !data && <p className="muted">Loading the diff…</p>}
+      {open && data && (
+        <>
+          <p className="change-summary" data-testid="change-summary">{changeSummary(data.diff)}</p>
+          <div className="change-tests" data-testid="change-tests">
+            <div><strong>Pandesh's check:</strong> {data.tests.pandesh.detail ?? 'none recorded yet'}{data.tests.pandesh.level ? ` (${data.tests.pandesh.level})` : ''}</div>
+            {data.tests.worker.length
+              ? data.tests.worker.map((t, i) => <div key={i}><strong>Worker ran:</strong> <code>{t.command}</code> · {t.status} <span className="muted">(reported by the worker, not re-run by Pandesh)</span></div>)
+              : <div><strong>Worker ran:</strong> <span className="muted">no test command recorded</span></div>}
+            {data.tests.workerSummary && <div className="muted">Worker's report: {data.tests.workerSummary}</div>}
+          </div>
+          {files.length > 0 && (
+            <button type="button" className="btn link small" onClick={() => setExpanded(Object.fromEntries(files.map((f) => [f.path, !allOpen])))}>{allOpen ? 'Collapse all' : 'Expand full diff'}</button>
+          )}
+          <ul className="change-files" aria-label="Changed files">
+            {files.map((f) => {
+              const flag = changeFlag(f);
+              const isOpen = expanded[f.path] === true;
+              return (
+                <li key={f.path} className="change-file">
+                  <button type="button" className="change-file-head" aria-expanded={isOpen} onClick={() => setExpanded({ ...expanded, [f.path]: !isOpen })}>
+                    <span className={`change-status ${f.status}`}>{changeStatusLabel(f.status)}</span>
+                    <code>{f.oldPath ? `${f.oldPath} → ${f.path}` : f.path}</code>
+                    <span className="change-counts"><span className="tl-add">{f.binary ? '' : `+${f.additions ?? '?'}`}</span> <span className="tl-del">{f.binary ? '' : `−${f.deletions ?? '?'}`}</span>{f.binary ? changeCounts(f) : ''}</span>
+                    {flag && <span className={`change-flag ${flag.kind}`}>{flag.text}</span>}
+                  </button>
+                  {isOpen && f.note && <p className="muted change-note">{f.note}</p>}
+                  {isOpen && f.patch !== null && <div className="change-diff"><DiffView diff={f.patch} /></div>}
+                </li>
+              );
+            })}
+          </ul>
+          {data.diff.ignored.length > 0 && <p className="muted">Not part of the change (the agent's own settings): {data.diff.ignored.join(', ')}</p>}
+        </>
+      )}
+    </div>
+  );
 }
 
 /** The recorded event log of one task, read from Core when opened and again whenever a new event is recorded. */

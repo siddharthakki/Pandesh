@@ -20,7 +20,7 @@ import {
 import { KandevClient } from '../runtime/kandev/kandevClient';
 import { listApprovalEvents, listPendingApprovals, pendingApproval, type ExternalApprovalRequest } from '../domain/bridgeApprovals';
 import {
-  approveBridgeChange, cancelBridgeTask, decideExternalApproval, deliverBridgeChange, discoverExecutors, dispatchBridgeTask, pauseBridgeTask, refreshBridgeTask, resumeBridgeTask, type BridgeRuntime,
+  approveBridgeChange, bridgeChangeDiff, cancelBridgeTask, decideExternalApproval, deliverBridgeChange, discoverExecutors, dispatchBridgeTask, pauseBridgeTask, refreshBridgeTask, resumeBridgeTask, type BridgeRuntime,
 } from '../runtime/kandev/pandaBridge';
 import { bridgeServices } from '../runtime/kandev/bridgeServices';
 import { activityItem } from '../runtime/kandev/bridgeActivity';
@@ -309,6 +309,11 @@ export function registerBridgeRoutes(router: Router<ApiContext, ApiResult>, opti
   router.post('/v1/bridge/tasks/:id/approve-change', async (ctx, match) => {
     requireHost(ctx);
     return ok(200, view(ctx, await approveBridgeChange(runtime(ctx), match.params.id, 'Pandesh')));
+  });
+  // Read-only diff of an A5 change for the owner's review. Host only: the diff holds project source.
+  router.get('/v1/bridge/tasks/:id/diff', async (ctx, match) => {
+    requireHost(ctx);
+    return ok(200, await bridgeChangeDiff(runtime(ctx), match.params.id));
   });
   router.post('/v1/bridge/tasks/:id/deliver', (ctx, match) => {
     requireHost(ctx);

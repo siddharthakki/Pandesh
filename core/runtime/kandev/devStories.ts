@@ -31,6 +31,7 @@ import type { RuntimeEventRecord } from '../../shared/wireTypes';
 import { KandevClient, kandevHome, type KandevPermission, type KandevSession } from './kandevClient';
 import { prepareWorkerProfile } from './workerProfile';
 import { gpuLaneLimit } from '../hardwareCapacity';
+import { readChangeDiff, unavailableDiff, type ChangeDiff } from './changeDiff';
 import { automatedChecks, deviceChecks, examineDiff, runAcceptance, validateAcceptanceChecks, type AcceptanceCheck, type VerificationLevel } from './storyAcceptance';
 
 export const DEV_ACTOR = 'kkd:dev-coordinator';
@@ -1665,6 +1666,38 @@ export async function devStoryWorkerEvents(kandev: KandevClient, storyId: string
   } catch {
     return null;
   }
+}
+
+/**
+ * The story's change as a read-only diff (the review's "View diff"). Before approval it is read from the worker's worktree, after
+ * reconcileWorktree has proven that worktree is Kandev's and belongs to this story's repository. After integration it is read from
+ * the integration branch in the story's own repository. Nothing is written and nothing is approved here.
+ */
+export async function devStoryChangeDiff(db: CoreDatabase, kandev: KandevClient, storyId: string): Promise<ChangeDiff & { ignored: string[] }> {
+  const story = getStory(db, storyId);
+  const spec = devSpec(story);
+  if (!spec) throw new CoreError('invalid_request', 'not a development story');
+  const none = (reason: string, source: ChangeDiff['source'] = null) => ({ ...unavailableDiff(reason, source), ignored: [] });
+  if (story.status === 'done' || story.status === 'merge_queue') {
+    const repo = spec.repoPath;
+    if (!fs.existsSync(path.join(repo, '.git'))) return none('The repository that holds the approved change is gone.', 'private copy');
+    const top = git(repo, ['rev-parse', '--show-toplevel']).out;
+    if (!top || path.resolve(top).toLowerCase() !== path.resolve(repo).toLowerCase()) return none('The repository that holds the approved change could not be confirmed.', 'private copy');
+    const tip = `refs/heads/${spec.integrationBranch}`;
+    if (!git(repo, ['rev-parse', '--verify', '--quiet', tip]).ok) return none('The approved change is no longer in its branch.', 'private copy');
+    const base = spec.codeCopy?.sourceHead && git(repo, ['cat-file', '-e', `${spec.codeCopy.sourceHead}^{commit}`]).ok ? spec.codeCopy.sourceHead : git(repo, ['merge-base', spec.baseBranch, tip]).out;
+    if (!base) return none('The change could not be compared with its base.', 'private copy');
+    return readChangeDiff(repo, base, tip, { source: 'private copy', ignore: AGENT_OWN_FILES });
+  }
+  const workspaceId = await kandev.defaultWorkspaceId();
+  const task = await kandev.taskByExternalId(workspaceId, storyId);
+  const session = task ? (await kandev.sessions(task.id).catch(() => []))[0] : undefined;
+  if (!session) return none('The worker has not started, so there is no change yet.', 'worker worktree');
+  const facts = reconcileWorktree(spec, session);
+  if ('error' in facts) return none(`The diff is not shown: ${facts.error}.`, 'worker worktree');
+  const base = git(session.worktree_path!, ['merge-base', spec.integrationBranch, 'HEAD']).out;
+  if (!base) return none('The change could not be compared with its base.', 'worker worktree');
+  return readChangeDiff(session.worktree_path!, base, null, { source: 'worker worktree', ignore: AGENT_OWN_FILES });
 }
 
 export async function devStoryDetail(db: CoreDatabase, kandev: KandevClient, storyId: string): Promise<{ story: DevStoryView; timeline: Array<{ at: string; event: string; text: string }>; changedFiles: string[] }> {

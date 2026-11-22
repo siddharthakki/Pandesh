@@ -33,8 +33,9 @@ import { parseServiceArgs, type ServiceHost, type ServiceRegistry } from './brid
 import { classifyInstruction, WORKSPACE_MARKER } from './intentRouter';
 import { allDeclarations, BUILTIN_WORKFLOWS, routeTask, trackRecords } from './capabilityRegistry';
 import {
-  AGENT_IDS, approveDevStoryReview, checkoutFingerprint, devSpec, devStoryDetail, devStoryWorkerEvents, dispatchDevStories, planDevStories, retryDevStory, stopDevStory, usesLocalGpu, type DevAgent, type DevStorySpec,
+  AGENT_IDS, approveDevStoryReview, checkoutFingerprint, devSpec, devStoryChangeDiff, devStoryDetail, devStoryWorkerEvents, dispatchDevStories, planDevStories, retryDevStory, stopDevStory, usesLocalGpu, type DevAgent, type DevStorySpec,
 } from './devStories';
+import { unavailableDiff, type ChangeDiff } from './changeDiff';
 
 export type BridgeExecutorId = DevAgent | 'native';
 
@@ -764,6 +765,38 @@ export async function approveBridgeChange(rt: BridgeRuntime, taskId: string, who
   const { storyId } = codeChangeOf(rt, taskId);
   await approveDevStoryReview(rt.db, rt.kandev, storyId, `Approved in Pandesh by ${who}`);
   return refreshBridgeTask(rt, taskId);
+}
+
+const TEST_RUN = /\b(?:(?:npm|pnpm|yarn|bun)\s+(?:run\s+)?test\b|npx\s+(?:vitest|jest)|vitest\b|jest\b|pytest\b|python\s+-m\s+(?:pytest|unittest)|node\s+--test\b|go\s+test\b|cargo\s+test\b|dotnet\s+test\b|mvn\s+test\b|gradle\w*\s+test\b)/i;
+
+export interface BridgeChangeTests {
+  /** What Pandesh itself checked, with the level it reached. */
+  pandesh: { level: string | null; detail: string | null };
+  /** Test commands the worker ran, from its event log (reported by the worker, not re-run by Pandesh). */
+  worker: Array<{ command: string; status: string; at: string }>;
+  workerSummary: string | null;
+}
+
+/**
+ * The A5 change as a read-only diff for the owner's review (host only; the route checks). Read from the worker's worktree before
+ * approval and from the private copy after; both are proven to be this task's before anything is read. Approves nothing.
+ */
+export async function bridgeChangeDiff(rt: BridgeRuntime, taskId: string): Promise<{ diff: ChangeDiff & { ignored: string[] }; tests: BridgeChangeTests }> {
+  const { task, storyId, spec } = codeChangeOf(rt, taskId);
+  const norm = (p: string) => { let r = path.resolve(p); try { r = fs.realpathSync.native(r); } catch { /* as spelled */ } return r.replace(/\\/g, '/').toLowerCase(); };
+  const root = norm(path.join(rt.dataDir, 'panda-workspaces'));
+  const diff = norm(spec.repoPath).startsWith(`${root}/`)
+    ? await devStoryChangeDiff(rt.db, rt.kandev, storyId)
+    : { ...unavailableDiff('The diff is not shown: the change is not in a Pandesh private copy.'), ignored: [] };
+  const result = task.result;
+  const activity = result?.activity ?? [];
+  const worker = activity.filter(a => a.kind.startsWith('tool') && TEST_RUN.test(a.text)).map(a => ({ command: a.text.slice(0, 200), status: a.status ?? 'unknown', at: a.at }));
+  const summary = [...activity].reverse().find(a => a.kind === 'message' && /\btests?\b/i.test(a.text) && /\b(pass|fail|error)/i.test(a.text));
+  const kkd = [...(result?.timeline ?? [])].reverse().find(t => t.event === 'integrated' || t.event === 'verified');
+  return {
+    diff,
+    tests: { pandesh: { level: result?.verification ?? null, detail: kkd ? redactPaths(kkd.text.split('\n')[0]).slice(0, 300) : null }, worker, workerSummary: summary ? redactPaths(summary.text).slice(0, 400) : null },
+  };
 }
 
 /**

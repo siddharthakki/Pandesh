@@ -262,6 +262,10 @@ describe('HTTP surface', () => {
     expect((await call('POST', `/v1/bridge/tasks/${id}/deliver`, { pairing: token })).status).toBe(403);
     // The host may call them; this task is not a code change, so Core says so instead of doing anything.
     expect((await call('POST', `/v1/bridge/tasks/${id}/deliver`, { host: true })).json.error.message).toMatch(/not a code change/);
+    // View diff holds project source: neither a paired client nor a bare Core token may read it.
+    expect((await call('GET', `/v1/bridge/tasks/${id}/diff`, { pairing: token })).status).toBe(403);
+    expect((await call('GET', `/v1/bridge/tasks/${id}/diff`, {})).status).toBe(403);
+    expect((await call('GET', `/v1/bridge/tasks/${id}/diff`, { host: true })).json.error.message).toMatch(/not a code change/);
   });
 
   it('approving a dev story\'s review needs an identified interactive client (it had no caller check)', async () => {
