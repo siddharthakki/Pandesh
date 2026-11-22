@@ -129,6 +129,8 @@ export interface ActivityItem {
    * checkout as a new branch (or already delivered). Null for every other task.
    */
   codeChange: { project: string; baseRef: string; awaitingReview: boolean; changedFiles: string[]; deliverable: boolean; delivered: { branch: string; commit: string } | null } | null;
+  /** What happened to the requested outcome, as Core recorded it (never the worker's claim). Null before the work is mirrored. */
+  outcome: { intent: string; state: string; summary: string } | null;
 }
 
 export function activityItem(db: CoreDatabase, task: BridgeTaskRecord, clientLabel: string, now = Date.now()): ActivityItem {
@@ -183,5 +185,6 @@ export function activityItem(db: CoreDatabase, task: BridgeTaskRecord, clientLab
       deliverable: task.status === 'completed' && !result.codeChange.delivered,
       delivered: result.codeChange.delivered ? { branch: result.codeChange.delivered.branch, commit: result.codeChange.delivered.commit } : null,
     } : null,
+    outcome: result?.outcome ? { intent: result.outcome.intent, state: result.outcome.state, summary: result.outcome.summary } : null,
   };
 }

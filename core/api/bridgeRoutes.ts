@@ -20,7 +20,7 @@ import {
 import { KandevClient } from '../runtime/kandev/kandevClient';
 import { listApprovalEvents, listPendingApprovals, pendingApproval, type ExternalApprovalRequest } from '../domain/bridgeApprovals';
 import {
-  approveBridgeChange, bridgeChangeDiff, cancelBridgeTask, decideExternalApproval, deliverBridgeChange, discoverExecutors, dispatchBridgeTask, pauseBridgeTask, refreshBridgeTask, resumeBridgeTask, type BridgeRuntime,
+  approveBridgeChange, rejectBridgeChange, bridgeChangeDiff, cancelBridgeTask, decideExternalApproval, deliverBridgeChange, discoverExecutors, dispatchBridgeTask, pauseBridgeTask, refreshBridgeTask, resumeBridgeTask, type BridgeRuntime,
 } from '../runtime/kandev/pandaBridge';
 import { bridgeServices } from '../runtime/kandev/bridgeServices';
 import { activityItem } from '../runtime/kandev/bridgeActivity';
@@ -224,6 +224,7 @@ export function registerBridgeRoutes(router: Router<ApiContext, ApiResult>, opti
       sourceRef: b.sourceRef && typeof b.sourceRef === 'object' ? (b.sourceRef as Record<string, never>) : undefined,
       ...(context ? { context: { text: String(context.text ?? ''), userConfirmed: context.userConfirmed === true } } : {}),
       markedConfidential: b.markedConfidential === true,
+      ...(typeof b.intent === 'string' ? { intent: b.intent } : {}),
     });
     return ok(duplicate ? 200 : 201, { taskId: task.id, duplicate, task: view(ctx, task) });
   });
@@ -309,6 +310,12 @@ export function registerBridgeRoutes(router: Router<ApiContext, ApiResult>, opti
   router.post('/v1/bridge/tasks/:id/approve-change', async (ctx, match) => {
     requireHost(ctx);
     return ok(200, view(ctx, await approveBridgeChange(runtime(ctx), match.params.id, 'Pandesh')));
+  });
+  // The owner does not approve the reviewed change: nothing is committed or delivered, and the task ends with that reason.
+  router.post('/v1/bridge/tasks/:id/reject-change', async (ctx, match) => {
+    requireHost(ctx);
+    const b = body(ctx);
+    return ok(200, view(ctx, await rejectBridgeChange(runtime(ctx), match.params.id, 'Pandesh', typeof b.note === 'string' ? b.note : undefined)));
   });
   // Read-only diff of an A5 change for the owner's review. Host only: the diff holds project source.
   router.get('/v1/bridge/tasks/:id/diff', async (ctx, match) => {
