@@ -809,6 +809,10 @@ export function outcomeOf(db: CoreDatabase, task: BridgeTaskRecord, storyStatus:
       return o('worker_failed', `The worker made no changes${explanation ? ` and explained why: ${explanation}` : ', and gave no explanation.'}${intent === 'code' ? ' The requested change was not made.' : ''}`);
     }
     const needs = last('[kkd-dev:needs-human]');
+    // The worker could not run at all (usage limit, sign-in, launch failure): that is the worker failing, not a check failing.
+    if (needs && /\[kkd-dev:(account-limit|signin-expired|launch-failed)\]/.test(needs.body)) {
+      return o('worker_failed', `${needs.body.replace(/\[kkd-dev:[\w-]+\]\s*/g, '').trim().slice(0, 500)}${intent === 'code' ? ' The requested change was not made.' : ''}`);
+    }
     return o('verification_failed', `Pandesh's checks did not accept the result${failedWhat ? `: ${failedWhat}` : needs ? `: ${needs.body.replace('[kkd-dev:needs-human]', '').trim().slice(0, 300)}` : '.'}${intent === 'code' ? ' The requested change was not delivered.' : ''}`);
   }
   if (failed && intent === 'code' && (storyStatus === 'implementing' || storyStatus === 'review')) {

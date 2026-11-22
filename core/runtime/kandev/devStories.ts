@@ -593,6 +593,22 @@ function baselineTests(db: CoreDatabase, storyId: string, spec: DevStorySpec): P
 }
 
 /**
+ * An account problem in what the worker (or Kandev) reported: a usage limit or a sign-in that no longer works. Retrying cannot fix
+ * either, so the step is parked with the agent's own words (Pandesh never guesses how much quota is left or when it resets).
+ */
+export function accountProblem(text: string | null | undefined): { kind: 'usage_limit' | 'signin'; tag: string; reason: string } | null {
+  const t = String(text ?? '');
+  // Only phrasings Claude Code / the API actually print; a task ABOUT rate limiting must not trip this.
+  if (/usage limit (?:reached|hit|exceeded)|hit your (?:usage |session |weekly )?limit|(?:5|five)-hour limit reached|weekly limit reached|limit reached\s*[∙·|]\s*resets|rate_limit_error|API Error:\s*(?:429|529)|overloaded_error|out of extra usage/i.test(t)) {
+    return { kind: 'usage_limit', tag: '[kkd-dev:account-limit]', reason: `the agent reported a usage limit: "${t.replace(/\s+/g, ' ').trim().slice(0, 240)}"` };
+  }
+  if (/not logged in|please run \/login|invalid api key|authentication_error|oauth token (?:has )?expired|API Error:\s*401/i.test(t)) {
+    return { kind: 'signin', tag: '[kkd-dev:signin-expired]', reason: `the agent cannot sign in: "${t.replace(/\s+/g, ' ').trim().slice(0, 240)}"` };
+  }
+  return null;
+}
+
+/**
  * The development grant still applies to this story: not expired and not revoked. Revocation is a `[kkd-dev:grant-revoked]` comment on
  * the story (written by the owner's revoke action or by cancelling the mission); after it every step waits for the owner's review again.
  */
@@ -940,8 +956,11 @@ export async function reconcileDevStories(db: CoreDatabase, kandev: KandevClient
     const session = (await kandev.sessions(task.id))[0];
     if (session?.state === 'FAILED' && story.status !== 'blocked') {
       // Kandev could not start (or lost) the worker. Without this the story would read "starting" forever.
-      walk(db, story, ['blocked'], 'the worker session failed');
-      addComment(db, story.id, { author: DEV_ACTOR, body: `[kkd-dev:needs-human] [kkd-dev:launch-failed] Kandev worker session failed: ${(session.error_message ?? 'no error reported').slice(0, 300)}. Fix the cause, then retry.` });
+      const account = accountProblem(session.error_message);
+      walk(db, story, ['blocked'], account ? account.reason.slice(0, 200) : 'the worker session failed');
+      addComment(db, story.id, { author: DEV_ACTOR, body: account
+        ? `[kkd-dev:needs-human] ${account.tag} ${account.kind === 'usage_limit' ? 'Claude could not continue: ' : 'Claude is not signed in: '}${account.reason}. Not retried automatically (a retry cannot fix it). The worktree is kept; Retry once ${account.kind === 'usage_limit' ? 'the limit has reset' : 'Claude Code is signed in again (open it once)'}.`
+        : `[kkd-dev:needs-human] [kkd-dev:launch-failed] Kandev worker session failed: ${(session.error_message ?? 'no error reported').slice(0, 300)}. Fix the cause, then retry.` });
       continue;
     }
     if (story.status === 'blocked') {
@@ -994,6 +1013,16 @@ export async function reconcileDevStories(db: CoreDatabase, kandev: KandevClient
     }
     if (session.worktree_path) { try { linkDependencies(spec.repoPath, session.worktree_path); } catch { /* verify will report it */ } }
     if (story.status === 'implementing') {
+      // A worker that hit a usage limit or lost its sign-in often stays "running" with that error as its last message: park it with
+      // the agent's own words instead of nudging it (a nudge would only spend another turn on the same error).
+      const lastSaid = (await Promise.resolve().then(() => kandev.agentMessages(session.id, 5)).catch(() => [])).filter(m => m.kind === 'message' || m.kind === 'error').pop();
+      const account = lastSaid ? accountProblem(lastSaid.text) : null;
+      if (account && lastSaid!.text.length < 600) {
+        await kandev.stopTask(task.id, `KKD: ${account.kind === 'usage_limit' ? 'usage limit' : 'sign-in'} reported by the agent`).catch(() => { /* already idle */ });
+        walk(db, story, ['blocked'], account.reason.slice(0, 200));
+        addComment(db, story.id, { author: DEV_ACTOR, body: `[kkd-dev:needs-human] ${account.tag} ${account.reason}. The worker was stopped and not retried; the worktree is kept. Retry once ${account.kind === 'usage_limit' ? 'the limit has reset' : 'Claude Code is signed in again'}.` });
+        continue;
+      }
       await relayWorkerNarrative(db, kandev, story, session.id).catch(() => { /* cosmetic: never block reconciliation */ });
       if (await nudgeIfSilent(db, kandev, story, task.id, session.id).catch(() => false)) continue;
     }
