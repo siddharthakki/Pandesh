@@ -22,6 +22,8 @@ import { appendMessage, createConversation } from './conversations';
 
 export const BRIDGE_MAX_INSTRUCTION_CHARS = 20_000;
 export const BRIDGE_MAX_CONTEXT_CHARS = 60_000;
+import { parseDeclaredIntent, type TaskIntentKind } from './taskIntent';
+
 const PAIRING_CODE_TTL_MS = 5 * 60_000;
 const PAIRING_CODE_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
 const MAX_FAILED_REDEEMS = 5;
@@ -40,6 +42,11 @@ export interface BridgeSourceRef {
   title?: string;
   capturedAt?: string;
   via?: 'send_button' | 'panda_mode';
+  /**
+   * What the requester declared the task to be (MCP `intent`), if anything. It only ever narrows what runs: a declared code change still
+   * needs a read-write project and the owner's approval. Kept in this JSON column so no schema change is needed (older builds ignore it).
+   */
+  declaredIntent?: TaskIntentKind;
 }
 
 export interface BridgeTransferConsent {
@@ -103,6 +110,29 @@ export interface BridgeTaskResult {
   branch?: string | null;
   /** A5 code change: which project, and the branch the owner had it delivered to in their checkout (null until asked). */
   codeChange?: { project: string; baseRef: string; delivered: { branch: string; commit: string; at: string } | null };
+  /**
+   * What actually happened to the REQUESTED outcome, separate from the task's lifecycle status. A worker finishing is not the requested
+   * change being made: `outcome_completed` only follows the owner's approval of a change that passed Pandesh's own checks.
+   */
+  outcome?: BridgeTaskOutcome;
+}
+
+export type BridgeOutcomeState =
+  | 'worker_running' | 'worker_finished' | 'worker_failed' | 'verification_failed'
+  | 'awaiting_owner_review' | 'review_denied' | 'outcome_completed' | 'delivered';
+
+export interface BridgeTaskOutcome {
+  intent: TaskIntentKind;
+  state: BridgeOutcomeState;
+  /** One or two sentences, in the owner's words. Also what the requester (ChatGPT) is told. */
+  summary: string;
+  /** Pandesh's own test run on a code change (base vs change). Null when no test run happened. */
+  tests: {
+    command: string; perTest: boolean; passedAfter: number; failedAfter: number;
+    newPassing: string[]; newFailing: string[]; regressions: string[]; preExistingFailing: string[]; fixed: string[];
+  } | null;
+  /** The worker's own words when it could not proceed (kept, never replaced by a generic line). */
+  workerExplanation: string | null;
 }
 
 /** Most events kept per task. Older ones drop off the front. */
@@ -285,9 +315,11 @@ export interface SubmitBridgeTaskInput {
   /** Optional page conversation text. Accepted only when the user confirmed sharing it. */
   context?: { text: string; userConfirmed: boolean };
   markedConfidential?: boolean;
+  /** Declared kind of work (see core/domain/taskIntent.ts). Unknown names are refused, never guessed. */
+  intent?: string | null;
 }
 
-function cleanSourceRef(ref: Partial<BridgeSourceRef> | undefined): BridgeSourceRef {
+function cleanSourceRef(ref: Partial<BridgeSourceRef> | undefined, declaredIntent: TaskIntentKind | null = null): BridgeSourceRef {
   let url: string | undefined;
   if (typeof ref?.url === 'string') {
     try {
@@ -302,6 +334,7 @@ function cleanSourceRef(ref: Partial<BridgeSourceRef> | undefined): BridgeSource
     ...(typeof ref?.title === 'string' ? { title: ref.title.slice(0, 120) } : {}),
     capturedAt: typeof ref?.capturedAt === 'string' && !Number.isNaN(Date.parse(ref.capturedAt)) ? new Date(ref.capturedAt).toISOString() : nowIso(),
     via: ref?.via === 'panda_mode' ? 'panda_mode' : 'send_button',
+    ...(declaredIntent ? { declaredIntent } : {}),
   };
 }
 
@@ -314,6 +347,8 @@ export function submitBridgeTask(db: CoreDatabase, pairing: BridgePairing, input
   if (!/^[\w.:-]{8,100}$/.test(clientRequestId)) throw new CoreError('invalid_request', "'clientRequestId' is required (8-100 characters of letters, digits, '.', ':', '_' or '-')");
   if (typeof input.instruction !== 'string' || input.instruction.trim().length === 0) throw new CoreError('invalid_request', 'the instruction is empty');
   if (input.instruction.length > BRIDGE_MAX_INSTRUCTION_CHARS) throw new CoreError('invalid_request', `the instruction is longer than ${BRIDGE_MAX_INSTRUCTION_CHARS} characters`);
+  const declaredIntent = input.intent === undefined || input.intent === null || input.intent === '' ? null : parseDeclaredIntent(input.intent);
+  if (input.intent && !declaredIntent) throw new CoreError('invalid_request', `unknown intent '${String(input.intent).slice(0, 40)}'; use one of: answer, inspect, code_change, research, operation`);
   if (input.context !== undefined && input.context !== null) {
     if (input.context.userConfirmed !== true) throw new CoreError('invalid_request', 'conversation context is only accepted after the user confirmed sharing it');
     if (typeof input.context.text !== 'string' || input.context.text.length > BRIDGE_MAX_CONTEXT_CHARS) throw new CoreError('invalid_request', `shared context must be text of at most ${BRIDGE_MAX_CONTEXT_CHARS} characters`);
@@ -326,7 +361,7 @@ export function submitBridgeTask(db: CoreDatabase, pairing: BridgePairing, input
     const digest = sha256(input.instruction);
 
     const { sensitivity, reasons } = classifySensitivity(input.instruction + (input.context?.text ? `\n${input.context.text}` : ''), input.markedConfidential === true);
-    const sourceRef = cleanSourceRef(input.sourceRef);
+    const sourceRef = cleanSourceRef(input.sourceRef, declaredIntent);
     const id = newId('ptask');
     const now = nowIso();
     const title = input.instruction.replace(/\s+/g, ' ').trim().slice(0, 80);

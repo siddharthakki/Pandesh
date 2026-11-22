@@ -32,12 +32,12 @@ export function WorkerPanels({ items, now, onChanged }: { items: BridgeActivityI
     finally { setBusy(null); }
   };
   /** A5: approve the reviewed change (KKD commits it to a branch in the private copy), or bring an approved one into the checkout. */
-  const changeAction = async (b: BridgeActivityItem, action: 'bridgeApproveChange' | 'bridgeDeliver') => {
+  const changeAction = async (b: BridgeActivityItem, action: 'bridgeApproveChange' | 'bridgeRejectChange' | 'bridgeDeliver') => {
     setBusy(`${b.id}:${action}`);
     setNote(null);
     try {
       const r = await api.household(action, { id: b.id }) as { delivered?: { branch: string } };
-      setNote({ id: b.id, text: action === 'bridgeApproveChange' ? 'Approved. Pandesh is committing the change to a branch in the private copy and checking it again.' : `In your checkout as branch ${r.delivered?.branch ?? ''}: not checked out, not merged, not pushed.` });
+      setNote({ id: b.id, text: action === 'bridgeApproveChange' ? 'Approved. Pandesh is committing the change to a branch in the private copy and checking it again.' : action === 'bridgeRejectChange' ? 'Not approved. Nothing was committed or delivered.' : `In your checkout as branch ${r.delivered?.branch ?? ''}: not checked out, not merged, not pushed.` });
       onChanged();
     } catch (err) { setNote({ id: b.id, text: errorText(err), error: true }); }
     finally { setBusy(null); }
@@ -93,6 +93,7 @@ export function WorkerPanels({ items, now, onChanged }: { items: BridgeActivityI
                       <ChangeReview taskId={b.id} refreshKey={b.eventCount} open={diffOpen[b.id] === true} onToggle={() => setDiffOpen({ ...diffOpen, [b.id]: !diffOpen[b.id] })} />
                       <div className="btns">
                         <button type="button" className="btn primary small" disabled={busy === `${b.id}:bridgeApproveChange`} onClick={() => void changeAction(b, 'bridgeApproveChange')}>Approve change</button>
+                        <button type="button" className="btn small" disabled={busy === `${b.id}:bridgeRejectChange`} onClick={() => void changeAction(b, 'bridgeRejectChange')}>Don't approve</button>
                       </div>
                     </div>
                   )}
@@ -129,6 +130,8 @@ export function WorkerPanels({ items, now, onChanged }: { items: BridgeActivityI
 
 /** What the panel says about the result: exactly what was checked, never "verified" for a worker's own report. */
 function workerOutcome(b: BridgeActivityItem): string {
+  // Core's own account of the requested outcome (code changed and approved, inspection only, made no change, failed a check…).
+  if (b.outcome && b.outcome.state !== 'worker_running') return b.outcome.summary;
   if (b.state === 'completed' && b.verification === 'worker-only') return 'Finished. Pandesh checked that no file changed; the result is the worker’s own report, not independently verified.';
   if (b.state === 'completed' && b.verification === 'independent') return 'Finished and verified independently by Pandesh.';
   if (b.state === 'completed' && b.verification === 'human-reviewed') return 'Finished and reviewed by a person.';

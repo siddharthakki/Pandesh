@@ -13,7 +13,7 @@ import * as path from 'node:path';
 import type { CoreDatabase } from '../../db/connection';
 import { CoreError } from '../../domain/errors';
 import { runHardenedGit } from '../../security/hardenedGit';
-import { getStory } from '../../domain/stories';
+import { addComment, getStory, listComments } from '../../domain/stories';
 import { loadProjects, projectAllows, resolveProject, type ProjectRecord } from '../../domain/projectRegistry';
 import { asksForChange, deriveMutationPolicy } from '../../domain/mutationPolicy';
 import { consumeApproval, decideApproval, pendingApproval, recordDirectApproval, requestApproval, usableApproval, withdrawApproval, type ExternalApprovalRequest } from '../../domain/bridgeApprovals';
@@ -24,16 +24,18 @@ import { newId } from '../../domain/ids';
 import {
   attachBridgeExecution, claimBridgeDispatch, evaluateTransferPolicy, getBridgeTask, getPairing, listBridgeTasks, recordBridgeStatus,
   setBridgeControl, TERMINAL_BRIDGE_STATUSES, BRIDGE_ACTIVITY_LIMIT,
-  type BridgeTaskRecord, type BridgeTaskResult, type BridgeTaskStatus, type BridgeTransferConsent,
+  type BridgeTaskOutcome, type BridgeTaskRecord, type BridgeTaskResult, type BridgeTaskStatus, type BridgeTransferConsent,
 } from '../../domain/pandaBridge';
 import { detectGpu, gpuLaneLimit, type GpuInfo } from '../hardwareCapacity';
 import type { RuntimeExecutor } from '../executor';
 import { KandevClient, KandevUnavailableError } from './kandevClient';
 import { parseServiceArgs, type ServiceHost, type ServiceRegistry } from './bridgeServices';
 import { classifyInstruction, WORKSPACE_MARKER } from './intentRouter';
+import { asksForTests, isReadOnlyIntent, resolveTaskIntent, type TaskIntent, type TaskIntentKind } from '../../domain/taskIntent';
 import { allDeclarations, BUILTIN_WORKFLOWS, routeTask, trackRecords } from './capabilityRegistry';
+import { judgeTests, type TestComparison } from './projectTests';
 import {
-  AGENT_IDS, approveDevStoryReview, checkoutFingerprint, devSpec, devStoryChangeDiff, devStoryDetail, devStoryWorkerEvents, dispatchDevStories, planDevStories, retryDevStory, stopDevStory, usesLocalGpu, type DevAgent, type DevStorySpec,
+  DEV_ACTOR, TESTS_TAG, AGENT_IDS, approveDevStoryReview, checkoutFingerprint, devSpec, devStoryChangeDiff, devStoryDetail, devStoryWorkerEvents, dispatchDevStories, planDevStories, retryDevStory, stopDevStory, usesLocalGpu, type DevAgent, type DevStorySpec,
 } from './devStories';
 import { unavailableDiff, type ChangeDiff } from './changeDiff';
 
@@ -257,24 +259,42 @@ export const CODE_CHANGE_MAX_FILES = 20;
  * `read-write` project; it comes back only as a branch in that copy, after verification and the owner's review. Nothing is pushed,
  * merged or installed, and the owner's checkout gets the change only when the owner asks for it as a new branch.
  */
-export interface ProjectIntent { project: ProjectRecord; path: string; ref: string | null; readOnlyRequested: boolean; mode: 'inspect' | 'code' }
+export interface ProjectIntent { project: ProjectRecord; path: string; ref: string | null; readOnlyRequested: boolean; mode: 'inspect' | 'code'; intent: TaskIntent }
+
+/** The kind of work that governs a relayed task: what the requester declared, else what its text asks for (core/domain/taskIntent.ts). */
+export function taskIntentOf(task: Pick<BridgeTaskRecord, 'instruction' | 'sourceRef'>): TaskIntent {
+  return resolveTaskIntent(task.instruction, task.sourceRef?.declaredIntent ?? null);
+}
+
+/**
+ * A request this task is not permitted to make (a change to a read-only project). The task fails with the reason, so the requester sees a
+ * permission failure and never a completed inspection in its place. Nothing ran, nothing was copied.
+ */
+function permissionRefused(db: CoreDatabase, taskId: string, reason: string): never {
+  recordBridgeStatus(db, taskId, 'failed', `Not permitted: ${reason}`.slice(0, 500));
+  throw new CoreError('forbidden', reason, { reason: 'permission_denied' });
+}
 
 /**
  * The project gate, without copying anything: which authorised project (if any) the task is about, and whether this executor and this
- * kind of work are allowed there. Ambiguous, unauthorised or not-allowed means ask (the task stays waiting; nothing runs, nothing widens).
+ * kind of work are allowed there. Ambiguous or unregistered means ask (the task stays waiting); a change the project does not allow is a
+ * permission failure. A requested change is never silently turned into an inspection, and no permission is widened.
  */
 function gateProject(rt: BridgeRuntime, task: BridgeTaskRecord, chosen: BridgeExecutor): ProjectIntent | null {
   if (chosen.kind === 'service') return null;
+  const intent = taskIntentOf(task);
+  if (intent.conflict) needsClarification(rt.db, task.id, intent.conflict);
   const projects = loadProjects(rt.dataDir);
   const r = projects.length || /[A-Za-z]:[\\/]/.test(task.instruction) ? resolveProject(projects, task.instruction) : ({ status: 'none' } as const);
   if (r.status === 'ambiguous' || r.status === 'unauthorized') needsClarification(rt.db, task.id, r.question);
-  if (r.status !== 'resolved' || !(r.via === 'path' || refersToCode(task.instruction))) return null;
-  if (chosen.kind !== 'acp') needsClarification(rt.db, task.id, `This task is about the project '${r.project.name}'. ${chosen.label} cannot be confined to that project yet; choose Claude Code or OpenCode for a read-only inspection.`);
-  // A question about the code is an inspection even without the words "read only"; only a request for a change is a change.
-  const readOnly = r.readOnlyRequested || isAnswerOnly(task.instruction);
+  // A project NAME refers to its code when the task is a code change or uses code words; a path always does.
+  if (r.status !== 'resolved' || !(r.via === 'path' || intent.kind === 'code' || refersToCode(task.instruction))) return null;
+  if (chosen.kind !== 'acp') needsClarification(rt.db, task.id, `This task is about the project '${r.project.name}'. ${chosen.label} cannot be confined to that project yet; choose Claude Code or OpenCode.`);
+  // A question about the code is an inspection; a change (or an action on the project's files) is a change.
+  const readOnly = isReadOnlyIntent(intent.kind);
   const allowed = projectAllows(r.project, readOnly);
-  if (!allowed.ok) needsClarification(rt.db, task.id, allowed.reason);
-  return { project: r.project, path: r.path, ref: r.ref, readOnlyRequested: readOnly, mode: readOnly ? 'inspect' : 'code' };
+  if (!allowed.ok) permissionRefused(rt.db, task.id, `${allowed.reason} (Pandesh read this task as ${intent.kind === 'code' ? 'a code change' : 'an action that changes files'} because ${intent.reason}.)`);
+  return { project: r.project, path: r.path, ref: r.ref, readOnlyRequested: readOnly, mode: readOnly ? 'inspect' : 'code', intent };
 }
 
 /**
@@ -284,8 +304,11 @@ function gateProject(rt: BridgeRuntime, task: BridgeTaskRecord, chosen: BridgeEx
  */
 function requireAnswerOnly(rt: BridgeRuntime, task: BridgeTaskRecord, chosen: BridgeExecutor): void {
   if (chosen.kind !== 'acp') return;
-  if (isAnswerOnly(task.instruction)) return;
-  needsClarification(rt.db, task.id, `This task may change files, but it names no registered project, so nothing ran. Pandesh does not run such work in an empty substitute workspace. Register the project in Pandesh and name it in the task, or ask for an answer only (say "do not change any files").`);
+  const intent = taskIntentOf(task);
+  if (intent.conflict) needsClarification(rt.db, task.id, intent.conflict);
+  if (isReadOnlyIntent(intent.kind)) return;
+  if (intent.kind === 'operation') needsClarification(rt.db, task.id, `This task asks for an action on this PC or outside it (${intent.reason}), and coding agents do not run such actions, so nothing ran. Ask Pandesh directly, or ask for an answer only.`);
+  needsClarification(rt.db, task.id, `This task is a code change (${intent.reason}), but it names no registered project, so nothing ran. Pandesh does not run such work in an empty substitute workspace or in any other project. Register the project in Pandesh and name it (or its path) in the task, or ask for an answer only (say "do not change any files").`);
 }
 
 /** The instruction asks for an answer or a read-only look, never a change (the same reading Pandesh applies to its own requests). */
@@ -341,7 +364,8 @@ async function requestExternalApproval(rt: BridgeRuntime, task: BridgeTaskRecord
     preview
       ? `Everything ${chosen.label} reads ${intent!.mode === 'code' ? 'or writes ' : ''}in a private copy of ${intent!.project.name} (branch ${preview.branch} at ${preview.commit}) goes there too. Your own checkout is not shared${preview.uncommittedFiles ? `, and ${preview.uncommittedFiles} uncommitted or untracked file(s) in it are not part of the copy` : ''}.`
       : `No project is shared: this is an answer-only task. ${chosen.label} gets an empty folder, may not change any file, and only the task text goes to ${provider}.`,
-    ...(intent?.mode === 'code' ? [`The change stays in that copy: nothing is pushed, merged or installed. You review it in Pandesh first, and it reaches your checkout only if you ask, as a new branch.`] : []),
+    ...(intent?.mode === 'code' ? [`The change stays in that copy: nothing is pushed, merged or installed. Pandesh runs the project's tests before and after the change, you review it in Pandesh first, and it reaches your checkout only if you ask, as a new branch.`] : []),
+    `Pandesh reads this task as ${intent ? (intent.mode === 'code' ? 'a code change' : 'a read-only inspection') : 'an answer only'}: ${(intent?.intent ?? taskIntentOf(task)).reason}${(intent?.intent ?? taskIntentOf(task)).source === 'declared' ? ' (declared by the requester)' : ''}.`,
     includeContext ? 'The ChatGPT conversation context you chose to share is included.' : 'No ChatGPT conversation context is included.',
   ];
   const request = requestApproval(rt.db, {
@@ -536,7 +560,7 @@ async function startAcp(rt: BridgeRuntime, task: BridgeTaskRecord, agent: DevAge
         description: answerDescription(task, includeContext), agent, ...(model ? { model } : {}),
         acceptanceCriteria: ['The requested change is made in this repository', 'The existing tests for the touched code still pass'],
         maxFiles: CODE_CHANGE_MAX_FILES,
-        codeCopy: { projectName: inspection.project.name, sourcePath: inspection.sourcePath, ref: inspection.ref, sourceHead: inspection.sourceHead, sourceStatusSha: inspection.sourceStatusSha },
+        codeCopy: { projectName: inspection.project.name, sourcePath: inspection.sourcePath, ref: inspection.ref, sourceHead: inspection.sourceHead, sourceStatusSha: inspection.sourceStatusSha, testsRequested: asksForTests(task.instruction) },
       }],
     });
     storyId = plan.stories[0].id;
@@ -662,7 +686,8 @@ async function startNative(rt: BridgeRuntime, task: BridgeTaskRecord): Promise<v
 const redactPaths = (text: string) => text.replace(/(?:[A-Za-z]:[\\/]|\\\\[^\\/\s]+[\\/])[^\s"'`<>|,;]*[^\s"'`<>|,;.]/g, '<path>');
 
 function mapPhase(phase: string, storyStatus: string, control: BridgeTaskRecord['control']): { status: BridgeTaskStatus; detail: string } {
-  if (storyStatus === 'done') return { status: 'completed', detail: 'Finished and verified.' };
+  // What "done" means depends on the kind of task; the outcome summary says it (never a blanket "verified").
+  if (storyStatus === 'done') return { status: 'completed', detail: 'Finished.' };
   if (phase === 'stopped') return control === 'cancelled' ? { status: 'cancelled', detail: 'Cancelled.' } : { status: 'paused', detail: 'Paused. Resume to continue from the preserved work.' };
   if (phase === 'needs approval') return { status: 'awaiting_approval', detail: 'The executor is waiting for your approval in Pandesh.' };
   if (phase === 'awaiting review') return { status: 'awaiting_approval', detail: 'The work is ready; review and approve it in Pandesh.' };
@@ -689,6 +714,62 @@ export function mergeActivity(previous: BridgeTaskResult['activity'], fresh: Bri
   }
   if (!changed) return previous;
   return [...byId.values()].sort((a, b) => a.at.localeCompare(b.at)).slice(-BRIDGE_ACTIVITY_LIMIT);
+}
+
+const WORKER_EXPLANATION = '--- worker explanation (its own words) ---';
+
+/**
+ * What happened to the REQUESTED outcome, read from KKD's own records on the story (never from the worker's claims): the worker is still
+ * working, finished (an answer or an inspection: its own report), failed (made no change and said why), failed Pandesh's checks, waits for
+ * the owner's review, was not approved, or the change was approved and committed (and perhaps delivered).
+ */
+export function outcomeOf(db: CoreDatabase, task: BridgeTaskRecord, storyStatus: string, spec: DevStorySpec, changedFiles: string[]): BridgeTaskOutcome {
+  const intent: TaskIntentKind = spec.codeCopy ? 'code' : spec.mode === 'inspect' ? (spec.answerOnly ? 'answer' : 'inspect') : taskIntentOf(task).kind;
+  const prior = task.result?.outcome;
+  if (prior?.state === 'review_denied') return prior; // the owner's refusal is final
+  const comments = task.storyId ? listComments(db, task.storyId) : [];
+  const last = (tag: string) => [...comments].reverse().find(c => c.body.startsWith(tag)) ?? null;
+  const project = spec.codeCopy?.projectName ?? spec.inspect?.projectName ?? 'the project';
+  let tests: BridgeTaskOutcome['tests'] = null;
+  let testLine = '';
+  const tc = last(TESTS_TAG);
+  if (tc) {
+    try {
+      const cmp = JSON.parse(tc.body.slice(TESTS_TAG.length)) as TestComparison;
+      tests = { command: cmp.command, perTest: cmp.perTest, passedAfter: cmp.after.passed, failedAfter: cmp.after.failed, newPassing: cmp.newPassing, newFailing: cmp.newFailing, regressions: cmp.regressions, preExistingFailing: cmp.preExistingFailing, fixed: cmp.fixed };
+      const j = judgeTests(cmp, spec.codeCopy?.testsRequested === true);
+      testLine = j.ok ? j.report : `Pandesh's own test run failed: ${j.what}.`;
+    } catch { /* an unreadable record is simply not reported */ }
+  }
+  const failed = last('[kkd-dev:verify-failed]');
+  const explanation = failed && failed.body.includes(WORKER_EXPLANATION) ? failed.body.slice(failed.body.indexOf(WORKER_EXPLANATION) + WORKER_EXPLANATION.length).trim().slice(0, 1_500) : null;
+  const failedWhat = failed ? failed.body.split('\n')[0]!.replace('[kkd-dev:verify-failed]', '').trim().slice(0, 300) : '';
+  const o = (state: BridgeTaskOutcome['state'], summary: string): BridgeTaskOutcome => ({ intent, state, summary: redactPaths(summary).replace(/\s+/g, ' ').trim(), tests, workerExplanation: explanation });
+
+  if (storyStatus === 'done') {
+    if (intent === 'code') {
+      const delivered = task.result?.codeChange?.delivered;
+      return delivered
+        ? o('delivered', `The requested change to ${project} was approved by you and is in your checkout as the new branch ${delivered.branch} (not checked out, not merged, not pushed). ${testLine}`)
+        : o('outcome_completed', `The requested change to ${project} was approved by you and committed to ${spec.integrationBranch} in Pandesh's private copy; nothing was pushed, merged or installed. ${testLine} It reaches your checkout only if you choose "Bring into my checkout".`);
+    }
+    if (intent === 'answer') return o('worker_finished', 'Answered. The reply is the worker\'s own; no project was shared and no file changed.');
+    return o('worker_finished', `Inspection of ${project} finished. The findings, including any test results, are the worker's own report; Pandesh checked only that nothing changed. No code was changed.`);
+  }
+  if (storyStatus === 'delivery_approval' && intent === 'code') {
+    return o('awaiting_owner_review', `The change to ${project} is ready for your review in Pandesh: ${changedFiles.length} file(s) changed (${changedFiles.slice(0, 6).join(', ')}). ${testLine} Nothing is committed until you approve it.`);
+  }
+  if (storyStatus === 'blocked' && task.control === 'none') {
+    if (explanation || /made no changes/.test(failedWhat)) {
+      return o('worker_failed', `The worker made no changes${explanation ? ` and explained why: ${explanation}` : ', and gave no explanation.'}${intent === 'code' ? ' The requested change was not made.' : ''}`);
+    }
+    const needs = last('[kkd-dev:needs-human]');
+    return o('verification_failed', `Pandesh's checks did not accept the result${failedWhat ? `: ${failedWhat}` : needs ? `: ${needs.body.replace('[kkd-dev:needs-human]', '').trim().slice(0, 300)}` : '.'}${intent === 'code' ? ' The requested change was not delivered.' : ''}`);
+  }
+  if (failed && intent === 'code' && (storyStatus === 'implementing' || storyStatus === 'review')) {
+    return o('worker_running', `Pandesh's check failed (${failedWhat}); the worker was asked to fix it.`);
+  }
+  return o('worker_running', 'Working.');
 }
 
 /** Brings a relayed task up to date from the work behind it and stores a checkpoint when something changed. */
@@ -721,9 +802,12 @@ export async function refreshBridgeTask(rt: BridgeRuntime, taskId: string): Prom
         branch: worker?.branch ?? task.result?.branch ?? view.branch ?? null,
         ...(devSpec(story)!.codeCopy ? { codeChange: { project: devSpec(story)!.codeCopy!.projectName, baseRef: devSpec(story)!.codeCopy!.ref, delivered: task.result?.codeChange?.delivered ?? null } } : {}),
       };
+      result.outcome = outcomeOf(db, task, story.status, devSpec(story)!, detail.changedFiles);
       // Where the coordinator names a concrete reason (a free slot, a review), show it; for settled states the mapped wording is clearer.
       const settled = mapped.status === 'paused' || mapped.status === 'cancelled' || mapped.status === 'completed';
-      const detailText = !settled && view.waitingReason ? redactPaths(view.waitingReason).slice(0, 300) : mapped.detail;
+      // Finished, failed, awaiting the owner's review: the outcome says exactly what happened (a held worker action keeps its own wording).
+      const speaks = result.outcome.state !== 'worker_running' && (mapped.status === 'completed' || mapped.status === 'needs_attention' || (mapped.status === 'awaiting_approval' && !view.pendingApprovals.length));
+      const detailText = speaks ? result.outcome.summary.slice(0, 500) : !settled && view.waitingReason ? redactPaths(view.waitingReason).slice(0, 300) : mapped.detail;
       recordBridgeStatus(db, taskId, mapped.status, detailText, result);
     } catch {
       recordBridgeStatus(db, taskId, task.status, 'Waiting for the executor to be reachable again.');
@@ -762,7 +846,9 @@ function codeChangeOf(rt: BridgeRuntime, taskId: string): { task: BridgeTaskReco
  * the private copy, re-runs its checks there, and the task completes. Nothing is pushed: the copy has no remote.
  */
 export async function approveBridgeChange(rt: BridgeRuntime, taskId: string, who: string): Promise<BridgeTaskRecord> {
-  const { storyId } = codeChangeOf(rt, taskId);
+  const { task, storyId } = codeChangeOf(rt, taskId);
+  // A change the owner refused (or a cancelled task) can never be approved afterwards, whatever state the worker was left in.
+  if (task.control === 'cancelled' || task.status === 'cancelled' || task.result?.outcome?.state === 'review_denied') throw new CoreError('conflict', 'this change was not approved or the task was cancelled; nothing can be approved now');
   await approveDevStoryReview(rt.db, rt.kandev, storyId, `Approved in Pandesh by ${who}`);
   return refreshBridgeTask(rt, taskId);
 }
@@ -820,9 +906,26 @@ export function deliverBridgeChange(rt: BridgeRuntime, taskId: string, who: stri
   const after = checkoutFingerprint(spec.codeCopy.sourcePath);
   if (!before || !after || before.head !== after.head || before.statusSha !== after.statusSha) throw new CoreError('internal_error', 'your checkout changed while the branch was delivered; check it before using the branch');
   const delivered = { branch, commit, at: new Date().toISOString() };
-  const result = { ...(task.result as BridgeTaskResult), codeChange: { project: spec.codeCopy.projectName, baseRef: spec.codeCopy.ref, delivered } };
+  const withDelivery: BridgeTaskRecord = { ...task, result: { ...(task.result as BridgeTaskResult), codeChange: { project: spec.codeCopy.projectName, baseRef: spec.codeCopy.ref, delivered } } };
+  const result: BridgeTaskResult = { ...withDelivery.result!, outcome: outcomeOf(rt.db, withDelivery, 'done', spec, task.result?.changedFiles ?? []) };
   recordBridgeStatus(rt.db, taskId, 'completed', `Delivered by ${who} as branch ${branch} in your checkout (not checked out, not merged, not pushed).`, result);
   return delivered;
+}
+
+/**
+ * The owner does NOT approve a reviewed A5 change (host only; the route checks). Nothing is committed, integrated or delivered; the worker
+ * is stopped and its worktree kept for reference. The task ends as cancelled with the reason, and its outcome says the change was refused.
+ */
+export async function rejectBridgeChange(rt: BridgeRuntime, taskId: string, who: string, note?: string): Promise<BridgeTaskRecord> {
+  const { task, storyId, spec } = codeChangeOf(rt, taskId);
+  if (task.control === 'cancelled' || task.status === 'cancelled' || getStory(rt.db, storyId).status !== 'delivery_approval') throw new CoreError('conflict', 'there is no change waiting for your review on this task');
+  const why = note ? ` Note: ${note.replace(/\s+/g, ' ').slice(0, 300)}` : '';
+  addComment(rt.db, storyId, { author: DEV_ACTOR, body: `[kkd-dev:review-denied] Not approved in Pandesh by ${who}. Nothing was committed, integrated or delivered.${why}` });
+  setBridgeControl(rt.db, taskId, 'cancelled');
+  await stopDevStory(rt.db, rt.kandev, storyId, `Change not approved by ${who}`).catch(() => { /* the worker is already idle; the decision stands */ });
+  const outcome: BridgeTaskOutcome = { ...outcomeOf(rt.db, task, 'delivery_approval', spec, task.result?.changedFiles ?? []), state: 'review_denied', summary: `You did not approve the change to ${spec.codeCopy.projectName}. Nothing was committed, merged, pushed or delivered; the worker's worktree is kept for reference.${why}` };
+  recordBridgeStatus(rt.db, taskId, 'cancelled', outcome.summary, { ...(task.result as BridgeTaskResult), outcome });
+  return getBridgeTask(rt.db, taskId);
 }
 
 export async function pauseBridgeTask(rt: BridgeRuntime, taskId: string, who: string): Promise<BridgeTaskRecord> {

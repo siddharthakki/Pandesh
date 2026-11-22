@@ -33,6 +33,7 @@ import { prepareWorkerProfile } from './workerProfile';
 import { gpuLaneLimit } from '../hardwareCapacity';
 import { readChangeDiff, unavailableDiff, type ChangeDiff } from './changeDiff';
 import { automatedChecks, deviceChecks, examineDiff, runAcceptance, validateAcceptanceChecks, type AcceptanceCheck, type VerificationLevel } from './storyAcceptance';
+import { compareTestRuns, judgeTests, runProjectTests, type ProjectTestRun } from './projectTests';
 
 export const DEV_ACTOR = 'kkd:dev-coordinator';
 const MAX_VERIFY_RETRIES = 2;
@@ -76,7 +77,11 @@ export interface DevStorySpec {
    * A5: a change requested through the bridge and approved by the owner. repoPath is a private copy (no remote) of this project; the
    * owner's checkout at sourcePath is never written by KKD or the worker. The result is a branch in the copy.
    */
-  codeCopy?: { projectName: string; sourcePath: string; ref: string; sourceHead: string; sourceStatusSha: string };
+  codeCopy?: {
+    projectName: string; sourcePath: string; ref: string; sourceHead: string; sourceStatusSha: string;
+    /** The task asked for tests: at least one new (or newly passing) test is required, as Pandesh's own test run sees it. */
+    testsRequested?: boolean;
+  };
 }
 
 /** Fingerprint of a checkout's HEAD and working-tree state (read-only git), used to prove an inspection did not touch it. */
@@ -205,6 +210,7 @@ function workerPrompt(story: StoryRecord, spec: DevStorySpec): string {
       story.description ? `\n${story.description}` : '',
       `\nYour CURRENT WORKING DIRECTORY is your own worktree of a private copy of ${spec.codeCopy.projectName} at branch ${spec.codeCopy.ref}. Make the change here. If the task names a path on this PC, that is the owner's checkout: never read or write it; use the same relative path in your working directory.`,
       `\nRules: change at most ${spec.maxFiles ?? 'a few'} files and only what the task needs. Run the existing tests for the code you touch with single plain commands (no \`&&\`, no \`cd\`). Do NOT commit, push, merge, switch branches, add remotes, install packages or change any Kandev task state: KarkeDikha verifies the change, the owner reviews it, and only then is it committed to a branch in this copy.`,
+      'This is a CODE CHANGE task: the owner approved changing files in this copy. Make the requested change and add or update tests for it when the task asks for tests. Pandesh runs the project\'s tests itself before and after your change: do not weaken, skip or delete existing tests, and do not fix unrelated failing tests unless the task asks (report them instead).',
       'If the change cannot be made here, change nothing and say plainly why in your last message. When done, stop and summarise exactly what you changed and which tests you ran with their results.',
     ].join('\n');
   }
@@ -551,6 +557,33 @@ function git(cwd: string, args: string[]): { ok: boolean; out: string } {
   return { ok: r.status === 0, out: `${r.stdout ?? ''}${r.stderr ?? ''}`.trim() };
 }
 
+/** Comment tags for Pandesh's own test runs on an A5 change (base run cached; comparison per verification). */
+const BASELINE_TAG = '[kkd-dev:baseline-tests]';
+export const TESTS_TAG = '[kkd-dev:tests]';
+
+/**
+ * The project's tests as they were BEFORE the change, run once per story in a temporary detached worktree of the private copy at the
+ * commit the worker started from, and cached on the story. The worker's worktree and the owner's checkout are not involved.
+ */
+function baselineTests(db: CoreDatabase, storyId: string, spec: DevStorySpec): ProjectTestRun {
+  const cached = [...listComments(db, storyId)].reverse().find(c => c.body.startsWith(BASELINE_TAG));
+  if (cached) { try { return JSON.parse(cached.body.slice(BASELINE_TAG.length)) as ProjectTestRun; } catch { /* recompute */ } }
+  const at = spec.codeCopy?.sourceHead || spec.baseBranch;
+  const dir = `${spec.repoPath}-baseline`;
+  let run: ProjectTestRun;
+  fs.rmSync(dir, { recursive: true, force: true });
+  git(spec.repoPath, ['worktree', 'prune']);
+  const add = git(spec.repoPath, ['worktree', 'add', '--detach', dir, at]);
+  if (!add.ok) run = { command: 'none', ran: false, ok: false, tests: null, passed: 0, failed: 0, output: add.out.slice(-500), note: 'the base could not be checked out for a test run' };
+  else {
+    run = runProjectTests(dir);
+    git(spec.repoPath, ['worktree', 'remove', '--force', dir]);
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+  addComment(db, storyId, { author: DEV_ACTOR, body: `${BASELINE_TAG}${JSON.stringify({ ...run, output: run.output.slice(-600) })}` });
+  return run;
+}
+
 function changedFiles(worktree: string, base: string): string[] {
   const committed = git(worktree, ['diff', '--name-only', `${base}...HEAD`]).out.split('\n');
   // Porcelain lines are "XY path"; parse the raw output (git() trims, which would eat a leading " M").
@@ -750,18 +783,31 @@ export async function verifyAndIntegrate(db: CoreDatabase, kandev: KandevClient,
         `${accepted.evidence}\n\nThe criteria in the story are authoritative; your own tests did not cover these inputs. Fix the implementation (do not weaken tests) and make it correct in general.`);
     }
   }
+  // A5: Pandesh runs the project's own tests on the base and on the change and compares them per test. A regression, a failing new test
+  // or (when the task asked for tests) no new test sends the work back; tests that were already failing are reported, never hidden.
+  let testReport = '';
+  if (spec.codeCopy) {
+    const base = baselineTests(db, story.id, spec);
+    const after = runProjectTests(worktree);
+    const cmp = compareTestRuns(base, after);
+    addComment(db, story.id, { author: DEV_ACTOR, body: `${TESTS_TAG} ${JSON.stringify(cmp)}` });
+    const verdict = judgeTests(cmp, spec.codeCopy.testsRequested === true);
+    if (!verdict.ok) return fail(`Pandesh's own test run: ${verdict.what}`, `${after.output}\n\nFix it (do not weaken or delete tests), and stop. Tests that were already failing before your change are not yours to fix unless the task asks.`);
+    testReport = verdict.report;
+  }
   const level: VerificationLevel = accepted ? 'independent' : 'worker-only';
   addComment(db, story.id, {
     author: DEV_ACTOR,
-    body: `[kkd-dev:verified] level=${level}; \`${spec.verify.join(' ')}\` passed in the worktree${accepted ? `; independent acceptance ${accepted.passed}/${accepted.total} (${accepted.names.join(', ')})` : ''}.\nChanged: ${files.join(', ')}\n${check.out.slice(-600)}`,
+    body: `[kkd-dev:verified] level=${level}; \`${spec.verify.join(' ')}\` passed in the worktree${accepted ? `; independent acceptance ${accepted.passed}/${accepted.total} (${accepted.names.join(', ')})` : ''}.${testReport ? ` ${testReport}` : ''}\nChanged: ${files.join(', ')}\n${check.out.slice(-600)}`,
   });
-  if (!reviewApproved && (level === 'worker-only' || diff.reviewReasons.length)) {
+  // An A5 change always waits for the owner's review, whatever was verified: only the owner decides what reaches their project.
+  if (!reviewApproved && (level === 'worker-only' || diff.reviewReasons.length || spec.codeCopy)) {
     // Nothing independent verifies this result (or the diff looks like it weakened tests): "the worker finished" is not
     // "it is correct". Hold it for a person and keep dependents locked.
     walk(db, story, ['validation', 'delivery_approval'], 'worker finished and its own tests pass; waiting for a human review');
     addComment(db, story.id, {
       author: DEV_ACTOR,
-      body: `[kkd-dev:awaiting-review] ${level === 'worker-only' ? 'Worker completed and its own tests pass, but KKD has no independent acceptance check for this story.' : 'Independent acceptance passed, but the diff needs a human look.'}${diff.reviewReasons.length ? ` ${diff.reviewReasons.join('; ')}.` : ''}\nChanged: ${files.join(', ')}\nWorktree: ${worktree}\nApprove to integrate it, or retry with a note.`,
+      body: `[kkd-dev:awaiting-review] ${spec.codeCopy ? `Change ready for the owner's review. ${testReport}` : level === 'worker-only' ? 'Worker completed and its own tests pass, but KKD has no independent acceptance check for this story.' : 'Independent acceptance passed, but the diff needs a human look.'}${diff.reviewReasons.length ? ` ${diff.reviewReasons.join('; ')}.` : ''}\nChanged: ${files.join(', ')}\nWorktree: ${worktree}\nApprove to integrate it, or retry with a note.`,
     });
     return;
   }
@@ -790,6 +836,14 @@ export async function verifyAndIntegrate(db: CoreDatabase, kandev: KandevClient,
   if (!post.ok) {
     git(integ.dir, ['reset', '--hard', before]);
     return fail(`\`${spec.verify.join(' ')}\` failed after integration (merge rolled back)`, post.out);
+  }
+  if (spec.codeCopy) {
+    // The committed result must show the same test picture: no test that passed before the change may fail on the integration branch.
+    const again = judgeTests(compareTestRuns(baselineTests(db, story.id, spec), runProjectTests(integ.dir)), false);
+    if (!again.ok) {
+      git(integ.dir, ['reset', '--hard', before]);
+      return fail(`Pandesh's own test run failed after integration (merge rolled back): ${again.what}`, '');
+    }
   }
   if (checks.length) {
     // The integrated result must also satisfy the independent checks (the merge may interact with earlier stories).
