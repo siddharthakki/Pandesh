@@ -54,3 +54,9 @@
   - `/diff` without the host token → 403
 - Not yet verified: a real ChatGPT round trip through the connector on b188d. That needs you in ChatGPT.
 - Undo: `rollback-to-b188c.ps1`.
+
+## CalcDemo registered read-write (2026-11-22 10:06 UTC, owner: "Register CalcDemo only")
+- On the b188d connector instance (profile `D:\PandeshB188cAccept`): `CalcDemo` → `D:\PandeshP0Dev\a5-calc` (synthetic demo repo, main @ a25faaf, no remote), access read-write, id `prj_fb054615ccb04783`.
+- Projects now: "connector test workspace" (read), CalcDemo (read-write). Nothing else registered.
+- A CalcDemo coding request resolves to it (resolve only; no task, no card). The demo repo is unchanged: clean `main` plus the two branches delivered earlier.
+- Next (yours): from ChatGPT, ask for a change "in the CalcDemo source code". Then Allow in Pandesh, View diff, Approve change, and optionally Bring into my checkout.
