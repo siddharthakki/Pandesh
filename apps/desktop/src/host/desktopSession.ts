@@ -3044,7 +3044,20 @@ export class DesktopSession {
       bridgeApprovals: { path: '/v1/bridge/approvals' },
       bridgeApprove: { path: `/v1/bridge/tasks/${id}/approval`, method: 'POST', body: { requestId: String(args.requestId ?? ''), decision: args.decision === 'approve' ? 'approve' : 'refuse', confidentialOverride: args.confidentialOverride === true } },
       bridgeAudit: { path: `/v1/bridge/tasks/${id}/audit` },
+      // One relayed task with the worker's full event log (Core keeps it; it never goes to a paired client).
+      bridgeTask: { path: `/v1/bridge/tasks/${id}` },
+      // Agent controls on a worker panel: the same Core lifecycle a paired client uses (pause/resume only for Kandev workers).
+      bridgeCancel: { path: `/v1/bridge/tasks/${id}/cancel`, method: 'POST', body: {} },
+      bridgePause: { path: `/v1/bridge/tasks/${id}/pause`, method: 'POST', body: {} },
+      bridgeResume: { path: `/v1/bridge/tasks/${id}/resume`, method: 'POST', body: {} },
+      // A5: the owner approves a reviewed change, then (separately) brings it into the checkout as a new branch.
+      bridgeApproveChange: { path: `/v1/bridge/tasks/${id}/approve-change`, method: 'POST', body: {} },
+      bridgeDeliver: { path: `/v1/bridge/tasks/${id}/deliver`, method: 'POST', body: {} },
+      bridgeDiff: { path: `/v1/bridge/tasks/${id}/diff` },
+      // A worker action held for a person (Kandev permission). Core accepts this only over the host transport.
+      devStoryPermission: { path: `/v1/dev-stories/${encodeURIComponent(String(args.storyId ?? ''))}/permissions/${encodeURIComponent(String(args.pendingId ?? ''))}`, method: 'POST', body: { allow: args.allow === true, via: 'window' } },
       mission: { path: `/v1/missions/${id}` },
+      missionReceipt: { path: `/v1/missions/${id}/receipt` },
       missionCancel: { path: `/v1/missions/${id}/cancel`, method: 'POST', body: {} },
       missionContinue: { path: `/v1/missions/${id}/continue`, method: 'POST', body: {} },
       agent: { path: `/v1/agents/${id}` },

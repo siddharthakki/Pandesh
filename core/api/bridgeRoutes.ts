@@ -20,7 +20,7 @@ import {
 import { KandevClient } from '../runtime/kandev/kandevClient';
 import { listApprovalEvents, listPendingApprovals, pendingApproval, type ExternalApprovalRequest } from '../domain/bridgeApprovals';
 import {
-  cancelBridgeTask, decideExternalApproval, discoverExecutors, dispatchBridgeTask, pauseBridgeTask, refreshBridgeTask, resumeBridgeTask, type BridgeRuntime,
+  approveBridgeChange, bridgeChangeDiff, cancelBridgeTask, decideExternalApproval, deliverBridgeChange, discoverExecutors, dispatchBridgeTask, pauseBridgeTask, refreshBridgeTask, resumeBridgeTask, type BridgeRuntime,
 } from '../runtime/kandev/pandaBridge';
 import { bridgeServices } from '../runtime/kandev/bridgeServices';
 import { activityItem } from '../runtime/kandev/bridgeActivity';
@@ -75,7 +75,10 @@ export function registerBridgeRoutes(router: Router<ApiContext, ApiResult>, opti
   // The browser card shows the same real state, reason, active time and heartbeat as Pandesh's own activity list.
   const view = (ctx: ApiContext, task: BridgeTaskRecord) => {
     const pending = task.status === 'awaiting_executor' ? pendingApproval(ctx.db, task.id) : null;
-    return { ...toBridgeTaskView(task, listCheckpoints(ctx.db, task.id)), activity: activityItem(ctx.db, task, 'Browser'), ...(pending ? { approval: approvalSummary(pending) } : {}) };
+    const base = toBridgeTaskView(task, listCheckpoints(ctx.db, task.id));
+    // The worker's full event log stays on this PC: a paired client (ChatGPT, a browser) gets the last few lines, as before.
+    const forClient = caller(ctx).kind === 'extension' && base.result ? { ...base, result: { ...base.result, activity: base.result.activity.slice(-3) } } : base;
+    return { ...forClient, activity: activityItem(ctx.db, task, 'Browser'), ...(pending ? { approval: approvalSummary(pending) } : {}) };
   };
 
   // --- pairing ---
@@ -302,6 +305,21 @@ export function registerBridgeRoutes(router: Router<ApiContext, ApiResult>, opti
       throw err;
     }
   };
+  // A5: only the owner, in the Pandesh window, approves a reviewed change or brings it into their checkout. A paired client never can.
+  router.post('/v1/bridge/tasks/:id/approve-change', async (ctx, match) => {
+    requireHost(ctx);
+    return ok(200, view(ctx, await approveBridgeChange(runtime(ctx), match.params.id, 'Pandesh')));
+  });
+  // Read-only diff of an A5 change for the owner's review. Host only: the diff holds project source.
+  router.get('/v1/bridge/tasks/:id/diff', async (ctx, match) => {
+    requireHost(ctx);
+    return ok(200, await bridgeChangeDiff(runtime(ctx), match.params.id));
+  });
+  router.post('/v1/bridge/tasks/:id/deliver', (ctx, match) => {
+    requireHost(ctx);
+    const delivered = deliverBridgeChange(runtime(ctx), match.params.id, 'Pandesh');
+    return ok(200, { delivered, task: view(ctx, getBridgeTask(ctx.db, match.params.id)) });
+  });
   router.post('/v1/bridge/tasks/:id/pause', control('pause'));
   router.post('/v1/bridge/tasks/:id/resume', control('resume'));
   router.post('/v1/bridge/tasks/:id/cancel', control('cancel'));

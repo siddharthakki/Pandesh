@@ -88,7 +88,7 @@ export function deriveExecutionState(sig: ActivitySignals): DerivedState {
     if (m.inFlightMs > MODEL_WAIT_STALL_MS) return done('stalled', `The model call has produced no token for ${secs(m.inFlightMs)}.${others}`);
     return done('waiting_for_model', `Waiting for the model: call in flight for ${secs(m.inFlightMs)} with no output yet (loading the model or queued behind other work).${others}`);
   }
-  if (sig.storyWaitingForSlot) return done('waiting_for_model', 'Waiting for a free worker slot (local model capacity).');
+  if (sig.storyWaitingForSlot) return done('waiting_for_model', /local GPU lane/i.test(task.statusDetail ?? '') ? 'Queued for the local GPU: one GPU job runs at a time.' : 'Waiting for a free worker slot (local model capacity).');
   if (age !== null && age > STALL_MS && !m?.inFlight) return done('stalled', `No activity from the executor for ${secs(age)}.`);
   return done('running', task.statusDetail ?? 'Working.');
 }
@@ -114,6 +114,21 @@ export interface ActivityItem {
   verification: string | null;
   conversationId: string | null;
   openTarget: { conversationId: string } | null;
+  /** The worker's newest observed event (Kandev message), not Core's own bookkeeping. */
+  latest: { at: string; kind: string; text: string } | null;
+  /** Time of that event: what "last event N s ago" is measured from. Core's own writes never move it. */
+  lastEventAt: string | null;
+  /** How many worker events are recorded for this task (the full log is on GET /v1/bridge/tasks/:id). */
+  eventCount: number;
+  branch: string | null;
+  /** Actions the worker is waiting on (answered from the Pandesh window only). */
+  pendingWorkerActions: Array<{ pendingId: string; what: string }>;
+  storyId: string | null;
+  /**
+   * A5 code change: waiting for the owner's review (with the files it changed), or done and ready to be brought into the owner's
+   * checkout as a new branch (or already delivered). Null for every other task.
+   */
+  codeChange: { project: string; baseRef: string; awaitingReview: boolean; changedFiles: string[]; deliverable: boolean; delivered: { branch: string; commit: string } | null } | null;
 }
 
 export function activityItem(db: CoreDatabase, task: BridgeTaskRecord, clientLabel: string, now = Date.now()): ActivityItem {
@@ -126,7 +141,9 @@ export function activityItem(db: CoreDatabase, task: BridgeTaskRecord, clientLab
   }
   const result = task.result;
   const lastActivityAt = Math.max(0, ...(result?.activity ?? []).map(a => ms(a.at) ?? 0), ...(result?.timeline ?? []).map(t => ms(t.at) ?? 0)) || null;
-  const storyWaitingForSlot = running && Boolean(task.storyId) && /free worker slot/i.test(task.statusDetail ?? '');
+  // Queued for a worker slot or for the local GPU lane is a legitimate wait, never "stalled" (live 2026-11-21: a task queued
+  // behind another OpenCode run on the one GPU lane was labelled Stalled after five minutes).
+  const storyWaitingForSlot = running && Boolean(task.storyId) && /free worker slot|local GPU lane/i.test(task.statusDetail ?? '');
   const approvalFor = task.status === 'awaiting_executor' ? pendingApproval(db, task.id, now)?.agentLabel ?? null : null;
   const d = deriveExecutionState({ now, task, attempt, model, storyWaitingForSlot, lastActivityAt, approvalFor });
 
@@ -152,5 +169,19 @@ export function activityItem(db: CoreDatabase, task: BridgeTaskRecord, clientLab
     verification: result?.verification ?? null,
     conversationId: task.conversationId,
     openTarget: task.conversationId ? { conversationId: task.conversationId } : null,
+    latest: latest ? { at: latest.at, kind: latest.kind, text: latest.text.slice(0, 300) } : null,
+    lastEventAt: latest?.at ?? null,
+    eventCount: result?.activity?.length ?? 0,
+    branch: result?.branch ?? null,
+    pendingWorkerActions: running && task.status === 'awaiting_approval' ? (result?.pendingApprovals ?? []) : [],
+    storyId: task.storyId,
+    codeChange: result?.codeChange ? {
+      project: result.codeChange.project, baseRef: result.codeChange.baseRef,
+      // "The work is ready; review and approve it" (no worker action pending) is the review gate; a held worker action is not.
+      awaitingReview: task.status === 'awaiting_approval' && !(result.pendingApprovals ?? []).length,
+      changedFiles: result.changedFiles ?? [],
+      deliverable: task.status === 'completed' && !result.codeChange.delivered,
+      delivered: result.codeChange.delivered ? { branch: result.codeChange.delivered.branch, commit: result.codeChange.delivered.commit } : null,
+    } : null,
   };
 }

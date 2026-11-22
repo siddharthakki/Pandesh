@@ -31,6 +31,7 @@ import type { RuntimeEventRecord } from '../../shared/wireTypes';
 import { KandevClient, kandevHome, type KandevPermission, type KandevSession } from './kandevClient';
 import { prepareWorkerProfile } from './workerProfile';
 import { gpuLaneLimit } from '../hardwareCapacity';
+import { readChangeDiff, unavailableDiff, type ChangeDiff } from './changeDiff';
 import { automatedChecks, deviceChecks, examineDiff, runAcceptance, validateAcceptanceChecks, type AcceptanceCheck, type VerificationLevel } from './storyAcceptance';
 
 export const DEV_ACTOR = 'kkd:dev-coordinator';
@@ -64,6 +65,18 @@ export interface DevStorySpec {
    */
   mode?: 'inspect';
   inspect?: { projectName: string; sourcePath: string; ref: string; sourceHead: string; sourceStatusSha: string };
+  /**
+   * With `mode: 'inspect'`: a task that names no project and only asks for an answer (a reply, a status). The worktree is an empty
+   * folder; the same read-only rules and checks apply, and the worker's final message, however short, is the result.
+   */
+  answerOnly?: true;
+  /** Most changed files accepted at verification; more fails it with the list (A5 code changes). */
+  maxFiles?: number;
+  /**
+   * A5: a change requested through the bridge and approved by the owner. repoPath is a private copy (no remote) of this project; the
+   * owner's checkout at sourcePath is never written by KKD or the worker. The result is a branch in the copy.
+   */
+  codeCopy?: { projectName: string; sourcePath: string; ref: string; sourceHead: string; sourceStatusSha: string };
 }
 
 /** Fingerprint of a checkout's HEAD and working-tree state (read-only git), used to prove an inspection did not touch it. */
@@ -102,6 +115,10 @@ export interface PlanInput {
     /** Read-only inspection of an authorized project (see DevStorySpec.mode). */
     mode?: 'inspect';
     inspect?: DevStorySpec['inspect'];
+    /** With mode 'inspect': an answer-only task with no project (see DevStorySpec.answerOnly). */
+    answerOnly?: boolean;
+    maxFiles?: number;
+    codeCopy?: DevStorySpec['codeCopy'];
   }>;
 }
 
@@ -126,7 +143,9 @@ export function planDevStories(db: CoreDatabase, input: PlanInput): { projectId:
         kind: 'kkd-dev-story', repoPath, baseBranch, integrationBranch, verify: s.verify?.length ? s.verify : input.verify,
         agent: s.agent, model: s.model, paths: s.paths,
         ...(acceptance[s.key].length ? { acceptance: acceptance[s.key] } : {}),
-        ...(s.mode === 'inspect' ? { mode: 'inspect' as const, ...(s.inspect ? { inspect: s.inspect } : {}) } : {}),
+        ...(s.mode === 'inspect' ? { mode: 'inspect' as const, ...(s.inspect ? { inspect: s.inspect } : {}), ...(s.answerOnly ? { answerOnly: true as const } : {}) } : {}),
+        ...(s.mode !== 'inspect' && s.codeCopy ? { codeCopy: s.codeCopy } : {}),
+        ...(Number.isInteger(s.maxFiles) && s.maxFiles! > 0 ? { maxFiles: s.maxFiles } : {}),
       };
       const story = createStory(db, {
         projectId: project.id, title: s.title, description: s.description ?? '', acceptanceCriteria: s.acceptanceCriteria ?? [],
@@ -171,6 +190,24 @@ function overlaps(a: string[] = [], b: string[] = []): string[] {
 }
 
 function workerPrompt(story: StoryRecord, spec: DevStorySpec): string {
+  if (spec.mode === 'inspect' && spec.answerOnly) {
+    return [
+      `Task: ${story.title}`,
+      story.description ? `\n${story.description}` : '',
+      '\nThis task needs no project. Your working directory is an empty folder that holds nothing of the owner\'s.',
+      'It is ANSWER-ONLY: do NOT create, edit or delete any file, do NOT commit, push or change any Kandev task state, and do not look outside the working directory.',
+      'Do what the task asks, then write your answer as your last message and stop. If you cannot do it without changing files, say so plainly in that message.',
+    ].join('\n');
+  }
+  if (spec.codeCopy) {
+    return [
+      `Task: ${story.title}`,
+      story.description ? `\n${story.description}` : '',
+      `\nYour CURRENT WORKING DIRECTORY is your own worktree of a private copy of ${spec.codeCopy.projectName} at branch ${spec.codeCopy.ref}. Make the change here. If the task names a path on this PC, that is the owner's checkout: never read or write it; use the same relative path in your working directory.`,
+      `\nRules: change at most ${spec.maxFiles ?? 'a few'} files and only what the task needs. Run the existing tests for the code you touch with single plain commands (no \`&&\`, no \`cd\`). Do NOT commit, push, merge, switch branches, add remotes, install packages or change any Kandev task state: KarkeDikha verifies the change, the owner reviews it, and only then is it committed to a branch in this copy.`,
+      'If the change cannot be made here, change nothing and say plainly why in your last message. When done, stop and summarise exactly what you changed and which tests you ran with their results.',
+    ].join('\n');
+  }
   if (spec.mode === 'inspect') {
     return [
       `Task: ${story.title}`,
@@ -193,6 +230,9 @@ function workerPrompt(story: StoryRecord, spec: DevStorySpec): string {
   ].join('\n');
 }
 
+/** A worker held on a person's decision for this long, with no live session, stops holding a worker slot. */
+export const STALE_DECISION_MS = 30 * 60_000;
+
 interface KandevContext { workspaceId: string; workflowId: string; executorProfileId: string; backlogStepId?: string; runningStepId?: string }
 
 /**
@@ -201,14 +241,19 @@ interface KandevContext { workspaceId: string; workflowId: string; executorProfi
  * workers ran one at a time. Task REVIEW also means "worker is waiting on a permission", so a task is only moved when it
  * provably holds no worker: no live session and nothing pending. Returns the ids moved.
  */
-export async function reclaimIdleWipSlots(kandev: KandevClient, workflowId: string, runningStepId: string, reviewStepId: string): Promise<string[]> {
-  const { tasks } = await kandev.tool<{ tasks: Array<{ id: string; state: string; workflow_step_id?: string }> }>('list_tasks_kandev', { workflow_id: workflowId });
+export async function reclaimIdleWipSlots(kandev: KandevClient, workflowId: string, runningStepId: string, reviewStepId: string, now = Date.now()): Promise<string[]> {
+  const { tasks } = await kandev.tool<{ tasks: Array<{ id: string; state: string; workflow_step_id?: string; updated_at?: string }> }>('list_tasks_kandev', { workflow_id: workflowId });
   const moved: string[] = [];
   for (const t of tasks.filter(t => t.workflow_step_id === runningStepId && (t.state === 'REVIEW' || t.state === 'COMPLETED'))) {
     const sessions = await kandev.sessions(t.id).catch(() => null);
     if (!sessions || sessions[0]?.state === 'RUNNING' || sessions[0]?.state === 'STARTING') continue; // unknown or live
     const pending = await kandev.pendingPermissions(t.id).catch(() => null);
-    if (!pending || pending.length) continue; // unknown or waiting on a decision: the worker may still be alive
+    if (!pending) continue; // unknown: the worker may still be alive
+    // A recent wait on a decision keeps its slot. One nobody has answered for STALE_DECISION_MS (an abandoned test, a Core that
+    // is gone) is moved out of In Progress: its session and its pending request are left exactly as they are, so a late
+    // decision still reaches the worker, but it no longer takes a slot from new work (seen 2026-11-21: one such task, two days
+    // old, left a two-worker limit running one worker at a time).
+    if (pending.length && !(Date.parse(t.updated_at ?? '') < now - STALE_DECISION_MS)) continue;
     await kandev.tool('move_task_kandev', { task_id: t.id, workflow_id: workflowId, workflow_step_id: reviewStepId });
     moved.push(t.id);
   }
@@ -569,6 +614,13 @@ async function sendFeedback(db: CoreDatabase, kandev: KandevClient, storyId: str
   }
 }
 
+/** The worker's last substantial prose message (after `since`, when given): what it says about the turn that just ended. */
+async function workerExplanation(kandev: KandevClient, sessionId: string, since?: string): Promise<string | null> {
+  const messages = await kandev.agentMessages(sessionId, 40).catch(() => []);
+  const prose = messages.filter(m => m.kind === 'message' && m.text.trim().length > 40 && (!since || m.at > since));
+  return prose.length ? prose[prose.length - 1].text.trim() : null;
+}
+
 /** Files an agent keeps for itself (its own history/cache); never the user's work. */
 const AGENT_OWN_FILES = /(^|\/)\.(?:claude|aider|codex|cline)[^/]*(\/|$)|(^|\/)node_modules(\/|$)/i;
 
@@ -590,7 +642,9 @@ async function finishInspection(db: CoreDatabase, kandev: KandevClient, story: S
     return;
   }
   const messages = await kandev.agentMessages(sessionId, 60).catch(() => []);
-  const prose = messages.filter(m => m.kind === 'message' && m.text.trim().length > 40);
+  // An answer may be one short sentence ("Hello from …"); an inspection report is expected to say more than that.
+  const minReport = spec.answerOnly ? 0 : 40;
+  const prose = messages.filter(m => m.kind === 'message' && m.text.trim().length > minReport);
   const report = (prose[prose.length - 1]?.text ?? '').trim();
   if (!report) {
     walk(db, getStory(db, story.id), ['blocked'], 'the worker finished without writing a report');
@@ -598,11 +652,14 @@ async function finishInspection(db: CoreDatabase, kandev: KandevClient, story: S
     return;
   }
   const tools = messages.filter(m => m.kind === 'tool_execute').map(m => m.text.replace(/\s+/g, ' ').slice(0, 140));
+  const header = spec.answerOnly
+    ? '[kkd-dev:inspected] level=worker-only; answer-only task: no project was shared, and KKD checked that no file changed in the worker\'s empty folder; every write and every path outside it was refused by policy.'
+    : `[kkd-dev:inspected] level=worker-only; read-only checked by KKD: no file changed in the agent's private copy of ${spec.inspect?.projectName ?? 'the project'} (branch ${spec.inspect?.ref ?? '?'} @ ${spec.inspect?.sourceHead.slice(0, 8) ?? '?'}); every write and every path outside the copy was refused by policy.${sourceMoved ? ' Note: your own checkout changed while this ran (you edited or committed there); the agent never had access to it.' : spec.inspect ? ' Your checkout is exactly as it was.' : ''}`;
   addComment(db, story.id, {
     author: DEV_ACTOR,
     body: [
-      `[kkd-dev:inspected] level=worker-only; read-only checked by KKD: no file changed in the agent's private copy of ${spec.inspect?.projectName ?? 'the project'} (branch ${spec.inspect?.ref ?? '?'} @ ${spec.inspect?.sourceHead.slice(0, 8) ?? '?'}); every write and every path outside the copy was refused by policy.${sourceMoved ? ' Note: your own checkout changed while this ran (you edited or committed there); the agent never had access to it.' : spec.inspect ? ' Your checkout is exactly as it was.' : ''}`,
-      '--- worker report (its own words; test results are as the worker reported them) ---',
+      header,
+      `--- worker ${spec.answerOnly ? 'answer' : 'report'} (its own words; test results are as the worker reported them) ---`,
       report.slice(0, 6_000),
       `--- commands the worker ran (${tools.length}) ---`,
       tools.slice(-8).join(' | ') || 'none recorded',
@@ -649,7 +706,9 @@ export async function verifyAndIntegrate(db: CoreDatabase, kandev: KandevClient,
     }
     if (retries + 1 > MAX_VERIFY_RETRIES) {
       walk(db, getStory(db, story.id), ['blocked'], `verification failed ${retries + 1} times: ${what}`);
-      addComment(db, story.id, { author: DEV_ACTOR, body: `[kkd-dev:needs-human] Verification failed ${retries + 1} times. Kandev task ${taskId}, worktree ${worktree}.` });
+      // Whatever the worker said last goes with it, so the owner sees its side and not only "failed 3 times".
+      const said = await workerExplanation(kandev, sessionId).catch(() => null);
+      addComment(db, story.id, { author: DEV_ACTOR, body: `[kkd-dev:needs-human] Verification failed ${retries + 1} times (${what}). Kandev task ${taskId}, worktree ${worktree}.${said ? ` The worker's last words: ${said.replace(/\s+/g, ' ').slice(0, 600)}` : ''}` });
       return;
     }
     const now = getStory(db, story.id);
@@ -657,8 +716,23 @@ export async function verifyAndIntegrate(db: CoreDatabase, kandev: KandevClient,
     const delivered = await sendFeedback(db, kandev, story.id, taskId, sessionId, `KarkeDikha verification failed: ${what}\n\n${detail.slice(-2_000)}\n\nFix it, re-run ${spec.verify.join(' ')}, and stop. Do not commit.`);
     if (!delivered) await repairOrPark(db, kandev, story.id, 'the correction was not accepted by the worker session');
   };
-  if (!files.length) return fail('the worker made no changes', 'git reports no changed files in the worktree');
+  if (!files.length) {
+    // A worker that changed nothing but explained itself (the task cannot be done here, it is not allowed, it needs a decision) is
+    // not sent back with "make changes": that pressures it into a diff it already said it should not make, three times in a minute
+    // (seen 2026-11-21). Its explanation is kept and the story goes to the owner. Only a silent worker gets the usual correction.
+    const explanation = opts.recovery ? null : await workerExplanation(kandev, sessionId, handOffEpoch(history, true));
+    if (explanation) {
+      addComment(db, story.id, { author: DEV_ACTOR, body: `[kkd-dev:verify-failed] the worker made no changes and explained why\n--- worker explanation (its own words) ---\n${explanation.slice(0, 2_000)}` });
+      walk(db, getStory(db, story.id), ['blocked'], 'the worker made no changes and explained why; not sent back for repair');
+      addComment(db, story.id, { author: DEV_ACTOR, body: `[kkd-dev:needs-human] The worker made no changes and explained why (not sent back for repair): ${explanation.replace(/\s+/g, ' ').slice(0, 600)}` });
+      return;
+    }
+    return fail('the worker made no changes', 'git reports no changed files in the worktree');
+  }
   if (unsafe.length) return fail('protected or credential-adjacent files changed', unsafe.map(u => `${u.path}: ${u.reason}`).join('\n'));
+  if (spec.maxFiles && files.length > spec.maxFiles) {
+    return fail(`${files.length} files changed; this change was approved for at most ${spec.maxFiles}`, `Changed: ${files.join(', ')}\nRevert (git checkout -- <file>) what the task does not need and keep only the requested change.`);
+  }
   const outOfScope = spec.paths?.length ? files.filter(f => !overlaps([f], spec.paths).length) : [];
   if (outOfScope.length) {
     return fail('files outside the story scope changed', `Allowed: ${spec.paths!.join(', ')}\nRevert (git checkout -- <file>) these out-of-scope changes: ${outOfScope.join(', ')}`);
@@ -748,6 +822,24 @@ async function waitsOnOverlap(db: CoreDatabase, kandev: KandevClient, workspaceI
   return false;
 }
 
+/**
+ * A local-GPU story must stay in Backlog while the GPU lanes are taken. Its Kandev blocked_by keeps it from starting, but released
+ * to "In Progress" it would hold a worker slot the whole time it waits (seen live 2026-11-21: a queued OpenCode task kept a Claude
+ * story that needs no GPU from starting). The GPU is one per machine, so peers are counted across every project.
+ */
+export async function waitsOnGpuLane(db: CoreDatabase, kandev: KandevClient, workspaceId: string, story: StoryRecord, spec: DevStorySpec, lanes = gpuLaneLimit()): Promise<boolean> {
+  if (!usesLocalGpu(spec)) return false;
+  let busy = 0;
+  for (const other of listStories(db, { limit: 200 })) {
+    const ospec = devSpec(other);
+    if (!ospec || other.id === story.id || !ACTIVE.includes(other.status) || !usesLocalGpu(ospec)) continue;
+    const t = await kandev.taskByExternalId(workspaceId, other.id).catch(() => null);
+    const s = t ? (await kandev.sessions(t.id).catch(() => []))[0] : undefined;
+    if (s && (s.state === 'RUNNING' || s.state === 'STARTING')) busy++;
+  }
+  return busy >= lanes;
+}
+
 /** One reconciliation pass over dispatched stories. Safe to call repeatedly and after any restart. */
 export async function reconcileDevStories(db: CoreDatabase, kandev: KandevClient): Promise<void> {
   const stories = listStories(db, { limit: 200 }).filter(s => devSpec(s) && ACTIVE.includes(s.status));
@@ -787,7 +879,7 @@ export async function reconcileDevStories(db: CoreDatabase, kandev: KandevClient
       // A dependent waits in Kandev's Backlog (which never auto-starts, so it holds no worker slot). KKD releases it
       // once KKD itself has verified and integrated every predecessor: moving it to "In Progress" starts the worker.
       const openPreds = predecessors(db, story.id).filter(d => getStory(db, d).status !== 'done');
-      if (story.status === 'implementing' && !openPreds.length && !(await waitsOnOverlap(db, kandev, workspaceId, story, spec))) {
+      if (story.status === 'implementing' && !openPreds.length && !(await waitsOnOverlap(db, kandev, workspaceId, story, spec)) && !(await waitsOnGpuLane(db, kandev, workspaceId, story, spec))) {
         // Kandev must agree the predecessors are complete, or it refuses to start the dependent.
         for (const d of predecessors(db, story.id)) {
           const dt = await kandev.taskByExternalId(workspaceId, d);
@@ -798,6 +890,13 @@ export async function reconcileDevStories(db: CoreDatabase, kandev: KandevClient
         if (ctx.backlogStepId && ctx.runningStepId && task.workflow_step_id === ctx.backlogStepId) {
           await kandev.tool('move_task_kandev', { task_id: task.id, workflow_id: ctx.workflowId, workflow_step_id: ctx.runningStepId });
           addComment(db, story.id, { author: DEV_ACTOR, body: '[kkd-dev:released] All predecessors are verified and integrated; handed to a worker.' });
+        }
+      } else if (usesLocalGpu(spec) && (await waitsOnGpuLane(db, kandev, workspaceId, story, spec))) {
+        // Released earlier (or by an older build) while the GPU is busy: back to Backlog so it stops holding a worker slot.
+        ctx ??= await kandevContext(kandev);
+        if (ctx.backlogStepId && ctx.runningStepId && task.workflow_step_id === ctx.runningStepId) {
+          await kandev.tool('move_task_kandev', { task_id: task.id, workflow_id: ctx.workflowId, workflow_step_id: ctx.backlogStepId });
+          addComment(db, story.id, { author: DEV_ACTOR, body: '[kkd-dev:requeued] Waiting for the local GPU lane in Backlog, so it does not hold a worker slot.' });
         }
       }
       continue; // blocked in Kandev or waiting for a worker slot
@@ -1462,20 +1561,24 @@ export function confirmDeviceVerification(db: CoreDatabase, storyId: string, ok:
   addComment(db, storyId, { author: 'user', body: ok ? `[kkd-dev:device-verified] ${note ?? 'Verified on the device.'}` : `[kkd-dev:device-failed] ${note ?? 'Failed on the device.'}` });
 }
 
-function verificationOf(evidence: string | null, done: boolean): DevStoryView['verification'] {
+export function verificationOf(evidence: string | null, done: boolean): DevStoryView['verification'] {
   if (!evidence) return null;
-  if (/level=independent/.test(evidence)) return 'independent';
-  if (/human-reviewed/.test(evidence)) return 'human-reviewed';
-  return done || /level=worker-only/.test(evidence) ? 'worker-only' : null;
+  // Only KKD's own header line says what was verified. The rest is the worker's report, which may quote these very words
+  // (seen live 2026-11-21: an inspection of this file was labelled "reviewed by a person").
+  const header = evidence.split('\n', 1)[0];
+  if (/level=independent/.test(header)) return 'independent';
+  if (/human-reviewed/.test(header)) return 'human-reviewed';
+  return done || /level=worker-only/.test(header) ? 'worker-only' : null;
 }
 
-export async function devStoryStatus(db: CoreDatabase, kandev: KandevClient, projectId?: string): Promise<{ available: boolean; counts: Record<string, number>; stories: DevStoryView[] }> {
+export async function devStoryStatus(db: CoreDatabase, kandev: KandevClient, projectId?: string, onlyStoryId?: string): Promise<{ available: boolean; counts: Record<string, number>; stories: DevStoryView[] }> {
   const stories = listStories(db, { projectId, limit: 200 }).filter(s => devSpec(s) && !s.archivedAt);
   const available = await kandev.healthy();
   const workspaceId = available ? await kandev.defaultWorkspaceId().catch(() => null) : null;
   const titles = new Map(stories.map(s => [s.id, s.title]));
   const views: DevStoryView[] = [];
-  for (const s of stories) {
+  // One story's detail (a relayed task refreshed every few seconds) must not query Kandev for every other story too.
+  for (const s of onlyStoryId ? stories.filter(x => x.id === onlyStoryId) : stories) {
     const comments = listComments(db, s.id);
     const last = (tag: string) => [...comments].reverse().find(c => c.body.startsWith(`[kkd-dev:${tag}]`))?.body ?? null;
     const task = workspaceId ? await kandev.taskByExternalId(workspaceId, s.id).catch(() => null) : null;
@@ -1538,8 +1641,67 @@ function redactPrivatePaths(text: string): string {
 }
 
 /** One story for the phone: the status view plus a chronological timeline and the files the last verification saw changed. */
+/** Kandev message kinds that are observable worker events (its prose, tool calls, permission requests, session status). */
+const WORKER_EVENT = /^(message|tool_[a-z_]+|permission_request|status)$/;
+
+/**
+ * The worker's recent observable events for one story, newest last, straight from Kandev: what it said, the tools it called, the
+ * permissions it asked for. Nothing is invented or summarised; text is whitespace-collapsed, capped and stripped of private paths.
+ * Returns null when there is no Kandev task or session yet (or Kandev is unreachable).
+ */
+export async function devStoryWorkerEvents(kandev: KandevClient, storyId: string, limit = 50): Promise<{ branch: string | null; events: Array<{ id: string; at: string; kind: string; text: string; status?: string }> } | null> {
+  try {
+    const workspaceId = await kandev.defaultWorkspaceId();
+    const task = await kandev.taskByExternalId(workspaceId, storyId);
+    if (!task) return null;
+    const session = (await kandev.sessions(task.id))[0];
+    if (!session) return null;
+    const messages = await kandev.agentMessages(session.id, limit);
+    return {
+      branch: session.worktree_branch ?? null,
+      events: messages.filter(m => m.id && WORKER_EVENT.test(m.kind)).map(m => ({
+        id: m.id, at: m.at, kind: m.kind, text: redactPrivatePaths(m.text.replace(/\s+/g, ' ').trim()).slice(0, 400), ...(m.status ? { status: m.status } : {}),
+      })),
+    };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The story's change as a read-only diff (the review's "View diff"). Before approval it is read from the worker's worktree, after
+ * reconcileWorktree has proven that worktree is Kandev's and belongs to this story's repository. After integration it is read from
+ * the integration branch in the story's own repository. Nothing is written and nothing is approved here.
+ */
+export async function devStoryChangeDiff(db: CoreDatabase, kandev: KandevClient, storyId: string): Promise<ChangeDiff & { ignored: string[] }> {
+  const story = getStory(db, storyId);
+  const spec = devSpec(story);
+  if (!spec) throw new CoreError('invalid_request', 'not a development story');
+  const none = (reason: string, source: ChangeDiff['source'] = null) => ({ ...unavailableDiff(reason, source), ignored: [] });
+  if (story.status === 'done' || story.status === 'merge_queue') {
+    const repo = spec.repoPath;
+    if (!fs.existsSync(path.join(repo, '.git'))) return none('The repository that holds the approved change is gone.', 'private copy');
+    const top = git(repo, ['rev-parse', '--show-toplevel']).out;
+    if (!top || path.resolve(top).toLowerCase() !== path.resolve(repo).toLowerCase()) return none('The repository that holds the approved change could not be confirmed.', 'private copy');
+    const tip = `refs/heads/${spec.integrationBranch}`;
+    if (!git(repo, ['rev-parse', '--verify', '--quiet', tip]).ok) return none('The approved change is no longer in its branch.', 'private copy');
+    const base = spec.codeCopy?.sourceHead && git(repo, ['cat-file', '-e', `${spec.codeCopy.sourceHead}^{commit}`]).ok ? spec.codeCopy.sourceHead : git(repo, ['merge-base', spec.baseBranch, tip]).out;
+    if (!base) return none('The change could not be compared with its base.', 'private copy');
+    return readChangeDiff(repo, base, tip, { source: 'private copy', ignore: AGENT_OWN_FILES });
+  }
+  const workspaceId = await kandev.defaultWorkspaceId();
+  const task = await kandev.taskByExternalId(workspaceId, storyId);
+  const session = task ? (await kandev.sessions(task.id).catch(() => []))[0] : undefined;
+  if (!session) return none('The worker has not started, so there is no change yet.', 'worker worktree');
+  const facts = reconcileWorktree(spec, session);
+  if ('error' in facts) return none(`The diff is not shown: ${facts.error}.`, 'worker worktree');
+  const base = git(session.worktree_path!, ['merge-base', spec.integrationBranch, 'HEAD']).out;
+  if (!base) return none('The change could not be compared with its base.', 'worker worktree');
+  return readChangeDiff(session.worktree_path!, base, null, { source: 'worker worktree', ignore: AGENT_OWN_FILES });
+}
+
 export async function devStoryDetail(db: CoreDatabase, kandev: KandevClient, storyId: string): Promise<{ story: DevStoryView; timeline: Array<{ at: string; event: string; text: string }>; changedFiles: string[] }> {
-  const found = (await devStoryStatus(db, kandev)).stories.find(v => v.id === storyId);
+  const found = (await devStoryStatus(db, kandev, undefined, storyId)).stories.find(v => v.id === storyId);
   if (!found) throw new CoreError('not_found', 'task not found');
   // No Kandev identifiers, worker configuration or private filesystem locations in the detail.
   const story: DevStoryView = {

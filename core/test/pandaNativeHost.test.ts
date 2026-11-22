@@ -96,7 +96,7 @@ describe('native messaging host', () => {
     const { code } = createPairingCode(db);
     const [paired] = await exchange([{ id: 'p', op: 'pair', code }]);
     const token = paired.data.token as string;
-    const [submitted] = await exchange([{ id: 's', op: 'submit', token, clientRequestId: 'click-host-0002', instruction: 'Build a thing' }]);
+    const [submitted] = await exchange([{ id: 's', op: 'submit', token, clientRequestId: 'click-host-0002', instruction: 'Say hello. Do not change any files.' }]);
     const [res] = await exchange([{ id: 'd', op: 'dispatch', token, taskId: submitted.data.taskId, executor: 'claude', consent: { externalTransfer: true, confidentialOverride: true } }]);
     // The smuggled consent is dropped; the browser can only ASK, so the answer is "approval pending" and nothing started.
     expect(res).toMatchObject({ ok: true, data: { started: false, approval: { executor: 'claude', agentLabel: 'Claude Code' } } });

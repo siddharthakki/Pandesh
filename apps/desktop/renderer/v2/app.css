@@ -567,6 +567,21 @@ button.tl-row:hover { background: var(--raised); }
 .mission-summary, .mission-note { margin: 0; font-size: 13.5px; color: var(--muted); }
 .mission-note.error { color: var(--danger); }
 
+/* Live Kandev worker panels (MissionControlPane.tsx WorkerPanels) */
+.worker-panels { display: flex; flex-direction: column; gap: 10px; }
+.worker-group { display: flex; flex-direction: column; gap: 6px; }
+.worker-group-head { font-size: 12px; font-weight: 600; letter-spacing: .04em; text-transform: uppercase; color: var(--muted); }
+.worker-latest { margin: 0; font-size: 14px; color: var(--ink); overflow-wrap: anywhere; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+.worker-kind { display: inline-block; min-width: 64px; font-size: 12px; font-weight: 600; color: var(--pulse); }
+.worker-age { margin: 0; font-size: 12.5px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.worker-age.attention { color: var(--attention, var(--danger)); font-weight: 600; }
+.worker-action { display: flex; flex-direction: column; gap: 6px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; }
+.worker-action code { overflow-wrap: anywhere; font-size: 12.5px; }
+.worker-action .btns { display: flex; gap: 8px; }
+.worker-log { margin: 4px 0 0; padding: 8px 10px; list-style: none; max-height: 280px; overflow: auto; border: 1px solid var(--line); border-radius: 8px; font-family: var(--font-mono, ui-monospace, monospace); font-size: 12px; display: flex; flex-direction: column; gap: 3px; }
+.worker-log li { overflow-wrap: anywhere; }
+.worker-log time { color: var(--muted); margin-right: 4px; }
+
 /* My Bots, Automations and provider cards */
 .bot-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 12px; }
 .bot-card { text-align: left; cursor: pointer; font: inherit; color: inherit; align-items: stretch; }
@@ -686,3 +701,20 @@ button.tl-row:hover { background: var(--raised); }
 .approval-facts ul { margin: 0; padding-left: 18px; }
 .approval-instruction { margin: 0; white-space: pre-wrap; word-break: break-word; max-height: 9em; overflow: auto; padding: 6px 8px; border-radius: 8px; background: color-mix(in srgb, currentColor 6%, transparent); font: inherit; }
 .approval-override { display: flex; gap: 8px; align-items: flex-start; margin: 6px 0; font-size: 0.92em; }
+.worker-controls { display: flex; gap: 8px; flex-wrap: wrap; }
+
+/* A5 View diff (MissionControlPane ChangeReview); diff lines reuse .tl-pre/.tl-add/.tl-del from the Activity pane. */
+.change-review { display: flex; flex-direction: column; gap: 6px; margin-top: 4px; }
+.change-summary { margin: 0; font-size: 13px; font-weight: 600; }
+.change-tests { font-size: 12.5px; display: flex; flex-direction: column; gap: 2px; }
+.change-files { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
+.change-file-head { display: flex; align-items: center; gap: 8px; width: 100%; text-align: left; background: var(--surface); border: 1px solid var(--line); border-radius: 6px; padding: 4px 8px; cursor: pointer; color: inherit; font: inherit; font-size: 12.5px; flex-wrap: wrap; }
+.change-status { font-size: 11px; padding: 1px 6px; border-radius: 4px; border: 1px solid var(--line); }
+.change-status.added, .change-status.untracked { color: var(--verified); }
+.change-status.deleted { color: var(--danger); }
+.change-counts { margin-left: auto; font-family: var(--font-mono); font-size: 12px; }
+.change-flag { font-size: 11px; padding: 1px 6px; border-radius: 4px; border: 1px solid currentColor; color: var(--attention); }
+.change-note { margin: 2px 0 0; font-size: 12px; }
+.change-diff .tl-pre { max-height: 420px; }
+.change-diff .tl-add { background: rgba(80, 200, 120, 0.14); }
+.change-diff .tl-del { background: rgba(230, 90, 90, 0.14); }

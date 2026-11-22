@@ -93,9 +93,20 @@ export interface BridgeTaskResult {
   changedFiles: string[];
   commit: string | null;
   pendingApprovals: Array<{ pendingId: string; what: string }>;
-  activity: Array<{ at: string; kind: string; text: string }>;
+  /**
+   * The worker's observed events (Kandev messages), oldest first, bounded (BRIDGE_ACTIVITY_LIMIT). Appended by message id on every
+   * refresh and kept after the task ends, so the log survives completion and restarts. `id` is Kandev's message id (dedupe key).
+   */
+  activity: Array<{ id?: string; at: string; kind: string; text: string; status?: string }>;
   timeline: Array<{ at: string; event: string; text: string }>;
+  /** The worker's branch in its private worktree, when known. */
+  branch?: string | null;
+  /** A5 code change: which project, and the branch the owner had it delivered to in their checkout (null until asked). */
+  codeChange?: { project: string; baseRef: string; delivered: { branch: string; commit: string; at: string } | null };
 }
+
+/** Most events kept per task. Older ones drop off the front. */
+export const BRIDGE_ACTIVITY_LIMIT = 200;
 
 const sha256 = (text: string) => crypto.createHash('sha256').update(text, 'utf8').digest('hex');
 

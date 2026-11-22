@@ -15,6 +15,7 @@ import { CoreError } from '../../domain/errors';
 import { runHardenedGit } from '../../security/hardenedGit';
 import { getStory } from '../../domain/stories';
 import { loadProjects, projectAllows, resolveProject, type ProjectRecord } from '../../domain/projectRegistry';
+import { asksForChange, deriveMutationPolicy } from '../../domain/mutationPolicy';
 import { consumeApproval, decideApproval, pendingApproval, recordDirectApproval, requestApproval, usableApproval, withdrawApproval, type ExternalApprovalRequest } from '../../domain/bridgeApprovals';
 import { getAttempt, requestCancelAttempt } from '../../domain/attempts';
 import { isTerminalAttemptStatus } from '../../domain/attemptTransitions';
@@ -22,7 +23,7 @@ import { submitRequest } from '../../domain/submission';
 import { newId } from '../../domain/ids';
 import {
   attachBridgeExecution, claimBridgeDispatch, evaluateTransferPolicy, getBridgeTask, getPairing, listBridgeTasks, recordBridgeStatus,
-  setBridgeControl, TERMINAL_BRIDGE_STATUSES,
+  setBridgeControl, TERMINAL_BRIDGE_STATUSES, BRIDGE_ACTIVITY_LIMIT,
   type BridgeTaskRecord, type BridgeTaskResult, type BridgeTaskStatus, type BridgeTransferConsent,
 } from '../../domain/pandaBridge';
 import { detectGpu, gpuLaneLimit, type GpuInfo } from '../hardwareCapacity';
@@ -32,8 +33,9 @@ import { parseServiceArgs, type ServiceHost, type ServiceRegistry } from './brid
 import { classifyInstruction, WORKSPACE_MARKER } from './intentRouter';
 import { allDeclarations, BUILTIN_WORKFLOWS, routeTask, trackRecords } from './capabilityRegistry';
 import {
-  AGENT_IDS, checkoutFingerprint, devSpec, devStoryDetail, dispatchDevStories, planDevStories, retryDevStory, stopDevStory, usesLocalGpu, type DevAgent,
+  AGENT_IDS, approveDevStoryReview, checkoutFingerprint, devSpec, devStoryChangeDiff, devStoryDetail, devStoryWorkerEvents, dispatchDevStories, planDevStories, retryDevStory, stopDevStory, usesLocalGpu, type DevAgent, type DevStorySpec,
 } from './devStories';
+import { unavailableDiff, type ChangeDiff } from './changeDiff';
 
 export type BridgeExecutorId = DevAgent | 'native';
 
@@ -173,15 +175,11 @@ export const TESTS_PRESENT_CHECK = [
   "process.exit(fail > 0 || pass < 1 ? 1 : 0);",
 ].join('\n');
 
-function workerDescription(task: BridgeTaskRecord, includeContext: boolean): string {
+function answerDescription(task: BridgeTaskRecord, includeContext: boolean): string {
   const parts = [task.instruction];
   if (includeContext && task.contextText) {
     parts.push('', 'Conversation context the user chose to share (background only; the instruction above is the task):', task.contextText);
   }
-  parts.push(
-    '', 'Deliver working code in this repository together with automated tests using the Node.js built-in test runner',
-    '(files named *.test.js; `npm test` runs them). Run the tests and make them pass before you stop.',
-  );
   return parts.join('\n');
 }
 
@@ -190,6 +188,8 @@ function workerDescription(task: BridgeTaskRecord, includeContext: boolean): str
 export interface InspectionPlan {
   project: ProjectRecord; sourcePath: string; ref: string; cloneDir: string;
   sourceHead: string; sourceStatusSha: string; uncommittedFiles: number;
+  /** `code`: the copy is where an approved change is made (A5). */
+  mode: 'inspect' | 'code';
 }
 
 /**
@@ -198,7 +198,7 @@ export interface InspectionPlan {
  * project's own node_modules, and KKD proves afterwards that the owner's checkout was not touched. Uncommitted work in the
  * owner's checkout is NOT part of the snapshot, and the report says so.
  */
-export function prepareProjectInspection(dataDir: string, taskId: string, project: ProjectRecord, sourcePath: string, requestedRef: string | null, expectCommit: string | null = null): InspectionPlan {
+export function prepareProjectInspection(dataDir: string, taskId: string, project: ProjectRecord, sourcePath: string, requestedRef: string | null, expectCommit: string | null = null, mode: 'inspect' | 'code' = 'inspect'): InspectionPlan {
   const fp = checkoutFingerprint(sourcePath);
   if (!fp) throw new CoreError('invalid_request', `'${project.name}' is not a readable git checkout at its registered path`);
   const run = (args: string[], cwd: string) => runHardenedGit(args, { cwd, encoding: 'utf8', windowsHide: true, timeout: 120_000 });
@@ -208,7 +208,7 @@ export function prepareProjectInspection(dataDir: string, taskId: string, projec
   if (run(['rev-parse', '--verify', '--quiet', `refs/heads/${ref}`], sourcePath).status !== 0) {
     throw new CoreError('invalid_request', `'${project.name}' has no branch '${ref}'. Nothing was inspected; name an existing branch.`, { reason: 'needs_clarification' });
   }
-  const cloneDir = path.join(dataDir, 'panda-workspaces', `${taskId.replace(/[^\w-]/g, '_')}-inspect`);
+  const cloneDir = path.join(dataDir, 'panda-workspaces', `${taskId.replace(/[^\w-]/g, '_')}-${mode}`);
   if (!fs.existsSync(path.join(cloneDir, '.git'))) {
     fs.mkdirSync(path.dirname(cloneDir), { recursive: true });
     const clone = run(['clone', '--quiet', '--no-hardlinks', '--single-branch', '--branch', ref, sourcePath, cloneDir], path.dirname(cloneDir));
@@ -218,11 +218,13 @@ export function prepareProjectInspection(dataDir: string, taskId: string, projec
       const head = String(run(['rev-parse', 'HEAD'], cloneDir).stdout ?? '').trim();
       if (!head.startsWith(expectCommit)) { fs.rmSync(cloneDir, { recursive: true, force: true }); throw new CoreError('conflict', `the branch moved while it was being copied (expected ${expectCommit}); nothing was sent. Ask again.`, { reason: 'approval_scope_changed' }); }
     }
+    // An inspection may borrow the owner's dependencies through a junction. A copy that will be changed never links back into the
+    // owner's folders: a write through the link would land in the owner's checkout.
     const deps = path.join(sourcePath, 'node_modules');
-    if (fs.existsSync(deps) && !fs.existsSync(path.join(cloneDir, 'node_modules'))) fs.symlinkSync(deps, path.join(cloneDir, 'node_modules'), 'junction');
+    if (mode === 'inspect' && fs.existsSync(deps) && !fs.existsSync(path.join(cloneDir, 'node_modules'))) fs.symlinkSync(deps, path.join(cloneDir, 'node_modules'), 'junction');
   }
   const porcelain = String(run(['status', '--porcelain', '--untracked-files=all'], sourcePath).stdout ?? '').split('\n').filter(Boolean);
-  return { project, sourcePath, ref, cloneDir, sourceHead: fp.head, sourceStatusSha: fp.statusSha, uncommittedFiles: porcelain.length };
+  return { project, sourcePath, ref, cloneDir, sourceHead: fp.head, sourceStatusSha: fp.statusSha, uncommittedFiles: porcelain.length, mode };
 }
 
 /** The question that makes the owner say which project (or register one); the task stays waiting, nothing runs. */
@@ -232,9 +234,30 @@ function needsClarification(db: CoreDatabase, taskId: string, question: string):
 }
 
 /** Words that make a bare project NAME a reference to its code rather than to the product ("ask Pandesh for my brief"). */
-const CODE_CUE = /\b(repo|repository|codebase|source|implementation|branch|tests?|test suite|module|files?|folder|directory|defects?|bugs?|code)\b/i;
+// "tests" (plural) and "test suite" point at code; a lone "test" usually names the request itself ("an acceptance test").
+const CODE_CUE = /\b(repo|repository|codebase|source|implementation|branch|tests|test suite|test files?|module|files?|folder|directory|defects?|bugs?|code)\b/i;
 
-export interface ProjectIntent { project: ProjectRecord; path: string; ref: string | null; readOnlyRequested: boolean }
+/**
+ * The part of an instruction that can make a project name a reference to its code. Agent names are not code words ("Claude Code"
+ * contains "code"), and a prohibition is not a reference ("do not read files or repositories"). Without this, a hello that names
+ * Claude Code and Pandesh became a read-only inspection of the Pandesh repository (seen live 2026-11-21).
+ */
+export function codeCueText(instruction: string): string {
+  return instruction
+    .replace(/\b(?:claude[ -]?code|open[ -]?code|antigravity|hermes)\b/gi, ' ')
+    .replace(/\b(?:do not|don't|never|must not|mustn't|without|no)\b[^.!?\n]*/gi, ' ');
+}
+export const refersToCode = (instruction: string): boolean => CODE_CUE.test(codeCueText(instruction));
+
+/** At most this many changed files are accepted from one ChatGPT-requested code change (A5); more fails verification with the list. */
+export const CODE_CHANGE_MAX_FILES = 20;
+
+/**
+ * `inspect`: read-only look at a private copy. `code` (A5): a change made by the agent in its own worktree of a private copy of a
+ * `read-write` project; it comes back only as a branch in that copy, after verification and the owner's review. Nothing is pushed,
+ * merged or installed, and the owner's checkout gets the change only when the owner asks for it as a new branch.
+ */
+export interface ProjectIntent { project: ProjectRecord; path: string; ref: string | null; readOnlyRequested: boolean; mode: 'inspect' | 'code' }
 
 /**
  * The project gate, without copying anything: which authorised project (if any) the task is about, and whether this executor and this
@@ -245,12 +268,29 @@ function gateProject(rt: BridgeRuntime, task: BridgeTaskRecord, chosen: BridgeEx
   const projects = loadProjects(rt.dataDir);
   const r = projects.length || /[A-Za-z]:[\\/]/.test(task.instruction) ? resolveProject(projects, task.instruction) : ({ status: 'none' } as const);
   if (r.status === 'ambiguous' || r.status === 'unauthorized') needsClarification(rt.db, task.id, r.question);
-  if (r.status !== 'resolved' || !(r.via === 'path' || CODE_CUE.test(task.instruction))) return null;
+  if (r.status !== 'resolved' || !(r.via === 'path' || refersToCode(task.instruction))) return null;
   if (chosen.kind !== 'acp') needsClarification(rt.db, task.id, `This task is about the project '${r.project.name}'. ${chosen.label} cannot be confined to that project yet; choose Claude Code or OpenCode for a read-only inspection.`);
-  const allowed = projectAllows(r.project, r.readOnlyRequested);
+  // A question about the code is an inspection even without the words "read only"; only a request for a change is a change.
+  const readOnly = r.readOnlyRequested || isAnswerOnly(task.instruction);
+  const allowed = projectAllows(r.project, readOnly);
   if (!allowed.ok) needsClarification(rt.db, task.id, allowed.reason);
-  if (!r.readOnlyRequested) needsClarification(rt.db, task.id, `Tasks that change files in '${r.project.name}' are not run from the browser bridge yet. Ask for a read-only inspection (say "do not modify files"), or run the change in Pandesh.`);
-  return { project: r.project, path: r.path, ref: r.ref, readOnlyRequested: r.readOnlyRequested };
+  return { project: r.project, path: r.path, ref: r.ref, readOnlyRequested: readOnly, mode: readOnly ? 'inspect' : 'code' };
+}
+
+/**
+ * No registered project resolved. An agent may still answer (a reply, a read-only check of nothing), but Pandesh never hands work that
+ * may change files an empty substitute workspace: that silently swaps the owner's project for a blank folder (seen 2026-11-21, where a
+ * coding task "for the Pandesh source" got a scaffold, the worker found no code and verification failed it three times).
+ */
+function requireAnswerOnly(rt: BridgeRuntime, task: BridgeTaskRecord, chosen: BridgeExecutor): void {
+  if (chosen.kind !== 'acp') return;
+  if (isAnswerOnly(task.instruction)) return;
+  needsClarification(rt.db, task.id, `This task may change files, but it names no registered project, so nothing ran. Pandesh does not run such work in an empty substitute workspace. Register the project in Pandesh and name it in the task, or ask for an answer only (say "do not change any files").`);
+}
+
+/** The instruction asks for an answer or a read-only look, never a change (the same reading Pandesh applies to its own requests). */
+export function isAnswerOnly(instruction: string): boolean {
+  return deriveMutationPolicy(instruction) === 'denied' || !asksForChange(instruction);
 }
 
 /** Read-only look at what an inspection would copy (branch, commit, uncommitted files); copies nothing. */
@@ -265,6 +305,13 @@ function previewInspection(intent: ProjectIntent): { branch: string; commit: str
   if (tip.status !== 0) throw new CoreError('invalid_request', `'${intent.project.name}' has no branch '${branch}'. Nothing was inspected; name an existing branch.`, { reason: 'needs_clarification' });
   const dirty = String(run(['status', '--porcelain', '--untracked-files=all']).stdout ?? '').split('\n').filter(Boolean).length;
   return { branch, commit: String(tip.stdout ?? '').trim().slice(0, 12), uncommittedFiles: dirty };
+}
+
+/** What the card says the agent may do; the dispatch checks the approved text against the current intent. */
+export function accessLevelOf(intent: ProjectIntent | null): string {
+  if (!intent) return 'Answer only: no project is shared and no file may be changed';
+  if (intent.mode === 'code') return `Code change in an isolated worktree of a private copy: it may change at most ${CODE_CHANGE_MAX_FILES} files there and run tests; no push, no merge, no install`;
+  return 'Read-only inspection of a private copy: it may read files and run existing tests, it cannot change anything';
 }
 
 /** Who receives the data, in the owner's words. */
@@ -285,20 +332,22 @@ async function requestExternalApproval(rt: BridgeRuntime, task: BridgeTaskRecord
   if (!chosen.dispatchable) throw new CoreError('invalid_request', `${chosen.label}: ${chosen.reason}`);
   if (!chosen.available) throw new CoreError('conflict', `${chosen.label} is not available: ${chosen.reason ?? 'unavailable'}`);
   const intent = gateProject(rt, task, chosen);
+  if (!intent) requireAnswerOnly(rt, task, chosen);
   const preview = intent ? previewInspection(intent) : null;
   const provider = providerOf(chosen.id, req.model ?? null);
   const includeContext = task.contextConfirmed;
   const exposure = [
     `The task text goes to ${provider}.`,
     preview
-      ? `Everything ${chosen.label} reads in a private copy of ${intent!.project.name} (branch ${preview.branch} at ${preview.commit}) goes there too. Your own checkout is not shared${preview.uncommittedFiles ? `, and ${preview.uncommittedFiles} uncommitted or untracked file(s) in it are not part of the copy` : ''}.`
-      : `${chosen.label} works in an empty isolated workspace; only what it reads there goes to ${provider}.`,
+      ? `Everything ${chosen.label} reads ${intent!.mode === 'code' ? 'or writes ' : ''}in a private copy of ${intent!.project.name} (branch ${preview.branch} at ${preview.commit}) goes there too. Your own checkout is not shared${preview.uncommittedFiles ? `, and ${preview.uncommittedFiles} uncommitted or untracked file(s) in it are not part of the copy` : ''}.`
+      : `No project is shared: this is an answer-only task. ${chosen.label} gets an empty folder, may not change any file, and only the task text goes to ${provider}.`,
+    ...(intent?.mode === 'code' ? [`The change stays in that copy: nothing is pushed, merged or installed. You review it in Pandesh first, and it reaches your checkout only if you ask, as a new branch.`] : []),
     includeContext ? 'The ChatGPT conversation context you chose to share is included.' : 'No ChatGPT conversation context is included.',
   ];
   const request = requestApproval(rt.db, {
     taskId: task.id, executor: chosen.id, agentLabel: chosen.label, provider, model: req.model ?? null,
     project: intent && preview ? { name: intent.project.name, branch: preview.branch, commit: preview.commit, access: intent.project.access, uncommittedFiles: preview.uncommittedFiles } : null,
-    accessLevel: preview ? 'Read-only inspection of a private copy: it may read files and run existing tests, it cannot change anything' : 'Isolated task workspace: it may create and change files only inside that workspace',
+    accessLevel: accessLevelOf(intent),
     exposure, instruction: task.instruction.slice(0, 2000), instructionSha256: task.instructionSha256,
     sensitivity: task.sensitivity, sensitivityReasons: task.sensitivityReasons, includeContext, requestedBy: req.decidedBy,
   });
@@ -423,16 +472,20 @@ export async function dispatchBridgeTask(rt: BridgeRuntime, taskId: string, req:
   // project never runs a task that may change files. Ambiguous or unauthorized means ask; no permission is widened.
   let inspection: InspectionPlan | null = null;
   const intent = gateProject(rt, task, chosen);
+  if (!intent) requireAnswerOnly(rt, task, chosen);
   if (intent && transferInfo(chosen.id, model).external && req.approvalRequestId) {
     // What the owner approved is what runs: same project, branch AND commit. A moved branch, an edited registry entry or a swapped
     // checkout since the card was shown means the card no longer describes this run.
     const approved = usableApproval(db, taskId, req.approvalRequestId).scope;
     const now = previewInspection(intent);
-    if (approved.project !== intent.project.name || approved.branch !== now.branch || (approved.commit ?? null) !== now.commit || !approved.access.startsWith('Read-only') || intent.project.access !== 'read') {
+    // The approved access must be exactly what would run now: an inspection card never starts a change, and a change needs a project
+    // that is still read-write. (Before A5 this also required access 'read', which made read-write projects impossible to inspect.)
+    const sameAccess = approved.access === accessLevelOf(intent) && (intent.mode === 'inspect' || intent.project.access === 'read-write');
+    if (approved.project !== intent.project.name || approved.branch !== now.branch || (approved.commit ?? null) !== now.commit || !sameAccess) {
       throw new CoreError('conflict', `'${intent.project.name}' changed since you approved this (now ${now.branch} at ${now.commit}); nothing was copied or sent. Ask again to see the new details.`, { reason: 'approval_scope_changed' });
     }
-    inspection = prepareProjectInspection(rt.dataDir, task.id, intent.project, intent.path, now.branch, now.commit);
-  } else if (intent) inspection = prepareProjectInspection(rt.dataDir, task.id, intent.project, intent.path, intent.ref);
+    inspection = prepareProjectInspection(rt.dataDir, task.id, intent.project, intent.path, now.branch, now.commit, intent.mode);
+  } else if (intent) inspection = prepareProjectInspection(rt.dataDir, task.id, intent.project, intent.path, intent.ref, null, intent.mode);
   const info = transferInfo(chosen.id, model);
   if (routing === 'auto' && info.external) {
     // A routed (not hand-picked) external executor still needs the host's explicit consent for this task.
@@ -447,7 +500,7 @@ export async function dispatchBridgeTask(rt: BridgeRuntime, taskId: string, req:
   if (info.external && req.approvalRequestId) consumeApproval(db, taskId, req.approvalRequestId, req.decidedBy);
   // A host-authorised external start that did not come through an approval card is still put in the audit trail, with who and what scope.
   if (info.external && !req.approvalRequestId) {
-    recordDirectApproval(db, taskId, { executor: chosen.id, model, project: inspection?.project.name ?? null, branch: inspection?.ref ?? null, access: inspection ? 'read-only inspection' : 'isolated workspace', instructionSha256: task.instructionSha256, confidentialOverride: consent?.confidentialOverride === true, includeContext }, req.decidedBy);
+    recordDirectApproval(db, taskId, { executor: chosen.id, model, project: inspection?.project.name ?? null, branch: inspection?.ref ?? null, access: inspection ? (inspection.mode === 'code' ? 'code change in an isolated copy' : 'read-only inspection') : 'answer only', instructionSha256: task.instructionSha256, confidentialOverride: consent?.confidentialOverride === true, includeContext }, req.decidedBy);
   }
 
   try {
@@ -468,7 +521,28 @@ async function startAcp(rt: BridgeRuntime, task: BridgeTaskRecord, agent: DevAge
   let storyId = task.storyId;
   let projectId = task.projectId;
   let workspace = task.workspacePath;
-  if (!storyId && inspection) {
+  if (!storyId && inspection?.mode === 'code') {
+    // A5: the change is made in Kandev's worktree of the private copy, verified, held for the owner's review, then integrated onto a
+    // branch inside the copy. The copy has no remote; the owner's checkout is never a worktree, a base or an integration target.
+    workspace = inspection.cloneDir;
+    const plan = planDevStories(db, {
+      projectName: 'Panda bridge',
+      repoPath: workspace,
+      baseBranch: inspection.ref,
+      integrationBranch: `panda/change-${task.id.slice(-12)}`,
+      verify: ['git', 'status', '--porcelain'],
+      stories: [{
+        key: 'task', title: `Change ${inspection.project.name}: ${task.instruction.replace(/\s+/g, ' ').trim()}`.slice(0, 80),
+        description: answerDescription(task, includeContext), agent, ...(model ? { model } : {}),
+        acceptanceCriteria: ['The requested change is made in this repository', 'The existing tests for the touched code still pass'],
+        maxFiles: CODE_CHANGE_MAX_FILES,
+        codeCopy: { projectName: inspection.project.name, sourcePath: inspection.sourcePath, ref: inspection.ref, sourceHead: inspection.sourceHead, sourceStatusSha: inspection.sourceStatusSha },
+      }],
+    });
+    storyId = plan.stories[0].id;
+    projectId = plan.projectId;
+    attachBridgeExecution(db, task.id, { projectId, storyId, workspacePath: workspace });
+  } else if (!storyId && inspection) {
     workspace = inspection.cloneDir;
     const title = `Inspect ${inspection.project.name}: ${task.instruction.replace(/\s+/g, ' ').trim()}`.slice(0, 80);
     const plan = planDevStories(db, {
@@ -488,6 +562,9 @@ async function startAcp(rt: BridgeRuntime, task: BridgeTaskRecord, agent: DevAge
     projectId = plan.projectId;
     attachBridgeExecution(db, task.id, { projectId, storyId, workspacePath: workspace });
   } else if (!storyId) {
+    // No project: an answer-only task (dispatch refused anything that may change files). The worker's working directory is an empty
+    // folder that holds nothing of the owner's; it is verified like an inspection: any changed file fails it, and its own final
+    // message is the result. It is never sent back with "make changes" repair instructions.
     workspace = prepareTaskWorkspace(rt.dataDir, task.id);
     const title = task.instruction.replace(/\s+/g, ' ').trim().slice(0, 80);
     const plan = planDevStories(db, {
@@ -495,21 +572,19 @@ async function startAcp(rt: BridgeRuntime, task: BridgeTaskRecord, agent: DevAge
       repoPath: workspace,
       baseBranch: 'main',
       integrationBranch: `panda/${task.id.slice(-12)}`,
-      verify: ['npm', 'test'],
-      stories: [{
-        key: 'task', title, description: workerDescription(task, includeContext), agent, ...(model ? { model } : {}),
-        acceptanceCriteria: ['The requested behaviour is implemented', 'Automated tests cover it and `npm test` passes'],
-        acceptanceChecks: [{ kind: 'script', name: 'Tests exist and pass', source: TESTS_PRESENT_CHECK }],
-      }],
+      verify: ['git', 'status', '--porcelain'],
+      stories: [{ key: 'task', title, description: answerDescription(task, includeContext), agent, ...(model ? { model } : {}), mode: 'inspect', answerOnly: true }],
     });
     storyId = plan.stories[0].id;
     projectId = plan.projectId;
     attachBridgeExecution(db, task.id, { projectId, storyId, workspacePath: workspace });
   }
   await dispatchWhenKandevIsReady(rt, projectId!, storyId, task.conversationId);
-  recordBridgeStatus(db, task.id, 'running', inspection
+  recordBridgeStatus(db, task.id, 'running', inspection?.mode === 'code'
+    ? `${KNOWN[agent].label} is changing a private copy of ${inspection.project.name} (branch ${inspection.ref}); nothing is pushed and your checkout is not touched.`
+    : inspection
     ? `${KNOWN[agent].label} is inspecting a read-only copy of ${inspection.project.name} (branch ${inspection.ref}); your checkout is not touched.`
-    : `${KNOWN[agent].label} is working in an isolated workspace.`);
+    : `${KNOWN[agent].label} is answering. No project is shared and it may not change any file.`);
 }
 
 /**
@@ -597,6 +672,25 @@ function mapPhase(phase: string, storyStatus: string, control: BridgeTaskRecord[
   return { status: 'running', detail: 'Working.' };
 }
 
+/**
+ * Appends newly observed worker events to the recorded log: deduplicated by Kandev message id, in time order, the newest
+ * BRIDGE_ACTIVITY_LIMIT kept. `fresh === null` (Kandev unreachable, no session yet) leaves the log exactly as it was.
+ */
+export function mergeActivity(previous: BridgeTaskResult['activity'], fresh: BridgeTaskResult['activity'] | null): BridgeTaskResult['activity'] {
+  if (!fresh) return previous;
+  // Entries without an id come from builds that kept only the last three lines; the full log replaces them.
+  const byId = new Map(previous.filter(e => e.id).map(e => [e.id!, e]));
+  let changed = byId.size !== previous.length;
+  for (const e of fresh) {
+    if (!e.id) continue;
+    const old = byId.get(e.id);
+    // Kandev streams a message by growing it under the same id: the newer text (or tool status) replaces the fragment.
+    if (!old || old.text !== e.text || old.status !== e.status) { byId.set(e.id, e); changed = true; }
+  }
+  if (!changed) return previous;
+  return [...byId.values()].sort((a, b) => a.at.localeCompare(b.at)).slice(-BRIDGE_ACTIVITY_LIMIT);
+}
+
 /** Brings a relayed task up to date from the work behind it and stores a checkpoint when something changed. */
 export async function refreshBridgeTask(rt: BridgeRuntime, taskId: string): Promise<BridgeTaskRecord> {
   const { db } = rt;
@@ -612,6 +706,7 @@ export async function refreshBridgeTask(rt: BridgeRuntime, taskId: string): Prom
       // Planned but not yet handed to Kandev: the dispatch in progress (or a failed one) owns the status, not the mirror.
       if (view.phase === 'not dispatched' || story.status === 'ready') return getBridgeTask(db, taskId);
       const mapped = mapPhase(view.phase, story.status, task.control);
+      const worker = await devStoryWorkerEvents(rt.kandev, task.storyId);
       const result: BridgeTaskResult = {
         verification: view.verification,
         // An inspection's evidence IS the report; give it room.
@@ -619,9 +714,12 @@ export async function refreshBridgeTask(rt: BridgeRuntime, taskId: string): Prom
         changedFiles: detail.changedFiles,
         commit: view.commit,
         pendingApprovals: view.pendingApprovals,
-        // The worker's own commands and file names can carry local paths; none of them leave this PC.
-        activity: view.activity.map(a => ({ ...a, text: redactPaths(a.text) })),
+        // The worker's own events, appended to what was already recorded (kept after the task ends and across restarts). Commands and
+        // file names can carry local paths; they are redacted, and only the summary line ever leaves this PC (see the extension view).
+        activity: mergeActivity(task.result?.activity ?? [], worker?.events.map(e => ({ ...e, text: redactPaths(e.text) })) ?? null),
         timeline: detail.timeline.slice(-30),
+        branch: worker?.branch ?? task.result?.branch ?? view.branch ?? null,
+        ...(devSpec(story)!.codeCopy ? { codeChange: { project: devSpec(story)!.codeCopy!.projectName, baseRef: devSpec(story)!.codeCopy!.ref, delivered: task.result?.codeChange?.delivered ?? null } } : {}),
       };
       // Where the coordinator names a concrete reason (a free slot, a review), show it; for settled states the mapped wording is clearer.
       const settled = mapped.status === 'paused' || mapped.status === 'cancelled' || mapped.status === 'completed';
@@ -649,6 +747,82 @@ export async function refreshBridgeTask(rt: BridgeRuntime, taskId: string): Prom
     recordBridgeStatus(db, taskId, task.control === 'cancelled' && isTerminalAttemptStatus(attempt.status) ? 'cancelled' : status, detail, result);
   }
   return getBridgeTask(db, taskId);
+}
+
+/** The A5 story behind a relayed task, or a conflict saying why there is none. */
+function codeChangeOf(rt: BridgeRuntime, taskId: string): { task: BridgeTaskRecord; storyId: string; spec: DevStorySpec & { codeCopy: NonNullable<DevStorySpec['codeCopy']> } } {
+  const task = getBridgeTask(rt.db, taskId);
+  const spec = task.storyId ? devSpec(getStory(rt.db, task.storyId)) : null;
+  if (!task.storyId || !spec?.codeCopy) throw new CoreError('conflict', 'this task is not a code change');
+  return { task, storyId: task.storyId, spec: spec as DevStorySpec & { codeCopy: NonNullable<DevStorySpec['codeCopy']> } };
+}
+
+/**
+ * The owner approves a reviewed A5 change (host only; the route checks). KKD then commits it onto the integration branch inside
+ * the private copy, re-runs its checks there, and the task completes. Nothing is pushed: the copy has no remote.
+ */
+export async function approveBridgeChange(rt: BridgeRuntime, taskId: string, who: string): Promise<BridgeTaskRecord> {
+  const { storyId } = codeChangeOf(rt, taskId);
+  await approveDevStoryReview(rt.db, rt.kandev, storyId, `Approved in Pandesh by ${who}`);
+  return refreshBridgeTask(rt, taskId);
+}
+
+const TEST_RUN = /\b(?:(?:npm|pnpm|yarn|bun)\s+(?:run\s+)?test\b|npx\s+(?:vitest|jest)|vitest\b|jest\b|pytest\b|python\s+-m\s+(?:pytest|unittest)|node\s+--test\b|go\s+test\b|cargo\s+test\b|dotnet\s+test\b|mvn\s+test\b|gradle\w*\s+test\b)/i;
+
+export interface BridgeChangeTests {
+  /** What Pandesh itself checked, with the level it reached. */
+  pandesh: { level: string | null; detail: string | null };
+  /** Test commands the worker ran, from its event log (reported by the worker, not re-run by Pandesh). */
+  worker: Array<{ command: string; status: string; at: string }>;
+  workerSummary: string | null;
+}
+
+/**
+ * The A5 change as a read-only diff for the owner's review (host only; the route checks). Read from the worker's worktree before
+ * approval and from the private copy after; both are proven to be this task's before anything is read. Approves nothing.
+ */
+export async function bridgeChangeDiff(rt: BridgeRuntime, taskId: string): Promise<{ diff: ChangeDiff & { ignored: string[] }; tests: BridgeChangeTests }> {
+  const { task, storyId, spec } = codeChangeOf(rt, taskId);
+  const norm = (p: string) => { let r = path.resolve(p); try { r = fs.realpathSync.native(r); } catch { /* as spelled */ } return r.replace(/\\/g, '/').toLowerCase(); };
+  const root = norm(path.join(rt.dataDir, 'panda-workspaces'));
+  const diff = norm(spec.repoPath).startsWith(`${root}/`)
+    ? await devStoryChangeDiff(rt.db, rt.kandev, storyId)
+    : { ...unavailableDiff('The diff is not shown: the change is not in a Pandesh private copy.'), ignored: [] };
+  const result = task.result;
+  const activity = result?.activity ?? [];
+  const worker = activity.filter(a => a.kind.startsWith('tool') && TEST_RUN.test(a.text)).map(a => ({ command: a.text.slice(0, 200), status: a.status ?? 'unknown', at: a.at }));
+  const summary = [...activity].reverse().find(a => a.kind === 'message' && /\btests?\b/i.test(a.text) && /\b(pass|fail|error)/i.test(a.text));
+  const kkd = [...(result?.timeline ?? [])].reverse().find(t => t.event === 'integrated' || t.event === 'verified');
+  return {
+    diff,
+    tests: { pandesh: { level: result?.verification ?? null, detail: kkd ? redactPaths(kkd.text.split('\n')[0]).slice(0, 300) : null }, worker, workerSummary: summary ? redactPaths(summary.text).slice(0, 400) : null },
+  };
+}
+
+/**
+ * The owner asks for an approved A5 change in their own checkout. It arrives as a NEW local branch fetched from the private copy:
+ * the owner's working tree, index and current branch are not touched, nothing is checked out, merged or pushed, and an existing
+ * branch is never overwritten.
+ */
+export function deliverBridgeChange(rt: BridgeRuntime, taskId: string, who: string): { branch: string; commit: string } {
+  const { task, storyId, spec } = codeChangeOf(rt, taskId);
+  if (task.status !== 'completed' || getStory(rt.db, storyId).status !== 'done') throw new CoreError('conflict', 'the change is not approved and integrated yet');
+  if (task.result?.codeChange?.delivered) return task.result.codeChange.delivered;
+  const git = (args: string[], cwd: string) => runHardenedGit(args, { cwd, encoding: 'utf8', windowsHide: true, timeout: 120_000 });
+  const tip = git(['rev-parse', '--verify', '--quiet', `refs/heads/${spec.integrationBranch}`], spec.repoPath);
+  if (tip.status !== 0) throw new CoreError('conflict', 'the approved change is not in the private copy any more; nothing was delivered');
+  const commit = String(tip.stdout ?? '').trim();
+  const branch = `pandesh/chatgpt-${task.id.slice(-12)}`;
+  if (git(['rev-parse', '--verify', '--quiet', `refs/heads/${branch}`], spec.codeCopy.sourcePath).status === 0) throw new CoreError('conflict', `your checkout already has a branch '${branch}'; nothing was overwritten`);
+  const before = checkoutFingerprint(spec.codeCopy.sourcePath);
+  const fetched = git(['fetch', '--no-tags', '--quiet', spec.repoPath, `refs/heads/${spec.integrationBranch}:refs/heads/${branch}`], spec.codeCopy.sourcePath);
+  if (fetched.status !== 0) throw new CoreError('internal_error', `could not bring the change into your checkout: ${String(fetched.stderr ?? '').trim().slice(0, 200)}`);
+  const after = checkoutFingerprint(spec.codeCopy.sourcePath);
+  if (!before || !after || before.head !== after.head || before.statusSha !== after.statusSha) throw new CoreError('internal_error', 'your checkout changed while the branch was delivered; check it before using the branch');
+  const delivered = { branch, commit, at: new Date().toISOString() };
+  const result = { ...(task.result as BridgeTaskResult), codeChange: { project: spec.codeCopy.projectName, baseRef: spec.codeCopy.ref, delivered } };
+  recordBridgeStatus(rt.db, taskId, 'completed', `Delivered by ${who} as branch ${branch} in your checkout (not checked out, not merged, not pushed).`, result);
+  return delivered;
 }
 
 export async function pauseBridgeTask(rt: BridgeRuntime, taskId: string, who: string): Promise<BridgeTaskRecord> {

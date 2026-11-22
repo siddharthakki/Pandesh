@@ -55,6 +55,17 @@ export function deriveMutationPolicy(objectiveText: string | null | undefined): 
   return POSITIVE_MUTATION_DIRECTIVE.test(withoutNegated) || hasAffirmativeMutationIntent(withoutNegated) ? 'allowed' : 'denied';
 }
 
+/**
+ * Does the text affirmatively ask for a change (a directive such as "fix", "add", "build", or another clear request to alter
+ * something), once clauses that forbid changes ("do not modify any files") are set aside? Unlike `deriveMutationPolicy`, it does
+ * not need an explicit read-only phrase: "Say hello; do not inspect, open, read, write, or modify any files" asks for no change.
+ * Used where the choice is between answering and refusing, never to widen a permission.
+ */
+export function asksForChange(text: string | null | undefined): boolean {
+  const withoutNegated = String(text ?? '').replace(NEGATED_MUTATION_CLAUSE, ' ');
+  return POSITIVE_MUTATION_DIRECTIVE.test(withoutNegated) || hasAffirmativeMutationIntent(withoutNegated);
+}
+
 /** Stable short identity of the objective a policy was derived from — logged
  * with every policy decision so a proposal can be proven to belong to (or not
  * belong to) a specific objective without inference. */

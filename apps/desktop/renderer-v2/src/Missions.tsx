@@ -2,14 +2,23 @@ import React, { useEffect, useRef, useState } from 'react';
 import { api, errorText, onDesktopEvent } from './bridge';
 import { elapsed } from './ui';
 import { describeStep, missionActiveMs, missionHeadline, missionHeartbeatMs, missionProgress, visibleMissions, type MissionView, type StepView } from './missionModel';
+import { WorkerPanels } from './MissionControlPane';
 
 /** One task relayed from the browser (Panda bridge), as Core's activity feed reports it. Same vocabulary as missions. */
 export interface BridgeActivityItem {
   id: string; origin: { kind?: string; client: string; title: string | null; via: string | null }; instruction: string; executor: string | null;
   state: string; stateLabel: string; reason: string; progress: string | null; elapsedMs: number | null; heartbeatAgeMs: number | null;
   verification: string | null; conversationId: string | null; createdAt: string;
+  // The worker's own newest event and the log size (Core keeps the log); absent from Cores before the worker panels.
+  latest: { at: string; kind: string; text: string } | null; lastEventAt: string | null; eventCount: number; branch: string | null;
+  pendingWorkerActions: Array<{ pendingId: string; what: string }>; storyId: string | null;
+  codeChange?: { project: string; baseRef: string; awaitingReview: boolean; changedFiles: string[]; deliverable: boolean; delivered: { branch: string; commit: string } | null } | null;
 }
+/** Tasks a Kandev worker runs get a live worker panel instead of a one-line row. */
+const isWorkerTask = (b: BridgeActivityItem) => Boolean(b.storyId) && ['claude', 'opencode', 'antigravity', 'hermes'].includes(b.executor ?? '');
 const BRIDGE_DONE = new Set(['completed', 'failed', 'cancelled']);
+/** An item from an older Core lacks the worker fields; give them their empty values instead of undefined. */
+const normalizeWorker = (b: BridgeActivityItem): BridgeActivityItem => ({ ...b, latest: b.latest ?? null, lastEventAt: b.lastEventAt ?? null, eventCount: b.eventCount ?? 0, branch: b.branch ?? null, pendingWorkerActions: b.pendingWorkerActions ?? [] });
 
 /** A cloud agent the browser asked for, waiting for the owner. Everything the owner needs to decide is here, from Core's own record. */
 export interface BridgeApproval {
@@ -25,7 +34,7 @@ export interface BridgeApproval {
  * person's OK, the files it left, and Stop / Continue. Everything shown is Core's record (GET /v1/missions); the card
  * never shows an agent's own words as a status.
  */
-export function MissionDock({ conversationId, narrow, onReport }: { conversationId: string | null; narrow: boolean; onReport: () => void }) {
+export function MissionDock({ conversationId, narrow, onReport }: { conversationId: string | null; narrow: boolean; onReport: (missionId?: string) => void }) {
   const [missions, setMissions] = useState<MissionView[]>([]);
   const [open, setOpen] = useState<Record<string, boolean>>({});
   const [hidden, setHidden] = useState<Record<string, boolean>>({});
@@ -44,7 +53,7 @@ export function MissionDock({ conversationId, narrow, onReport }: { conversation
       // A mission that just ended has written its report into the conversation: show it.
       for (const m of list) {
         const before = lastStatus.current[m.id];
-        if (before === 'running' && m.status !== 'running' && m.conversationId === conversationId) onReport();
+        if (before === 'running' && m.status !== 'running' && m.conversationId === conversationId) onReport(m.id);
         lastStatus.current[m.id] = m.status;
       }
       setMissions(list);
@@ -137,7 +146,8 @@ export function MissionDock({ conversationId, narrow, onReport }: { conversation
         </section>
       ))}
       {note && !approvals.length && !shown.length && !bridgeShown.length && <p className={`mission-note${note.error ? ' error' : ''}`} role="status">{note.text}</p>}
-      {bridgeShown.map((b) => (
+      <WorkerPanels items={bridgeShown.filter(isWorkerTask).map(normalizeWorker)} now={now} onChanged={() => void load()} />
+      {bridgeShown.filter((b) => !isWorkerTask(b)).map((b) => (
         <section key={b.id} className={`mission bridge ${b.state}`} aria-label={`From ${b.origin.client}: ${b.instruction}`}>
           <header className="mission-head">
             <span className="mission-toggle">

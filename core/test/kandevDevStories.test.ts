@@ -352,4 +352,23 @@ describe('WIP slot reclamation', () => {
     expect(await reclaimIdleWipSlots(kandev, 'wf', 'run', 'review')).toEqual(['idle-review', 'idle-done']);
     expect(moves).toEqual([{ task_id: 'idle-review', workflow_id: 'wf', workflow_step_id: 'review' }, { task_id: 'idle-done', workflow_id: 'wf', workflow_step_id: 'review' }]);
   });
+
+  it('a decision nobody has answered for over 30 minutes stops holding a slot; its pending request is not touched', async () => {
+    const { reclaimIdleWipSlots, STALE_DECISION_MS } = await import('../runtime/kandev/devStories');
+    const now = Date.parse('2026-11-21T15:10:00Z');
+    const tasks = [
+      { id: 'abandoned', state: 'REVIEW', workflow_step_id: 'run', updated_at: '2026-11-19T22:34:05Z' }, // two days waiting: released
+      { id: 'fresh-ask', state: 'REVIEW', workflow_step_id: 'run', updated_at: new Date(now - STALE_DECISION_MS + 60_000).toISOString() }, // kept
+      { id: 'no-date', state: 'REVIEW', workflow_step_id: 'run' },                                         // age unknown: kept
+    ];
+    const moves: string[] = []; const resolved: string[] = [];
+    const kandev: any = {
+      tool: async (name: string, args: any) => { if (name === 'list_tasks_kandev') return { tasks }; if (name === 'move_task_kandev') moves.push(args.task_id); if (name === 'resolve_agent_permission_kandev') resolved.push(args.task_id); return {}; },
+      sessions: async () => [{ id: 's', state: 'WAITING_FOR_INPUT' }],
+      pendingPermissions: async () => [{ pending_id: 'p' }],
+    };
+    expect(await reclaimIdleWipSlots(kandev, 'wf', 'run', 'review', now)).toEqual(['abandoned']);
+    expect(moves).toEqual(['abandoned']);
+    expect(resolved).toEqual([]);
+  });
 });

@@ -178,6 +178,101 @@ describe('Ask mode', () => {
   }, 60_000);
 });
 
+describe('DRV-010: an existing file is never silently overwritten under a folder envelope', () => {
+  const original = 'This is a test document for the approved account.\nGenerated on: 2026-11-11.\nStatus: Verified.\n';
+
+  // The recorded defect: asked to rename a file, the model wrote "93" over an unrelated 3-line document. Under the
+  // envelope this must NOT be auto-authorized; it routes to an explicit per-file approval card (with diff) instead.
+  it('an existing file requires a per-file approval card (not silent auto-authorize)', async () => {
+    human(() => 'approved');
+    fs.writeFileSync(path.join(ws, 'test_document.txt'), original);
+    steps = [write('test_document.txt', '93')];
+    const { attemptId } = await turn('Rename the selected test file.');
+    // A per-file write_file card was shown: the overwrite was not silent.
+    expect(asked).toContain('write_file');
+    // The authority recorded is human approval, not the mission envelope.
+    const events = writeEvents(attemptId);
+    expect(events.map((e) => e.authorizationSource)).toContain('human_approval');
+  }, 60_000);
+
+  // Filename occurrence in the request is NOT authorization (reviewer examples).
+  it('"Do not change report.txt" still requires per-file approval', async () => {
+    human(() => 'approved');
+    fs.writeFileSync(path.join(ws, 'report.txt'), 'original report\n');
+    steps = [write('report.txt', 'changed\n')];
+    const { attemptId } = await turn('Do not change report.txt.');
+    expect(asked).toContain('write_file');
+    const events = writeEvents(attemptId);
+    expect(events.map((e) => e.authorizationSource)).toContain('human_approval');
+  }, 60_000);
+
+  it('"Rename report.txt" still requires per-file approval', async () => {
+    human(() => 'approved');
+    fs.writeFileSync(path.join(ws, 'report.txt'), 'original report\n');
+    steps = [write('report.txt', 'renamed content\n')];
+    const { attemptId } = await turn('Rename report.txt.');
+    expect(asked).toContain('write_file');
+  }, 60_000);
+
+  it('"Compare report.txt with another document" still requires per-file approval', async () => {
+    human(() => 'approved');
+    fs.writeFileSync(path.join(ws, 'report.txt'), 'original report\n');
+    steps = [write('report.txt', 'compared\n')];
+    const { attemptId } = await turn('Compare report.txt with another document.');
+    expect(asked).toContain('write_file');
+  }, 60_000);
+
+  // A read is observation, not authorization: reading first does not make the overwrite silent.
+  it('reading an existing file first still requires per-file approval', async () => {
+    human(() => 'approved');
+    fs.writeFileSync(path.join(ws, 'test_document.txt'), 'old line\n');
+    steps = [
+      { tool: { name: 'read_file', args: { filePath: 'test_document.txt' } } },
+      write('test_document.txt', 'new line\n'),
+    ];
+    const { attemptId } = await turn('Update the test document.');
+    expect(asked).toContain('write_file');
+    expect(fs.readFileSync(path.join(ws, 'test_document.txt'), 'utf8')).toBe('new line\n');
+  }, 60_000);
+
+  // Zero-byte existing file: must be treated as existing (not "new"), so it also needs per-file approval.
+  it('an existing zero-byte file requires per-file approval', async () => {
+    human(() => 'approved');
+    fs.writeFileSync(path.join(ws, 'empty.txt'), '');
+    steps = [write('empty.txt', 'now has content\n')];
+    const { attemptId } = await turn('Fill in empty.txt.');
+    expect(asked).toContain('write_file');
+  }, 60_000);
+
+  // Legitimate coding flow preserved: a file created this turn may be rewritten without a per-file card.
+  it('a file created this turn may be rewritten under the envelope (coding flow)', async () => {
+    human(() => 'approved');
+    steps = [write('src/a.js'), write('src/a.js', 'export const ok = 2;\n')];
+    const { attemptId } = await turn('Build the calculator module');
+    expect(asked).toEqual(['authorize_mission']);
+    expect(fs.readFileSync(path.join(ws, 'src', 'a.js'), 'utf8')).toBe('export const ok = 2;\n');
+    expect(writeEvents(attemptId).map((e) => e.authorizationSource)).toEqual(['mission_envelope', 'mission_envelope']);
+  }, 60_000);
+
+  // Case-insensitive path matching (Windows) for created-this-turn tracking.
+  it('created-this-turn tracking is case-insensitive on Windows', async () => {
+    human(() => 'approved');
+    steps = [write('Fresh.TXT', 'hello\n'), write('fresh.txt', 'hello 2\n')];
+    const { attemptId } = await turn('Write a fresh note.');
+    expect(asked).toEqual(['authorize_mission']);
+    expect(fs.readFileSync(path.join(ws, 'fresh.txt'), 'utf8')).toBe('hello 2\n');
+  }, 60_000);
+
+  // New file creation stays auto-authorized.
+  it('still allows creating a brand-new file under the envelope', async () => {
+    human(() => 'approved');
+    steps = [write('fresh2.txt', 'hello\n')];
+    const { attemptId } = await turn('Write a fresh note.');
+    expect(fs.readFileSync(path.join(ws, 'fresh2.txt'), 'utf8')).toBe('hello\n');
+    expect(writeEvents(attemptId).map((e) => e.authorizationSource)).toEqual(['mission_envelope']);
+  }, 60_000);
+});
+
 describe('folder search permission is read-only', () => {
   it('a searched folder outside the workspace still needs an exact-file approval, and a declined one writes nothing', async () => {
     human((tool) => (tool === 'request_search_permission' ? 'approved' : 'rejected'));
