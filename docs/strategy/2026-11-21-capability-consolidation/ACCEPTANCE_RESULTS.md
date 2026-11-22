@@ -69,9 +69,28 @@ Unit tests: `core/test/bridgeCodeChange.test.ts` 7/7 (read-only project refused 
 
 Found and fixed on the way: `/v1/dev-stories/:id/approve-review` had no caller check (a paired client could approve a review); it is now host-only. Read-write projects could not be inspected through a card (the scope check required `access==='read'`); fixed.
 
+## A5 View diff (cc79820), full A5 workflow re-run live on 2026-11-22
+Scratch instance rebuilt from cc79820. Task sent as the paired ChatGPT client: "In the CalcDemo source code: fix the bug in src/add.js…, add a new multiply(a, b) function in a new file src/multiply.js, and add a test for multiply in test/multiply.test.js. Then run the project's tests (npm test)…". The change was written by Claude Code (Kandev, claude-acp).
+
+| Step | Result | Evidence |
+|---|---|---|
+| Card | Access level "Code change in an isolated worktree of a private copy: … at most 20 files … no push, no merge, no install"; project CalcDemo, main @ a25faaf5931e, read-write (approval audit) | `GET /v1/bridge/tasks/:id/audit` |
+| Allow | Pressed in the desktop UI; Claude ran, ~1 min | panel |
+| View diff before approval | "3 files changed · +6 −1 · read from the worker worktree (a25faaf → a25faaf + uncommitted)": `src/add.js` Modified +1 −1, `src/multiply.js` New +1, `test/multiply.test.js` New +4; red/green lines; Expand full diff; Pandesh's check (`git status`, worker-only) and "Worker ran: npm test · complete (reported by the worker, not re-run by Pandesh)" with the worker's report (2 tests, 2 pass) | `evidence/live-19-a5b-view-diff.png` |
+| Viewing is read-only | Worker worktree HEAD, `git status` hash, index file hash and refs identical before/after `GET …/diff`; task still `awaiting_approval` | shell check |
+| Not readable by the client | Paired client `GET …/diff` → 403 "only the Pandesh app can do this" | live |
+| Approve | "Approve change" clicked in the UI → completed in < 10 s | panel |
+| View diff after approval | Same 3 files, now "read from the private copy (a25faaf → a13162b)" | `evidence/live-20-a5b-diff-after-approval.png` |
+| Delivery | "Bring into my checkout as a new branch" → `pandesh/chatgpt-3f4c9fc2633b`; owner repo still `main` a25faaf, clean, no remote; branch diff = the same 3 files +6 −1; the project's tests on an export of the branch: 2/2 pass | `evidence/live-21-a5b-delivered.png` |
+| Read-only project | "Fix the typo in the Pandesh source code README … and commit it" → 400 "Project 'Pandesh' is authorized read-only…", no card, no copy | live |
+| No project | "Write a new Python script that renames all files in a folder, then run it" → 400 "…names no registered project, so nothing ran…", no card | live |
+
+Tests: `core/test/changeDiff.test.ts` 10/10 (modified/deleted/renamed/binary/untracked text and binary; committed range with ignored agent files; large diff cut with counts kept and over-cap file not shown; index/refs/HEAD/working tree unchanged; unknown base = unavailable; traversal, absolute and drive paths refused; a junction leading outside is refused and its content never read; a repo outside Pandesh's private copies is refused; a worker worktree that is not Kandev's is refused). Route authz added to `pandaBridge.test.ts` (paired client and bare Core token 403). Helper tests in `workerModel.test.ts`. Related suites 97/97; `typecheck:core`, renderer-v2 and `compile` clean.
+
+Not shown live (covered by unit tests only): a binary file, a large diff, an unavailable diff. Known cosmetic issue: the "Pandesh's check" line repeats "(human-reviewed)" after approval.
+
 ## Remaining acceptance criteria (not met)
-- A5: no "View diff" in the review box yet (the changed file list only).
-- Panel open worktree / view diff (Stop, Pause verified live in 565b818; Resume of a task paused before its first event fails in Kandev: "Agent startup failed").
+- Panel open worktree (Stop, Pause verified live in 565b818; Resume of a task paused before its first event fails in Kandev: "Agent startup failed").
 - Board / Team / Processes consolidation.
 - Allow-once pressed live.
 - Live run of the two router fixes. They need a rebuild from `feat/capability-consolidation`; the scratch instance runs the main checkout's bundle.

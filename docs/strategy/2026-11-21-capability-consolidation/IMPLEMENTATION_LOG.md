@@ -56,3 +56,9 @@ Not pushed, not merged, not installed.
 - `/v1/dev-stories/:id/approve-review` was callable by paired clients; now host-only.
 - Worker panel: review box with changed files, "Approve change", "Bring into my checkout as a new branch".
 - Live: see `ACCEPTANCE_RESULTS.md` (screens live-15/16/17).
+
+## A5 View diff (cc79820)
+- `core/runtime/kandev/changeDiff.ts`: read-only diff through `runHardenedGit` (`diff -z --name-status/--numstat`, per-file `diff -- :(literal)path`, `ls-files --others`). No index, object or ref writes (the test compares the index file bytes). Per-file cap 2,000 lines / 200 KB (cut, counts kept), 1.5 MB total, 200 files; binary by numstat or NUL bytes; untracked files read only after `safeChangePath` (relative, no `..`, no drive, nearest existing ancestor resolves inside the real root) and `lstat` (links and special files not read).
+- `devStoryChangeDiff`: before approval, the worker worktree, only after `reconcileWorktree` proves it is Kandev's and shares the story repository's git dir; after integration, `sourceHead..refs/heads/<integration branch>` in the copy. Agent's own files (`.claude` etc.) listed as ignored.
+- `bridgeChangeDiff`: refuses a story repository outside `<data>/panda-workspaces`; adds test results: Pandesh's own check (latest verified/integrated timeline line, level) and the worker's test commands from its stored event log, labelled "reported by the worker, not re-run by Pandesh".
+- Host-only `GET /v1/bridge/tasks/:id/diff`; desktop action `bridgeDiff`. UI reuses the Activity pane's `DiffView`; pure helpers in `workerModel.ts`.

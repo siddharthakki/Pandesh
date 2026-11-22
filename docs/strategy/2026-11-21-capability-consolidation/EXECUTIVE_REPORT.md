@@ -82,13 +82,15 @@ A new read-only, cross-engine tool covers Ollama, Hugging Face, Strata and other
 | | 6c4146d | GPU-queued reads as queued, not stalled |
 | | 565b818 | Stop / Pause / Resume on the worker panels (Stop and Pause verified live) |
 | | cafb8a0 | A5 (approved by you): ChatGPT coding in an isolated private copy, owner review, delivery as a new branch; verified live end to end |
+| | cc79820 | View diff in the A5 review box (read-only, host-only); full A5 workflow re-run live |
+| `release/b188-live-workers` (worktree `D:PandeshRelease188d`) | 505746b | Build 188 connector line (94b4272) + this work; packaged for isolated real-project testing, not installed |
 | feat/capability-consolidation (worktree `D:\Projects\Pandesh-consolidation`, based on the branch above) | 06de824 | Model store inventory; image OCR and health routing |
 | | (this commit) | These reports |
 
 Nothing was merged, pushed, installed or deployed. Production (`E:\Pandesh`) was not touched.
 
 ## Not done / not verified
-- **A5 is built (cafb8a0) and verified live**, see `ACCEPTANCE_RESULTS.md`. Only `read-write` registered projects; the review box lists changed files but has no "View diff" yet.
+- **A5 is built (cafb8a0) and verified live**, see `ACCEPTANCE_RESULTS.md`. Only `read-write` registered projects; View diff (cc79820) shows the real Git diff before and after approval.
 - **Board → Missions, Team → Settings, Processes → Diagnostics.** Not done (priority 4 of the slice).
 - **Panel controls.** Stop and Pause were added (565b818) and verified live. Resume of a task paused before its worker's first event fails in Kandev ("Agent startup failed"); the panel shows it as Needs attention. Open worktree and view diff are not built.
 - **Direct dev stories have no panel.** Stories started from Pandesh itself (not through the bridge) don't appear in the worker panels; their approvals are only answerable from the phone page or the API.
@@ -104,7 +106,7 @@ Nothing was merged, pushed, installed or deployed. Production (`E:\Pandesh`) was
 5. **Merge order** for `feat/kandev-live-workers` (it is stacked on `feat/stage-c-vertical-slice`, PR siddharthakki/Pandesh#131).
 
 ## Highest-priority next steps
-1. A5 follow-up: "View diff" in the review box.
+1. Real-project A5 testing on the isolated Build 188 integration (`D:PandeshAssistantDevel188d`): you switch the connector instance and register the projects you choose.
 2. Fix Resume-before-first-event (start a fresh repair session instead of relaunching); add open worktree / view diff; show direct dev stories in the panels.
 3. Repoint the failing scheduled tasks (after your OK).
 4. Do the Board/Team/Processes consolidation.

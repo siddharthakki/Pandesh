@@ -3,7 +3,7 @@
 **Before pushing:** this folder contains a machine inventory (local paths, NAS share names, model stores). Review it before pushing. The Pandesh repository may be public.
 
 ## Branches and worktrees
-- `feat/kandev-live-workers` in `D:\Projects\Pandesh`: bde6f7a → 7e4536a → d96795d → 68db6e9 → fc0aa0e → 6c4146d → 565b818 → cafb8a0 (A5). Stacked on `feat/stage-c-vertical-slice` (PR siddharthakki/Pandesh#131). Not pushed.
+- `feat/kandev-live-workers` in `D:\Projects\Pandesh`: bde6f7a → 7e4536a → d96795d → 68db6e9 → fc0aa0e → 6c4146d → 565b818 → cafb8a0 (A5) → cc79820 (View diff). Stacked on `feat/stage-c-vertical-slice` (PR siddharthakki/Pandesh#131). Not pushed.
 - `feat/capability-consolidation` in worktree `D:\Projects\Pandesh-consolidation` (node_modules is a junction to the main checkout's): 06de824 (inventory + routing) and the commit holding these reports + `scripts/lib/resource-lock.mjs`. Not pushed.
 - Nothing merged, nothing installed. Production `E:\Pandesh` untouched.
 
@@ -37,7 +37,7 @@ Kandev worktrees for the live tasks are under `C:\Users\<you>\.kkd-kandev\tasks\
 
 ## Safe next steps (no owner decision needed)
 1. Rebuild from `feat/capability-consolidation` and run the two router fixes live (image OCR, health phrasing).
-2. Worker panel: fix Resume of a task paused before its first event (repro: Pause right after Allow, then Resume → Kandev "Agent startup failed"); add "Open worktree" and "View diff" (also for the A5 review box).
+2. Worker panel: fix Resume of a task paused before its first event (repro: Pause right after Allow, then Resume → Kandev "Agent startup failed"); add "Open worktree". (View diff is done: cc79820.)
 3. Show direct dev stories (not only bridge tasks) in the worker panels.
 4. `scripts/ci/local-pipeline.mjs` using `resource-lock.mjs` (`CI_CD_AUTOMATION_PLAN.md`).
 5. Join the model store inventory with the Ollama API inventory (created models' manifests are not on disk).
