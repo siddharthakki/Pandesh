@@ -81,6 +81,14 @@ export interface DevStorySpec {
     projectName: string; sourcePath: string; ref: string; sourceHead: string; sourceStatusSha: string;
     /** The task asked for tests: at least one new (or newly passing) test is required, as Pandesh's own test run sees it. */
     testsRequested?: boolean;
+    /**
+     * The owner's development grant for a multi-step mission (given once, on the mission's approval card): a step whose change passes
+     * Pandesh's own test run (tests ran, no regression, no failing new test) and whose diff raises no review flag is committed onto the
+     * integration branch IN THE PRIVATE COPY without a further click, so the next step can start. Bounded by expiry and revocable
+     * ([kkd-dev:grant-revoked]); anything else still waits for the owner's review. Delivery into the owner's checkout, push and merge are
+     * never covered.
+     */
+    grant?: { id: string; expiresAt: string; steps: number };
   };
 }
 
@@ -584,6 +592,33 @@ function baselineTests(db: CoreDatabase, storyId: string, spec: DevStorySpec): P
   return run;
 }
 
+/**
+ * An account problem in what the worker (or Kandev) reported: a usage limit or a sign-in that no longer works. Retrying cannot fix
+ * either, so the step is parked with the agent's own words (Pandesh never guesses how much quota is left or when it resets).
+ */
+export function accountProblem(text: string | null | undefined): { kind: 'usage_limit' | 'signin'; tag: string; reason: string } | null {
+  const t = String(text ?? '');
+  // Only phrasings Claude Code / the API actually print; a task ABOUT rate limiting must not trip this.
+  if (/usage limit (?:reached|hit|exceeded)|hit your (?:usage |session |weekly )?limit|(?:5|five)-hour limit reached|weekly limit reached|limit reached\s*[∙·|]\s*resets|rate_limit_error|API Error:\s*(?:429|529)|overloaded_error|out of extra usage/i.test(t)) {
+    return { kind: 'usage_limit', tag: '[kkd-dev:account-limit]', reason: `the agent reported a usage limit: "${t.replace(/\s+/g, ' ').trim().slice(0, 240)}"` };
+  }
+  if (/not logged in|please run \/login|invalid api key|authentication_error|oauth token (?:has )?expired|API Error:\s*401/i.test(t)) {
+    return { kind: 'signin', tag: '[kkd-dev:signin-expired]', reason: `the agent cannot sign in: "${t.replace(/\s+/g, ' ').trim().slice(0, 240)}"` };
+  }
+  return null;
+}
+
+/**
+ * The development grant still applies to this story: not expired and not revoked. Revocation is a `[kkd-dev:grant-revoked]` comment on
+ * the story (written by the owner's revoke action or by cancelling the mission); after it every step waits for the owner's review again.
+ */
+export function grantInForce(db: CoreDatabase, storyId: string, grant: NonNullable<NonNullable<DevStorySpec['codeCopy']>['grant']>, now = Date.now()): typeof grant | null {
+  if (!(Date.parse(grant.expiresAt) > now)) return null;
+  if (listComments(db, storyId).some(c => c.body.startsWith(GRANT_REVOKED_TAG))) return null;
+  return grant;
+}
+export const GRANT_REVOKED_TAG = '[kkd-dev:grant-revoked]';
+
 function changedFiles(worktree: string, base: string): string[] {
   const committed = git(worktree, ['diff', '--name-only', `${base}...HEAD`]).out.split('\n');
   // Porcelain lines are "XY path"; parse the raw output (git() trims, which would eat a leading " M").
@@ -786,6 +821,7 @@ export async function verifyAndIntegrate(db: CoreDatabase, kandev: KandevClient,
   // A5: Pandesh runs the project's own tests on the base and on the change and compares them per test. A regression, a failing new test
   // or (when the task asked for tests) no new test sends the work back; tests that were already failing are reported, never hidden.
   let testReport = '';
+  let testsProven = false;
   if (spec.codeCopy) {
     const base = baselineTests(db, story.id, spec);
     const after = runProjectTests(worktree);
@@ -794,14 +830,18 @@ export async function verifyAndIntegrate(db: CoreDatabase, kandev: KandevClient,
     const verdict = judgeTests(cmp, spec.codeCopy.testsRequested === true);
     if (!verdict.ok) return fail(`Pandesh's own test run: ${verdict.what}`, `${after.output}\n\nFix it (do not weaken or delete tests), and stop. Tests that were already failing before your change are not yours to fix unless the task asks.`);
     testReport = verdict.report;
+    // Only a per-test comparison (or a passing suite) is evidence enough to commit without a person looking.
+    testsProven = after.ran && (cmp.perTest || after.ok);
   }
+  const grant = spec.codeCopy?.grant && testsProven && !diff.reviewReasons.length ? grantInForce(db, story.id, spec.codeCopy.grant) : null;
   const level: VerificationLevel = accepted ? 'independent' : 'worker-only';
   addComment(db, story.id, {
     author: DEV_ACTOR,
     body: `[kkd-dev:verified] level=${level}; \`${spec.verify.join(' ')}\` passed in the worktree${accepted ? `; independent acceptance ${accepted.passed}/${accepted.total} (${accepted.names.join(', ')})` : ''}.${testReport ? ` ${testReport}` : ''}\nChanged: ${files.join(', ')}\n${check.out.slice(-600)}`,
   });
   // An A5 change always waits for the owner's review, whatever was verified: only the owner decides what reaches their project.
-  if (!reviewApproved && (level === 'worker-only' || diff.reviewReasons.length || spec.codeCopy)) {
+  const needsReview = spec.codeCopy ? !grant : (level === 'worker-only' || diff.reviewReasons.length > 0);
+  if (!reviewApproved && needsReview) {
     // Nothing independent verifies this result (or the diff looks like it weakened tests): "the worker finished" is not
     // "it is correct". Hold it for a person and keep dependents locked.
     walk(db, story, ['validation', 'delivery_approval'], 'worker finished and its own tests pass; waiting for a human review');
@@ -855,7 +895,7 @@ export async function verifyAndIntegrate(db: CoreDatabase, kandev: KandevClient,
   }
   const sha = git(integ.dir, ['rev-parse', '--short', 'HEAD']).out;
   walk(db, getStory(db, story.id), ['done'], `integrated as ${sha} on ${spec.integrationBranch}`);
-  addComment(db, story.id, { author: DEV_ACTOR, body: `[kkd-dev:integrated] ${sha} on ${spec.integrationBranch} (branch ${branch}); level=${level}${reviewApproved ? ' (human-reviewed)' : ''}${opts.recovery ? ' (verified from preserved worker output; worker not restarted)' : ''}; \`${spec.verify.join(' ')}\`${checks.length ? ' and independent acceptance' : ''} passed after merge.` });
+  addComment(db, story.id, { author: DEV_ACTOR, body: `[kkd-dev:integrated] ${sha} on ${spec.integrationBranch} (branch ${branch}); level=${level}${reviewApproved ? ' (human-reviewed)' : grant ? ` (committed under the owner's development grant ${grant.id} after Pandesh's own test run passed)` : ''}${opts.recovery ? ' (verified from preserved worker output; worker not restarted)' : ''}; \`${spec.verify.join(' ')}\`${checks.length ? ' and independent acceptance' : ''} passed after merge.` });
   // Stop first: Kandev's stop handler moves the task back to REVIEW, which would undo COMPLETED.
   await kandev.stopTask(taskId, 'KKD integrated the story').catch(() => { /* already idle */ });
   await kandev.setTaskState(taskId, 'COMPLETED'); // releases Kandev dependents
@@ -916,8 +956,11 @@ export async function reconcileDevStories(db: CoreDatabase, kandev: KandevClient
     const session = (await kandev.sessions(task.id))[0];
     if (session?.state === 'FAILED' && story.status !== 'blocked') {
       // Kandev could not start (or lost) the worker. Without this the story would read "starting" forever.
-      walk(db, story, ['blocked'], 'the worker session failed');
-      addComment(db, story.id, { author: DEV_ACTOR, body: `[kkd-dev:needs-human] [kkd-dev:launch-failed] Kandev worker session failed: ${(session.error_message ?? 'no error reported').slice(0, 300)}. Fix the cause, then retry.` });
+      const account = accountProblem(session.error_message);
+      walk(db, story, ['blocked'], account ? account.reason.slice(0, 200) : 'the worker session failed');
+      addComment(db, story.id, { author: DEV_ACTOR, body: account
+        ? `[kkd-dev:needs-human] ${account.tag} ${account.kind === 'usage_limit' ? 'Claude could not continue: ' : 'Claude is not signed in: '}${account.reason}. Not retried automatically (a retry cannot fix it). The worktree is kept; Retry once ${account.kind === 'usage_limit' ? 'the limit has reset' : 'Claude Code is signed in again (open it once)'}.`
+        : `[kkd-dev:needs-human] [kkd-dev:launch-failed] Kandev worker session failed: ${(session.error_message ?? 'no error reported').slice(0, 300)}. Fix the cause, then retry.` });
       continue;
     }
     if (story.status === 'blocked') {
@@ -970,6 +1013,16 @@ export async function reconcileDevStories(db: CoreDatabase, kandev: KandevClient
     }
     if (session.worktree_path) { try { linkDependencies(spec.repoPath, session.worktree_path); } catch { /* verify will report it */ } }
     if (story.status === 'implementing') {
+      // A worker that hit a usage limit or lost its sign-in often stays "running" with that error as its last message: park it with
+      // the agent's own words instead of nudging it (a nudge would only spend another turn on the same error).
+      const lastSaid = (await Promise.resolve().then(() => kandev.agentMessages(session.id, 5)).catch(() => [])).filter(m => m.kind === 'message' || m.kind === 'error').pop();
+      const account = lastSaid ? accountProblem(lastSaid.text) : null;
+      if (account && lastSaid!.text.length < 600) {
+        await kandev.stopTask(task.id, `KKD: ${account.kind === 'usage_limit' ? 'usage limit' : 'sign-in'} reported by the agent`).catch(() => { /* already idle */ });
+        walk(db, story, ['blocked'], account.reason.slice(0, 200));
+        addComment(db, story.id, { author: DEV_ACTOR, body: `[kkd-dev:needs-human] ${account.tag} ${account.reason}. The worker was stopped and not retried; the worktree is kept. Retry once ${account.kind === 'usage_limit' ? 'the limit has reset' : 'Claude Code is signed in again'}.` });
+        continue;
+      }
       await relayWorkerNarrative(db, kandev, story, session.id).catch(() => { /* cosmetic: never block reconciliation */ });
       if (await nudgeIfSilent(db, kandev, story, task.id, session.id).catch(() => false)) continue;
     }

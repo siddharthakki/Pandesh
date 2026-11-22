@@ -13,7 +13,8 @@ import * as path from 'node:path';
 import type { CoreDatabase } from '../../db/connection';
 import { CoreError } from '../../domain/errors';
 import { runHardenedGit } from '../../security/hardenedGit';
-import { addComment, getStory, listComments } from '../../domain/stories';
+import { addComment, getStory, listComments, listStories } from '../../domain/stories';
+import type { StoryRecord } from '../../shared/wireTypes';
 import { loadProjects, projectAllows, resolveProject, type ProjectRecord } from '../../domain/projectRegistry';
 import { asksForChange, deriveMutationPolicy } from '../../domain/mutationPolicy';
 import { consumeApproval, decideApproval, pendingApproval, recordDirectApproval, requestApproval, usableApproval, withdrawApproval, type ExternalApprovalRequest } from '../../domain/bridgeApprovals';
@@ -24,7 +25,7 @@ import { newId } from '../../domain/ids';
 import {
   attachBridgeExecution, claimBridgeDispatch, evaluateTransferPolicy, getBridgeTask, getPairing, listBridgeTasks, recordBridgeStatus,
   setBridgeControl, TERMINAL_BRIDGE_STATUSES, BRIDGE_ACTIVITY_LIMIT,
-  type BridgeTaskOutcome, type BridgeTaskRecord, type BridgeTaskResult, type BridgeTaskStatus, type BridgeTransferConsent,
+  type BridgeTaskOutcome, type BridgeTaskRecord, type MissionStep, type BridgeTaskResult, type BridgeTaskStatus, type BridgeTransferConsent,
 } from '../../domain/pandaBridge';
 import { detectGpu, gpuLaneLimit, type GpuInfo } from '../hardwareCapacity';
 import type { RuntimeExecutor } from '../executor';
@@ -35,7 +36,7 @@ import { asksForTests, isReadOnlyIntent, resolveTaskIntent, type TaskIntent, typ
 import { allDeclarations, BUILTIN_WORKFLOWS, routeTask, trackRecords } from './capabilityRegistry';
 import { judgeTests, type TestComparison } from './projectTests';
 import {
-  DEV_ACTOR, TESTS_TAG, AGENT_IDS, approveDevStoryReview, checkoutFingerprint, devSpec, devStoryChangeDiff, devStoryDetail, devStoryWorkerEvents, dispatchDevStories, planDevStories, retryDevStory, stopDevStory, usesLocalGpu, type DevAgent, type DevStorySpec,
+  DEV_ACTOR, GRANT_REVOKED_TAG, TESTS_TAG, AGENT_IDS, approveDevStoryReview, checkoutFingerprint, devSpec, devStoryChangeDiff, devStoryDetail, devStoryWorkerEvents, dispatchDevStories, planDevStories, retryDevStory, stopDevStory, usesLocalGpu, type DevAgent, type DevStorySpec,
 } from './devStories';
 import { unavailableDiff, type ChangeDiff } from './changeDiff';
 
@@ -261,6 +262,9 @@ export const CODE_CHANGE_MAX_FILES = 20;
  */
 export interface ProjectIntent { project: ProjectRecord; path: string; ref: string | null; readOnlyRequested: boolean; mode: 'inspect' | 'code'; intent: TaskIntent }
 
+/** The mission steps of a task (empty for a single task). */
+export const missionOf = (task: Pick<BridgeTaskRecord, 'sourceRef'>): MissionStep[] => task.sourceRef?.plan ?? [];
+
 /** The kind of work that governs a relayed task: what the requester declared, else what its text asks for (core/domain/taskIntent.ts). */
 export function taskIntentOf(task: Pick<BridgeTaskRecord, 'instruction' | 'sourceRef'>): TaskIntent {
   return resolveTaskIntent(task.instruction, task.sourceRef?.declaredIntent ?? null);
@@ -331,8 +335,12 @@ function previewInspection(intent: ProjectIntent): { branch: string; commit: str
 }
 
 /** What the card says the agent may do; the dispatch checks the approved text against the current intent. */
-export function accessLevelOf(intent: ProjectIntent | null): string {
+/** How long a mission's development grant lasts after the owner allows it. */
+export const MISSION_GRANT_MS = 4 * 60 * 60_000;
+
+export function accessLevelOf(intent: ProjectIntent | null, missionSteps = 0): string {
   if (!intent) return 'Answer only: no project is shared and no file may be changed';
+  if (intent.mode === 'code' && missionSteps > 1) return `Mission of ${missionSteps} code-change steps in isolated worktrees of one private copy (at most ${CODE_CHANGE_MAX_FILES} files per step, tests allowed). Development grant for ${MISSION_GRANT_MS / 3_600_000} hours: a step whose change passes Pandesh's own test run is committed in the private copy without asking again and the next step starts; anything else waits for your review. No push, no merge, no install, nothing in your checkout unless you ask`;
   if (intent.mode === 'code') return `Code change in an isolated worktree of a private copy: it may change at most ${CODE_CHANGE_MAX_FILES} files there and run tests; no push, no merge, no install`;
   return 'Read-only inspection of a private copy: it may read files and run existing tests, it cannot change anything';
 }
@@ -364,14 +372,17 @@ async function requestExternalApproval(rt: BridgeRuntime, task: BridgeTaskRecord
     preview
       ? `Everything ${chosen.label} reads ${intent!.mode === 'code' ? 'or writes ' : ''}in a private copy of ${intent!.project.name} (branch ${preview.branch} at ${preview.commit}) goes there too. Your own checkout is not shared${preview.uncommittedFiles ? `, and ${preview.uncommittedFiles} uncommitted or untracked file(s) in it are not part of the copy` : ''}.`
       : `No project is shared: this is an answer-only task. ${chosen.label} gets an empty folder, may not change any file, and only the task text goes to ${provider}.`,
-    ...(intent?.mode === 'code' ? [`The change stays in that copy: nothing is pushed, merged or installed. Pandesh runs the project's tests before and after the change, you review it in Pandesh first, and it reaches your checkout only if you ask, as a new branch.`] : []),
+    ...(intent?.mode === 'code' && missionOf(task).length > 1 ? [
+      `This is a mission of ${missionOf(task).length} steps (listed in the task). Allowing it grants, for ${MISSION_GRANT_MS / 3_600_000} hours: each step whose change passes Pandesh's own before/after test run is committed to one branch in that copy without asking you again, and the steps that depend on it start. A step that fails Pandesh's checks, or whose diff looks like it weakens tests, waits for your review. Stop ends the grant at once.`,
+      `Nothing is pushed, merged or installed, and nothing reaches your checkout unless you ask for it as a new branch at the end.`,
+    ] : intent?.mode === 'code' ? [`The change stays in that copy: nothing is pushed, merged or installed. Pandesh runs the project's tests before and after the change, you review it in Pandesh first, and it reaches your checkout only if you ask, as a new branch.`] : []),
     `Pandesh reads this task as ${intent ? (intent.mode === 'code' ? 'a code change' : 'a read-only inspection') : 'an answer only'}: ${(intent?.intent ?? taskIntentOf(task)).reason}${(intent?.intent ?? taskIntentOf(task)).source === 'declared' ? ' (declared by the requester)' : ''}.`,
     includeContext ? 'The ChatGPT conversation context you chose to share is included.' : 'No ChatGPT conversation context is included.',
   ];
   const request = requestApproval(rt.db, {
     taskId: task.id, executor: chosen.id, agentLabel: chosen.label, provider, model: req.model ?? null,
     project: intent && preview ? { name: intent.project.name, branch: preview.branch, commit: preview.commit, access: intent.project.access, uncommittedFiles: preview.uncommittedFiles } : null,
-    accessLevel: accessLevelOf(intent),
+    accessLevel: accessLevelOf(intent, missionOf(task).length),
     exposure, instruction: task.instruction.slice(0, 2000), instructionSha256: task.instructionSha256,
     sensitivity: task.sensitivity, sensitivityReasons: task.sensitivityReasons, includeContext, requestedBy: req.decidedBy,
   });
@@ -504,7 +515,7 @@ export async function dispatchBridgeTask(rt: BridgeRuntime, taskId: string, req:
     const now = previewInspection(intent);
     // The approved access must be exactly what would run now: an inspection card never starts a change, and a change needs a project
     // that is still read-write. (Before A5 this also required access 'read', which made read-write projects impossible to inspect.)
-    const sameAccess = approved.access === accessLevelOf(intent) && (intent.mode === 'inspect' || intent.project.access === 'read-write');
+    const sameAccess = approved.access === accessLevelOf(intent, missionOf(task).length) && (intent.mode === 'inspect' || intent.project.access === 'read-write');
     if (approved.project !== intent.project.name || approved.branch !== now.branch || (approved.commit ?? null) !== now.commit || !sameAccess) {
       throw new CoreError('conflict', `'${intent.project.name}' changed since you approved this (now ${now.branch} at ${now.commit}); nothing was copied or sent. Ask again to see the new details.`, { reason: 'approval_scope_changed' });
     }
@@ -545,7 +556,35 @@ async function startAcp(rt: BridgeRuntime, task: BridgeTaskRecord, agent: DevAge
   let storyId = task.storyId;
   let projectId = task.projectId;
   let workspace = task.workspacePath;
-  if (!storyId && inspection?.mode === 'code') {
+  const steps = missionOf(task);
+  let storyIds: string[] | undefined;
+  if (!storyId && inspection?.mode === 'code' && steps.length > 1) {
+    // A mission: one dependent story per step, all in Kandev worktrees of ONE private copy, integrated in order onto one branch. The
+    // owner's approval of the mission card is the development grant the steps carry (bounded by time; revoked by Stop).
+    workspace = inspection.cloneDir;
+    const objective = task.instruction.split('\nSteps (')[0]!.trim();
+    const grant = { id: `grant-${task.id.slice(-12)}`, expiresAt: new Date(Date.now() + MISSION_GRANT_MS).toISOString(), steps: steps.length };
+    const plan = planDevStories(db, {
+      // A project of its own per mission, so the task's projectId names exactly its steps.
+      projectName: `Panda mission ${task.id.slice(-12)}`,
+      repoPath: workspace,
+      baseBranch: inspection.ref,
+      integrationBranch: `panda/mission-${task.id.slice(-12)}`,
+      verify: ['git', 'status', '--porcelain'],
+      stories: steps.map((s, i) => ({
+        key: s.key, title: `${inspection.project.name} ${i + 1}/${steps.length}: ${s.instruction}`.slice(0, 80),
+        description: [`Mission objective: ${objective}`, '', `This step (${s.key}): ${s.instruction}`, s.dependsOn.length ? `It builds on the already integrated steps: ${s.dependsOn.join(', ')}.` : ''].join('\n'),
+        agent, ...(model ? { model } : {}), dependsOn: s.dependsOn,
+        acceptanceCriteria: ['The step\'s change is made in this repository', 'Tests that passed before still pass'],
+        maxFiles: CODE_CHANGE_MAX_FILES,
+        codeCopy: { projectName: inspection.project.name, sourcePath: inspection.sourcePath, ref: inspection.ref, sourceHead: inspection.sourceHead, sourceStatusSha: inspection.sourceStatusSha, testsRequested: asksForTests(s.instruction), grant },
+      })),
+    });
+    storyIds = plan.stories.map(s => s.id);
+    storyId = storyIds[0]!;
+    projectId = plan.projectId;
+    attachBridgeExecution(db, task.id, { projectId, storyId, workspacePath: workspace });
+  } else if (!storyId && inspection?.mode === 'code') {
     // A5: the change is made in Kandev's worktree of the private copy, verified, held for the owner's review, then integrated onto a
     // branch inside the copy. The copy has no remote; the owner's checkout is never a worktree, a base or an integration target.
     workspace = inspection.cloneDir;
@@ -603,8 +642,12 @@ async function startAcp(rt: BridgeRuntime, task: BridgeTaskRecord, agent: DevAge
     projectId = plan.projectId;
     attachBridgeExecution(db, task.id, { projectId, storyId, workspacePath: workspace });
   }
-  await dispatchWhenKandevIsReady(rt, projectId!, storyId, task.conversationId);
-  recordBridgeStatus(db, task.id, 'running', inspection?.mode === 'code'
+  // A mission retried after a failed start re-dispatches all its steps (handing over is idempotent per story).
+  if (!storyIds && steps.length > 1 && projectId) storyIds = missionStories(db, projectId).map(s => s.id);
+  await dispatchWhenKandevIsReady(rt, projectId!, storyIds ?? [storyId], task.conversationId);
+  recordBridgeStatus(db, task.id, 'running', steps.length > 1 && inspection
+    ? `Mission of ${steps.length} steps started on a private copy of ${inspection.project.name} (branch ${inspection.ref}); steps run in dependency order. Nothing is pushed and your checkout is not touched.`
+    : inspection?.mode === 'code'
     ? `${KNOWN[agent].label} is changing a private copy of ${inspection.project.name} (branch ${inspection.ref}); nothing is pushed and your checkout is not touched.`
     : inspection
     ? `${KNOWN[agent].label} is inspecting a read-only copy of ${inspection.project.name} (branch ${inspection.ref}); your checkout is not touched.`
@@ -615,11 +658,11 @@ async function startAcp(rt: BridgeRuntime, task: BridgeTaskRecord, agent: DevAge
  * Kandev answers its very first calls after a cold start with an empty error while it seeds its first workspace. Handing a
  * story over is idempotent (a Kandev task is bound to its story id), so wait a moment and try again instead of failing the task.
  */
-async function dispatchWhenKandevIsReady(rt: BridgeRuntime, projectId: string, storyId: string, conversationId: string | null): Promise<void> {
+async function dispatchWhenKandevIsReady(rt: BridgeRuntime, projectId: string, storyIds: string[], conversationId: string | null): Promise<void> {
   let last: unknown;
   for (let attempt = 0; attempt < 6; attempt++) {
     try {
-      await dispatchDevStories(rt.db, rt.kandev, { projectId, storyIds: [storyId], conversationId });
+      await dispatchDevStories(rt.db, rt.kandev, { projectId, storyIds, conversationId });
       return;
     } catch (err) {
       last = err;
@@ -749,9 +792,11 @@ export function outcomeOf(db: CoreDatabase, task: BridgeTaskRecord, storyStatus:
   if (storyStatus === 'done') {
     if (intent === 'code') {
       const delivered = task.result?.codeChange?.delivered;
+      const underGrant = /development grant/.test(last('[kkd-dev:integrated]')?.body ?? '');
+      const how = underGrant ? 'passed Pandesh\'s own test run and was committed under your development grant' : 'was approved by you and committed';
       return delivered
-        ? o('delivered', `The requested change to ${project} was approved by you and is in your checkout as the new branch ${delivered.branch} (not checked out, not merged, not pushed). ${testLine}`)
-        : o('outcome_completed', `The requested change to ${project} was approved by you and committed to ${spec.integrationBranch} in Pandesh's private copy; nothing was pushed, merged or installed. ${testLine} It reaches your checkout only if you choose "Bring into my checkout".`);
+        ? o('delivered', `The requested change to ${project} ${how}, and is in your checkout as the new branch ${delivered.branch} (not checked out, not merged, not pushed). ${testLine}`)
+        : o('outcome_completed', `The requested change to ${project} ${how} to ${spec.integrationBranch} in Pandesh's private copy; nothing was pushed, merged or installed. ${testLine} It reaches your checkout only if you choose "Bring into my checkout".`);
     }
     if (intent === 'answer') return o('worker_finished', 'Answered. The reply is the worker\'s own; no project was shared and no file changed.');
     return o('worker_finished', `Inspection of ${project} finished. The findings, including any test results, are the worker's own report; Pandesh checked only that nothing changed. No code was changed.`);
@@ -764,6 +809,10 @@ export function outcomeOf(db: CoreDatabase, task: BridgeTaskRecord, storyStatus:
       return o('worker_failed', `The worker made no changes${explanation ? ` and explained why: ${explanation}` : ', and gave no explanation.'}${intent === 'code' ? ' The requested change was not made.' : ''}`);
     }
     const needs = last('[kkd-dev:needs-human]');
+    // The worker could not run at all (usage limit, sign-in, launch failure): that is the worker failing, not a check failing.
+    if (needs && /\[kkd-dev:(account-limit|signin-expired|launch-failed)\]/.test(needs.body)) {
+      return o('worker_failed', `${needs.body.replace(/\[kkd-dev:[\w-]+\]\s*/g, '').trim().slice(0, 500)}${intent === 'code' ? ' The requested change was not made.' : ''}`);
+    }
     return o('verification_failed', `Pandesh's checks did not accept the result${failedWhat ? `: ${failedWhat}` : needs ? `: ${needs.body.replace('[kkd-dev:needs-human]', '').trim().slice(0, 300)}` : '.'}${intent === 'code' ? ' The requested change was not delivered.' : ''}`);
   }
   if (failed && intent === 'code' && (storyStatus === 'implementing' || storyStatus === 'review')) {
@@ -772,12 +821,79 @@ export function outcomeOf(db: CoreDatabase, task: BridgeTaskRecord, storyStatus:
   return o('worker_running', 'Working.');
 }
 
+/** A mission's steps (its own project's stories), in plan order. */
+export function missionStories(db: CoreDatabase, projectId: string): StoryRecord[] {
+  return listStories(db, { projectId, limit: 50 }).filter(s => devSpec(s)?.codeCopy).sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id));
+}
+
+/**
+ * Mirrors a mission: each step's own outcome (from KKD's records), and one overall status that never claims more than the steps show.
+ * Completed only when every step is integrated; a stopped step makes the mission need attention (the steps after it wait); a step held
+ * for review makes it await the owner. Worker events come from the step that is working now.
+ */
+async function refreshMission(rt: BridgeRuntime, task: BridgeTaskRecord): Promise<BridgeTaskRecord> {
+  const { db } = rt;
+  const plan = missionOf(task);
+  const stories = task.projectId ? missionStories(db, task.projectId) : [];
+  if (!stories.length || stories.every(s => s.status === 'ready')) return task;
+  const steps: NonNullable<BridgeTaskResult['steps']> = [];
+  const changed = new Set<string>();
+  for (const [i, s] of stories.entries()) {
+    const spec = devSpec(s)!;
+    const detail = await devStoryDetail(db, rt.kandev, s.id).catch(() => null);
+    detail?.changedFiles.forEach(f => changed.add(f));
+    const o = outcomeOf(db, { ...task, storyId: s.id, result: task.result ? { ...task.result, outcome: undefined } : null }, s.status, spec, detail?.changedFiles ?? []);
+    steps.push({ key: plan[i]?.key ?? `step-${i + 1}`, title: s.title, storyId: s.id, storyStatus: s.status, state: o.state, summary: o.summary, tests: o.tests, pendingApprovals: detail?.story.pendingApprovals ?? [] });
+  }
+  const active = stories.find(s => s.status !== 'done') ?? stories[stories.length - 1]!;
+  const activeStep = steps.find(s => s.storyId === active.id)!;
+  const worker = await devStoryWorkerEvents(rt.kandev, active.id).catch(() => null);
+  const spec = devSpec(stories[0]!)!;
+  const project = spec.codeCopy!.projectName;
+  const done = steps.filter(s => s.storyStatus === 'done').length;
+  const stopped = steps.find(s => s.storyStatus === 'blocked');
+  const review = steps.find(s => s.storyStatus === 'delivery_approval');
+  let status: BridgeTaskStatus; let state: BridgeTaskOutcome['state']; let summary: string;
+  if (task.control === 'paused') { status = 'paused'; state = 'worker_running'; summary = `Paused after ${done} of ${steps.length} steps.`; }
+  else if (done === steps.length) {
+    status = 'completed'; state = task.result?.codeChange?.delivered ? 'delivered' : 'outcome_completed';
+    summary = `All ${steps.length} steps of the mission on ${project} are committed to ${spec.integrationBranch} in Pandesh's private copy (nothing pushed, merged or installed). ${steps[steps.length - 1]!.summary.replace(/^.*?(Pandesh ran)/, '$1')}`;
+  } else if (stopped && task.control === 'none') {
+    status = 'needs_attention'; state = stopped.state;
+    summary = `Step ${steps.indexOf(stopped) + 1} of ${steps.length} (${stopped.key}) stopped: ${stopped.summary} ${done} step(s) are done; the steps after it wait.`;
+  } else if (review) {
+    status = 'awaiting_approval'; state = 'awaiting_owner_review';
+    summary = `Step ${steps.indexOf(review) + 1} of ${steps.length} (${review.key}) waits for your review: ${review.summary}`;
+  } else {
+    status = 'running'; state = 'worker_running';
+    summary = `Step ${steps.indexOf(activeStep) + 1} of ${steps.length} (${activeStep.key}) is ${activeStep.storyStatus === 'implementing' ? 'being worked on' : activeStep.storyStatus}; ${done} done. ${activeStep.state === 'worker_running' && activeStep.summary !== 'Working.' ? activeStep.summary : ''}`.trim();
+  }
+  const result: BridgeTaskResult = {
+    verification: done === steps.length ? 'worker-only' : null,
+    evidence: null,
+    changedFiles: [...changed],
+    commit: null,
+    pendingApprovals: activeStep.pendingApprovals,
+    activity: mergeActivity(task.result?.activity ?? [], worker?.events.map(e => ({ ...e, text: redactPaths(e.text) })) ?? null),
+    timeline: [],
+    branch: worker?.branch ?? task.result?.branch ?? null,
+    codeChange: { project, baseRef: spec.codeCopy!.ref, delivered: task.result?.codeChange?.delivered ?? null },
+    steps,
+    outcome: { intent: 'code', state, summary: redactPaths(summary).replace(/\s+/g, ' ').trim(), tests: activeStep.tests, workerExplanation: stopped ? (stopped.summary.match(/explained why: (.*)/)?.[1] ?? null) : null },
+  };
+  recordBridgeStatus(db, task.id, status, result.outcome!.summary.slice(0, 500), result);
+  return getBridgeTask(db, task.id);
+}
+
 /** Brings a relayed task up to date from the work behind it and stores a checkpoint when something changed. */
 export async function refreshBridgeTask(rt: BridgeRuntime, taskId: string): Promise<BridgeTaskRecord> {
   const { db } = rt;
   const task = getBridgeTask(db, taskId);
   if (TERMINAL_BRIDGE_STATUSES.has(task.status) || !['dispatching', 'running', 'awaiting_approval', 'verifying', 'paused', 'needs_attention'].includes(task.status)) return task;
 
+  if (task.storyId && missionOf(task).length > 1) {
+    try { return await refreshMission(rt, task); } catch { recordBridgeStatus(db, taskId, task.status, 'Waiting for the executor to be reachable again.'); return getBridgeTask(db, taskId); }
+  }
   if (task.storyId) {
     const story = getStory(db, task.storyId);
     if (!devSpec(story)) return task;
@@ -834,11 +950,15 @@ export async function refreshBridgeTask(rt: BridgeRuntime, taskId: string): Prom
 }
 
 /** The A5 story behind a relayed task, or a conflict saying why there is none. */
-function codeChangeOf(rt: BridgeRuntime, taskId: string): { task: BridgeTaskRecord; storyId: string; spec: DevStorySpec & { codeCopy: NonNullable<DevStorySpec['codeCopy']> } } {
+function codeChangeOf(rt: BridgeRuntime, taskId: string): { task: BridgeTaskRecord; storyId: string; spec: DevStorySpec & { codeCopy: NonNullable<DevStorySpec['codeCopy']> }; allDone: boolean } {
   const task = getBridgeTask(rt.db, taskId);
-  const spec = task.storyId ? devSpec(getStory(rt.db, task.storyId)) : null;
-  if (!task.storyId || !spec?.codeCopy) throw new CoreError('conflict', 'this task is not a code change');
-  return { task, storyId: task.storyId, spec: spec as DevStorySpec & { codeCopy: NonNullable<DevStorySpec['codeCopy']> } };
+  // A mission's review/approval is about the step that is waiting for it; delivery needs every step done.
+  const stories = task.projectId && missionOf(task).length > 1 ? missionStories(rt.db, task.projectId) : [];
+  const storyId = stories.find(s => s.status === 'delivery_approval')?.id ?? task.storyId;
+  const spec = storyId ? devSpec(getStory(rt.db, storyId)) : null;
+  if (!storyId || !spec?.codeCopy) throw new CoreError('conflict', 'this task is not a code change');
+  const allDone = stories.length ? stories.every(s => s.status === 'done') : getStory(rt.db, storyId).status === 'done';
+  return { task, storyId, spec: spec as DevStorySpec & { codeCopy: NonNullable<DevStorySpec['codeCopy']> }, allDone };
 }
 
 /**
@@ -891,8 +1011,8 @@ export async function bridgeChangeDiff(rt: BridgeRuntime, taskId: string): Promi
  * branch is never overwritten.
  */
 export function deliverBridgeChange(rt: BridgeRuntime, taskId: string, who: string): { branch: string; commit: string } {
-  const { task, storyId, spec } = codeChangeOf(rt, taskId);
-  if (task.status !== 'completed' || getStory(rt.db, storyId).status !== 'done') throw new CoreError('conflict', 'the change is not approved and integrated yet');
+  const { task, spec, allDone } = codeChangeOf(rt, taskId);
+  if (task.status !== 'completed' || !allDone) throw new CoreError('conflict', 'the change is not approved and integrated yet');
   if (task.result?.codeChange?.delivered) return task.result.codeChange.delivered;
   const git = (args: string[], cwd: string) => runHardenedGit(args, { cwd, encoding: 'utf8', windowsHide: true, timeout: 120_000 });
   const tip = git(['rev-parse', '--verify', '--quiet', `refs/heads/${spec.integrationBranch}`], spec.repoPath);
@@ -964,7 +1084,14 @@ export async function cancelBridgeTask(rt: BridgeRuntime, taskId: string, who: s
   if (task.status === 'cancelled' || task.status === 'completed') return task;
   setBridgeControl(rt.db, taskId, 'cancelled');
   activeServices.get(taskId)?.abort();
-  if (task.storyId) {
+  if (task.storyId && task.projectId && missionOf(task).length > 1) {
+    // Stop ends the development grant at once on every step, then stops the steps that are working or waiting.
+    for (const s of missionStories(rt.db, task.projectId)) {
+      if (s.status === 'done') continue;
+      addComment(rt.db, s.id, { author: DEV_ACTOR, body: `${GRANT_REVOKED_TAG} Mission stopped by ${who}; the development grant no longer applies.` });
+      if (['implementing', 'review', 'validation', 'delivery_approval', 'merge_queue'].includes(s.status)) await stopDevStory(rt.db, rt.kandev, s.id, `Mission cancelled by ${who}`).catch(() => { /* reported by the next refresh */ });
+    }
+  } else if (task.storyId) {
     const story = getStory(rt.db, task.storyId);
     if (['implementing', 'review', 'validation', 'delivery_approval', 'merge_queue'].includes(story.status)) {
       await stopDevStory(rt.db, rt.kandev, task.storyId, `Cancelled from the browser bridge by ${who}`);
@@ -1002,7 +1129,8 @@ export function startPandaBridgeLoop(rt: BridgeRuntime, intervalMs = 5_000): () 
           continue;
         }
         // Practical deadline: a tiny bridge job must not run indefinitely. Reuse the existing cancel path.
-        if (t.status === 'running' && Date.now() - Date.parse(t.createdAt) > BRIDGE_TASK_DEADLINE_MS) {
+        // A mission runs as long as its development grant (several Claude steps take longer than one small bridge job).
+        if (t.status === 'running' && Date.now() - Date.parse(t.createdAt) > (missionOf(t).length > 1 ? MISSION_GRANT_MS : BRIDGE_TASK_DEADLINE_MS)) {
           await cancelBridgeTask(rt, t.id, 'Pandesh (deadline)').catch(() => { /* best effort */ });
           continue;
         }

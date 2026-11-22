@@ -47,6 +47,37 @@ export interface BridgeSourceRef {
    * needs a read-write project and the owner's approval. Kept in this JSON column so no schema change is needed (older builds ignore it).
    */
   declaredIntent?: TaskIntentKind;
+  /**
+   * A multi-step mission: ordered steps with dependencies, run as dependent stories in one private copy. The steps are ALSO written
+   * into the instruction text (so the approval card shows them and the instruction digest binds them); this is the structured form.
+   */
+  plan?: MissionStep[];
+}
+
+export interface MissionStep { key: string; instruction: string; dependsOn: string[] }
+export const MISSION_MAX_STEPS = 6;
+
+/** Validates steps: 2..MISSION_MAX_STEPS, unique short keys, dependencies only on EARLIER steps (so there is never a cycle). */
+export function cleanMissionSteps(raw: unknown): MissionStep[] | null {
+  if (raw === undefined || raw === null) return null;
+  if (!Array.isArray(raw) || raw.length < 2 || raw.length > MISSION_MAX_STEPS) throw new CoreError('invalid_request', `a mission has 2 to ${MISSION_MAX_STEPS} steps`);
+  const seen = new Set<string>();
+  return raw.map((s, i) => {
+    const o = (s ?? {}) as Record<string, unknown>;
+    const key = typeof o.key === 'string' && /^[a-z0-9][a-z0-9-]{0,23}$/i.test(o.key) ? o.key.toLowerCase() : `step-${i + 1}`;
+    if (seen.has(key)) throw new CoreError('invalid_request', `step key '${key}' is used twice`);
+    const instruction = typeof o.instruction === 'string' ? o.instruction.replace(/\s+/g, ' ').trim() : '';
+    if (!instruction || instruction.length > 1_500) throw new CoreError('invalid_request', `step '${key}' needs an instruction of at most 1500 characters`);
+    const dependsOn = Array.isArray(o.dependsOn) ? o.dependsOn.map(d => String(d).toLowerCase()) : [];
+    for (const d of dependsOn) if (!seen.has(d)) throw new CoreError('invalid_request', `step '${key}' depends on '${d}', which is not an earlier step`);
+    seen.add(key);
+    return { key, instruction, dependsOn: [...new Set(dependsOn)] };
+  });
+}
+
+/** The steps as text appended to the instruction: what the owner reads on the card and what the digest covers. */
+export function missionStepsText(steps: MissionStep[]): string {
+  return ['', 'Steps (each runs after the steps it depends on; one private copy, one branch):', ...steps.map((s, i) => `${i + 1}. [${s.key}] ${s.instruction}${s.dependsOn.length ? ` (after: ${s.dependsOn.join(', ')})` : ''}`)].join('\n');
 }
 
 export interface BridgeTransferConsent {
@@ -115,6 +146,12 @@ export interface BridgeTaskResult {
    * change being made: `outcome_completed` only follows the owner's approval of a change that passed Pandesh's own checks.
    */
   outcome?: BridgeTaskOutcome;
+  /** A mission's steps, in plan order, each with its own outcome (see BridgeTaskOutcome). */
+  steps?: Array<{
+    key: string; title: string; storyId: string; storyStatus: string;
+    state: BridgeOutcomeState; summary: string; tests: BridgeTaskOutcome['tests'];
+    pendingApprovals: Array<{ pendingId: string; what: string }>;
+  }>;
 }
 
 export type BridgeOutcomeState =
@@ -317,9 +354,11 @@ export interface SubmitBridgeTaskInput {
   markedConfidential?: boolean;
   /** Declared kind of work (see core/domain/taskIntent.ts). Unknown names are refused, never guessed. */
   intent?: string | null;
+  /** A multi-step mission (see cleanMissionSteps). Only for code changes. */
+  steps?: unknown;
 }
 
-function cleanSourceRef(ref: Partial<BridgeSourceRef> | undefined, declaredIntent: TaskIntentKind | null = null): BridgeSourceRef {
+function cleanSourceRef(ref: Partial<BridgeSourceRef> | undefined, declaredIntent: TaskIntentKind | null = null, plan: MissionStep[] | null = null): BridgeSourceRef {
   let url: string | undefined;
   if (typeof ref?.url === 'string') {
     try {
@@ -335,6 +374,7 @@ function cleanSourceRef(ref: Partial<BridgeSourceRef> | undefined, declaredInten
     capturedAt: typeof ref?.capturedAt === 'string' && !Number.isNaN(Date.parse(ref.capturedAt)) ? new Date(ref.capturedAt).toISOString() : nowIso(),
     via: ref?.via === 'panda_mode' ? 'panda_mode' : 'send_button',
     ...(declaredIntent ? { declaredIntent } : {}),
+    ...(plan ? { plan } : {}),
   };
 }
 
@@ -349,6 +389,10 @@ export function submitBridgeTask(db: CoreDatabase, pairing: BridgePairing, input
   if (input.instruction.length > BRIDGE_MAX_INSTRUCTION_CHARS) throw new CoreError('invalid_request', `the instruction is longer than ${BRIDGE_MAX_INSTRUCTION_CHARS} characters`);
   const declaredIntent = input.intent === undefined || input.intent === null || input.intent === '' ? null : parseDeclaredIntent(input.intent);
   if (input.intent && !declaredIntent) throw new CoreError('invalid_request', `unknown intent '${String(input.intent).slice(0, 40)}'; use one of: answer, inspect, code_change, research, operation`);
+  const plan = cleanMissionSteps(input.steps);
+  if (plan && declaredIntent !== 'code') throw new CoreError('invalid_request', 'steps are for a code-change mission: send them with intent code_change');
+  // The steps are part of what the owner approves: they are in the instruction text, so its digest covers them.
+  if (plan) input = { ...input, instruction: `${input.instruction.trim()}\n${missionStepsText(plan)}` };
   if (input.context !== undefined && input.context !== null) {
     if (input.context.userConfirmed !== true) throw new CoreError('invalid_request', 'conversation context is only accepted after the user confirmed sharing it');
     if (typeof input.context.text !== 'string' || input.context.text.length > BRIDGE_MAX_CONTEXT_CHARS) throw new CoreError('invalid_request', `shared context must be text of at most ${BRIDGE_MAX_CONTEXT_CHARS} characters`);
@@ -361,7 +405,7 @@ export function submitBridgeTask(db: CoreDatabase, pairing: BridgePairing, input
     const digest = sha256(input.instruction);
 
     const { sensitivity, reasons } = classifySensitivity(input.instruction + (input.context?.text ? `\n${input.context.text}` : ''), input.markedConfidential === true);
-    const sourceRef = cleanSourceRef(input.sourceRef, declaredIntent);
+    const sourceRef = cleanSourceRef(input.sourceRef, declaredIntent, plan);
     const id = newId('ptask');
     const now = nowIso();
     const title = input.instruction.replace(/\s+/g, ' ').trim().slice(0, 80);
