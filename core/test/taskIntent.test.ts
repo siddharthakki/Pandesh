@@ -22,6 +22,14 @@ describe('task intent', () => {
     expect(deriveTaskIntent('Review the code; do not change any files or push.')).toMatchObject({ kind: 'inspect', conflict: null });
   });
 
+  it('a narrow constraint limits a change; it does not make the task read-only', () => {
+    expect(deriveTaskIntent('Implement divide(a, b) in src/divide.js with tests. Do not change src/add.js; its failing test is out of scope.')).toMatchObject({ kind: 'code', conflict: null });
+    expect(deriveTaskIntent('Add a multiply function. Do not modify the tests in test/add.test.js.')).toMatchObject({ kind: 'code', conflict: null });
+    expect(deriveTaskIntent('Fix the bug in add(). Do not touch the README.')).toMatchObject({ kind: 'code', conflict: null });
+    expect(deriveTaskIntent('Fix the bug in add(). Do not modify any other files.')).toMatchObject({ kind: 'code', conflict: null });
+    expect(deriveTaskIntent('Explain add(); do not change the code.').kind).toBe('inspect');
+  });
+
   it('a change AND read-only is a contradiction to resolve, never a silent inspection', () => {
     const i = deriveTaskIntent('Implement divide(a, b) with tests. This is read-only.');
     expect(i.conflict).toMatch(/both asks for a code change and says/);

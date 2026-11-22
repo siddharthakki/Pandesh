@@ -78,8 +78,11 @@ const EXPLICIT_READ_ONLY: RegExp[] = [
   /\b(?:inspection|report|answer|analysis|explanation|review)[- ]only\b/i,
   // "only inspect", "just explain"; not "owner-only review approval" (an approval rule, not a scope).
   /(?<![-\w])(?:only|just) (?:inspect|look|read|report|explain|answer|review|tell me)\b(?! (?:approval|gate|step))/i,
-  /\b(?:do not|don't|dont|never|must not|mustn't|should not)\s+(?:modify|change|edit|write(?: to)?|touch|alter|update|patch|create|delete|make (?:any )?changes to|fix|implement)\b/i,
-  /\bwithout (?:modifying|changing|editing|writing|touching|altering|making (?:any )?changes)\b/i,
+  // Only a prohibition over the work AS A WHOLE ("do not modify any files", "don't change the code"). A narrow constraint ("do not change
+  // src/add.js", "do not modify the tests") limits a change; it does not make the task read-only (same rule as mutationPolicy).
+  /\b(?:do not|don't|dont|never|must not|mustn't|should not)\s+(?:modify|change|edit|write(?: to)?|touch|alter|update|patch|make (?:any )?changes to)\s+(?:any(?:thing| files?| code| source(?: code)?)?|anything|(?:the |this )?(?:files|codebase|code ?base|workspace)|(?:the |this )(?:code|source(?: code)?|repo(?:sitory)?|project))\b(?!\s+(?:other|else|unrelated|additional|outside|beyond|except)\b)(?!\s*(?:in|of|at|under)\s+\S*[./\\])(?![\w-]|[./\\]\w)/i,
+  /\bwithout (?:modifying|changing|editing|writing|touching|altering)\s+(?:any(?:thing| files?| code)?|anything|(?:the )?(?:files|code|codebase|repo(?:sitory)?|project|workspace))\b/i,
+  /\bwithout making (?:any )?changes\b/i,
   /\bno (?:code |file |workspace )?(?:changes|modifications|edits)\b/i,
 ];
 
