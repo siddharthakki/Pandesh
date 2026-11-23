@@ -14,6 +14,7 @@ export const RECENT_MS = 24 * 60 * 60_000;
 /** A task no executor has picked up for this long is stuck, not "in flight" (seen on the scratch profile: days-old browser tasks). */
 export const UNCLAIMED_MS = 30 * 60_000;
 const UNCLAIMED_STATES = new Set(['waiting_for_executor', 'queued']);
+const WAITING_STATES = new Set(['waiting_for_approval', 'waiting_for_model', 'waiting_for_executor', 'paused', 'queued']);
 
 const BRIDGE_DONE = new Set(['completed', 'failed', 'cancelled']);
 const TASK_DONE_OK = new Set(['completed', 'succeeded']);
@@ -66,6 +67,10 @@ export function eventLine(b: Pick<BridgeActivityItem, 'lastEventAt' | 'state' | 
   if (!Number.isFinite(at)) return { text: 'no worker event yet', live: false };
   const ms = now - at;
   const what = b.latest ? ` · ${b.latest.kind.replace(/^tool_/, '').replace(/_/g, ' ')}` : '';
+  // Finished work is history, not silence.
+  if (BRIDGE_DONE.has(b.state)) return { text: `${b.state} · last event ${new Date(at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`, live: false };
+  // A worker that finished its turn and waits (for the owner, the GPU, a resume) is not stale telemetry: say what it waits for.
+  if (WAITING_STATES.has(b.state)) return { text: `waiting ${age(ms)} · worker's last event ${new Date(at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`, live: false };
   if (ms >= LIVE_MS) return { text: `no event for ${age(ms)} (stale)`, live: false };
   return { text: `last event ${age(ms)} ago${what}`, live: !BRIDGE_DONE.has(b.state) };
 }
@@ -86,7 +91,8 @@ export function buildHome({ missions, bridge, approvals, tasks, snapshot, now }:
   for (const a of approvals) decisions.push({ id: `cloud:${a.requestId}`, kind: 'cloud_agent', title: `Allow ${a.agentLabel} to work on this task?`, detail: a.instruction, source: `Browser · ${a.provider}`, at: a.requestedAt, target: { kind: 'missions', view: 'flight' } });
   for (const b of bridge) {
     for (const p of b.pendingWorkerActions ?? []) decisions.push({ id: `perm:${p.pendingId}`, kind: 'worker_permission', storyId: b.storyId, pendingId: p.pendingId, title: `${engineLabel(b.executor)} asks to: ${p.what}`, detail: b.instruction, source: engineLabel(b.executor), at: b.lastEventAt, target: { kind: 'missions', view: 'flight', id: b.id } });
-    if (b.codeChange?.awaitingReview) decisions.push({ id: `change:${b.id}`, kind: 'change_review', title: `Review the change to ${b.codeChange.project}`, detail: `${plural(b.codeChange.changedFiles.length, 'file')} changed: ${b.codeChange.changedFiles.slice(0, 3).join(', ')}`, source: engineLabel(b.executor), at: b.lastEventAt, target: { kind: 'missions', view: 'flight', id: b.id } });
+    // Core's own outcome already holds Pandesh's before/after test run: the owner sees it before opening the diff.
+    if (b.codeChange?.awaitingReview) decisions.push({ id: `change:${b.id}`, kind: 'change_review', title: `Review the change to ${b.codeChange.project}`, detail: b.outcome?.summary ?? `${plural(b.codeChange.changedFiles.length, 'file')} changed: ${b.codeChange.changedFiles.slice(0, 3).join(', ')}`, source: engineLabel(b.executor), at: b.lastEventAt, target: { kind: 'missions', view: 'flight', id: b.id } });
   }
   for (const m of missions) for (const a of m.pendingApprovals) decisions.push({ id: `mission:${a.approvalId}`, kind: 'mission_approval', approvalId: a.approvalId, title: a.agentName ? `${a.agentName} asks for your OK` : 'A mission asks for your OK', detail: a.text, source: 'Mission', at: a.requestedAt, target: { kind: 'missions', view: 'flight', id: m.id } });
 

@@ -16,13 +16,17 @@ export function MissionsHub({ tab, onTab, data, overview, narrow, onOpenPalette,
   tab: MissionsTab; onTab: (t: MissionsTab) => void; data: OperatorData; overview: Overview; narrow: boolean;
   onOpenPalette: () => void; onOpenConversation: (id: string) => void; focusId?: string | null;
 }) {
-  const workers = data.bridge.filter((b) => b.storyId || b.executor);
+  // Agent workers only: service sub-steps (service:*) are plumbing with no event log of their own.
+  const workers = data.bridge.filter((b) => (b.storyId || b.executor) && !(b.executor ?? '').startsWith('service:'));
   const [logId, setLogId] = useState<string | null>(null);
   const [filter, setFilter] = useState('');
   useEffect(() => { if (focusId && workers.some((w) => w.id === focusId)) setLogId(focusId); }, [focusId]);
   const selected = workers.find((w) => w.id === logId) ?? workers[0] ?? null;
   const live = workers.some((w) => !['completed', 'failed', 'cancelled'].includes(w.state));
-  const now = useTicker(live && tab === 'events', 2000);
+  const now = useTicker(live, 2000);
+  // The log beside Flight follows the focused task, else the worker that sent an event most recently.
+  const byRecent = [...workers].filter((w) => w.executor && !w.executor.startsWith('service:')).sort((a, b) => (b.lastEventAt ?? '').localeCompare(a.lastEventAt ?? ''));
+  const logTarget = workers.find((w) => w.id === focusId) ?? byRecent[0] ?? null;
 
   return (
     <div className="jv-missions">
@@ -38,8 +42,22 @@ export function MissionsHub({ tab, onTab, data, overview, narrow, onOpenPalette,
 
       {tab === 'flight' && (
         <div className="jv-flight">
-          <MissionDock conversationId={null} narrow={narrow} onReport={() => undefined} />
-          {!data.missions.some((m) => m.status === 'running') && !workers.length && !data.approvals.length && <p className="jv-empty">No mission or worker is running. Finished work is on the Board.</p>}
+          <div className="jv-flight-main">
+            <MissionDock conversationId={null} narrow={narrow} onReport={() => undefined} />
+            {!data.missions.some((m) => m.status === 'running') && !workers.length && !data.approvals.length && <p className="jv-empty">No mission or worker is running. Finished work is on the Board.</p>}
+          </div>
+          {!narrow && logTarget && (
+            <aside className="jv-flight-log" aria-label="Live execution log">
+              <header>
+                <span className={`jv-dot${eventLine(logTarget, now).live ? ' live' : ''}`} aria-hidden="true" />
+                <span className="jv-portal-title"><strong>{engineLabel(logTarget.executor)} · {logTarget.stateLabel}</strong><span className="jv-src">{logTarget.eventCount} events · {eventLine(logTarget, now).text}</span></span>
+                <button type="button" className="btn link small" onClick={() => onTab('events')}>Full log</button>
+              </header>
+              <p className="jv-detail">{logTarget.instruction}</p>
+              {logTarget.outcome?.summary && <p className="jv-outcome">{logTarget.outcome.summary}</p>}
+              <WorkerLog taskId={logTarget.id} eventCount={logTarget.eventCount} />
+            </aside>
+          )}
         </div>
       )}
 
@@ -49,20 +67,27 @@ export function MissionsHub({ tab, onTab, data, overview, narrow, onOpenPalette,
         <div className="jv-events">
           {!workers.length ? <p className="jv-empty">No worker has recorded events yet.</p> : (
             <>
-              <div className="jv-events-bar">
-                <label className="sr-only" htmlFor="jv-worker">Worker task</label>
-                <select id="jv-worker" value={selected?.id ?? ''} onChange={(e) => setLogId(e.target.value)}>
-                  {workers.map((w) => <option key={w.id} value={w.id}>{engineLabel(w.executor)} · {w.stateLabel} · {w.instruction.slice(0, 70)}</option>)}
-                </select>
-                <label className="sr-only" htmlFor="jv-filter">Filter events</label>
-                <input id="jv-filter" value={filter} onChange={(e) => setFilter(e.target.value)} placeholder="Filter (edit, ran, permission…)" />
+              <nav className="jv-events-list" aria-label="Worker tasks">
+                {workers.map((w) => (
+                  <button key={w.id} type="button" className={`jv-events-item${selected?.id === w.id ? ' on' : ''}`} aria-current={selected?.id === w.id ? 'true' : undefined} onClick={() => setLogId(w.id)}>
+                    <span className="jv-src">{engineLabel(w.executor)} · {w.stateLabel} · {w.eventCount} ev</span>
+                    <span className="jv-events-title">{w.instruction}</span>
+                  </button>
+                ))}
+              </nav>
+              <div className="jv-events-log">
+                <div className="jv-events-bar">
+                  <label className="sr-only" htmlFor="jv-filter">Filter events</label>
+                  <input id="jv-filter" value={filter} onChange={(e) => setFilter(e.target.value)} placeholder="Filter (edit, ran, permission…)" />
+                </div>
+                {selected && (
+                  <>
+                    <p className="jv-events-meta mono">{selected.eventCount} events · {eventLine(selected, now).text}{selected.branch ? ` · branch ${selected.branch}` : ''}</p>
+                    {selected.outcome?.summary && <p className="jv-outcome">{selected.outcome.summary}</p>}
+                    <WorkerLog taskId={selected.id} eventCount={selected.eventCount} filter={filter} />
+                  </>
+                )}
               </div>
-              {selected && (
-                <>
-                  <p className="jv-events-meta mono">{selected.eventCount} events · {eventLine(selected, now).text}{selected.branch ? ` · branch ${selected.branch}` : ''}</p>
-                  <WorkerLog taskId={selected.id} eventCount={selected.eventCount} filter={filter} />
-                </>
-              )}
             </>
           )}
         </div>

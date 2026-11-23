@@ -28,6 +28,15 @@ describe('Jarvis Home model', () => {
     expect(quiet.presence).toBe('idle');
   });
 
+  it('a worker waiting for the owner reads as waiting, never as stale (live run ptask_a27f5ca8)', () => {
+    const h = home([item({ state: 'waiting_for_approval', stateLabel: 'Waiting for approval', lastEventAt: iso(130_000),
+      codeChange: { project: 'CalcDemo', baseRef: 'main', awaitingReview: true, changedFiles: ['src/subtract.js'], deliverable: false, delivered: null },
+      outcome: { intent: 'code', state: 'awaiting_owner_review', summary: 'Pandesh ran node --test before and after: no regressions.' } })]);
+    expect(h.inFlight[0].eventText).toMatch(/^waiting 2 min/);
+    expect(h.inFlight[0].eventText).not.toMatch(/stale/);
+    expect(h.decisions[0]).toMatchObject({ kind: 'change_review', detail: 'Pandesh ran node --test before and after: no regressions.' });
+  });
+
   it('a task no executor picked up for a long time is an exception with Stop, not work in flight', () => {
     const h = home([item({ state: 'waiting_for_executor', stateLabel: 'Waiting for executor', executor: null, createdAt: iso(UNCLAIMED_MS + 60_000) })]);
     expect(h.inFlight).toEqual([]);

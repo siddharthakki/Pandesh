@@ -3040,6 +3040,8 @@ export class DesktopSession {
       // Missions: background objectives with specialist steps (core/api/missionRoutes.ts).
       missions: { path: '/v1/missions?limit=12' },
       bridgeActivity: { path: '/v1/bridge/activity' },
+      // Coding engines as Kandev reports them (installed, available, GPU lanes): the Agents screen. Read-only.
+      bridgeExecutors: { path: '/v1/bridge/executors' },
       // External-agent approval: the card in the Missions dock. Only these three fixed routes; the window names a task and a decision, never a path.
       bridgeApprovals: { path: '/v1/bridge/approvals' },
       bridgeApprove: { path: `/v1/bridge/tasks/${id}/approval`, method: 'POST', body: { requestId: String(args.requestId ?? ''), decision: args.decision === 'approve' ? 'approve' : 'refuse', confidentialOverride: args.confidentialOverride === true } },
