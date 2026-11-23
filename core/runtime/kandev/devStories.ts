@@ -81,6 +81,8 @@ export interface DevStorySpec {
     projectName: string; sourcePath: string; ref: string; sourceHead: string; sourceStatusSha: string;
     /** The task asked for tests: at least one new (or newly passing) test is required, as Pandesh's own test run sees it. */
     testsRequested?: boolean;
+    /** A mission step's 1-based position in the mission's plan (stories of one plan share a creation time, so it is kept here). */
+    step?: number;
     /**
      * The owner's development grant for a multi-step mission (given once, on the mission's approval card): a step whose change passes
      * Pandesh's own test run (tests ran, no regression, no failing new test) and whose diff raises no review flag is committed onto the

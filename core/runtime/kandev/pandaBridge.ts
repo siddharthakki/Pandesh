@@ -577,7 +577,7 @@ async function startAcp(rt: BridgeRuntime, task: BridgeTaskRecord, agent: DevAge
         agent, ...(model ? { model } : {}), dependsOn: s.dependsOn,
         acceptanceCriteria: ['The step\'s change is made in this repository', 'Tests that passed before still pass'],
         maxFiles: CODE_CHANGE_MAX_FILES,
-        codeCopy: { projectName: inspection.project.name, sourcePath: inspection.sourcePath, ref: inspection.ref, sourceHead: inspection.sourceHead, sourceStatusSha: inspection.sourceStatusSha, testsRequested: asksForTests(s.instruction), grant },
+        codeCopy: { projectName: inspection.project.name, sourcePath: inspection.sourcePath, ref: inspection.ref, sourceHead: inspection.sourceHead, sourceStatusSha: inspection.sourceStatusSha, testsRequested: asksForTests(s.instruction), grant, step: i + 1 },
       })),
     });
     storyIds = plan.stories.map(s => s.id);
@@ -821,9 +821,14 @@ export function outcomeOf(db: CoreDatabase, task: BridgeTaskRecord, storyStatus:
   return o('worker_running', 'Working.');
 }
 
-/** A mission's steps (its own project's stories), in plan order. */
+/**
+ * A mission's steps (its own project's stories), in plan order. The stories of one plan are created in the same instant, so creation time
+ * cannot order them: the plan position is stored in the spec (`step`), and for missions planned before that, read from the title's "i/N:".
+ */
 export function missionStories(db: CoreDatabase, projectId: string): StoryRecord[] {
-  return listStories(db, { projectId, limit: 50 }).filter(s => devSpec(s)?.codeCopy).sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id));
+  const position = (s: StoryRecord): number => devSpec(s)?.codeCopy?.step ?? Number(s.title.match(/ (\d+)\/\d+: /)?.[1] ?? Number.MAX_SAFE_INTEGER);
+  return listStories(db, { projectId, limit: 50 }).filter(s => devSpec(s)?.codeCopy)
+    .sort((a, b) => position(a) - position(b) || a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id));
 }
 
 /**
@@ -842,7 +847,10 @@ async function refreshMission(rt: BridgeRuntime, task: BridgeTaskRecord): Promis
     const spec = devSpec(s)!;
     const detail = await devStoryDetail(db, rt.kandev, s.id).catch(() => null);
     detail?.changedFiles.forEach(f => changed.add(f));
-    const o = outcomeOf(db, { ...task, storyId: s.id, result: task.result ? { ...task.result, outcome: undefined } : null }, s.status, spec, detail?.changedFiles ?? []);
+    let o = outcomeOf(db, { ...task, storyId: s.id, result: task.result ? { ...task.result, outcome: undefined } : null }, s.status, spec, detail?.changedFiles ?? []);
+    // A step whose dependencies are not integrated yet is queued in Kandev, not worked on: say what it waits for.
+    const waitsFor = (plan[i]?.dependsOn ?? []).filter(k => { const j = plan.findIndex(p => p.key === k); return stories[j]?.status !== 'done'; });
+    if (s.status === 'implementing' && waitsFor.length && o.state === 'worker_running') o = { ...o, state: 'waiting', summary: `Waits for ${waitsFor.join(', ')}.` };
     steps.push({ key: plan[i]?.key ?? `step-${i + 1}`, title: s.title, storyId: s.id, storyStatus: s.status, state: o.state, summary: o.summary, tests: o.tests, pendingApprovals: detail?.story.pendingApprovals ?? [] });
   }
   const active = stories.find(s => s.status !== 'done') ?? stories[stories.length - 1]!;
