@@ -65,7 +65,8 @@ describe('the v2 window', () => {
     render(React.createElement(App));
     await act(async () => { await vi.advanceTimersByTimeAsync(200); });
     const main = () => document.querySelector('.main')?.getAttribute('data-view');
-    expect(main()).toBe('chat');
+    // The Jarvis interface opens on Home (results, work in flight, decisions, exceptions).
+    expect(main()).toBe('home');
 
     await act(async () => { listener(navEvent('view:connections', 'v2', 'uinav_a')); });
     await act(async () => { await vi.advanceTimersByTimeAsync(1200); });

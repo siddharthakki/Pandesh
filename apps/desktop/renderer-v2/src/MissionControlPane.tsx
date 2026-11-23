@@ -206,7 +206,7 @@ function ChangeReview({ taskId, refreshKey, open, onToggle }: { taskId: string; 
 }
 
 /** The recorded event log of one task, read from Core when opened and again whenever a new event is recorded. */
-function WorkerLog({ taskId, eventCount }: { taskId: string; eventCount: number }) {
+export function WorkerLog({ taskId, eventCount, filter = '' }: { taskId: string; eventCount: number; filter?: string }) {
   const [events, setEvents] = useState<WorkerEvent[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   useEffect(() => {
@@ -222,9 +222,12 @@ function WorkerLog({ taskId, eventCount }: { taskId: string; eventCount: number 
   if (error) return <p className="mission-note error" role="alert">{error}</p>;
   if (!events) return <p className="muted">Loading the log…</p>;
   if (!events.length) return <p className="muted">No worker events recorded.</p>;
+  const q = filter.trim().toLowerCase();
+  const shown = q ? events.filter((e) => `${e.kind} ${e.text}`.toLowerCase().includes(q)) : events;
+  if (!shown.length) return <p className="muted">No event matches “{filter}”.</p>;
   return (
     <ol className="worker-log" aria-label="Execution log">
-      {events.map((e, i) => (
+      {shown.map((e, i) => (
         <li key={e.id ?? i}><time dateTime={e.at}>{new Date(e.at).toLocaleTimeString()}</time> <span className="worker-kind">{eventLabel(e.kind)}</span> {e.text}</li>
       ))}
     </ol>

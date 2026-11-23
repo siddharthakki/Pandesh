@@ -30,8 +30,10 @@ if (!api) {
   root.textContent = 'Pandesh could not reach its desktop host. Restart the app.';
 } else {
   try {
+    // The Jarvis look is the default; a person who chose light, dark or "follow Windows" keeps that choice.
     const saved = localStorage.getItem('pandesh.v2.theme');
-    if (saved === 'light' || saved === 'dark') document.documentElement.dataset.theme = saved;
-  } catch { /* storage unavailable: follow the OS */ }
+    if (saved === 'light' || saved === 'dark' || saved === 'jarvis') document.documentElement.dataset.theme = saved;
+    else if (saved !== 'system') document.documentElement.dataset.theme = 'jarvis';
+  } catch { document.documentElement.dataset.theme = 'jarvis'; }
   createRoot(root).render(<ErrorBoundary><App /></ErrorBoundary>);
 }

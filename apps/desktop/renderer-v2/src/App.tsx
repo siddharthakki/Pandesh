@@ -20,8 +20,12 @@ import { MailHub } from './MailHub';
 import type { SettingsSection } from './settingsModel';
 import { useWakeWord } from './wake';
 import { startWorkshopIntake } from './workshop/useWorkshop';
+import { JarvisHome } from './JarvisHome';
+import { MissionsHub, type MissionsTab } from './MissionsHub';
+import { useOperatorData } from './useOperatorData';
+import type { HomeTarget } from './jarvisModel';
 
-export type View = 'chat' | 'bots' | 'automations' | 'board' | 'team' | 'space' | 'system' | 'software' | 'tools' | 'brain' | 'processes' | 'workspace' | 'radar' | 'revenue' | 'mailhub' | 'connections' | 'settings';
+export type View = 'home' | 'missions' | 'chat' | 'bots' | 'automations' | 'board' | 'team' | 'space' | 'system' | 'software' | 'tools' | 'brain' | 'processes' | 'workspace' | 'radar' | 'revenue' | 'mailhub' | 'connections' | 'settings';
 
 interface PaletteEntry { group: string; label: string; run: () => void }
 
@@ -29,7 +33,10 @@ export function App() {
   const narrow = useNarrow();
   const { snapshot, error, refresh } = useSnapshot();
   const overview = useTaskOverview();
-  const [view, setView] = useState<View>('chat');
+  const [view, setView] = useState<View>('home');
+  const operator = useOperatorData();
+  const [missionsTab, setMissionsTab] = useState<MissionsTab>('flight');
+  const [missionFocus, setMissionFocus] = useState<string | null>(null);
   const [placeholder, setPlaceholder] = useState<{ title: string; text: string } | null>(null);
   const [pop, setPop] = useState<null | 'spaces' | 'system' | 'palette'>(null);
   const [labels, setLabels] = useState<boolean>(() => { try { return localStorage.getItem('pandesh.v2.labels') !== '0'; } catch { return true; } });
@@ -67,12 +74,12 @@ export function App() {
   });
 
   const toggleLabels = () => { const next = !labels; setLabels(next); try { localStorage.setItem('pandesh.v2.labels', next ? '1' : '0'); } catch { /* ignore */ } };
-  const applyTheme = (next: 'system' | 'light' | 'dark') => {
+  const applyTheme = (next: 'system' | 'light' | 'dark' | 'jarvis') => {
     setTheme(next);
     if (next === 'system') delete document.documentElement.dataset.theme; else document.documentElement.dataset.theme = next;
-    try { if (next === 'system') localStorage.removeItem('pandesh.v2.theme'); else localStorage.setItem('pandesh.v2.theme', next); } catch { /* ignore */ }
+    try { localStorage.setItem('pandesh.v2.theme', next); } catch { /* ignore */ }
   };
-  const cycleTheme = () => applyTheme(theme === 'dark' ? 'light' : theme === 'light' ? 'system' : 'dark');
+  const cycleTheme = () => applyTheme(theme === 'jarvis' ? 'dark' : theme === 'dark' ? 'light' : theme === 'light' ? 'system' : 'jarvis');
   const setLabelsTo = (on: boolean) => { setLabels(on); try { localStorage.setItem('pandesh.v2.labels', on ? '1' : '0'); } catch { /* ignore */ } };
   const [settingsSection, setSettingsSection] = useState<{ id: SettingsSection; n: number } | null>(null);
   const openSettings = (id: SettingsSection = 'models') => { setSettingsSection({ id, n: Date.now() }); go('settings'); };
@@ -82,8 +89,16 @@ export function App() {
   const [space, setSpace] = useState<SpaceId>('projects');
   const go = (v: View) => { setView(v); setPop(null); };
   const openSpace = (id: SpaceId) => { setSpace(id); go('workspace'); };
-  // The seven places that are always in the sidebar, in the order a day uses them.
+  const openMissions = (tab: MissionsTab, focus: string | null = null) => { setMissionsTab(tab); setMissionFocus(focus); go('missions'); };
+  const openTarget = (t: HomeTarget) => {
+    if (t.kind === 'missions') { openMissions(t.view ?? 'flight', t.id ?? null); return; }
+    if (t.conversationId) setOpenConversationId(t.conversationId);
+    go('chat');
+  };
+  // The places that are always in the sidebar, in the order a day uses them: Home and Missions first.
   const rail: Array<{ id: string; label: string; text: string; icon: IconName; current: boolean; onClick: () => void }> = [
+    { id: 'home', label: 'Home — results, work in flight, decisions, exceptions', text: 'Home', icon: 'home' as IconName, current: view === 'home', onClick: () => go('home') },
+    { id: 'missions', label: needs ? `Missions — ${needs} need you` : 'Missions — flight, board and events', text: 'Missions', icon: 'board' as IconName, current: view === 'missions' || view === 'board', onClick: () => openMissions(missionsTab) },
     { id: 'chat', label: 'Chat — talk to Pandesh', text: 'Chat', icon: 'chat', current: view === 'chat', onClick: () => go('chat') },
     { id: 'bots', label: 'My Bots — assistants with their own job and memory', text: 'My Bots', icon: 'bots', current: view === 'bots', onClick: () => go('bots') },
     { id: 'automations', label: 'Automations — recurring work, next run and last result', text: 'Automations', icon: 'clock', current: view === 'automations', onClick: () => go('automations') },
@@ -95,7 +110,7 @@ export function App() {
 
   // Everything else stays one click away, out of the everyday sidebar.
   const spaces = [
-    { name: needs ? `Board · ${needs} need you` : 'Board', sub: 'Every task and its real status', run: () => go('board') },
+    { name: needs ? `Board · ${needs} need you` : 'Board', sub: 'Missions › Board: every task and its real status', run: () => openMissions('board') },
     { name: 'Team', sub: 'Specialist agents', run: () => go('team') },
     { name: 'Mail Hub', sub: 'Read-only Outlook mail: inbox, bills, recruiters, dates', run: () => go('mailhub') },
     { name: 'Second Brain', sub: 'Search your memories, notes and documents', run: () => go('brain') },
@@ -165,11 +180,14 @@ export function App() {
   const [mailScreen, setMailScreen] = useState<{ screen: string; n: number } | null>(null);
 
   const paletteEntries: PaletteEntry[] = useMemo(() => [
+    { group: 'GO TO', label: 'Home', run: () => go('home') },
+    { group: 'GO TO', label: 'Missions', run: () => openMissions('flight') },
+    { group: 'GO TO', label: 'Missions: Events (execution log)', run: () => openMissions('events') },
     { group: 'GO TO', label: 'Chat', run: () => go('chat') },
     { group: 'GO TO', label: 'My Bots', run: () => go('bots') },
     { group: 'GO TO', label: 'Automations', run: () => go('automations') },
     { group: 'GO TO', label: 'Projects', run: () => openSpace('projects') },
-    { group: 'GO TO', label: 'Board', run: () => go('board') },
+    { group: 'GO TO', label: 'Board', run: () => openMissions('board') },
     { group: 'GO TO', label: 'Mail Hub', run: () => go('mailhub') },
     { group: 'GO TO', label: 'Software & Services', run: () => go('software') },
     { group: 'GO TO', label: 'AI Radar', run: () => go('radar') },
@@ -195,7 +213,7 @@ export function App() {
       {(labels || narrow) && <span className="label">{r.text}</span>}
     </button>
   ));
-  const moreCurrent = ['mailhub', 'board', 'team', 'brain', 'radar', 'revenue', 'processes', 'software'].includes(view) || (view === 'workspace' && space !== 'projects');
+  const moreCurrent = ['mailhub', 'team', 'brain', 'radar', 'revenue', 'processes', 'software'].includes(view) || (view === 'workspace' && space !== 'projects');
 
   return (
     <div className={`app${narrow ? ' narrow' : ''}`}>
@@ -211,7 +229,10 @@ export function App() {
       )}
 
       <div className="main" data-view={view}>
-        {view === 'chat' && <Chat snapshot={snapshot} snapshotError={error} refresh={refresh} narrow={narrow} openConversationId={openConversationId} onOpenPalette={() => openPop('palette')} onOpenBoard={() => go('board')} onOpenSettings={() => openSettings()} draft={draft} onDraftUsed={() => setDraft(null)}
+        {view === 'home' && <JarvisHome snapshot={snapshot} tasks={overview.data?.tasks ?? []} queued={overview.data?.queued ?? []} data={operator} onOpen={openTarget} onAsk={(t) => { setDraft(t); go('chat'); }} />}
+        {view === 'missions' && <MissionsHub tab={missionsTab} onTab={setMissionsTab} data={operator} overview={overview} narrow={narrow} focusId={missionFocus}
+          onOpenPalette={() => openPop('palette')} onOpenConversation={(id) => { setOpenConversationId(id); go('chat'); }} />}
+        {view === 'chat' && <Chat snapshot={snapshot} snapshotError={error} refresh={refresh} narrow={narrow} openConversationId={openConversationId} onOpenPalette={() => openPop('palette')} onOpenBoard={() => openMissions('board')} onOpenSettings={() => openSettings()} draft={draft} onDraftUsed={() => setDraft(null)}
           wake={wake} wakeTurn={wakeTurn} onWakeTurnTaken={() => setWakeTurn(null)} onVoiceBusy={setVoiceBusy} />}
         {view === 'bots' && <Bots onOpenConversation={(id) => { setOpenConversationId(id); go('chat'); }} onAskPandesh={(t) => { setDraft(t); go('chat'); }} />}
         {view === 'automations' && <Automations onOpenConversation={(id) => { setOpenConversationId(id); go('chat'); }} onOpenBot={() => go('bots')} />}
