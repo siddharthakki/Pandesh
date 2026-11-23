@@ -222,7 +222,7 @@ export function App() {
             <div className="home-main">
               <HomeStatus counts={counts} loading={!overview.data && !overview.error} error={overview.error ?? null} brief={brief} onOpen={openWork} onNote={() => openPop('feedback')} />
               <Chat snapshot={snapshot} snapshotError={error} refresh={refresh} narrow={narrow} openConversationId={openConversationId} onOpenPalette={() => openPop('palette')} onOpenBoard={() => openWork('active')} onOpenSettings={() => openSettings()} draft={draft} onDraftUsed={() => setDraft(null)}
-                briefInShell onToggleHistory={narrow ? undefined : () => showHistory(!historyOpen)} historyOpen={historyOpen && !narrow}
+                briefInShell onNewChat={() => setOpenConversationId(null)} onToggleHistory={narrow ? undefined : () => showHistory(!historyOpen)} historyOpen={historyOpen && !narrow}
                 wake={wake} wakeTurn={wakeTurn} onWakeTurnTaken={() => setWakeTurn(null)} onVoiceBusy={setVoiceBusy} />
             </div>
           </div>

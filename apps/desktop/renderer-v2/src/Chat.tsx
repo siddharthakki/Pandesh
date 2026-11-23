@@ -29,6 +29,8 @@ interface Props {
   historyOpen?: boolean;
   /** The shell shows what needs the person above the chat, so the welcome screen does not list it a second time. */
   briefInShell?: boolean;
+  /** The person started a new chat here: the shell stops pointing at the conversation it opened earlier. */
+  onNewChat?: () => void;
   /** Opens Settings (models, permissions, diagnostics). */
   onOpenSettings?: () => void;
   /** Text to place in the composer (from a workspace's "Ask Pandesh"). */
@@ -105,7 +107,7 @@ function pendingDecision(s: Snapshot | null): null | { kind: 'tool' | 'image' | 
   return null;
 }
 
-export function Chat({ snapshot, snapshotError, refresh, narrow, openConversationId, onOpenPalette, onOpenBoard, onToggleHistory, historyOpen, briefInShell, onOpenSettings, draft, onDraftUsed, wake, wakeTurn, onWakeTurnTaken, onVoiceBusy }: Props) {
+export function Chat({ snapshot, snapshotError, refresh, narrow, openConversationId, onOpenPalette, onOpenBoard, onToggleHistory, historyOpen, briefInShell, onNewChat, onOpenSettings, draft, onDraftUsed, wake, wakeTurn, onWakeTurnTaken, onVoiceBusy }: Props) {
   const [messages, setMessages] = useState<TranscriptMessage[]>([]);
   const [loadedFor, setLoadedFor] = useState<string | null | undefined>(undefined);
   const [live, setLive] = useState<{ attemptId: string | null; text: string }>({ attemptId: null, text: '' });
@@ -479,7 +481,7 @@ export function Chat({ snapshot, snapshotError, refresh, narrow, openConversatio
           </button>
         )}
         {(activities.length > 0 || shownRun != null) && !asideOpen && <button type="button" className="btn small" title="Show what Pandesh did in this chat" onClick={() => { setClosedFor(null); setForcedOpen(true); }}>Activity{activities.length ? ` · ${activities.length}` : ''}</button>}
-        <button type="button" className="ghost-icon" title="New chat" aria-label="New chat" onClick={() => { void api.newConversation().then(() => { setMessages([]); setLoadedFor(null); refresh(); }); }}><Icon name="plus" size={18} /></button>
+        <button type="button" className="ghost-icon" title="New chat" aria-label="New chat" onClick={() => { void api.newConversation().then(() => { onNewChat?.(); setMessages([]); setLoadedFor(null); refresh(); }); }}><Icon name="plus" size={18} /></button>
         <button type="button" className="search-btn" title="Search everything (Ctrl K)" onClick={onOpenPalette}><Icon name="search" size={16} /><span>Search</span>{!narrow && <kbd>Ctrl K</kbd>}</button>
       </div>
 

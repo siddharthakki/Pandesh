@@ -1,3 +1,5 @@
+import fs from 'node:fs';
+import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { APPS, BOARD_COLUMNS, homeCounts, placeOf, settingsTabOf, subLinks, workTabOf } from '../renderer-v2/src/placesModel';
 import { parseV2Target } from '../renderer-v2/src/navigationTargets';
@@ -74,5 +76,15 @@ describe('daily-use notes', () => {
       expect(report).toMatch(/2026-11-23: home 4, work 2, palette 1/);
       expect(report).toMatch(/\[work\/board\] looked for the backup automation/);
     } finally { delete (globalThis as { localStorage?: unknown }).localStorage; }
+  });
+});
+
+describe('new chat after opening an earlier conversation', () => {
+  // Live finding 2026-11-23: with an earlier conversation opened from the list, "+" started a new chat, the answer was
+  // stored there, and the window then jumped back to the earlier conversation.
+  it('the chat tells the shell, and the shell forgets the conversation it had opened', () => {
+    const src = (name: string) => fs.readFileSync(path.join(__dirname, '../renderer-v2/src', name), 'utf8');
+    expect(src('Chat.tsx')).toContain('api.newConversation().then(() => { onNewChat?.();');
+    expect(src('App.tsx')).toContain('onNewChat={() => setOpenConversationId(null)}');
   });
 });
