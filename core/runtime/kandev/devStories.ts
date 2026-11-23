@@ -575,10 +575,13 @@ export const TESTS_TAG = '[kkd-dev:tests]';
  * The project's tests as they were BEFORE the change, run once per story in a temporary detached worktree of the private copy at the
  * commit the worker started from, and cached on the story. The worker's worktree and the owner's checkout are not involved.
  */
-function baselineTests(db: CoreDatabase, storyId: string, spec: DevStorySpec): ProjectTestRun {
+function baselineTests(db: CoreDatabase, storyId: string, spec: DevStorySpec, worktree?: string): ProjectTestRun {
   const cached = [...listComments(db, storyId)].reverse().find(c => c.body.startsWith(BASELINE_TAG));
   if (cached) { try { return JSON.parse(cached.body.slice(BASELINE_TAG.length)) as ProjectTestRun; } catch { /* recompute */ } }
-  const at = spec.codeCopy?.sourceHead || spec.baseBranch;
+  // The base is the commit this worker started from (merge-base of its worktree and the integration branch): for a mission's later
+  // step that already holds the earlier steps (live b188f: step 2 was measured against main and claimed step 1's test as new).
+  const started = worktree ? git(worktree, ['merge-base', 'HEAD', spec.integrationBranch]) : null;
+  const at = (started?.ok && started.out.trim()) || spec.codeCopy?.sourceHead || spec.baseBranch;
   const dir = `${spec.repoPath}-baseline`;
   let run: ProjectTestRun;
   fs.rmSync(dir, { recursive: true, force: true });
@@ -825,7 +828,7 @@ export async function verifyAndIntegrate(db: CoreDatabase, kandev: KandevClient,
   let testReport = '';
   let testsProven = false;
   if (spec.codeCopy) {
-    const base = baselineTests(db, story.id, spec);
+    const base = baselineTests(db, story.id, spec, worktree);
     const after = runProjectTests(worktree);
     const cmp = compareTestRuns(base, after);
     addComment(db, story.id, { author: DEV_ACTOR, body: `${TESTS_TAG} ${JSON.stringify(cmp)}` });
@@ -881,7 +884,7 @@ export async function verifyAndIntegrate(db: CoreDatabase, kandev: KandevClient,
   }
   if (spec.codeCopy) {
     // The committed result must show the same test picture: no test that passed before the change may fail on the integration branch.
-    const again = judgeTests(compareTestRuns(baselineTests(db, story.id, spec), runProjectTests(integ.dir)), false);
+    const again = judgeTests(compareTestRuns(baselineTests(db, story.id, spec, worktree), runProjectTests(integ.dir)), false);
     if (!again.ok) {
       git(integ.dir, ['reset', '--hard', before]);
       return fail(`Pandesh's own test run failed after integration (merge rolled back): ${again.what}`, '');
