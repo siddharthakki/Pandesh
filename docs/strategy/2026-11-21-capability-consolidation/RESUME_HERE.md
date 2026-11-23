@@ -1,5 +1,30 @@
 # Resume here
 
+## State at 2026-11-23 ~08:00 UTC (owner's reliability priorities, done on b188j)
+
+**Test build**:
+- b188j = `release/b188f-missions` @ 6682cf3 (worktree `D:\PandeshRelease188e`), running on profile `D:\PandeshB188cAccept`.
+- Package and smoke pass (the first smoke attempt timed out behind a 24 GB `qwen3.8:27b-mtp` model running 26% on CPU; the re-run passed in 40 s). The installer step was not re-run.
+- `feat/supervised-missions` now ends at 4aabafa. Nothing is pushed, merged or installed.
+
+**Owner priorities of 2026-11-23** (all on `feat/supervised-missions`):
+1. **Paths outside the worktree are refused automatically, never put to the owner** (533ad4d):
+   - In a private copy (A5, missions): any read, write, edit or delete outside the worktree.
+   - Elsewhere: any path that does not exist.
+   - ACP rejections carry no text, so the directions are in the code-change prompt up front.
+2. **Real paths on the owner's own activity list** (533ad4d): an in-memory map; client views stay `<path>` (tested with a real Windows path).
+3. **The prompt says to use relative paths**, and that the memory folder is not the project (533ad4d).
+4. **Mission-step test baseline** (c6d97b3): live on b188i/j. Step 2's "before" now includes step 1 (14 pass before, not 0).
+5. **Crash recovery** (4aabafa): a turn Kandev marks `error_terminated` is resumed in the same session, once per crash, at most twice; a third crash parks the story with the reason.
+   - Live on b188i, before the fix: the kill was misread as "worker made no changes" and cost a retry; it recovered only by accident.
+   - Live on b188j (ptask_cfee1373): claude.exe killed at 07:52:01Z → `[kkd-dev:worker-crashed]` at 07:52:06Z → resumed → both steps integrated by 07:53:50Z (95fda3a, be2cec7); no verify-failed.
+   - Independent `node --test`: 43 pass, 1 pre-existing fail. Owner checkout unchanged (a25faaf, clean).
+
+**Still open**:
+- Three ACP worker processes from 11/21 are still alive (Kandev does not reap them).
+- E:\Pandesh production is not running (the build log says 0 processes; not touched).
+- The acceptance client is revoked again; run `node mcp-accept.mjs setup` to pair it again.
+
 ## State at 2026-11-23 ~07:25 UTC (live acceptance A/B/C on b188g/b188h)
 
 **Test build**:

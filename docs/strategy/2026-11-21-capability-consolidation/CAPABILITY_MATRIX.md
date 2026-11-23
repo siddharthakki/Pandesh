@@ -29,14 +29,16 @@ Production is Build 187/186 at `E:\Pandesh`. Nothing below was installed there.
 | Two concurrent Claude workers | Kandev WIP 2 | ✔ | partial | ✘ | scratch | ✔ live | Overlap 15:09:37–15:09:45 |
 | GPU lane lock | `gpuLaneLimit`, `waitsOnGpuLane` | ✔ | ✔ | ✘ | ✔ | ✔ live | "Waits for: local GPU lane (1 at a time)" |
 | Scoped ChatGPT coding in a project (A5) | — | ✔ | | | | | Built cafb8a0; View diff cc79820; verified live on a synthetic read-write repo |
-| A5 intent contract (code / inspect / answer / research / operation; MCP `intent`) | `core/domain/taskIntent.ts` (18304c4, 1ac53e6) | ✔ | ✔ | b188h | B188c profile | ✔ live 2026-11-23 (Test A ptask_af136609, `-code` worktree) | Fixes ptask_c00d7741 (coding task ran as inspection, "Finished and verified") |
-| Pandesh's own before/after project test run on A5 changes | `core/runtime/kandev/projectTests.ts` | ✔ | ✔ | b188h | ✔ | ✔ live (Test A: 2 new pass, `adds` pre-existing) | Mission steps measured against main until c6d97b3 (committed, not yet built) |
-| Requested-outcome status (worker finished ≠ change delivered) | `outcomeOf` in `pandaBridge.ts` | ✔ | ✔ | b188h | ✔ | ✔ live (A: awaiting review → approved → completed) | "Finished and verified" removed |
-| Owner "Don't approve" for a reviewed change | `rejectBridgeChange`, `reject-change` route | ✔ | ✔ | b188h | ✔ | ✘ not pressed live (owner approved) | A refused change can never be approved later |
-| Multi-step missions + bounded development grant | `feat/supervised-missions` 395269d, de89cac, 2c6620c | ✔ | ✔ | b188h | ✔ | ✔ live (Test B ptask_3b30d620: 3 steps integrated after one Allow; survived 2 restarts) | Worker permission prompts still need the owner (by design); prompt shows `<path>` to the owner (open) |
-| MCP `pandesh_list_projects`, `pandesh_updates` (changes since cursor) | gateway + `/v1/bridge/project-names`, `/v1/bridge/updates` | ✔ | ✔ | b188h | ✔ | ✔ live (updates read across 2 restarts; needsOwner on a stalled step after 2c6620c) | Polling only: an MCP connector cannot start a ChatGPT conversation |
+| A5 intent contract (code / inspect / answer / research / operation; MCP `intent`) | `core/domain/taskIntent.ts` (18304c4, 1ac53e6) | ✔ | ✔ | b188j | B188c profile | ✔ live 2026-11-23 (Test A ptask_af136609, `-code` worktree) | Fixes ptask_c00d7741 (coding task ran as inspection, "Finished and verified") |
+| Pandesh's own before/after project test run on A5 changes | `core/runtime/kandev/projectTests.ts` | ✔ | ✔ | b188j | ✔ | ✔ live (Test A: 2 new pass, `adds` pre-existing) | Mission steps measured from where their worker started (c6d97b3, live on b188i/j) |
+| Requested-outcome status (worker finished ≠ change delivered) | `outcomeOf` in `pandaBridge.ts` | ✔ | ✔ | b188j | ✔ | ✔ live (A: awaiting review → approved → completed) | "Finished and verified" removed |
+| Owner "Don't approve" for a reviewed change | `rejectBridgeChange`, `reject-change` route | ✔ | ✔ | b188j | ✔ | ✘ not pressed live (owner approved) | A refused change can never be approved later |
+| Multi-step missions + bounded development grant | `feat/supervised-missions` 395269d, de89cac, 2c6620c | ✔ | ✔ | b188j | ✔ | ✔ live (Test B ptask_3b30d620: 3 steps integrated after one Allow; survived 2 restarts) | Worker permission prompts still need the owner (by design); out-of-worktree paths are refused automatically and the owner sees real paths (533ad4d) |
+| MCP `pandesh_list_projects`, `pandesh_updates` (changes since cursor) | gateway + `/v1/bridge/project-names`, `/v1/bridge/updates` | ✔ | ✔ | b188j | ✔ | ✔ live (updates read across 2 restarts; needsOwner on a stalled step after 2c6620c) | Polling only: an MCP connector cannot start a ChatGPT conversation |
 | Claude usage-limit / sign-in detection | `accountProblem` (eadcdd7) | ✔ | ✔ | b188f | ✔ | ✘ not provoked live | Quotes Claude's message; no retries; no invented quota |
-| Unanswered approval card expires visibly | `expireStaleApproval` (d519c62) | ✔ | ✔ | b188h | ✔ | ✔ live (2 cards from 11-22 now say expired, nothing sent) | |
+| Unanswered approval card expires visibly | `expireStaleApproval` (d519c62) | ✔ | ✔ | b188j | ✔ | ✔ live (2 cards from 11-22 now say expired, nothing sent) | |
+| Worker crash recovery (error-terminated turn resumed in the same session, max 2, then parked) | `reconcileDevStories` (4aabafa) | ✔ | ✔ | b188j | ✔ | ✔ live (claude.exe killed 07:52:01Z, resumed 07:52:06Z, mission completed 07:53:50Z) | |
+| Out-of-worktree worker paths refused automatically, owner sees real paths | `permissionDecision`, `ownerViewOfPending` (533ad4d) | ✔ | ✔ | b188j | ✔ | ✘ not provoked live since the fix | ACP refusal carries no text: directions are in the prompt |
 
 ## Live agent workspace
 
