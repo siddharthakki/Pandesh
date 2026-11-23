@@ -20,7 +20,7 @@ import type { RuntimeEventRecord } from '../shared/wireTypes';
 import type { GovernedCapabilityAdapter } from './governedCapability';
 import type { ModelToolCall, ModelToolDefinition } from './modelBackend';
 import type { ToolExecutionContext, ToolExecutionResult } from './toolRunner';
-import { WORKSHOP_MIME, WORKSHOP_TYPE_LABEL, isWorkshopViewAction, versionLabel, type WorkshopSummary, type WorkshopType } from '../shared/workshop/model';
+import { WORKSHOP_MIME, WORKSHOP_TYPE_LABEL, WORKSHOP_VIEW_ACTIONS, isWorkshopViewAction, versionLabel, type WorkshopSummary, type WorkshopType } from '../shared/workshop/model';
 import { applySceneEdits, describeScene, parseSceneFile, validateScene, type Scene3D } from '../shared/workshop/scene3d';
 import { applySimulationChanges, describeMetrics, parseSimulationFile, queueAssumptions, runQueue, validateSimulation, type SimulationSpec } from '../shared/workshop/simulation';
 import { MAX_DESIGN_BYTES, applyDesignEdits, checkDesignHtml, designTitle, lineDiff } from '../shared/workshop/design';
@@ -476,10 +476,36 @@ export function createWorkshopCapabilityAdapter(options: WorkshopCapabilityOptio
 
   // ------------------------------------------------------------------ view (read-only)
 
+  /**
+   * What the window's renderer measures for the workshop on screen: the meshes it drew, their positions, materials and
+   * triangle counts, the camera and the frame rate (Viewer3D inspect; the page and the video player answer for their
+   * kinds). It is a measurement, not a picture: it can say what is in the scene and where, not whether it looks like
+   * a house. Nothing is reported unless the window itself answered.
+   */
+  async function inspectView(call: ModelToolCall, ctx: ToolExecutionContext): Promise<ToolExecutionResult> {
+    const a = call.arguments ?? {};
+    const conversationId = ctx.correlationId ?? null;
+    const target = resolveWorkshopTarget(db, { conversationId, named: typeof a.workshop === 'string' ? a.workshop : null });
+    if (!target.ok) return fail(`NOT INSPECTED: ${target.reason}. Ask the user which workshop they mean.${CANDIDATES(target.candidates)}`, 'workshop_target_ambiguous');
+    const summary = target.workshop;
+    const result = await requestWorkshopCommand(db, {
+      conversationId, attemptId: ctx.attemptId ?? null, workshopId: summary.workshopId, artifactId: null, action: 'inspect', args: {},
+      actor: 'core:workshop', publish: options.publish, timeoutMs: options.commandTimeoutMs,
+    });
+    if (result.status === 'done' && result.state) {
+      return ok(`INSPECTED "${summary.title}" — measured by the window's renderer just now (what is in the scene and where; it cannot judge how it looks): ${JSON.stringify(result.state).slice(0, 2_500)}`, 'workshop_view_inspected');
+    }
+    if (result.status === 'not_done') return fail(`NOT INSPECTED: the Pandesh window could not inspect "${summary.title}"${result.detail ? `: ${result.detail}` : ''}. Nothing was measured; do not describe the view.`, 'workshop_view_failed');
+    return fail(`NOT INSPECTED: the Pandesh window did not answer (the Workshop may be closed, or showing another chat). Nothing was measured; do not describe the view.`, 'workshop_view_unconfirmed');
+  }
+
   async function view(call: ModelToolCall, ctx: ToolExecutionContext): Promise<ToolExecutionResult> {
     const a = call.arguments ?? {};
     const action = String(a.action ?? '');
-    if (!isWorkshopViewAction(action)) return fail(`NOT DONE: unknown action "${action}".`, 'workshop_invalid_action');
+    // Live run 2026-11-23: after building a house the model called workshop_view(action: "inspect") and got 'unknown
+    // action "inspect"'. The inspection exists (workshop_status inspect=true); the same real measurement answers here.
+    if (action === 'inspect') return inspectView(call, ctx);
+    if (!isWorkshopViewAction(action)) return fail(`NOT DONE: unknown action "${action}". The actions are: ${WORKSHOP_VIEW_ACTIONS.join(', ')}, inspect.`, 'workshop_invalid_action');
     const conversationId = ctx.correlationId ?? null;
     const target = resolveWorkshopTarget(db, { conversationId, named: typeof a.workshop === 'string' ? a.workshop : null });
     if (!target.ok) return fail(`NOT DONE: ${target.reason}. Ask the user which workshop they mean.${CANDIDATES(target.candidates)}`, 'workshop_target_ambiguous');
@@ -649,7 +675,7 @@ export function createWorkshopCapabilityAdapter(options: WorkshopCapabilityOptio
     },
     {
       name: 'workshop_view',
-      description: 'Change only what the Workshop window shows; nothing is saved. Actions: open, close, fullscreen, exit_fullscreen, show_version (version: number|"previous"), compare (version, compareWith). 3D: rotate (turntable), stop_rotation, explode (pull apart), assemble (put back together), labels_on, labels_off, reset_camera, camera (value: front|top|side|iso), focus (component), isolate (component), show_all. Simulation: play, pause, reset, speed (value: 1|2|5|10|30), show_metric (value: wait|queue|utilization). Design page: device (value: mobile|tablet|desktop), show_code, reset (reload the preview). Reports DONE only when the window confirms. Read-only.',
+      description: 'Change only what the Workshop window shows; nothing is saved. Actions: open, close, fullscreen, exit_fullscreen, show_version (version: number|"previous"), compare (version, compareWith). 3D: rotate (turntable), stop_rotation, explode (pull apart), assemble (put back together), labels_on, labels_off, reset_camera, camera (value: front|top|side|iso), focus (component), isolate (component), show_all, inspect (what the renderer really shows: parts, positions, materials, camera — a measurement, not a judgement of looks). Simulation: play, pause, reset, speed (value: 1|2|5|10|30), show_metric (value: wait|queue|utilization). Design page: device (value: mobile|tablet|desktop), show_code, reset (reload the preview). Reports DONE only when the window confirms. Read-only.',
       parameters: { type: 'object', properties: { action: { type: 'string' }, workshop: { type: 'string' }, component: { type: 'string' }, value: { type: 'string' }, version: { type: 'string' }, compareWith: { type: 'string' } }, required: ['action'] },
     },
     {
