@@ -13,10 +13,10 @@ import { spawnSync } from 'node:child_process';
 import { openCoreDatabase } from '../db/openCore';
 import type { CoreDatabase } from '../db/connection';
 import { attachBridgeExecution, createPairingCode, getBridgeTask, redeemPairingCode, submitBridgeTask, toBridgeTaskView, type BridgePairing } from '../domain/pandaBridge';
-import { registerProject } from '../domain/projectRegistry';
+import { loadProjects, registerProject } from '../domain/projectRegistry';
 import { listPendingApprovals } from '../domain/bridgeApprovals';
 import { getStory, listComments, transitionStory } from '../domain/stories';
-import { approveBridgeChange, dispatchBridgeTask, outcomeOf, rejectBridgeChange, type BridgeRuntime } from '../runtime/kandev/pandaBridge';
+import { approveBridgeChange, confirmWorkspace, dispatchBridgeTask, outcomeOf, rejectBridgeChange, type BridgeRuntime } from '../runtime/kandev/pandaBridge';
 import { checkoutFingerprint, DEV_ACTOR, devSpec, planDevStories, TESTS_TAG, verifyAndIntegrate } from '../runtime/kandev/devStories';
 import { compareTestRuns, judgeTests, parseTap, runProjectTests } from '../runtime/kandev/projectTests';
 import type { KandevClient } from '../runtime/kandev/kandevClient';
@@ -100,6 +100,42 @@ describe('dispatch: intent and authorization', () => {
     const a = submit('Implement divide(a, b) in the Calc source and in the Ledger source.', 'req-d-amb-0001');
     await expect(askAsChatGPT(a.id)).rejects.toThrow();
     expect(getBridgeTask(db, a.id).storyId).toBeNull();
+  });
+
+  it('4b. a task for a named project that is not registered fails before any card, copy or agent; no other project stands in (ptask_9902d8ad)', async () => {
+    const live = 'CODE CHANGE IN THE REGISTERED PROJECT NAMED "Pandesh" (not Calc). Implement the approved UI-only navigation simplification in a NEW ISOLATED WORKTREE AND FEATURE BRANCH CREATED OFF main. This request is for editing source files.';
+    const t = submit(live, 'req-d-unreg-001');
+    await expect(askAsChatGPT(t.id)).rejects.toThrow(/no project of that name is registered/);
+    const after = getBridgeTask(db, t.id);
+    expect(after).toMatchObject({ status: 'failed', executor: null, storyId: null, workspacePath: null });
+    expect(after.statusDetail).toMatch(/^Project not registered: This task names the project 'Pandesh'/);
+    expect(listPendingApprovals(db)).toEqual([]);
+    expect(fs.existsSync(path.join(data, 'panda-workspaces'))).toBe(false);
+    // The owner cannot start it by hand either: the host path meets the same gate.
+    await expect(dispatchBridgeTask(rt, t.id, { executor: 'claude', decidedBy: 'owner', authority: 'host', consent: { externalTransfer: true, confidentialOverride: false, includeContext: false } })).rejects.toThrow(/no project of that name is registered/);
+    expect(getBridgeTask(db, t.id)).toMatchObject({ executor: null, storyId: null });
+    // Only ruled out, nothing named: still no project, and the ruled-out one is never used.
+    const n = submit('Implement divide(a, b) with tests, but not in Calc.', 'req-d-unreg-002', 'code_change');
+    await expect(askAsChatGPT(n.id)).rejects.toThrow(/names no registered project/);
+    // Named and registered read-only: the existing permission failure, unchanged.
+    const ro2 = submit('Code change in the project named "Ledger" (not Calc): implement divide(a, b) with tests.', 'req-d-unreg-003');
+    await expect(askAsChatGPT(ro2.id)).rejects.toThrow(/authorized read-only/);
+    // Named and registered read-write: the card names exactly that project.
+    const ok = submit('Code change in the project named "Calc" (not Ledger): implement divide(a, b) with tests.', 'req-d-unreg-004');
+    expect((await askAsChatGPT(ok.id)).approval!.project).toMatchObject({ name: 'Calc', access: 'read-write' });
+  });
+
+  it('4c. the copy is confirmed to be the resolved project before an agent starts', () => {
+    const fp = checkoutFingerprint(rw)!;
+    const copyOf = (src: string, name: string) => { const c = path.join(dir, name); git(dir, 'clone', '-q', src, c); return c; };
+    const plan = (cloneDir: string) => ({ project: loadProjects(data).find(p => p.name === 'Calc')!, sourcePath: rw, ref: 'main', cloneDir, sourceHead: fp.head, sourceStatusSha: fp.statusSha, uncommittedFiles: 0, mode: 'code' as const });
+    expect(() => confirmWorkspace({ instruction: 'Fix add() in the Calc source' }, plan(copyOf(rw, 'c-ok')))).not.toThrow();
+    // A copy of another repository under Calc's name is stopped and removed.
+    const wrong = copyOf(ro, 'c-wrong');
+    expect(() => confirmWorkspace({ instruction: 'Fix add() in the Calc source' }, plan(wrong))).toThrow(/not Calc.*Nothing was started/);
+    expect(fs.existsSync(wrong)).toBe(false);
+    // The task names another project than the one the copy is for.
+    expect(() => confirmWorkspace({ instruction: 'Code change in the project named "Pandesh"' }, plan(copyOf(rw, 'c-name')))).toThrow(/names the project 'Pandesh'/);
   });
 
   it('5. explicit coding intent is never downgraded; a contradiction asks instead of inspecting', async () => {
