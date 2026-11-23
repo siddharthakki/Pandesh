@@ -149,12 +149,51 @@ export type ProjectResolution =
   | { status: 'none' }
   | { status: 'resolved'; project: ProjectRecord; path: string; via: 'path' | 'name'; ref: string | null; readOnlyRequested: boolean }
   | { status: 'ambiguous'; candidates: Array<{ id: string; name: string; paths: string[] }>; question: string }
-  | { status: 'unauthorized'; path: string; question: string };
+  | { status: 'unauthorized'; path: string; question: string }
+  /** The task says outright which project it is for ("the project named X"), and no project of that name is registered. */
+  | { status: 'unregistered'; name: string; question: string };
 
 const WINDOWS_PATH = /[A-Za-z]:[\\/][^\s"'`<>|?*]*[^\s"'`<>|?*.,;:!)]/g;
-const REF = /\b(?:on|branch|at)\s+(?:the\s+)?(?:branch\s+)?([A-Za-z0-9][A-Za-z0-9._/-]{1,80}\/[A-Za-z0-9._/-]{1,80}|main|master|develop)\b/i;
+const REF = /\b(?:on|branch|at|off(?:\s+of)?)\s+(?:the\s+)?(?:branch\s+)?([A-Za-z0-9][A-Za-z0-9._/-]{1,80}\/[A-Za-z0-9._/-]{1,80}|main|master|develop)\b/i;
 const READ_ONLY = /\b(do not modify|don't modify|without modifying|read[- ]only|no changes|do not change|do not edit)\b/i;
 const esc = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+const QUOTE = '["\'`“”‘’]';
+const QUOTED_NAME = `${QUOTE}([^"'\`“”‘’]{2,49})${QUOTE}`;
+/** Ways a task says outright which project it is for. Deliberately narrow: a quoted name, or the word right after "named"/"called". */
+const DECLARED: RegExp[] = [
+  new RegExp(`\\bproject\\s+(?:named|called|name\\s*[:=]?)\\s*${QUOTED_NAME}`, 'i'),
+  new RegExp(`\\b(?:registered|authori[sz]ed)\\s+project\\s*[:=]?\\s*${QUOTED_NAME}`, 'i'),
+  /\bproject\s+(?:named|called)\s+([A-Za-z0-9][A-Za-z0-9._-]{1,48})(?![\w-])/i,
+];
+/** A line that is only `Project: Name`. */
+const DECLARED_LINE = /^[ \t]*project[ \t]*[:=][ \t]*["'`“‘]?([A-Za-z0-9][A-Za-z0-9 ._-]{1,48}?)["'`”’]?[ \t]*$/im;
+const NOT_A_NAME = new Set(['after', 'for', 'in', 'on', 'the', 'a', 'an', 'by', 'as', 'it', 'this', 'that', 'something', 'whatever']);
+
+/**
+ * The project a task names outright (`the registered project named "Pandesh"`, `project called Calc`, a line `Project: Calc`), or
+ * null when it only mentions names in passing. An explicit name is binding: it resolves to exactly that registered project or to
+ * nothing, never to another project that happens to be mentioned (live failure 2026-11-23, ptask_9902d8ad: `PROJECT NAMED "Pandesh"
+ * (not CalcDemo)` on a PC where only CalcDemo was registered ran in CalcDemo).
+ */
+export function declaredProjectName(instruction: string): string | null {
+  const flat = instruction.replace(/\s+/g, ' ');
+  for (const re of DECLARED) {
+    const name = re.exec(flat)?.[1]?.trim();
+    if (name && !NOT_A_NAME.has(name.toLowerCase())) return name;
+  }
+  return DECLARED_LINE.exec(instruction)?.[1]?.trim() || null;
+}
+
+/** Wording that rules a project OUT: "not CalcDemo", "rather than the Ledger project", "instead of Calc". */
+const RULED_OUT = new RegExp(`(?:\\bnot|\\bnever|\\brather than|\\binstead of|\\bother than|\\bunlike|\\bexcluding|\\bexcept(?: for)?)\\s+(?:(?:in|on|for|the|project|named|called)\\s+)*${QUOTE}?$`, 'i');
+
+/** Whether the text mentions this name at least once in a way that does not rule it out. */
+function mentioned(text: string, name: string): boolean {
+  const whole = new RegExp(`(?<![\\w-])${esc(name)}(?![\\w-])`, 'gi');
+  for (let m = whole.exec(text); m; m = whole.exec(text)) if (!RULED_OUT.test(text.slice(0, m.index))) return true;
+  return false;
+}
 
 /**
  * Which authorized project does this instruction mean?
@@ -177,6 +216,24 @@ export function resolveProject(projects: ProjectRecord[], instruction: string): 
     if (owner) hits.set(owner.id, { project: owner, path: owner.paths.find(pp => { const pk = pathKey(pp); return k === pk || k.startsWith(pk + path.sep); })! });
     else stray.push(raw);
   }
+  // A project named outright is binding: exactly that registered project, or nothing. Other names in the text never stand in for it.
+  const declared = declaredProjectName(instruction);
+  if (declared) {
+    const want = declared.toLowerCase();
+    const match = projects.find(p => [p.name, ...p.aliases].some(n => n.toLowerCase() === want));
+    if (!match) {
+      return { status: 'unregistered', name: declared, question: `This task names the project '${declared}', and no project of that name is registered in Pandesh on this PC. Nothing was copied, started or sent, and no other project was used in its place. Register '${declared}' in Pandesh with the access this task needs, then send the task again.` };
+    }
+    const elsewhere = [...hits.values()].filter(h => h.project.id !== match.id);
+    if (elsewhere.length) {
+      return { status: 'ambiguous', candidates: [match, ...elsewhere.map(h => h.project)].map(p => ({ id: p.id, name: p.name, paths: p.paths })), question: `This task names the project '${match.name}' but gives a path in ${elsewhere.map(h => h.project.name).join(', ')}. Which one is it about?` };
+    }
+    if (stray.length) {
+      return { status: 'unauthorized', path: stray[0]!, question: `${stray[0]} is not an authorized project. Register it in Pandesh first (nothing was searched or read), or name an authorized project.` };
+    }
+    const hit = hits.get(match.id);
+    return { status: 'resolved', project: match, path: hit?.path ?? match.paths[0]!, via: hit ? 'path' : 'name', ref, readOnlyRequested };
+  }
   if (hits.size > 1) {
     return { status: 'ambiguous', candidates: [...hits.values()].map(h => ({ id: h.project.id, name: h.project.name, paths: h.project.paths })), question: `This task names paths in ${hits.size} different projects (${[...hits.values()].map(h => h.project.name).join(', ')}). Which one is it about?` };
   }
@@ -187,7 +244,8 @@ export function resolveProject(projects: ProjectRecord[], instruction: string): 
   if (stray.length) {
     return { status: 'unauthorized', path: stray[0]!, question: `${stray[0]} is not an authorized project. Register it in Pandesh first (nothing was searched or read), or name an authorized project.` };
   }
-  const named = projects.filter(p => [p.name, ...p.aliases].some(n => new RegExp(`(?<![\\w-])${esc(n)}(?![\\w-])`, 'i').test(text)));
+  // A name the task rules out ("not CalcDemo") is not a reference to that project.
+  const named = projects.filter(p => [p.name, ...p.aliases].some(n => mentioned(text, n)));
   if (named.length === 1) return { status: 'resolved', project: named[0]!, path: named[0]!.paths[0]!, via: 'name', ref, readOnlyRequested };
   if (named.length > 1) {
     return { status: 'ambiguous', candidates: named.map(p => ({ id: p.id, name: p.name, paths: p.paths })), question: `Which project do you mean: ${named.map(p => p.name).join(' or ')}?` };

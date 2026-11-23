@@ -116,6 +116,69 @@ describe('project resolution', () => {
     expect(resolve('PandeshXYZ is not Pandesh-like')).toEqual({ status: 'none' });
   });
 
+  describe('a project named outright (live failure ptask_9902d8ad, 2026-11-23)', () => {
+    /** The opening of the live instruction, on a PC where "Pandesh" was not registered and "CalcDemo" was. */
+    const LIVE = 'CODE CHANGE IN THE REGISTERED PROJECT NAMED "Pandesh" (not CalcDemo). Implement the approved UI-only navigation simplification in a NEW ISOLATED WORKTREE AND FEATURE BRANCH CREATED OFF main.';
+    let only: string;
+    beforeEach(() => {
+      only = path.join(dir, 'data-calc');
+      registerProject(only, { name: 'CalcDemo', path: repo(dir, 'CalcDemo'), access: 'read-write', authorizedBy: 'o' });
+    });
+
+    it('the live task is not registered here: it never resolves to CalcDemo', () => {
+      const r = resolveProject(loadProjects(only), LIVE);
+      expect(r).toMatchObject({ status: 'unregistered', name: 'Pandesh' });
+      if (r.status === 'unregistered') expect(r.question).toMatch(/no other project was used in its place/);
+      // An empty registry gives the same answer, not "none".
+      expect(resolveProject([], LIVE)).toMatchObject({ status: 'unregistered', name: 'Pandesh' });
+    });
+
+    it('with Pandesh registered, the same task resolves to exactly Pandesh, on main', () => {
+      registerProject(only, { name: 'Pandesh', path: pandesh, access: 'read-write', authorizedBy: 'o' });
+      const r = resolveProject(loadProjects(only), LIVE);
+      expect(r).toMatchObject({ status: 'resolved', via: 'name', ref: 'main' });
+      if (r.status === 'resolved') expect(r.project.name).toBe('Pandesh');
+    });
+
+    it('the explicit name wins over other names mentioned, in every declared form, also by alias', () => {
+      for (const t of [
+        'In the project named "Novocomedy", port the router we wrote for Pandesh.',
+        'project called Novocomedy: port the Pandesh router',
+        "Use the registered project 'novocomedy' and compare with Pandesh later.",
+        'Port the Pandesh router.\nProject: Novocomedy\nKeep the tests green.',
+      ]) {
+        const r = resolve(t);
+        expect(r, t).toMatchObject({ status: 'resolved' });
+        if (r.status === 'resolved') expect(r.project.name, t).toBe('Novocomedy');
+      }
+      const a = resolve('Fix the router in the project named "the assistant"');
+      if (a.status === 'resolved') expect(a.project.name).toBe('Pandesh'); else throw new Error(a.status);
+    });
+
+    it('a name the task rules out is not a reference to that project', () => {
+      for (const t of ['Fix the router in Pandesh, not Novocomedy', 'Fix the router in Pandesh rather than the Novocomedy project', 'Fix the Pandesh router instead of "Novocomedy"']) {
+        const r = resolve(t);
+        expect(r, t).toMatchObject({ status: 'resolved' });
+        if (r.status === 'resolved') expect(r.project.name, t).toBe('Pandesh');
+      }
+      // Ruled out and nothing else named: no project, never the ruled-out one.
+      expect(resolve('Fix the router, but not Novocomedy')).toEqual({ status: 'none' });
+      // "do not modify X" is a read-only request about X, not a ruling out.
+      expect(resolve('Check the router; do not modify Pandesh')).toMatchObject({ status: 'resolved', readOnlyRequested: true });
+    });
+
+    it('an explicit name that disagrees with a path asks; an unregistered path is still refused', () => {
+      expect(resolve(`In the project named "Pandesh", fix ${novo}\\README.md`).status).toBe('ambiguous');
+      expect(resolve('In the project named "Pandesh", fix C:\\Somewhere\\Else\\x.ts').status).toBe('unauthorized');
+      expect(resolve(`In the project named "Pandesh", fix ${pandesh}\\README.md`)).toMatchObject({ status: 'resolved', via: 'path' });
+    });
+
+    it('passing uses of the word project declare nothing', () => {
+      expect(resolve('Start a project named after my grandmother').status).toBe('none');
+      expect(resolve('Resolve the named registered Pandesh project and fail closed')).toMatchObject({ status: 'resolved', via: 'name' });
+    });
+  });
+
   it('read-only projects only allow read-only work', () => {
     const [p] = loadProjects(data);
     expect(projectAllows(p!, true)).toEqual({ ok: true });

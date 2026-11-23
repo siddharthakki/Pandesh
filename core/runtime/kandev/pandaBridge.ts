@@ -15,7 +15,7 @@ import { CoreError } from '../../domain/errors';
 import { runHardenedGit } from '../../security/hardenedGit';
 import { addComment, getStory, listComments, listStories } from '../../domain/stories';
 import type { StoryRecord } from '../../shared/wireTypes';
-import { loadProjects, projectAllows, resolveProject, type ProjectRecord } from '../../domain/projectRegistry';
+import { declaredProjectName, loadProjects, projectAllows, repoIdentity, resolveProject, type ProjectRecord } from '../../domain/projectRegistry';
 import { asksForChange, deriveMutationPolicy } from '../../domain/mutationPolicy';
 import { consumeApproval, decideApproval, expireStaleApproval, pendingApproval, recordDirectApproval, requestApproval, usableApproval, withdrawApproval, type ExternalApprovalRequest } from '../../domain/bridgeApprovals';
 import { getAttempt, requestCancelAttempt } from '../../domain/attempts';
@@ -281,6 +281,29 @@ function permissionRefused(db: CoreDatabase, taskId: string, reason: string): ne
   throw new CoreError('forbidden', reason, { reason: 'permission_denied' });
 }
 
+/** The task names a project that is not registered: it fails with that reason; nothing ran and nothing was substituted. */
+function projectNotRegistered(db: CoreDatabase, taskId: string, reason: string): never {
+  recordBridgeStatus(db, taskId, 'failed', `Project not registered: ${reason}`.slice(0, 500));
+  throw new CoreError('invalid_request', reason, { reason: 'project_not_registered' });
+}
+
+/**
+ * The last check before an agent starts: the private copy really is the project the task resolved to (same repository, the approved
+ * commit's branch) and, when the task names a project outright, that name. A mismatch stops the start; the copy is removed.
+ */
+export function confirmWorkspace(task: Pick<BridgeTaskRecord, 'instruction'>, plan: InspectionPlan): void {
+  const stop = (why: string): never => {
+    fs.rmSync(plan.cloneDir, { recursive: true, force: true });
+    throw new CoreError('conflict', `The workspace prepared for this task is not ${plan.project.name}: ${why}. Nothing was started.`, { reason: 'workspace_mismatch' });
+  };
+  const declared = declaredProjectName(task.instruction);
+  if (declared && ![plan.project.name, ...plan.project.aliases].some(n => n.toLowerCase() === declared.toLowerCase())) stop(`the task names the project '${declared}'`);
+  const copy = repoIdentity(plan.cloneDir).identity;
+  const source = repoIdentity(plan.sourcePath).identity;
+  if (!copy || copy !== source) stop('the copy is not a copy of its registered checkout');
+  if (plan.project.repo.identity && copy !== plan.project.repo.identity) stop('the registered folder now holds a different repository than the one you registered');
+}
+
 /**
  * The project gate, without copying anything: which authorised project (if any) the task is about, and whether this executor and this
  * kind of work are allowed there. Ambiguous or unregistered means ask (the task stays waiting); a change the project does not allow is a
@@ -291,8 +314,14 @@ function gateProject(rt: BridgeRuntime, task: BridgeTaskRecord, chosen: BridgeEx
   const intent = taskIntentOf(task);
   if (intent.conflict) needsClarification(rt.db, task.id, intent.conflict);
   const projects = loadProjects(rt.dataDir);
-  const r = projects.length || /[A-Za-z]:[\\/]/.test(task.instruction) ? resolveProject(projects, task.instruction) : ({ status: 'none' } as const);
+  const r = resolveProject(projects, task.instruction);
   if (r.status === 'ambiguous' || r.status === 'unauthorized') needsClarification(rt.db, task.id, r.question);
+  // A project named outright that is not registered: the task fails here, before any card, copy or agent. It is never run in another
+  // registered project or in an empty folder. (A personal "project named X" sent to Pandesh itself is not about code and passes.)
+  if (r.status === 'unregistered') {
+    if (chosen.kind === 'acp' || intent.kind === 'code' || refersToCode(task.instruction)) projectNotRegistered(rt.db, task.id, r.question);
+    return null;
+  }
   // A project NAME refers to its code when the task is a code change or uses code words; a path always does.
   if (r.status !== 'resolved' || !(r.via === 'path' || intent.kind === 'code' || refersToCode(task.instruction))) return null;
   if (chosen.kind !== 'acp') needsClarification(rt.db, task.id, `This task is about the project '${r.project.name}'. ${chosen.label} cannot be confined to that project yet; choose Claude Code or OpenCode.`);
@@ -526,6 +555,7 @@ export async function dispatchBridgeTask(rt: BridgeRuntime, taskId: string, req:
     }
     inspection = prepareProjectInspection(rt.dataDir, task.id, intent.project, intent.path, now.branch, now.commit, intent.mode);
   } else if (intent) inspection = prepareProjectInspection(rt.dataDir, task.id, intent.project, intent.path, intent.ref, null, intent.mode);
+  if (inspection) confirmWorkspace(task, inspection);
   const info = transferInfo(chosen.id, model);
   if (routing === 'auto' && info.external) {
     // A routed (not hand-picked) external executor still needs the host's explicit consent for this task.
