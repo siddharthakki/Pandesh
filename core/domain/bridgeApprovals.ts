@@ -59,6 +59,18 @@ export function pendingApproval(db: CoreDatabase, taskId: string, now = Date.now
   return Date.parse(last.request.expiresAt) > now ? last.request : null;
 }
 
+/**
+ * Closes a request that expired while nobody answered it (otherwise only a late decision would notice): records `expired` once and returns
+ * the request, so the task can say that nothing was sent instead of "waiting for your approval" forever. Null when there is nothing to close.
+ */
+export function expireStaleApproval(db: CoreDatabase, taskId: string, now = Date.now()): ExternalApprovalRequest | null {
+  const events = listApprovalEvents(db, taskId);
+  const last = events[events.length - 1];
+  if (!last || last.event !== 'requested' || !last.request || Date.parse(last.request.expiresAt) > now) return null;
+  write(db, taskId, 'awaiting_executor', 'The approval request expired before it was decided; nothing was sent.', { event: 'expired', requestId: last.request.requestId, at: new Date(now).toISOString(), by: 'pandesh' });
+  return last.request;
+}
+
 /** Records a new request for the task, superseding an older pending one (the owner only ever sees the latest scope). */
 export function requestApproval(db: CoreDatabase, req: Omit<ExternalApprovalRequest, 'requestId' | 'requestedAt' | 'expiresAt'>, now = Date.now()): ExternalApprovalRequest {
   const prior = pendingApproval(db, req.taskId, now);
