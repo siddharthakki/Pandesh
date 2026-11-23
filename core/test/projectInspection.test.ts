@@ -18,7 +18,7 @@ describe('project-bound tasks through the bridge', () => {
   let dir: string; let data: string; let db: CoreDatabase; let pairing: BridgePairing; let rt: BridgeRuntime; let proj: string; let other: string;
   // Claude is "available" so the dispatch reaches the project gate; the fake never actually starts anything.
   const kandev = {
-    healthy: async () => true, reprobeAgent: async () => null,
+    healthy: async () => true, reprobeAgent: async () => null, agentBinaryInstalled: () => true,
     tool: async (name: string) => (name === 'list_agents_kandev' ? { agents: [{ id: 'a1', name: 'claude-acp', capability_status: 'ok', profiles: [{ id: 'p', model: 'sonnet', auto_approve: false }] }] } : {}),
   } as unknown as KandevClient;
   const consent = { externalTransfer: true };

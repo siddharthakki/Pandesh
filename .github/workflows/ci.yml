@@ -3,8 +3,10 @@ name: CI
 on:
   push:
     branches: [main]
+  # Stacked PRs (a feature PR on top of another feature PR) are validated before anything merges: a PR into a feature or fix
+  # branch runs the same jobs, with its impacted tests taken against its own base (see the unit step).
   pull_request:
-    branches: [main]
+    branches: [main, 'feat/**', 'fix/**']
 
 permissions:
   contents: read
@@ -58,7 +60,7 @@ jobs:
       - name: Unit tests (tests impacted by this change)
         shell: bash
         run: |
-          base="origin/main"
+          base="origin/${{ github.base_ref || 'main' }}"
           if [ "${{ github.event_name }}" = "push" ]; then base="HEAD^"; fi
           node scripts/ci/ollama-tags-stub.mjs &
           node scripts/test-tiers.mjs unit --base "$base"

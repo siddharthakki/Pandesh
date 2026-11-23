@@ -1,4 +1,5 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { KandevClient } from '../runtime/kandev/kandevClient';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
@@ -18,6 +19,8 @@ let db: CoreDatabase;
 let api: RunningApiServer;
 
 beforeEach(async () => {
+  // About what the native host forwards, not about this machine's Claude Code install (GitHub's runner has none). Restored after each test.
+  vi.spyOn(KandevClient.prototype, 'agentBinaryInstalled').mockReturnValue(true);
   dir = fs.mkdtempSync(path.join(os.tmpdir(), 'panda-host-'));
   db = openCoreDatabase(path.join(dir, 'core.db')).db;
   api = await startApiServer({
@@ -30,6 +33,7 @@ beforeEach(async () => {
   fs.writeFileSync(path.join(dir, 'host-config.json'), JSON.stringify({ dataDir: dir }));
 });
 afterEach(async () => {
+  vi.restoreAllMocks();
   await api.close();
   db.close();
   fs.rmSync(dir, { recursive: true, force: true });

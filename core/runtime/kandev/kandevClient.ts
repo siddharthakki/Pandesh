@@ -88,6 +88,13 @@ function kandevScriptsDir(): string | null {
   return candidates.find(p => fs.existsSync(path.join(p, 'start-kandev.ps1'))) ?? null;
 }
 
+/** Is the executable on PATH? A plain directory scan (honouring PATHEXT on Windows): nothing is spawned to find out. */
+export function binaryOnPath(binary: string, env: NodeJS.ProcessEnv = process.env): boolean {
+  const dirs = (env.PATH ?? env.Path ?? '').split(path.delimiter).filter(Boolean);
+  const exts = process.platform === 'win32' ? ['', ...(env.PATHEXT ?? '.EXE;.CMD;.BAT;.COM').split(';').filter(Boolean)] : [''];
+  return dirs.some(dir => exts.some(ext => { try { return fs.statSync(path.join(dir, binary + ext)).isFile(); } catch { return false; } }));
+}
+
 export class KandevClient {
   private mcpSession: string | null = null;
 
@@ -133,6 +140,9 @@ export class KandevClient {
   async reprobeAgent(agentType: string): Promise<{ status: string; error?: string } | null> {
     try { return await this.rest<{ status: string; error?: string }>('POST', `/agent-capabilities/${encodeURIComponent(agentType)}/probe`); } catch { return null; }
   }
+
+  /** Is this agent's CLI installed where Kandev launches it? A PATH scan: nothing is spawned. Test doubles answer it themselves. */
+  agentBinaryInstalled(binary: string): boolean { return binaryOnPath(binary); }
 
   async healthy(): Promise<boolean> {
     try {

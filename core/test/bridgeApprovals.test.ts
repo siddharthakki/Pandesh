@@ -17,7 +17,7 @@ const git = (cwd: string, ...a: string[]) => spawnSync('git', ['-c', 'user.name=
 describe('external-agent approval', () => {
   let dir: string; let data: string; let db: CoreDatabase; let pairing: BridgePairing; let rt: BridgeRuntime; let proj: string;
   const kandev = {
-    healthy: async () => true, reprobeAgent: async () => null,
+    healthy: async () => true, reprobeAgent: async () => null, agentBinaryInstalled: () => true,
     tool: async (name: string) => (name === 'list_agents_kandev' ? { agents: [{ id: 'a1', name: 'claude-acp', capability_status: 'ok', profiles: [{ id: 'p', model: 'sonnet', auto_approve: false }] }, { id: 'a2', name: 'opencode-acp', capability_status: 'ok', profiles: [{ id: 'p2', model: 'qwen', auto_approve: false }] }] } : {}),
   } as unknown as KandevClient;
   beforeEach(() => {
@@ -33,6 +33,21 @@ describe('external-agent approval', () => {
   const submit = (text: string, id: string, markedConfidential = false) => submitBridgeTask(db, pairing, { clientRequestId: id, instruction: text, sourceRef: { kind: 'chatgpt' }, markedConfidential }).task;
   const ask = (id: string) => dispatchBridgeTask(rt, id, { executor: 'claude', decidedBy: `extension:${pairing.id}`, authority: 'extension' });
   const TASK = (p = proj) => `Inspect the router in ${p} on feat/x. Run its existing tests and report defects. Do not modify files.`;
+
+  it('an agent that is not installed is still refused (no card, nothing starts), but never hides a project answer', async () => {
+    // CI 2026-11-23: availability came from the machine's PATH and was checked before the project gate; now it is injectable and second.
+    const absent = { ...rt, kandev: { ...kandev, agentBinaryInstalled: () => false } as unknown as KandevClient };
+    const ok = submit(TASK(), 'req-appr-absent1');
+    await expect(dispatchBridgeTask(absent, ok.id, { executor: 'claude', decidedBy: `extension:${pairing.id}`, authority: 'extension' })).rejects.toThrow(/Claude Code is not available: Claude Code is not installed on this PC/);
+    expect(pendingApproval(db, ok.id)).toBeNull();
+    expect(getBridgeTask(db, ok.id)).toMatchObject({ status: 'awaiting_executor', executor: null });
+    const stray = submit(TASK(path.join(dir, 'not-registered')), 'req-appr-absent2');
+    await expect(dispatchBridgeTask(absent, stray.id, { executor: 'claude', decidedBy: `extension:${pairing.id}`, authority: 'extension' })).rejects.toThrow(/not an authorized project/);
+    for (const executor of ['claude'] as const) {
+      await expect(dispatchBridgeTask(absent, ok.id, { executor, decidedBy: 'host:x', authority: 'host', consent: { externalTransfer: true } })).rejects.toThrow(/not available/);
+    }
+    expect(fs.existsSync(path.join(data, 'panda-workspaces'))).toBe(false);
+  });
 
   it('a browser can ASK for Claude Code: nothing starts, the owner gets the full picture, the browser learns only that approval is pending', async () => {
     const t = submit(TASK(), 'req-appr-000001');

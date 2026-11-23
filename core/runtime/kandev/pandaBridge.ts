@@ -29,7 +29,7 @@ import {
 } from '../../domain/pandaBridge';
 import { detectGpu, gpuLaneLimit, type GpuInfo } from '../hardwareCapacity';
 import type { RuntimeExecutor } from '../executor';
-import { KandevClient, KandevUnavailableError } from './kandevClient';
+import { binaryOnPath, KandevClient, KandevUnavailableError } from './kandevClient';
 import { parseServiceArgs, type ServiceHost, type ServiceRegistry } from './bridgeServices';
 import { classifyInstruction, WORKSPACE_MARKER } from './intentRouter';
 import { asksForTests, isReadOnlyIntent, resolveTaskIntent, type TaskIntent, type TaskIntentKind } from '../../domain/taskIntent';
@@ -79,11 +79,13 @@ export function transferInfo(executor: string, model: string | null | undefined)
   return { id: executor, label, external };
 }
 
-/** Is the executable on PATH? A plain directory scan (honouring PATHEXT on Windows): nothing is spawned to find out. */
-function onPath(binary: string, env: NodeJS.ProcessEnv = process.env): boolean {
-  const dirs = (env.PATH ?? env.Path ?? '').split(path.delimiter).filter(Boolean);
-  const exts = process.platform === 'win32' ? ['', ...(env.PATHEXT ?? '.EXE;.CMD;.BAT;.COM').split(';').filter(Boolean)] : [''];
-  return dirs.some(dir => exts.some(ext => { try { return fs.statSync(path.join(dir, binary + ext)).isFile(); } catch { return false; } }));
+/**
+ * Is the agent's CLI installed on this PC? Asked of the Kandev client (which launches agents here), so a test double answers it like
+ * every other Kandev fact; the real client scans PATH. (CI 2026-11-23: unit tests read the runner's real PATH, found no Claude Code,
+ * and 22 approval / project tests failed on GitHub while passing on any PC with Claude installed.)
+ */
+function agentInstalled(kandev: KandevClient, binary: string): boolean {
+  return typeof kandev.agentBinaryInstalled === 'function' ? kandev.agentBinaryInstalled(binary) : binaryOnPath(binary);
 }
 
 export interface ExecutorListing {
@@ -105,7 +107,7 @@ export async function discoverExecutors(kandev: KandevClient, opts: { nativeAvai
   for (const id of Object.keys(AGENT_IDS) as DevAgent[]) {
     const known = KNOWN[id];
     const agent = byName.get(AGENT_IDS[id]);
-    const installed = known.binary ? onPath(known.binary) : Boolean(agent);
+    const installed = known.binary ? agentInstalled(kandev, known.binary) : Boolean(agent);
     let available = installed;
     let reason: string | null = null;
     if (agent && agent.capability_status === 'failed') {
@@ -361,9 +363,11 @@ async function requestExternalApproval(rt: BridgeRuntime, task: BridgeTaskRecord
   const chosen = listing.executors.find(e => e.id === req.executor);
   if (!chosen) throw new CoreError('invalid_request', `unknown executor '${req.executor}'`);
   if (!chosen.dispatchable) throw new CoreError('invalid_request', `${chosen.label}: ${chosen.reason}`);
-  if (!chosen.available) throw new CoreError('conflict', `${chosen.label} is not available: ${chosen.reason ?? 'unavailable'}`);
+  // Project and permission checks first: a missing, ambiguous, unauthorized or read-only project fails closed with its own answer on
+  // every machine, whether or not the agent happens to be installed. Availability is checked right after; nothing has started yet.
   const intent = gateProject(rt, task, chosen);
   if (!intent) requireAnswerOnly(rt, task, chosen);
+  if (!chosen.available) throw new CoreError('conflict', `${chosen.label} is not available: ${chosen.reason ?? 'unavailable'}`);
   const preview = intent ? previewInspection(intent) : null;
   const provider = providerOf(chosen.id, req.model ?? null);
   const includeContext = task.contextConfirmed;
@@ -496,7 +500,6 @@ export async function dispatchBridgeTask(rt: BridgeRuntime, taskId: string, req:
     chosen = listing.executors.find(e => e.id === req.executor);
     if (!chosen) throw new CoreError('invalid_request', `unknown executor '${req.executor}'`);
     if (!chosen.dispatchable) throw new CoreError('invalid_request', `${chosen.label}: ${chosen.reason}`);
-    if (!chosen.available) throw new CoreError('conflict', `${chosen.label} is not available: ${chosen.reason ?? 'unavailable'}`);
   }
   // Services that handle private data (a household's documents) are not for a paired browser, however they were chosen (named or routed).
   if (chosen.kind === 'service' && rt.services?.get(chosen.id.slice('service:'.length))?.internal && req.authority !== 'host') {
@@ -508,6 +511,8 @@ export async function dispatchBridgeTask(rt: BridgeRuntime, taskId: string, req:
   let inspection: InspectionPlan | null = null;
   const intent = gateProject(rt, task, chosen);
   if (!intent) requireAnswerOnly(rt, task, chosen);
+  // After the project gate (see requestExternalApproval): an unavailable agent never starts, but never masks a fail-closed project answer.
+  if (!chosen.available) throw new CoreError('conflict', `${chosen.label} is not available: ${chosen.reason ?? 'unavailable'}`);
   if (intent && transferInfo(chosen.id, model).external && req.approvalRequestId) {
     // What the owner approved is what runs: same project, branch AND commit. A moved branch, an edited registry entry or a swapped
     // checkout since the card was shown means the card no longer describes this run.
