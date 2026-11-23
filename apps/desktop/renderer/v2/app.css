@@ -1135,3 +1135,10 @@ button.tl-row:hover { background: var(--raised); }
 @media (max-width: 720px) { .jv-journey { grid-template-columns: 1fr 1fr; } }
 .jv-wish-item strong { display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; font-size: 13px; line-height: 1.35; }
 .jv-wish-main h2 { display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+
+/* The wish's outcome, readable in place. */
+.jv-outputs { display: flex; flex-direction: column; gap: 8px; }
+.jv-output { border: 1px solid var(--line); border-radius: 12px; background: var(--raised); }
+.jv-output.review { border-color: rgba(170,150,255,.45); }
+.jv-output > summary { cursor: pointer; padding: 8px 12px; display: flex; gap: 8px; align-items: baseline; font-size: 13.5px; }
+.jv-output-text { margin: 0; padding: 4px 14px 12px; max-height: 460px; overflow: auto; overflow-wrap: anywhere; font-size: 13.5px; line-height: 1.5; color: var(--ink); }

@@ -39,7 +39,12 @@ export interface Journey {
   /** One sentence: where it stands, from the records. */
   headline: string; needsYou: boolean; live: boolean; finished: boolean; failed: boolean;
   actions: JourneyAction[]; at: string;
+  /** What the wish actually produced, as the steps reported it (the result, then the review), for reading in place. */
+  outputs?: Array<{ title: string; by: string; kind: 'work' | 'review'; text: string }>;
 }
+
+/** A review that reports missing items or gaps, in its own words (the receipt's "Verified" means only that tools backed each step). */
+export const reviewFoundGaps = (text: string | null): boolean => Boolean(text && /❌|(?<!(nothing|no|not) )\bmissing\b|(?<!no )\bgaps? (found|identified)\b|\bnot addressed\b|(?<!not )\bincomplete\b/i.test(text));
 
 export interface TrackedWish { conversationId: string; text: string; at: string }
 export interface ReceiptLite { headline: string; verifiedOutputs: Array<{ label?: string; text?: string; path?: string } | string>; artifacts: Array<{ path: string; exists: boolean }>; nextAction: string | null; independentlyReviewed: boolean; partialOrFailed: Array<unknown> }
@@ -71,10 +76,12 @@ export function missionJourney(m: MissionView, receipt: ReceiptLite | null, titl
   const verify: [StageState, string] = !review.length
     ? (terminal ? ['skip', 'No independent review was planned; the receipt shows what the tools themselves confirmed'] : ['skip', 'No independent review planned'])
     : rv.status === 'running' ? ['now', `${m.agentNames[rv.agentId] ?? 'Reviewer'} is checking the work`]
-    : DONE_STEP.has(rv.status) ? ['done', `${m.agentNames[rv.agentId] ?? 'Reviewer'} checked it${rv.resultText ? `: ${rv.resultText.slice(0, 160)}` : ''}`]
+    : DONE_STEP.has(rv.status) ? (reviewFoundGaps(rv.resultText)
+      ? ['warn', `${m.agentNames[rv.agentId] ?? 'Reviewer'} checked it and found gaps: read the review below`]
+      : ['done', `${m.agentNames[rv.agentId] ?? 'Reviewer'} checked it${rv.resultText ? `: ${rv.resultText.slice(0, 160)}` : ''}`])
     : rv.status === 'failed' ? ['fail', rv.error ?? 'The review did not finish'] : ['todo', `${m.agentNames[rv.agentId] ?? 'Reviewer'} will check the work`];
   const deliver: [StageState, string] = !terminal ? ['todo', 'A receipt is written when the mission ends']
-    : m.status === 'completed' ? ['done', receipt ? `${receipt.headline}${receipt.artifacts.length ? ` · ${receipt.artifacts.length} file${receipt.artifacts.length === 1 ? '' : 's'}` : ''}${m.resultSummary ? ` · ${m.resultSummary.slice(0, 200)}` : ''}` : (m.resultSummary ?? 'Completed')]
+    : m.status === 'completed' ? ['done', receipt ? `Delivered; Core's receipt shows each step backed by tool calls it recorded${receipt.artifacts.length ? ` · ${receipt.artifacts.length} file${receipt.artifacts.length === 1 ? '' : 's'}` : ''}` : (m.resultSummary ?? 'Completed')]
     : m.status === 'completed_with_issues' ? ['warn', receipt?.nextAction ?? m.resultSummary ?? 'Completed with issues']
     : ['fail', m.resultSummary ?? (m.status === 'cancelled' ? 'Cancelled' : 'Not finished')];
 
@@ -91,10 +98,12 @@ export function missionJourney(m: MissionView, receipt: ReceiptLite | null, titl
   const now = current(stages);
   const headline = waiting ? 'Waiting for your OK to continue.'
     : m.status === 'running' ? (running ? `Working: ${running.title}` : 'Between steps.')
-    : m.status === 'completed' ? `Delivered${receipt?.independentlyReviewed ? ' and independently reviewed' : ''}.`
+    : m.status === 'completed' && rv && reviewFoundGaps(rv.resultText) ? 'Delivered. The Reviewer found gaps: the result and the review are below.'
+    : m.status === 'completed' ? `Delivered${receipt?.independentlyReviewed ? ' and independently reviewed' : ''}. The result is below.`
     : m.status === 'completed_with_issues' ? 'Delivered with issues: see what was not verified.'
     : m.status === 'interrupted' ? 'Interrupted: it can be continued from Missions.' : m.status === 'cancelled' ? 'Cancelled.' : 'Not finished.';
-  return { id: `m:${m.id}`, kind: 'mission', title: title ?? m.objective, source: 'Mission', conversationId: m.conversationId, stages, now, headline, needsYou: waiting, live: m.status === 'running' && Boolean(running), finished: terminal, failed: ['failed', 'cancelled', 'interrupted'].includes(m.status), actions, at: m.updatedAt };
+  return { id: `m:${m.id}`, kind: 'mission', title: title ?? m.objective, source: 'Mission', conversationId: m.conversationId, stages, now, headline, needsYou: waiting, live: m.status === 'running' && Boolean(running), finished: terminal, failed: ['failed', 'cancelled', 'interrupted'].includes(m.status), actions, at: m.updatedAt,
+    outputs: m.steps.filter((s) => s.resultText).map((s) => ({ title: s.title, by: m.agentNames[s.agentId] ?? s.agentId, kind: s.kind, text: s.resultText as string })) };
 }
 
 export function codeJourney(b: BridgeActivityItem, approval: BridgeApproval | null): Journey {
@@ -189,17 +198,24 @@ export function chatJourney(w: TrackedWish, tasks: TaskRow[], pending: { convers
 
 /**
  * All journeys, newest first. A tracked wish shows as its mission or worker task once one exists for its conversation
- * (keeping the owner's words as the title); otherwise as its chat turn. Service tasks are not wishes.
+ * (keeping the owner's words as the title); otherwise as its chat turn. Missions and tasks no wish asked for are not
+ * listed: Missions shows all work; Wish to Reality shows what the owner asked for and where it got to.
  */
 export function buildJourneys(i: { tracked: TrackedWish[]; missions: MissionView[]; bridge: BridgeActivityItem[]; approvals: BridgeApproval[]; tasks: TaskRow[]; pending: { conversationId: string | null; approvalId: string; detail: string } | null; receipts: Record<string, ReceiptLite>; cards?: PendingCard[] }): Journey[] {
   const wordsFor = new Map(i.tracked.map((w) => [w.conversationId, w.text]));
   const covered = new Set<string>();
   const out: Journey[] = [];
-  for (const m of i.missions) { out.push(missionJourney(m, i.receipts[m.id] ?? null, wordsFor.get(m.conversationId))); covered.add(m.conversationId); }
+  // Only the owner's own wishes: a mission or worker task appears here when it is how one of them is being done.
+  // Every other mission and task belongs to Missions (the operational view), not here (owner feedback 2026-11-23).
+  for (const m of i.missions) {
+    if (!wordsFor.has(m.conversationId) || covered.has(m.conversationId)) continue;
+    out.push(missionJourney(m, i.receipts[m.id] ?? null, wordsFor.get(m.conversationId))); covered.add(m.conversationId);
+  }
   for (const b of i.bridge.filter((x) => !(x.executor ?? '').startsWith('service:'))) {
+    if (!b.conversationId || !wordsFor.has(b.conversationId) || covered.has(b.conversationId)) continue;
     const j = codeJourney(b, i.approvals.find((a) => a.taskId === b.id) ?? null);
-    if (b.conversationId && wordsFor.has(b.conversationId)) j.title = wordsFor.get(b.conversationId)!;
-    out.push(j); if (b.conversationId) covered.add(b.conversationId);
+    j.title = wordsFor.get(b.conversationId)!;
+    out.push(j); covered.add(b.conversationId);
   }
   for (const w of i.tracked) if (!covered.has(w.conversationId)) out.push(chatJourney(w, i.tasks, i.pending, i.cards ?? []));
   return out.sort((a, b) => Number(b.needsYou) - Number(a.needsYou) || Number(b.live) - Number(a.live) || b.at.localeCompare(a.at));

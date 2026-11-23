@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildJourneys, cardsFrom, chatJourney, codeJourney, missionJourney } from '../renderer-v2/src/journeyModel';
+import { buildJourneys, cardsFrom, chatJourney, codeJourney, missionJourney, reviewFoundGaps } from '../renderer-v2/src/journeyModel';
 import type { MissionView } from '../renderer-v2/src/missionModel';
 import type { BridgeActivityItem } from '../renderer-v2/src/Missions';
 import type { TaskRow } from '../renderer-v2/src/bridge';
@@ -36,6 +36,15 @@ describe('Wish journeys', () => {
     expect(done.headline).toMatch(/independently reviewed/);
     const noReview = missionJourney(mission({ status: 'completed', steps: [step(0, 'work', 'succeeded')] }), null);
     expect(noReview.stages[5]).toMatchObject({ state: 'skip' });
+  });
+
+  it('a review that found gaps is a caveat at Verify, and the result and review are readable in place (live run 2026-11-23)', () => {
+    const j = missionJourney(mission({ status: 'completed', steps: [step(0, 'work', 'succeeded', { resultText: '# Checklist\n- [ ] Charge' }), step(1, 'review', 'succeeded', { resultText: '| Power bank capacity check | ❌ Not addressed |' })] }), null);
+    expect(j.stages[5].state).toBe('warn');
+    expect(j.headline).toMatch(/Reviewer found gaps/);
+    expect(j.outputs?.map((o) => o.kind)).toEqual(['work', 'review']);
+    expect(reviewFoundGaps('No gaps found; nothing missing.')).toBe(false);
+    expect(reviewFoundGaps('Critical Missing Items: flight delay buffer')).toBe(true);
   });
 
   it('an unverified work step is shown as done with a caveat, never as plain done', () => {
@@ -81,5 +90,8 @@ describe('Wish journeys', () => {
     const all = buildJourneys({ tracked: [w], missions: [mission({})], bridge: [], approvals: [], tasks: [task('completed')], pending: null, receipts: {} });
     expect(all).toHaveLength(1);
     expect(all[0]).toMatchObject({ kind: 'mission', title: 'Make me a packing checklist' });
+    // Owner feedback 2026-11-23: missions no wish asked for are Missions' business, not duplicated here.
+    const other = buildJourneys({ tracked: [w], missions: [mission({}), mission({ id: 'msn_2', conversationId: 'conv_other' })], bridge: [], approvals: [], tasks: [], pending: null, receipts: {} });
+    expect(other.map((j) => j.id)).toEqual(['m:msn_1']);
   });
 });

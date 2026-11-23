@@ -4,6 +4,7 @@ import { buildJourneys, cardsFrom, JOURNEY, type Journey, type JourneyAction, ty
 import { buildWish, money, type WishDetailRec, type WishView } from './wishModel';
 import type { OperatorData } from './useOperatorData';
 import { readTracked, sendWish } from './wishSend';
+import { Markdown } from './markdown';
 
 /**
  * Wish to Reality: "what can Pandesh accomplish for me?". A wish typed here is sent as a real chat message in a new
@@ -196,10 +197,22 @@ function JourneyDetail({ j, busy, onAct, onDeny, receipt }: { j: Journey; busy: 
         ) : <button key={i} type="button" className="btn small primary" disabled={busy === ('taskId' in a ? a.taskId : '')} onClick={() => onAct(a)}>{label(a)}</button>)}
       </div>
 
+      {/* The outcome itself, in the specialists' own words: what was made, then what the Reviewer found. */}
+      {j.outputs && j.outputs.length > 0 && (
+        <div className="jv-outputs">
+          {j.outputs.map((o, i) => (
+            <details key={i} className={`jv-output ${o.kind}`} open={i === 0 || o.kind === 'review'}>
+              <summary><span className="jv-tag">{o.kind === 'review' ? 'Review' : 'Result'}</span> {o.title} <span className="jv-src">by {o.by}</span></summary>
+              <div className="jv-output-text"><Markdown text={o.text} /></div>
+            </details>
+          ))}
+        </div>
+      )}
+
       {receipt && (
         <div className="jv-wish-cols">
           <section aria-label="What was verified">
-            <h3 className="jv-tag">Receipt · {receipt.headline}</h3>
+            <h3 className="jv-tag" title="Core's receipt: every step is backed by tool calls it recorded. It does not judge the content; the review above does.">Receipt · tools backed every step</h3>
             {receipt.verifiedOutputs.length === 0 && <p className="jv-empty">No output was confirmed by a tool.</p>}
             {receipt.verifiedOutputs.slice(0, 8).map((o, i) => <div key={i} className="jv-wish-row verified">{typeof o === 'string' ? o : o.text ?? o.label ?? o.path}</div>)}
           </section>
