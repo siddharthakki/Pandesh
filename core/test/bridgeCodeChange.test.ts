@@ -78,7 +78,8 @@ describe('A5 gate and approval card', () => {
     await dispatchBridgeTask(rt, t.id, { executor: 'claude', consent: { externalTransfer: true }, decidedBy: 'owner', authority: 'host' }).catch(() => { /* the fake Kandev cannot hand over */ });
     const task = getBridgeTask(db, t.id);
     const spec = devSpec(getStory(db, task.storyId!))!;
-    expect(spec).toMatchObject({ maxFiles: CODE_CHANGE_MAX_FILES, codeCopy: { projectName: 'Calc', sourcePath: rw, ref: 'main' } });
+    // The registry stores the project's real (long) path; the test's temp path may be an 8.3 short spelling (GitHub: RUNNER~1).
+    expect(spec).toMatchObject({ maxFiles: CODE_CHANGE_MAX_FILES, codeCopy: { projectName: 'Calc', sourcePath: fs.realpathSync.native(rw), ref: 'main' } });
     expect(spec.mode).toBeUndefined();
     expect(spec.repoPath).toBe(path.join(data, 'panda-workspaces', `${t.id}-code`));
     expect(git(spec.repoPath, 'remote').stdout.trim()).toBe('');

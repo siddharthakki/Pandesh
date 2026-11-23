@@ -1853,7 +1853,9 @@ export async function devStoryChangeDiff(db: CoreDatabase, kandev: KandevClient,
     const repo = spec.repoPath;
     if (!fs.existsSync(path.join(repo, '.git'))) return none('The repository that holds the approved change is gone.', 'private copy');
     const top = git(repo, ['rev-parse', '--show-toplevel']).out;
-    if (!top || path.resolve(top).toLowerCase() !== path.resolve(repo).toLowerCase()) return none('The repository that holds the approved change could not be confirmed.', 'private copy');
+    // Compare real paths: git prints the long name, the stored path may be a Windows 8.3 short spelling (CI 2026-11-23, RUNNER~1).
+    const real = (p: string) => { try { return fs.realpathSync.native(path.resolve(p)).toLowerCase(); } catch { return path.resolve(p).toLowerCase(); } };
+    if (!top || real(top) !== real(repo)) return none('The repository that holds the approved change could not be confirmed.', 'private copy');
     const tip = `refs/heads/${spec.integrationBranch}`;
     if (!git(repo, ['rev-parse', '--verify', '--quiet', tip]).ok) return none('The approved change is no longer in its branch.', 'private copy');
     const base = spec.codeCopy?.sourceHead && git(repo, ['cat-file', '-e', `${spec.codeCopy.sourceHead}^{commit}`]).ok ? spec.codeCopy.sourceHead : git(repo, ['merge-base', spec.baseBranch, tip]).out;
