@@ -12,7 +12,7 @@ import { checkPublicQuery, derivePublicQuery, explicitlyRequestsWebSearch, refer
 import { commandOpinionWarnings, readCommandReviewSettings, recordCommandReview, reviewCommand, warmCommandReview, type CommandOpinion, type CommandReviewOutcome } from './commandSecondOpinion';
 import { queryPrivacySummary, queryPrivacyWarning, readQueryPrivacySettings, recordQueryPrivacyReview, reviewQueryPrivacy, warmQueryPrivacy, type QueryPrivacyOpinion } from './queryPrivacySecondOpinion';
 import { checkStatedTotals, evaluateExpression } from './arithmeticCheck';
-import { enforceDeclineWording } from './declineWording';
+import { enforceDeclineWording, withholdUnsourcedLinksAfterWebDecline } from './declineWording';
 import { csvShapeProblem } from './csvShape';
 import { describeRequestTools, groupOfTool, groupsForText, hiddenGroups, offerActiveTools, selectChatTools, toolsInGroups } from './chatToolSelection';
 import { recordResearchProvenance, researchSourcesForTurn } from '../domain/researchProvenance';
@@ -424,6 +424,19 @@ export function failedProductSearchReply(toolError: string): string {
     return `I could not read current prices: ${reason}. These are the pages the search found; I have not read them, so I am not quoting a price:\n\n${links.join('\n')}\n\nTell me which one to open in the browser and I will read the offers from the page.`;
   }
   return `I could not get current prices: ${reason}. I have no verified offer, so I am not naming shops or prices from memory.\n\nYou can ask me again in a minute, or tell me to open a price-comparison site in the browser (for example "open geizhals.de and look up this model") and I will read the offers from the page.`;
+}
+
+/**
+ * What the assistant is told when it asks for web access again in a task where the person already said no (live finding
+ * 2026-11-23: after "Don't allow", the model re-sent the search with other words and the person was asked a second time).
+ * An approval covers the whole task, so a refusal does too: the person is not asked again, and the assistant is pointed at
+ * what remains possible. A new message from the person starts a new task, where they can be asked again.
+ */
+export function describeRepeatedWebAccessRequest(): string {
+  return 'The user already declined web access for this task, so they were not asked again and nothing was searched. '
+    + 'Do not ask for web access again in this turn. Answer from what you already know and say plainly that it is unverified, '
+    + 'then tell the user what is still possible: they can allow a search by asking again, paste the text or a link they already have, '
+    + 'or ask for something that needs no web access.';
 }
 
 export function describeUnansweredApproval(outcome: PiToolApprovalOutcome): string {
@@ -1571,6 +1584,10 @@ export class PiAgentEngine implements EngineAdapter {
 
     let webResearchApproved = false;
     let agentReachApproved = false;
+    // The person's recorded "no" to going online in this task. Only a recorded refusal sets these; an unanswered or failed
+    // request stays retryable.
+    let webResearchDeclined = false;
+    let agentReachDeclined = false;
     const agentReachConfig = readAgentReachConfig(ctx.dataDir);
     let webResearchCount = 0;
     const seenResearchQueries = new Set<string>();
@@ -2598,11 +2615,13 @@ export class PiAgentEngine implements EngineAdapter {
               research: runWebResearch,
               approveNetwork: async (queries) => {
                 if (webResearchApproved) return { approved: true };
+                if (webResearchDeclined) return { approved: false, message: describeRepeatedWebAccessRequest() };
                 const decision = await requestToolApproval({
                   toolName: 'web_research',
                   query: queries.join(' | '),
                   cardText: `Pandesh wants to search the web for current offers: ${queries.map((q) => `"${q.slice(0, 80)}"`).join(', ')}. Each query goes to a public search engine and up to 3 public pages are fetched per query for this task.`,
                 });
+                if (decision.outcome === 'rejected') webResearchDeclined = true;
                 if (decision.outcome !== 'approved') return { approved: false, message: describeUnansweredApproval(decision) };
                 webResearchApproved = true;
                 return { approved: true };
@@ -3024,6 +3043,12 @@ export class PiAgentEngine implements EngineAdapter {
               isError: true,
             };
           }
+          // The person already said no to web access in this task: they are not asked again, whatever the wording, and
+          // the query is not sent anywhere, not even to the local privacy review.
+          if (webResearchDeclined) {
+            safeRecordRuntimeEvent(db, broadcaster, attemptId, 'web_access_request_not_repeated', { tool: 'web_research', queryChars: query.length }, actor);
+            return { content: [{ type: 'text', text: describeRepeatedWebAccessRequest() }], isError: true };
+          }
           const normQuery = query.toLowerCase().replace(/\s+/g, ' ');
           if (seenResearchQueries.has(normQuery)) {
             webResearchCount += 1;
@@ -3048,6 +3073,7 @@ export class PiAgentEngine implements EngineAdapter {
               ...(privacyFlag ? { privacySecondOpinion: queryPrivacySummary(privacyFlag) } : {}),
               cardText: `${privacyFlag ? `${queryPrivacyWarning(privacyFlag)}\n` : ''}Pandesh wants to search the web for: "${query.slice(0, 200)}". The query is sent to a public search engine and up to 3 public pages are fetched per search for this task.`,
             });
+            if (decision.outcome === 'rejected') webResearchDeclined = true;
             if (decision.outcome !== 'approved') {
               // Say exactly what happened. Only a recorded decision is a refusal.
               return { content: [{ type: 'text', text: describeUnansweredApproval(decision) }], isError: true };
@@ -3107,12 +3133,17 @@ export class PiAgentEngine implements EngineAdapter {
             safeRecordRuntimeEvent(db, broadcaster, attemptId, 'agent_reach_query_refused', { reason: queryCheck.reason, queryChars: call.target.length }, actor);
             return { content: [{ type: 'text', text: `NOT READ: ${queryCheck.reason}. Nothing was sent off this computer. Call agent_reach again with a short public query.` }], isError: true };
           }
+          if (agentReachDeclined) {
+            safeRecordRuntimeEvent(db, broadcaster, attemptId, 'web_access_request_not_repeated', { tool: 'agent_reach', queryChars: call.target.length }, actor);
+            return { content: [{ type: 'text', text: describeRepeatedWebAccessRequest() }], isError: true };
+          }
           if (!agentReachApproved) {
             const decision = await requestToolApproval({
               toolName: 'agent_reach',
               query: call.target,
               cardText: `Pandesh wants to ${call.action} ${call.channel === 'web' ? 'a public web page' : `public ${call.channel} content`}: "${call.target.slice(0, 200)}". The ${checked.isSearch ? 'query' : 'link'} is sent to ${call.channel === 'web' ? 'a public page reader service (r.jina.ai, a third party) and the site' : `${call.channel}`}. Nothing from your files, accounts or messages is sent.`,
             });
+            if (decision.outcome === 'rejected') agentReachDeclined = true;
             if (decision.outcome !== 'approved') return { content: [{ type: 'text', text: describeUnansweredApproval(decision) }], isError: true };
             agentReachApproved = true;
           }
@@ -7424,6 +7455,16 @@ ${screenCorrection}`;
       if (decline.corrected) {
         finalReply = decline.text;
         safeRecordRuntimeEvent(db, broadcaster, attemptId, 'decline_wording_corrected', {}, actor);
+      }
+      // The person declined web access and nothing was searched: links no tool returned are not shown as findings.
+      const unsourced = withholdUnsourcedLinksAfterWebDecline(
+        finalReply,
+        declineResults,
+        [requestText, ctx.currentMessage ?? '', prompt, ...toolCallsRecorded.filter((t) => t.status === 'completed').map((t) => extractToolResultText(t.result))],
+      );
+      if (unsourced.withheld.length) {
+        finalReply = unsourced.text;
+        safeRecordRuntimeEvent(db, broadcaster, attemptId, 'unsourced_links_withheld_after_web_decline', { links: unsourced.withheld.length }, actor);
       }
       // The task record refused "satisfied" (no evidence) and no tool did anything this turn: the reply's "done" has
       // nothing behind it (tool-selection run: "I've noted that you are vegetarian and will keep that in mind for our

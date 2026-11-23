@@ -186,12 +186,14 @@ describe('privacy second opinion on web_research', () => {
     verdict = { publicP: 0.1, personDetail: 0.2 };
     await turn(`Search the web for the ${PUBLIC}`, 'auto');
     expect(searches).toEqual([]);
-    expect(cards).toHaveLength(2);
+    // One card, not two: the person declined it, and a refusal of web access holds for the rest of the task. Core's
+    // fallback search goes through the same tool, so it is not put to the person again with other words (2026-11-23).
+    expect(cards).toHaveLength(1);
     for (const card of cards) {
       expect(card.cardText).toContain('⚠ This search may contain private information');
       expect(card.cardText).toContain('Auto would have sent this search, but a second opinion thinks it may contain private information, so it waits for you.');
     }
-    expect(reviews().slice(2).map((r) => r.outcome)).toEqual(['asked', 'asked']);
+    expect(reviews().slice(2).map((r) => r.outcome)).toEqual(['asked']);
   }, 60_000);
 
   it('off by default: Ollaya is never asked and research behaves as before', async () => {

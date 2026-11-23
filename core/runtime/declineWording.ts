@@ -28,3 +28,31 @@ export function enforceDeclineWording(reply: string, declinedResults: string[], 
   const rest = kept.join(' ').trim();
   return { text: rest ? `${statement} ${rest}` : statement, corrected: true };
 }
+
+const WEB_ACCESS_DECLINED = /\b(?:the user|you)(?: already)? declined web access for this task\b/i;
+const LINK = /https?:\/\/[^\s<>()\[\]"'`]+/gi;
+
+/** What the person reads instead of invented web findings. It states the fact and what is still possible. */
+export const WEB_DECLINED_REPLY = 'You declined the web search, so nothing was searched. I have no verified current information for this, '
+  + 'so I am not giving headlines, figures or links from memory.\n\n'
+  + 'What is possible: ask again and allow the search, paste a link or text you already have, or ask me something that needs no web access.';
+
+export interface UnsourcedLinkCheck { text: string; withheld: string[] }
+
+/**
+ * Live finding 2026-11-23 (scratch instance, attempt att_a4bcb293): the person declined a web search; the model then wrote
+ * "Here are a few current headlines" with four article links, two of them dated in the future. Nothing had been searched.
+ *
+ * After a recorded refusal of web access in this turn, a link in the reply that appears in nothing the person wrote and in
+ * nothing a tool returned has no source. Removing only the link would leave the invented headline standing, so the reply is
+ * replaced by the fact. A reply without such links is left alone: answering from memory and saying so is allowed.
+ * `known` is everything that may legitimately contain a link: the person's messages and this turn's successful tool outputs.
+ */
+export function withholdUnsourcedLinksAfterWebDecline(reply: string, toolResults: string[], known: string[]): UnsourcedLinkCheck {
+  if (!toolResults.some((r) => WEB_ACCESS_DECLINED.test(r))) return { text: reply, withheld: [] };
+  const haystack = known.join('\n');
+  const clean = (u: string) => u.replace(/[.,;:!?*_]+$/, '');
+  const withheld = [...new Set((reply.match(LINK) ?? []).map(clean))].filter((u) => !haystack.includes(u));
+  if (!withheld.length) return { text: reply, withheld: [] };
+  return { text: WEB_DECLINED_REPLY, withheld };
+}
