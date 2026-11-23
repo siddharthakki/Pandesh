@@ -63,6 +63,14 @@ export interface PiOllamaFetchOptions {
   /** A reply that stops streaming for this long is stopped. Default 120 s, or PANDESH_MODEL_IDLE_TIMEOUT_MS. */
   idleTimeoutMs?: number;
   /**
+   * The same allowance when the request offers tools. Ollama sends a tool call as one frame once it is complete, so
+   * while the model composes a long call (a 3D scene, a whole file) nothing arrives. Default 300 s, or
+   * PANDESH_MODEL_TOOL_CALL_IDLE_TIMEOUT_MS; never less than the plain allowance.
+   * Live run 2026-11-23 (att_318f6d45): a 27B model at about 12 tokens/s wrote "Now the detailed build ...:" and was
+   * stopped 120 s later, in the middle of the build_3d_model call. Nothing was built.
+   */
+  toolCallIdleTimeoutMs?: number;
+  /**
    * Most distinct tool calls one model response may carry; generation stops at the limit. Default 12, or
    * PANDESH_MAX_TOOL_CALLS_PER_RESPONSE. Micro-test RAD-020: gemma4:12b looped one call 875 times in a single
    * 12,288-token response and Core ran all of them (199 s); FIN-007 did the same with 372 calls.
@@ -89,6 +97,11 @@ export class ModelStalledError extends Error {
     super(`no output from Ollama for ${Math.round(silentMs / 1000)} s ${phase === 'first_output' ? 'after the request was sent' : 'in the middle of the reply'} (the model may be stuck or the machine overloaded); the call was stopped`);
     this.name = 'ModelStalledError';
   }
+}
+
+/** How long a reply may be silent: longer when tools are offered, because a tool call arrives whole (see toolCallIdleTimeoutMs). */
+export function idleAllowanceMs(plainMs: number, offersTools: boolean, toolCallMs: number): number {
+  return offersTools ? Math.max(plainMs, toolCallMs) : plainMs;
 }
 
 function positiveEnv(name: string, fallback: number): number {
@@ -254,7 +267,8 @@ export function createPiOllamaFetch(options: PiOllamaFetchOptions): typeof fetch
     };
 
     const firstOutputMs = options.firstOutputTimeoutMs ?? positiveEnv('PANDESH_MODEL_FIRST_OUTPUT_TIMEOUT_MS', 300_000);
-    const idleMs = options.idleTimeoutMs ?? positiveEnv('PANDESH_MODEL_IDLE_TIMEOUT_MS', 120_000);
+    const plainIdleMs = options.idleTimeoutMs ?? positiveEnv('PANDESH_MODEL_IDLE_TIMEOUT_MS', 120_000);
+    const idleMs = idleAllowanceMs(plainIdleMs, tools.length > 0, options.toolCallIdleTimeoutMs ?? positiveEnv('PANDESH_MODEL_TOOL_CALL_IDLE_TIMEOUT_MS', 300_000));
     let upstream: Awaited<ReturnType<typeof streamOllamaChatNdjson>>;
     try {
       // Ollama sends its response headers with the first streamed frame, after loading the model and reading the prompt.

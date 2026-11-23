@@ -439,6 +439,37 @@ export function describeRepeatedWebAccessRequest(): string {
     + 'or ask for something that needs no web access.';
 }
 
+/** A last paragraph that ends on a colon introduces something that did not follow (a code fence closing the reply is fine). */
+export function endsOnAnnouncingColon(reply: string): boolean {
+  const tail = (reply.trim().split(/\n\s*\n/).pop() ?? '').trim();
+  return tail.length > 0 && tail.length <= 400 && /[:：]\s*\**\s*$/.test(tail);
+}
+
+/**
+ * True when the last thing the model wrote into its task record in this turn was "in_progress" and no tool that acts
+ * ran after it. `lookupOnly` is the engine's own list of tools that only look things up or keep records.
+ */
+export function declaredInProgressWithoutAction(
+  calls: ReadonlyArray<{ tool: string; status: string; args?: unknown; isError?: boolean }>,
+  lookupOnly: RegExp,
+): boolean {
+  let at = -1;
+  calls.forEach((c, i) => { if (c.tool === 'update_task_outcome' && c.status === 'completed' && !c.isError) at = i; });
+  if (at < 0) return false;
+  if ((calls[at].args as { status?: unknown } | undefined)?.status !== 'in_progress') return false;
+  return !calls.slice(at + 1).some((c) => c.status === 'completed' && !c.isError && !lookupOnly.test(c.tool));
+}
+
+/** What the person reads under a reply the model did not finish. States what happened and what was not done. */
+export function cutOffReplyCorrection(error: string, producedSomething: boolean): string {
+  const why = /^no output from Ollama/.test(error)
+    ? 'the local model stopped producing output and the call was stopped'
+    : error ? `the model call failed (${error.slice(0, 160)})` : 'the model call failed';
+  return `Correction: this reply was cut off — ${why}. ${producedSomething
+    ? 'The step it was about to take was not carried out; what the tools above report is all that was done.'
+    : 'The step it announced was not carried out: nothing was built or changed in this turn.'} Ask me to continue, or to try again.`;
+}
+
 export function describeUnansweredApproval(outcome: PiToolApprovalOutcome): string {
   if (outcome.outcome === 'rejected') {
     return 'The user declined web access for this task. Do not claim any web findings; answer only from what you know and say it is unverified.';
@@ -6288,9 +6319,14 @@ When the user asks to continue, resume, or check progress/updates, resume this w
       const beforeFailure: any = messagesNow[messagesNow.length - 2];
       if (!signal?.aborted && supersedeWith === null
         && failedCall?.role === 'assistant' && (failedCall.stopReason === 'error' || failedCall.errorMessage)
-        && !(failedCall.content || []).some((c: any) => (c.type === 'text' && String(c.text ?? '').trim()) || c.type === 'toolCall')
+        // A call that had begun to write and was then cut off is retried too: its half sentence is not an answer
+        // (2026-11-23: "Now the detailed build ...:" and nothing after it). A call that already issued a tool call is not.
+        && !(failedCall.content || []).some((c: any) => c.type === 'toolCall')
         && (beforeFailure?.role === 'toolResult' || beforeFailure?.role === 'tool')) {
-        safeRecordRuntimeEvent(db, broadcaster, attemptId, 'model_call_retried_after_error', { error: String(failedCall.errorMessage ?? '').slice(0, 300) }, actor);
+        safeRecordRuntimeEvent(db, broadcaster, attemptId, 'model_call_retried_after_error', {
+          error: String(failedCall.errorMessage ?? '').slice(0, 300),
+          partialChars: (failedCall.content || []).reduce((n: number, c: any) => n + (c.type === 'text' ? String(c.text ?? '').length : 0), 0),
+        }, actor);
         agent.state.messages = messagesNow.slice(0, -1);
         await tolerateSupersede(async () => {
           await agent.continue();
@@ -7030,11 +7066,14 @@ When the user asks to continue, resume, or check progress/updates, resume this w
       // A request to make something whose reply says the work is starting, anywhere in it, with nothing produced yet,
       // gets the same one continuation.
       const startsWithoutWork = !didRealWork && asksToMakeSomething && announcesWorkStarting(finalReply);
-      if (announcesNextStep || startsWithoutWork) {
-        safeRecordRuntimeEvent(db, broadcaster, attemptId, 'announced_step_continued', { tail: tail.slice(0, 200), reason: announcesNextStep ? 'announced_next_step' : 'said_work_is_starting' }, actor);
+      // "Now the detailed build — proper storeys, visible floor slabs ...:" — a last paragraph that ends on a colon
+      // introduces something that never came. It gets the same one continuation.
+      const endsOnColon = endsOnAnnouncingColon(finalReply);
+      if (announcesNextStep || endsOnColon || startsWithoutWork) {
+        safeRecordRuntimeEvent(db, broadcaster, attemptId, 'announced_step_continued', { tail: tail.slice(0, 200), reason: announcesNextStep ? 'announced_next_step' : endsOnColon ? 'ended_on_a_colon' : 'said_work_is_starting' }, actor);
         try {
           const floor = agent.state.messages.length;
-          await agent.prompt(announcesNextStep
+          await agent.prompt(announcesNextStep || endsOnColon
             ? 'Continue now: you said what you would do next but stopped before doing it. Carry out that step with your tools in this turn (write the file, run the check, open it), then give the final answer with what really happened.'
             : 'Continue now: you said the work is starting, but nothing has been built — no file was written in this turn, and nothing runs after your reply ends. Do the first real step with your tools in this turn (create the files with write_file, run them), then give the final answer with what really exists. If you cannot build it, say plainly that nothing has been built yet and why.');
           await agent.waitForIdle();
@@ -7250,23 +7289,36 @@ ${screenCorrection}`;
       // A call that returned an error result produced nothing (M0 F03: pc_organize_scan failed twice, the turn ended with
       // "completed" and an attempt that never moved a file).
       const producedSomething = (predecessorChain(db, attemptId).length > 0 && Number(db.get<{ n: number }>(`SELECT COUNT(*) AS n FROM tool_invocations WHERE toolName = 'write_file' AND status = 'succeeded' AND attemptId IN (${predecessorChain(db, attemptId).map(() => '?').join(',')})`, predecessorChain(db, attemptId))?.n ?? 0) > 0) /* a resumed task: what the interrupted attempts already wrote counts */ || toolCallsRecorded.some((t) => t.status === 'completed' && !LOOKUP_ONLY.test(t.tool) && !(t.result as { isError?: boolean } | undefined)?.isError);
+      // Two facts that do not depend on how the request was worded ("Try buuilding agai" names no artifact):
+      // the model's own task record still says "in progress" with nothing done after it, and the last model call failed.
+      const stillInProgress = declaredInProgressWithoutAction(toolCallsRecorded.map((t) => ({ tool: t.tool, status: t.status, args: t.args, isError: Boolean((t.result as { isError?: boolean } | undefined)?.isError) })), LOOKUP_ONLY);
+      const lastModelCall = modelCalls[modelCalls.length - 1];
+      const replyCutOff = !signal?.aborted && !isUnanswered && lastModelCall?.status === 'error' && Boolean(finalReply.trim());
       const correction = auditPromises(finalReply, {
         activeWorker: hasActiveWorker(db, conversationId, attemptId),
         canNotify: capability.canNotify,
         notifyStatement: capability.statement,
-        nothingMade: asksToBuildOutsideChat && !producedSomething,
+        nothingMade: (asksToBuildOutsideChat || stillInProgress) && !producedSomething,
       });
       if (correction) finalReply += "\n\n" + correction;
+      if (replyCutOff) {
+        finalReply += "\n\n" + cutOffReplyCorrection(String(lastModelCall?.error ?? ''), producedSomething);
+        safeRecordRuntimeEvent(db, broadcaster, attemptId, 'reply_cut_off', { error: String(lastModelCall?.error ?? '').slice(0, 300), producedSomething }, actor);
+      }
       // The durable signal for escalation (executor → stronger model): a request to build something that ended with
       // nothing built, or a turn with no reply. A question ("…, possible?"), a stopped turn or work still running in
       // this chat is not an unfinished turn.
       const isQuestion = /\?\s*$/.test(requestText.trim()) || /^\s*(?:can|could|would|is|are|do|does|how|what|why|which|should)\b/i.test(requestText);
       // A reply that ends by asking the user something is waiting for them, not a failure.
-      const asksUser = /\?\s*\**\s*$/.test(finalReply.replace(/\n\nCorrection:[\s\S]*$/, '').trim());
+      const asksUser = !replyCutOff && /\?\s*\**\s*$/.test(finalReply.replace(/\n\nCorrection:[\s\S]*$/, '').trim());
       const unfinishedReason = signal?.aborted || asksUser || hasActiveWorker(db, conversationId, attemptId) ? null
         : isUnanswered ? 'no_reply'
           : asksToBuildOutsideChat && !isQuestion && !producedSomething ? 'nothing_built'
-            : null;
+            // The model's own record says the task is in progress and nothing acted: it is not finished, however the
+            // request was worded. A cut-off reply with nothing done is unfinished too.
+            : stillInProgress && !isQuestion && !producedSomething ? 'nothing_built'
+              : replyCutOff && !producedSomething ? 'reply_cut_off'
+                : null;
       if (unfinishedReason) {
         const ran = toolCallsRecorded.filter((t) => t.status === 'completed' && !/^(?:update_task_outcome|request_tools)$/.test(t.tool)).map((t) => t.tool);
         safeRecordRuntimeEvent(db, broadcaster, attemptId, 'turn_unfinished', { reason: unfinishedReason, model: selectedModel, toolsRun: ran }, actor);

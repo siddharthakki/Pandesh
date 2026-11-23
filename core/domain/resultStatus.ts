@@ -42,7 +42,7 @@ export function deriveResultStatus(db: CoreDatabase, attemptId: string): Attempt
   const unfinished = db.get<{ metadata: string }>("SELECT metadata FROM runtime_events WHERE entityId = ? AND eventType = 'turn_unfinished' ORDER BY sequence DESC LIMIT 1", [attemptId]);
   if (unfinished && !db.get('SELECT 1 FROM attempts WHERE predecessorAttemptId = ? LIMIT 1', [attemptId])) {
     let reason = 'the turn ended with the work unfinished';
-    try { const meta = JSON.parse(unfinished.metadata) as { reason?: string }; reason = meta.reason === 'no_reply' ? 'the model produced no reply' : 'nothing was built — no file was written or changed'; } catch { /* generic reason */ }
+    try { const meta = JSON.parse(unfinished.metadata) as { reason?: string }; reason = meta.reason === 'no_reply' ? 'the model produced no reply' : meta.reason === 'reply_cut_off' ? 'the model stopped before finishing its reply; the step it announced was not carried out' : 'nothing was built — no file was written or changed'; } catch { /* generic reason */ }
     return { status: 'failed', reason };
   }
   // The work was blocked by a tool that failed and the reply asked the user how to go on (M0 E01).

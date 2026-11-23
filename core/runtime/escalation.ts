@@ -164,7 +164,10 @@ export function unfinishedTurnOf(db: CoreDatabase, attemptId: string, isMutating
     const toolsRun = toolsRunBy(db, attemptId);
     return meta.reason === 'no_reply'
       ? { reason: 'no_reply', detail: 'the model produced no reply', toolsRun }
-      : { reason: 'nothing_built', detail: 'nothing was built — no file was written or changed', toolsRun };
+      // Recorded only when nothing acted in the turn, so handing it to another model repeats no side effect.
+      : meta.reason === 'reply_cut_off'
+        ? { reason: 'no_reply', detail: 'the model stopped before finishing its reply; the step it announced was not carried out', toolsRun }
+        : { reason: 'nothing_built', detail: 'nothing was built — no file was written or changed', toolsRun };
   }
   if (attempt.status === 'failed' && attempt.failureReason && classifyFailureFingerprint(attempt.failureReason)) {
     // A side effect already applied is never repeated by another model.
