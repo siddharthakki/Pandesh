@@ -21,7 +21,7 @@ import type { SettingsSection } from './settingsModel';
 import { useWakeWord } from './wake';
 import { startWorkshopIntake } from './workshop/useWorkshop';
 import { HistoryPanel, HomeStatus, PlaceTabs, UsabilityDialog, useBrief } from './Places';
-import { APPS, homeCounts, placeOf, settingsTabOf, subLinks, workTabOf, type BoardShow, type SettingsTab, type WorkTab } from './placesModel';
+import { APPS, homeCounts, isMissionStepConversation, placeOf, settingsTabOf, subLinks, workTabOf, type BoardShow, type SettingsTab, type WorkTab } from './placesModel';
 import { countVisit } from './usability';
 
 export type View = 'chat' | 'bots' | 'automations' | 'board' | 'team' | 'space' | 'system' | 'software' | 'tools' | 'brain' | 'processes' | 'workspace' | 'radar' | 'revenue' | 'mailhub' | 'connections' | 'settings';
@@ -185,7 +185,7 @@ export function App() {
     { group: 'ACTIONS', label: 'Feedback: note something that was hard to find', run: () => openPop('feedback') },
     { group: 'ACTIONS', label: 'Change theme', run: cycleTheme },
     { group: 'ACTIONS', label: labels ? 'Hide navigation labels' : 'Show navigation labels', run: toggleLabels },
-    ...conversations.slice(0, 12).map((c) => ({ group: 'RECENT CHATS', label: c.title || c.preview || 'Untitled chat', run: () => { setOpenConversationId(c.id); go('chat'); } })),
+    ...conversations.filter((c) => !isMissionStepConversation(c.title)).slice(0, 12).map((c) => ({ group: 'RECENT CHATS', label: c.title || c.preview || 'Untitled chat', run: () => { setOpenConversationId(c.id); go('chat'); } })),
   ], [conversations, theme, labels]);
 
   const navButtons = rail.map((r) => (

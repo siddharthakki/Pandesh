@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { APPS, BOARD_COLUMNS, homeCounts, placeOf, settingsTabOf, subLinks, workTabOf } from '../renderer-v2/src/placesModel';
+import { APPS, BOARD_COLUMNS, homeCounts, isMissionStepConversation, placeOf, settingsTabOf, subLinks, workTabOf } from '../renderer-v2/src/placesModel';
 import { parseV2Target } from '../renderer-v2/src/navigationTargets';
 import { addNote, usabilityReport } from '../renderer-v2/src/usability';
 
@@ -86,5 +86,18 @@ describe('new chat after opening an earlier conversation', () => {
     const src = (name: string) => fs.readFileSync(path.join(__dirname, '../renderer-v2/src', name), 'utf8');
     expect(src('Chat.tsx')).toContain('api.newConversation().then(() => { onNewChat?.();');
     expect(src('App.tsx')).toContain('onNewChat={() => setOpenConversationId(null)}');
+  });
+});
+
+describe('the Home conversation list', () => {
+  it('leaves out the conversations Pandesh held with its own specialists for mission steps', () => {
+    expect(isMissionStepConversation('Reviewer · Mission step 2 of 2 (run 5bg2a). Review the checklist')).toBe(true);
+    expect(isMissionStepConversation('Skill Engineering · Mission step 2 of 4 (run 4if0q). Find or draft')).toBe(true);
+    expect(isMissionStepConversation('Make me a short checklist for backing up my phone photos')).toBe(false);
+    expect(isMissionStepConversation('What was mission step 2 of 2 about?')).toBe(false);
+    expect(isMissionStepConversation('ChatGPT → Panda: Fix the typo')).toBe(false);
+    expect(isMissionStepConversation(null)).toBe(false);
+    const places = fs.readFileSync(path.join(__dirname, '../renderer-v2/src/Places.tsx'), 'utf8');
+    expect(places).toContain('!isMissionStepConversation(c.title)');
   });
 });

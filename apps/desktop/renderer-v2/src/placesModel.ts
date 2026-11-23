@@ -118,3 +118,12 @@ export const APPS: ReadonlyArray<{ key: string; label: string; words: string }> 
   { key: 'revenue', label: 'Revenue', words: 'leads offers money' },
   { key: 'team', label: 'Team', words: 'agents specialists' },
 ];
+
+/**
+ * A conversation Pandesh held with one of its own specialists while carrying out a mission step ("Reviewer · Mission step 2 of 2
+ * (run 5bg2a). …"). Core titles them this way (missionRunner); the person never typed them, so the Home list leaves them out
+ * unless the person searches. Their results are reachable from the mission's own conversation and from Work.
+ */
+export function isMissionStepConversation(title: string | null | undefined): boolean {
+  return /^.{1,60} · Mission step \d+ of \d+ \(run [a-z0-9]+\)/.test(title ?? '');
+}

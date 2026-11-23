@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { api, errorText, type BriefAction, type BriefItem, type ConversationEntry, type Snapshot } from './bridge';
 import { Icon } from './ui';
-import { SETTINGS_TABS, WORK_TABS, type HomeCounts, type Place, type SettingsTab, type SubLink, type WorkTab } from './placesModel';
+import { SETTINGS_TABS, WORK_TABS, isMissionStepConversation, type HomeCounts, type Place, type SettingsTab, type SubLink, type WorkTab } from './placesModel';
 import { addNote, clearNotes, listNotes, usabilityReport, type UsabilityNote } from './usability';
 
 /** The tab bar of Work and Settings, with the few sibling pages of the current tab on a second row. */
@@ -142,7 +142,8 @@ export function HistoryPanel({ currentId, reloadKey, onOpen, onClose }: { curren
     return () => { live = false; if (timer) clearTimeout(timer); };
   }, [reloadKey, currentId, retry]);
   const want = q.trim().toLowerCase();
-  const shown = (items ?? []).filter((c) => !want || `${c.title ?? ''} ${c.preview ?? ''}`.toLowerCase().includes(want));
+  // Pandesh's own mission-step conversations stay out of the list; a search still finds them.
+  const shown = (items ?? []).filter((c) => (want ? `${c.title ?? ''} ${c.preview ?? ''}`.toLowerCase().includes(want) : !isMissionStepConversation(c.title)));
   return (
     <aside className="history" aria-label="Conversations">
       <div className="history-head">
