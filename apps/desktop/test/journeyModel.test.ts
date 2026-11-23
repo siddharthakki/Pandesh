@@ -61,6 +61,11 @@ describe('Wish journeys', () => {
     const w = { conversationId: 'conv_1', text: 'Make me a packing checklist', at: '2026-11-23T10:00:00Z' };
     expect(chatJourney(w, [], null).now).toBe('understand');
     expect(chatJourney(w, [task('waiting_for_approval')], { conversationId: 'conv_1', approvalId: 'x', detail: 'Start a mission' }).now).toBe('permissions');
+    // Regression (live 2026-11-23): a card in a chat that is not open was shown as "Pandesh is on it" with no way to review it.
+    const notOpen = chatJourney(w, [{ ...task('waiting_for_approval'), activity: 'Running mission_start', createdAt: '2026-11-23T10:05:00Z' }, task('completed')], null);
+    expect(notOpen).toMatchObject({ now: 'permissions', needsYou: true });
+    expect(notOpen.headline).toMatch(/proposed a mission; it waits for your decision/);
+    expect(notOpen.actions[0]).toMatchObject({ kind: 'review_chat' });
     const answered = chatJourney(w, [task('completed')], null);
     expect(answered.stages[5]).toMatchObject({ state: 'skip' });
     const all = buildJourneys({ tracked: [w], missions: [mission({})], bridge: [], approvals: [], tasks: [task('completed')], pending: null, receipts: {} });

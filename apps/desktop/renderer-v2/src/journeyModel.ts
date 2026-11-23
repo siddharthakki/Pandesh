@@ -138,6 +138,7 @@ export function codeJourney(b: BridgeActivityItem, approval: BridgeApproval | nu
 
 /** A wish sent from the Wish screen that has no mission or worker task (yet): its stage comes from its chat turn. */
 export function chatJourney(w: TrackedWish, tasks: TaskRow[], pending: { conversationId: string | null; approvalId: string; detail: string } | null): Journey {
+  // Newest turn first: a retry on a stronger model (Core's escalation) is a new turn in the same chat and decides the stage.
   const mine = tasks.filter((t) => t.conversationId === w.conversationId).sort((a, b) => b.createdAt.localeCompare(a.createdAt));
   const t = mine[0] ?? null;
   const asking = pending && pending.conversationId === w.conversationId ? pending : null;
@@ -153,13 +154,15 @@ export function chatJourney(w: TrackedWish, tasks: TaskRow[], pending: { convers
     verify: answered ? ['skip', 'A chat answer is not independently checked; ask for a mission with a review if it matters'] : ['todo', ''],
     deliver: answered ? ['done', 'The answer is in the chat'] : ['todo', ''],
   });
+  // The task record says a card waits even when that chat is not the one open (the snapshot only carries the open chat's card).
+  const waitingCard = Boolean(asking) || t?.status === 'waiting_for_approval';
   const actions: JourneyAction[] = [];
-  if (asking) actions.push({ kind: 'review_chat', conversationId: w.conversationId, text: 'Review the card in its chat' });
+  if (waitingCard) actions.push({ kind: 'review_chat', conversationId: w.conversationId, text: 'Review the card in its chat' });
   actions.push({ kind: 'open_chat', conversationId: w.conversationId });
   return {
     id: `c:${w.conversationId}`, kind: 'chat', title: w.text, source: 'Chat', conversationId: w.conversationId, stages, now: current(stages),
-    headline: asking ? 'Pandesh proposed a plan; it waits for your decision in the chat.' : answered ? 'Answered in the chat.' : failed ? 'Stopped before an answer.' : 'Pandesh is on it.',
-    needsYou: Boolean(asking) || t?.status === 'waiting_for_approval', live: Boolean(working), finished: Boolean(answered || failed), failed: Boolean(failed), actions, at: t?.lastEventAt ?? t?.createdAt ?? w.at,
+    headline: waitingCard ? `Pandesh proposed ${t?.activity?.includes('mission_start') ? 'a mission' : 'a step'}; it waits for your decision in the chat.` : answered ? 'Answered in the chat.' : failed ? 'Stopped before an answer.' : 'Pandesh is on it.',
+    needsYou: waitingCard, live: Boolean(working), finished: Boolean(answered || failed), failed: Boolean(failed), actions, at: t?.lastEventAt ?? t?.createdAt ?? w.at,
   };
 }
 
