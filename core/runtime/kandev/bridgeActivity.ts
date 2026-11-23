@@ -176,7 +176,8 @@ export function activityItem(db: CoreDatabase, task: BridgeTaskRecord, clientLab
     eventCount: result?.activity?.length ?? 0,
     branch: result?.branch ?? null,
     pendingWorkerActions: running && task.status === 'awaiting_approval' ? (result?.pendingApprovals ?? []) : [],
-    storyId: task.storyId,
+    // A mission's buttons act on the step that is asking (or working), not on its first step.
+    storyId: result?.steps?.find(s => s.pendingApprovals.length)?.storyId ?? result?.steps?.find(s => s.storyStatus !== 'done')?.storyId ?? task.storyId,
     codeChange: result?.codeChange ? {
       project: result.codeChange.project, baseRef: result.codeChange.baseRef,
       // "The work is ready; review and approve it" (no worker action pending) is the review gate; a held worker action is not.
