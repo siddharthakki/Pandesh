@@ -1128,8 +1128,8 @@ button.tl-row:hover { background: var(--raised); }
 .jv-mini-track i { height: 4px; border-radius: 2px; background: var(--line); }
 .jv-mini-track i.done { background: var(--verified); } .jv-mini-track i.now { background: var(--pulse); } .jv-mini-track i.warn { background: var(--attention); } .jv-mini-track i.fail { background: var(--danger); } .jv-mini-track i.skip { background: transparent; border: 1px dashed var(--line); }
 .jv-wish-item.need { border-color: rgba(255,181,71,.6); }
-.jv-allow { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; flex-basis: 100%; }
-.jv-allow .jv-detail { flex: 1 1 260px; }
+.jv-card-decide { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; flex-basis: 100%; padding-top: 6px; border-top: 1px solid var(--line); }
+.jv-card-decide .jv-card-text { flex: 1 1 320px; font-size: 13.5px; color: var(--ink); line-height: 1.45; }
 .jv-actions { display: flex; gap: 6px; flex-wrap: wrap; }
 @media (max-width: 1100px) { .jv-journey { grid-template-columns: repeat(4, minmax(0, 1fr)); } }
 @media (max-width: 720px) { .jv-journey { grid-template-columns: 1fr 1fr; } }

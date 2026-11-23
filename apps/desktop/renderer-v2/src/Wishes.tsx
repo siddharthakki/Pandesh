@@ -188,8 +188,8 @@ function JourneyDetail({ j, busy, onAct, onDeny, receipt }: { j: Journey; busy: 
         <span className="jv-tag">{j.needsYou ? 'Your decision' : 'Where it stands'}</span>
         <p>{j.headline}</p>
         {primary.map((a, i) => a.kind === 'allow' ? (
-          <span key={i} className="jv-allow">
-            <span className="jv-detail">{a.text}</span>
+          <span key={i} className="jv-card-decide">
+            <span className="jv-card-text">{a.text}</span>
             <button type="button" className="btn small primary" disabled={busy === a.approvalId} onClick={() => onAct(a)}>Allow once</button>
             <button type="button" className="btn small" disabled={busy === a.approvalId} onClick={() => onDeny(a.approvalId)}>Don't allow</button>
           </span>
