@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { APPS, BOARD_COLUMNS, homeCounts, isMissionStepConversation, placeOf, settingsTabOf, subLinks, workTabOf } from '../renderer-v2/src/placesModel';
+import { APPS, BOARD_COLUMNS, HISTORY_BESIDE_CHAT_MIN_WIDTH, asksThePerson, homeCounts, isConnectorConversation, isInternalConversation, isMissionStepConversation, needsYouTotal, placeOf, settingsTabOf, subLinks, workTabOf } from '../renderer-v2/src/placesModel';
 import { parseV2Target } from '../renderer-v2/src/navigationTargets';
 import { addNote, usabilityReport } from '../renderer-v2/src/usability';
 
@@ -75,6 +75,12 @@ describe('daily-use notes', () => {
       expect(report).toMatch(/1 day\(s\) with use, 1 note\(s\)/);
       expect(report).toMatch(/2026-11-23: home 4, work 2, palette 1/);
       expect(report).toMatch(/\[work\/board\] looked for the backup automation/);
+      // The seven-day trial's fields: the task, whether it was completed, and the kind of trouble. All optional.
+      const more = addNote('home', '', new Date('2026-11-24T09:00:00Z'), { task: ' find yesterday\'s report ', outcome: 'blocked', issues: ['navigation', 'clicks'] });
+      expect(more[1]).toEqual({ at: '2026-11-24T09:00:00.000Z', where: 'home', text: '', task: 'find yesterday\'s report', outcome: 'blocked', issues: ['navigation', 'clicks'] });
+      const full = usabilityReport(more, {});
+      expect(full).toContain('[home] task: find yesterday\'s report | blocked | Confusing navigation, Extra clicks or decisions');
+      expect(full).toContain('Tasks noted: 0 completed, 1 blocked.');
     } finally { delete (globalThis as { localStorage?: unknown }).localStorage; }
   });
 });
@@ -98,6 +104,59 @@ describe('the Home conversation list', () => {
     expect(isMissionStepConversation('ChatGPT → Panda: Fix the typo')).toBe(false);
     expect(isMissionStepConversation(null)).toBe(false);
     const places = fs.readFileSync(path.join(__dirname, '../renderer-v2/src/Places.tsx'), 'utf8');
-    expect(places).toContain('!isMissionStepConversation(c.title)');
+  });
+});
+
+describe('what counts as needing the person', () => {
+  // Live finding 2026-11-23: an ordinary chat raised "needs you" by one while it ran, because every item of Core's home brief
+  // (which also carries a running task and a recent result) was counted.
+  it('only a pending approval and a failed or interrupted task ask something; running and finished work never do', () => {
+    expect(['approval', 'task_failed', 'task_interrupted'].every(asksThePerson)).toBe(true);
+    expect(['task_running', 'task_completed', 'routine', 'commitment', 'reminder'].some(asksThePerson)).toBe(false);
+    expect(needsYouTotal(['task_running'], 0)).toBe(0);
+    expect(needsYouTotal(['task_completed', 'task_running'], 0)).toBe(0);
+    expect(needsYouTotal(['approval', 'task_failed', 'task_completed'], 1)).toBe(2);
+    // Core's brief shows one approval at most; the board knows of three tasks waiting.
+    expect(needsYouTotal(['approval'], 3)).toBe(3);
+    expect(needsYouTotal([], 2)).toBe(2);
+  });
+});
+
+describe('task transcripts in the Home conversation list', () => {
+  it('a connector task is recognised only by the exact title prefix Core gives it', () => {
+    expect(isConnectorConversation('ChatGPT → Panda: Fix the typo in the README')).toBe(true);
+    expect(isConnectorConversation('How do I connect ChatGPT → Panda: is it safe?')).toBe(false);
+    expect(isConnectorConversation('ChatGPT and Panda bridge notes')).toBe(false);
+    expect(isConnectorConversation('ChatGPT -> Panda: typed by hand')).toBe(false);
+    expect(isInternalConversation('Reviewer · Mission step 2 of 2 (run 5bg2a). Review')).toBe(true);
+    expect(isInternalConversation('Make me a short checklist')).toBe(false);
+    const src = (name: string) => fs.readFileSync(path.join(__dirname, '../renderer-v2/src', name), 'utf8');
+    // Hidden by default, found by the search, shown again on request; the palette's recent chats follow the same rule.
+    expect(src('Places.tsx')).toContain('all || !isInternalConversation(c.title)');
+    expect(src('App.tsx')).toContain('conversations.filter((c) => !isInternalConversation(c.title))');
+    // Core really does title them this way.
+    expect(fs.readFileSync(path.join(__dirname, '../../../core/domain/pandaBridge.ts'), 'utf8')).toContain('title: `ChatGPT → Panda: ${title}`');
+  });
+});
+
+describe('room for the conversation list', () => {
+  // Live finding 2026-11-23: at the default 1086 px window, the list plus the Activity panel left the chat about 250 px wide.
+  it('the list sits beside the chat only in a window wide enough for both; otherwise the chat button opens the search', () => {
+    expect(HISTORY_BESIDE_CHAT_MIN_WIDTH).toBeGreaterThan(1086);
+    const app = fs.readFileSync(path.join(__dirname, '../renderer-v2/src/App.tsx'), 'utf8');
+    expect(app).toContain('const tight = useNarrow(HISTORY_BESIDE_CHAT_MIN_WIDTH);');
+    expect(app).toContain('{historyOpen && !tight && <HistoryPanel');
+    expect(app).toContain('onToggleHistory={tight ? undefined : () => showHistory(!historyOpen)}');
+  });
+});
+
+describe('the needs-you list follows the tasks', () => {
+  // Live finding 2026-11-23: a task waiting for an approval was stopped; the approval expired in Core, but Home went on
+  // offering Approve and Reject for it until the next chat turn.
+  it('is read again when the board numbers change', () => {
+    const src = (name: string) => fs.readFileSync(path.join(__dirname, '../renderer-v2/src', name), 'utf8');
+    expect(src('Places.tsx')).toContain("onOpenWork: () => void, taskPicture = '')");
+    expect(src('Places.tsx')).toMatch(/snapshot\?\.pendingApproval\?\.approvalId,[\s\S]{0,200}taskPicture\]\);/);
+    expect(src('App.tsx')).toContain('counts.needsYou}:${counts.inProgress}:${counts.stuck}:${counts.doneToday}:${counts.failedToday}');
   });
 });

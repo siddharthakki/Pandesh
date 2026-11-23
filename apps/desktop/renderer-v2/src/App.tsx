@@ -21,7 +21,7 @@ import type { SettingsSection } from './settingsModel';
 import { useWakeWord } from './wake';
 import { startWorkshopIntake } from './workshop/useWorkshop';
 import { HistoryPanel, HomeStatus, PlaceTabs, UsabilityDialog, useBrief } from './Places';
-import { APPS, homeCounts, isMissionStepConversation, placeOf, settingsTabOf, subLinks, workTabOf, type BoardShow, type SettingsTab, type WorkTab } from './placesModel';
+import { APPS, HISTORY_BESIDE_CHAT_MIN_WIDTH, homeCounts, isInternalConversation, placeOf, settingsTabOf, subLinks, workTabOf, type BoardShow, type SettingsTab, type WorkTab } from './placesModel';
 import { countVisit } from './usability';
 
 export type View = 'chat' | 'bots' | 'automations' | 'board' | 'team' | 'space' | 'system' | 'software' | 'tools' | 'brain' | 'processes' | 'workspace' | 'radar' | 'revenue' | 'mailhub' | 'connections' | 'settings';
@@ -30,6 +30,8 @@ interface PaletteEntry { group: string; label: string; /** Extra words the searc
 
 export function App() {
   const narrow = useNarrow();
+  // Too little room for the conversation list beside the chat (see HISTORY_BESIDE_CHAT_MIN_WIDTH).
+  const tight = useNarrow(HISTORY_BESIDE_CHAT_MIN_WIDTH);
   const { snapshot, error, refresh } = useSnapshot();
   const overview = useTaskOverview();
   const [view, setView] = useState<View>('chat');
@@ -185,7 +187,7 @@ export function App() {
     { group: 'ACTIONS', label: 'Feedback: note something that was hard to find', run: () => openPop('feedback') },
     { group: 'ACTIONS', label: 'Change theme', run: cycleTheme },
     { group: 'ACTIONS', label: labels ? 'Hide navigation labels' : 'Show navigation labels', run: toggleLabels },
-    ...conversations.filter((c) => !isMissionStepConversation(c.title)).slice(0, 12).map((c) => ({ group: 'RECENT CHATS', label: c.title || c.preview || 'Untitled chat', run: () => { setOpenConversationId(c.id); go('chat'); } })),
+    ...conversations.filter((c) => !isInternalConversation(c.title)).slice(0, 12).map((c) => ({ group: 'RECENT CHATS', label: c.title || c.preview || 'Untitled chat', run: () => { setOpenConversationId(c.id); go('chat'); } })),
   ], [conversations, theme, labels]);
 
   const navButtons = rail.map((r) => (
@@ -202,7 +204,7 @@ export function App() {
   );
   const counts = overview.data ? homeCounts(overview.data.tasks ?? [], (overview.data.queued ?? []).length, needs) : null;
   const openChat = (id: string | null) => { setOpenConversationId(id); go('chat'); };
-  const brief = useBrief(snapshot, refresh, () => openWork('active'));
+  const brief = useBrief(snapshot, refresh, () => openWork('active'), counts ? `${counts.needsYou}:${counts.inProgress}:${counts.stuck}:${counts.doneToday}:${counts.failedToday}` : '');
 
   return (
     <div className={`app${narrow ? ' narrow' : ''}`}>
@@ -218,11 +220,11 @@ export function App() {
         <PlaceTabs place={place} workTab={workTabOf(shown)} settingsTab={settingsTabOf(shown)} subs={subLinks(shown)} needs={needs} onWorkTab={openWork} onSettingsTab={openSettingsTab} onSub={openKey} />
         {view === 'chat' && (
           <div className="home">
-            {historyOpen && !narrow && <HistoryPanel currentId={snapshot?.selectedConversationId ?? null} reloadKey={`${snapshot?.coreState}:${snapshot?.running}`} onOpen={(id) => openChat(id)} onClose={() => showHistory(false)} />}
+            {historyOpen && !tight && <HistoryPanel currentId={snapshot?.selectedConversationId ?? null} reloadKey={`${snapshot?.coreState}:${snapshot?.running}`} onOpen={(id) => openChat(id)} onClose={() => showHistory(false)} />}
             <div className="home-main">
               <HomeStatus counts={counts} loading={!overview.data && !overview.error} error={overview.error ?? null} brief={brief} onOpen={openWork} onNote={() => openPop('feedback')} />
               <Chat snapshot={snapshot} snapshotError={error} refresh={refresh} narrow={narrow} openConversationId={openConversationId} onOpenPalette={() => openPop('palette')} onOpenBoard={() => openWork('active')} onOpenSettings={() => openSettings()} draft={draft} onDraftUsed={() => setDraft(null)}
-                briefInShell onNewChat={() => setOpenConversationId(null)} onToggleHistory={narrow ? undefined : () => showHistory(!historyOpen)} historyOpen={historyOpen && !narrow}
+                briefInShell onNewChat={() => setOpenConversationId(null)} onToggleHistory={tight ? undefined : () => showHistory(!historyOpen)} historyOpen={historyOpen && !tight}
                 wake={wake} wakeTurn={wakeTurn} onWakeTurnTaken={() => setWakeTurn(null)} onVoiceBusy={setVoiceBusy} />
             </div>
           </div>

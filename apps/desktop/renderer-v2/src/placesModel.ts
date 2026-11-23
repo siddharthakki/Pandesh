@@ -124,6 +124,45 @@ export const APPS: ReadonlyArray<{ key: string; label: string; words: string }> 
  * (run 5bg2a). …"). Core titles them this way (missionRunner); the person never typed them, so the Home list leaves them out
  * unless the person searches. Their results are reachable from the mission's own conversation and from Work.
  */
+/**
+ * A task ChatGPT sent through the Panda connector. Core creates its conversation with exactly this title prefix
+ * (core/domain/pandaBridge.ts); it is the transcript of that task, not a chat the person held in this window.
+ * LIMITATION: the conversation list carries no origin field, so this is recognised by the title. Only the exact prefix at the
+ * start counts, so a chat that merely mentions ChatGPT or Panda stays in the list.
+ */
+export function isConnectorConversation(title: string | null | undefined): boolean {
+  return (title ?? '').startsWith('ChatGPT → Panda: ');
+}
+/** Execution transcripts (mission steps, connector tasks): out of the default Home list, still found by its search. Never deleted. */
+export function isInternalConversation(title: string | null | undefined): boolean {
+  return isMissionStepConversation(title) || isConnectorConversation(title);
+}
+
+/**
+ * Which of Core's home brief items ask something of the person. Core's brief also carries a running task and a recent result
+ * (assistantBrief.ts buildAssistantHomeItems) to show progress; those are not requests. Only a pending approval and a task that
+ * failed or was interrupted are.
+ */
+export function asksThePerson(kind: string): boolean {
+  return kind === 'approval' || kind === 'task_failed' || kind === 'task_interrupted';
+}
+/**
+ * The number on Home's "needs you" chip. Core's brief shows at most one approval, so when the board knows of more tasks waiting
+ * for a decision, the larger number counts. A running or finished task never adds to it.
+ */
+export function needsYouTotal(briefKinds: string[], boardNeeds: number): number {
+  const asking = briefKinds.filter(asksThePerson);
+  const approvals = asking.filter((k) => k === 'approval').length;
+  return (asking.length - approvals) + Math.max(approvals, boardNeeds);
+}
+
+/**
+ * Below this window width the conversation list is not placed beside the chat: with the Activity panel open the chat column
+ * was left about 250 px wide (seen live at the default 1086 px window). The list is then reached from the chat's button, which
+ * opens the search with recent chats.
+ */
+export const HISTORY_BESIDE_CHAT_MIN_WIDTH = 1200;
+
 export function isMissionStepConversation(title: string | null | undefined): boolean {
   return /^.{1,60} · Mission step \d+ of \d+ \(run [a-z0-9]+\)/.test(title ?? '');
 }
