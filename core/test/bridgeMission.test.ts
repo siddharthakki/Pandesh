@@ -20,7 +20,7 @@ const git = (cwd: string, ...a: string[]) => spawnSync('git', ['-c', 'user.name=
 let dir: string; let data: string; let db: CoreDatabase; let pairing: BridgePairing; let rt: BridgeRuntime; let rw: string;
 const prevHome = process.env.KARKEDIKHA_KANDEV_HOME;
 const kandev = {
-  healthy: async () => true, reprobeAgent: async () => null,
+  healthy: async () => true, reprobeAgent: async () => null, agentBinaryInstalled: () => true,
   tool: async (name: string) => (name === 'list_agents_kandev' ? { agents: [{ id: 'a1', name: 'claude-acp', capability_status: 'ok', profiles: [{ id: 'p', model: 'sonnet', auto_approve: false }] }] } : {}),
   agentMessages: async () => [], sendMessage: async () => undefined, stopTask: async () => undefined, setTaskState: async () => undefined, taskByExternalId: async () => null,
 } as unknown as KandevClient;

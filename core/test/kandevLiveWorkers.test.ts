@@ -52,7 +52,7 @@ describe('bridge dispatch without a registered project', () => {
   let dir: string; let data: string; let db: CoreDatabase; let pairing: BridgePairing; let rt: BridgeRuntime;
   // Claude is "available" so dispatch reaches the gates; the fake never really starts anything.
   const kandev = {
-    healthy: async () => true, reprobeAgent: async () => null,
+    healthy: async () => true, reprobeAgent: async () => null, agentBinaryInstalled: () => true,
     tool: async (name: string) => (name === 'list_agents_kandev' ? { agents: [{ id: 'a1', name: 'claude-acp', capability_status: 'ok', profiles: [{ id: 'p', model: 'sonnet', auto_approve: false }] }] } : {}),
   } as unknown as KandevClient;
   beforeEach(() => {
