@@ -19,6 +19,7 @@ import {
 import { MobileAssets, defaultMobileAssetsDir } from './mobileAssets';
 import { detectSecureLink, pickLanAddress, type SecureLinkStatus } from './mobileTailscale';
 import { phoneEvent, phoneState } from './mobileState';
+import { buildPhoneInbox, type InboxItem, type InboxKind } from './phoneInbox';
 
 export interface MobileServerOptions {
   port?: number;
@@ -454,6 +455,19 @@ export class MobileServer {
     });
   }
 
+  /** The phone's inbox, read fresh from Core (each source optional: an older Core simply contributes nothing). */
+  private async readInbox(): Promise<{ items: InboxItem[]; counts: Record<InboxKind, number>; readAt: string }> {
+    const get = async <T>(action: string, key: string): Promise<T[]> => {
+      try { return (((await this.session.household(action)) as Record<string, unknown>)[key] as T[]) ?? []; } catch { return []; }
+    };
+    const [approvals, missions, bridge, bridgeApprovals] = await Promise.all([
+      get<any>('pendingApprovals', 'approvals'), get<any>('missions', 'missions'), get<any>('bridgeActivity', 'items'), get<any>('bridgeApprovals', 'approvals'),
+    ]);
+    let tasks: any[] = [];
+    try { tasks = (await this.session.getTaskOverview()).tasks as any[]; } catch { /* titles fall back to the card text */ }
+    return { ...buildPhoneInbox({ approvals, missions, bridge, bridgeApprovals, tasks, now: this.now() }), readAt: new Date(this.now()).toISOString() };
+  }
+
   private async readJson(req: http.IncomingMessage): Promise<any> {
     if (!hasContentType(req, 'application/json')) throw new HttpError(415, 'Send JSON (Content-Type: application/json).');
     const raw = (await this.readBody(req, MAX_JSON_BYTES)).toString('utf8');
@@ -864,6 +878,39 @@ export class MobileServer {
       const state = phoneState(this.session.snapshot());
       this.broadcast('state', state);
       this.json(res, 200, { ok: true, state });
+      return;
+    }
+
+    // Inbox: every decision Core holds (whichever chat it is in), recent results and problems. Read from Core each time.
+    if (pathname === '/api/inbox' && req.method === 'GET') {
+      try {
+        this.json(res, 200, await this.readInbox());
+      } catch (err) {
+        this.json(res, 503, { ok: false, error: 'Your PC could not read its records right now.', detail: err instanceof Error ? err.message : String(err) });
+      }
+      return;
+    }
+
+    // Answer one inbox decision. Only a card Core lists as pending right now can be answered, through the same Core
+    // approval path the PC uses; the reply carries the status Core recorded, never an assumed one.
+    if (pathname === '/api/inbox/decide' && req.method === 'POST') {
+      const body = await this.readJson(req);
+      const approvalId = String(body.approvalId ?? '').trim();
+      const resolution = body.resolution === 'approved' ? 'approved' : body.resolution === 'rejected' ? 'rejected' : null;
+      if (!approvalId || !resolution) { this.json(res, 400, { ok: false, error: 'approvalId and resolution (approved or rejected) are required' }); return; }
+      try {
+        const pending = ((await this.session.household('pendingApprovals')) as { approvals?: Array<{ id: string; status: string }> }).approvals ?? [];
+        if (!pending.some((a) => a.id === approvalId && a.status === 'pending')) {
+          this.json(res, 409, { ok: false, error: 'This is no longer waiting for an answer. It may have been answered on the PC or expired.' });
+          return;
+        }
+        const r = await this.session.resolveAssistantApproval(approvalId, resolution);
+        this.log(`[MOBILE] inbox decision ${r.status}`);
+        this.scheduleState();
+        this.json(res, 200, { ok: r.status === resolution, status: r.status, inbox: await this.readInbox() });
+      } catch (err) {
+        this.json(res, 409, { ok: false, error: 'Core did not accept the decision.', detail: err instanceof Error ? err.message : String(err) });
+      }
       return;
     }
 

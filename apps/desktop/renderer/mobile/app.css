@@ -289,3 +289,16 @@ svg { width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-width:
   .decision-actions { flex-direction: row; }
   .decision-actions .btn { flex: 1 1 0; }
 }
+
+/* Inbox: decisions first (with the card's own text), then problems, then finished work with its result. */
+.inbox-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 10px; }
+.inbox-item { padding: 12px 14px; border: 1px solid var(--line); border-radius: 14px; background: var(--surface); }
+.inbox-item.decision { border-color: var(--attention, #e0a43c); }
+.inbox-item.problem { border-color: var(--danger, #d9534f); }
+.inbox-item.gaps .inbox-meta { color: var(--attention, #e0a43c); }
+.inbox-meta { margin: 0 0 4px; font-size: 12px; color: var(--muted); }
+.inbox-title { margin: 0 0 4px; font-size: 15px; line-height: 1.3; }
+.inbox-detail { margin: 0; font-size: 14px; line-height: 1.45; overflow-wrap: anywhere; }
+.inbox-body { margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--line); font-size: 14px; line-height: 1.45; overflow-wrap: anywhere; max-height: 60vh; overflow: auto; }
+.inbox-note { margin: 0 0 10px; padding: 8px 10px; border-radius: 10px; font-size: 14px; background: var(--surface); border: 1px solid var(--line); }
+.inbox-note[data-tone="bad"] { border-color: var(--danger, #d9534f); }

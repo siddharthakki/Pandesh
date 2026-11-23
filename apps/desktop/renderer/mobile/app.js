@@ -87,6 +87,7 @@
     reviewTurn: null,
     readAloud: prefGet('readAloud', 'voice'),
     tasksNeedYou: 0,
+    inboxDecisions: 0,
   };
 
   function prefGet(key, fallback) {
@@ -1141,6 +1142,80 @@
   });
 
   // ------------------------------------------------------------------------------------------------------------
+  // Inbox tab: every decision Core holds, recent results and problems (built on the PC: /api/inbox).
+
+  var inboxTimer = 0;
+  var openResults = {};
+  function startInbox() {
+    loadInbox();
+    clearInterval(inboxTimer);
+    inboxTimer = setInterval(function () { if (document.visibilityState === 'visible') loadInbox(); }, 5000);
+  }
+  function stopInbox() {
+    clearInterval(inboxTimer);
+    // Off the tab, a slow check keeps the badge honest.
+    inboxTimer = setInterval(function () { if (document.visibilityState === 'visible' && S.phase === 'live') loadInbox(); }, 30000);
+  }
+  function inboxNote(text, isError) {
+    var n = $('inbox-note');
+    n.hidden = !text;
+    n.textContent = text || '';
+    n.setAttribute('data-tone', isError ? 'bad' : 'ok');
+  }
+  function loadInbox() {
+    return api('/api/inbox').then(function (r) {
+      if (r.status === 401) { lostPairing(); return; }
+      if (r.ok && r.data) renderInbox(r.data);
+      else $('inbox-counts').textContent = (r.data && r.data.error) || 'Your PC could not read its records right now.';
+    }).catch(function () { $('inbox-counts').textContent = 'Could not reach your PC.'; });
+  }
+  function renderInbox(data) {
+    var items = Array.isArray(data.items) ? data.items : [];
+    var c = data.counts || {};
+    $('inbox-counts').textContent = [(c.decision || 0) + ' need you', (c.problem || 0) + ' problem' + (c.problem === 1 ? '' : 's'), (c.result || 0) + ' finished'].join(' · ') + (data.readAt ? ' · read ' + new Date(data.readAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '');
+    $('inbox-empty').hidden = items.length > 0;
+    S.inboxDecisions = c.decision || 0;
+    updateBadges();
+    var list = $('inbox-list');
+    list.replaceChildren.apply(list, items.map(inboxEl));
+  }
+  function inboxEl(it) {
+    var when = it.at ? new Date(it.at).toLocaleString([], { weekday: 'short', hour: '2-digit', minute: '2-digit' }) : '';
+    var verdict = it.verdict === 'gaps' ? 'Reviewer found gaps' : it.verdict === 'reviewed' ? 'Reviewed' : it.verdict === 'not_reviewed' ? 'Not independently reviewed' : '';
+    var li = h('li', { class: 'inbox-item ' + it.kind + (it.verdict === 'gaps' ? ' gaps' : '') },
+      h('p', { class: 'inbox-meta', text: [it.kind === 'decision' ? 'Needs you' : it.kind === 'problem' ? 'Problem' : 'Finished', it.source, when, verdict].filter(Boolean).join(' · ') }),
+      h('h3', { class: 'inbox-title', text: it.title }),
+      h('p', { class: 'inbox-detail', text: it.detail }));
+    if (it.kind === 'decision' && it.approvalId) {
+      li.append(h('div', { class: 'task-row' },
+        h('button', { type: 'button', class: 'btn small primary', text: 'Allow once', onclick: function (e) { decideInbox(it, 'approved', e.currentTarget); } }),
+        h('button', { type: 'button', class: 'btn small', text: 'Don’t allow', onclick: function (e) { decideInbox(it, 'rejected', e.currentTarget); } })));
+    } else if (it.kind === 'decision' && it.reviewOnPc) {
+      li.append(h('p', { class: 'task-note', text: 'This needs the full review on your PC (Missions › Flight).' }));
+    }
+    if (it.body || it.review) {
+      var open = Boolean(openResults[it.id]);
+      var box = h('div', { class: 'inbox-body', hidden: !open });
+      if (it.body) box.append(markdown(it.body));
+      if (it.review) { box.append(h('h4', { text: 'Review' })); box.append(markdown(it.review)); }
+      li.append(h('div', { class: 'task-row' }, h('button', { type: 'button', class: 'btn small ghost', text: open ? 'Hide result' : 'Read result', onclick: function (e) { openResults[it.id] = !openResults[it.id]; box.hidden = !openResults[it.id]; e.currentTarget.textContent = openResults[it.id] ? 'Hide result' : 'Read result'; } })), box);
+    }
+    return li;
+  }
+  function decideInbox(it, resolution, btn) {
+    if (btn) btn.disabled = true;
+    inboxNote('');
+    return api('/api/inbox/decide', { method: 'POST', json: { approvalId: it.approvalId, resolution: resolution } }).then(function (r) {
+      if (r.status === 401) { lostPairing(); return; }
+      // Say only what Core recorded.
+      if (r.ok && r.data && r.data.ok) inboxNote(resolution === 'approved' ? 'Allowed once. Your PC recorded it and continues.' : 'Not allowed. Your PC recorded it; nothing was done for that step.');
+      else inboxNote((r.data && r.data.error) || 'Your PC did not record that decision.', true);
+      if (r.data && r.data.inbox) renderInbox(r.data.inbox); else loadInbox();
+    }).catch(function () { inboxNote('Could not reach your PC. Nothing was decided.', true); if (btn) btn.disabled = false; });
+  }
+  $('inbox-refresh').addEventListener('click', function () { loadInbox(); });
+
+  // ------------------------------------------------------------------------------------------------------------
   // PC tab
 
   var healthTimer = 0;
@@ -1234,7 +1309,7 @@
     show('view-pair', p === 'pairing');
     show('view-offline', p === 'offline' && !S.everLive);
     show('tabbar', mainVisible);
-    ['chat', 'tasks', 'pc'].forEach(function (t) { show('view-' + t, mainVisible && S.tab === t); });
+    ['chat', 'inbox', 'tasks', 'pc'].forEach(function (t) { show('view-' + t, mainVisible && S.tab === t); });
     $('menu-btn').hidden = p === 'pairing' || p === 'boot';
 
     renderBanner();
@@ -1284,6 +1359,9 @@
     var tasksBadge = $('badge-tasks');
     tasksBadge.hidden = !(S.tasksNeedYou > 0 && S.tab !== 'tasks');
     tasksBadge.textContent = String(S.tasksNeedYou);
+    var inboxBadge = $('badge-inbox');
+    inboxBadge.hidden = !(S.inboxDecisions > 0 && S.tab !== 'inbox');
+    inboxBadge.textContent = String(S.inboxDecisions);
     document.title = decision ? '(1) Pandesh' : 'Pandesh';
   }
 
@@ -1299,6 +1377,7 @@
     });
     renderChrome();
     if (tab === 'tasks') startTasks(); else stopTasks();
+    if (tab === 'inbox') startInbox(); else stopInbox();
     if (tab === 'pc') { startHealth(); renderPcAssistant(); } else stopHealth();
     if (tab === 'chat') stickToBottom(true);
     updateBadges();
