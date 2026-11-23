@@ -1,5 +1,51 @@
 # Resume here
 
+## State at 2026-11-23 ~07:25 UTC (live acceptance A/B/C on b188g/b188h)
+
+**Test build**:
+- b188h = `release/b188f-missions` @ ff10d80, in `D:\PandeshRelease188e`, running on profile `D:\PandeshB188cAccept`.
+- It contains feat/supervised-missions de89cac, d519c62 and 2c6620c, cherry-picked.
+- c6d97b3 (mission step baseline) is committed on `feat/supervised-missions` and is not in a build yet.
+- Nothing is pushed, merged or installed.
+
+**Test A (ChatGPT → MCP → A5)**: PASS.
+- ptask_af136609: the card showed a code change, the worker ran in a `-code` worktree, Pandesh ran the tests before and after (divide's 2 new tests pass; `adds` reported as pre-existing).
+- The owner viewed the diff and approved it: f57f7ce on `panda/change-f8dc6e23dccd` in the private copy.
+- The owner checkout was unchanged afterwards: a25faaf, main, clean.
+
+**Test B (3-step mission, one Allow)**: multiply and power were integrated under the grant with no clicks. Step 3 (index) stalled because Claude read files at a path built from its memory folder name, outside its worktree, which raised 5 permission prompts. The owner denied all 5 at ~07:18Z. The worker then used relative paths and finished. **PASS at 07:19:05Z:**
+- 3 steps on `panda/mission-4ece1d50b3dd` (5bff483, e4a344a, 8be6c7d plus Integrate commits; tip 95a1587).
+- 6 files added; `src/add.js` untouched; the copy has no remote.
+- An independent `node --test` on the branch gives 6 pass and 1 fail (`adds`, pre-existing), matching Pandesh's report.
+- The owner checkout was unchanged: a25faaf, clean, same 3 branches.
+- The final MCP report is in `D:\PandeshAssistantDev\rel188e\shots\b-final-report.json`. Screenshots 03 and 04 show the stall before and after the fix.
+
+**Cleanup done**:
+- The acceptance client pairing was revoked and `.mcp-accept-state.json` deleted. Run `node mcp-accept.mjs setup` to pair again.
+- `revoke-accept.mjs` revokes only that client.
+
+**Next**:
+1. Rebuild with c6d97b3 and show the owner the real path in worker permission prompts (keep it redacted for ChatGPT).
+2. Two-slot concurrency evidence.
+3. Section 8 backlog.
+4. Push / PR only on the owner's OK.
+
+**Test C**:
+- Pandesh was restarted twice mid-mission (b188f→g at 06:56Z, g→h at 07:08Z). The mission and grant survived, and MCP `pandesh_updates` read the correct state back.
+- The planned worker kill missed (the step had already exited).
+- The real stall was surfaced only after fix 2c6620c.
+
+**Defects found live and fixed**:
+- **de89cac:** steps were mislabelled (stories share a creation instant; ordering fell back to random id).
+- **d519c62:** unanswered cards read "waiting for approval" forever.
+- **2c6620c:** a mission whose worker waits on a permission showed "Working.", with needsOwner false and no buttons; the buttons also targeted step 1's story.
+- **c6d97b3:** a later step's tests were compared with main.
+
+**Open defects**:
+- Worker permission prompts show `<path>` to the owner too. The redaction meant for ChatGPT is shared with the desktop panel; the owner needs the real path.
+- Three ACP worker processes from 11/21 are still alive (Kandev does not reap them).
+- The build log shows "production still running: 0 processes" (E:\Pandesh is not running; not touched by this work).
+
 ## State at 2026-11-22 ~20:30 UTC (A5 coding fix + supervised missions)
 
 **Branches** (all in `D:\Projects\Pandesh`; nothing pushed, merged or installed):

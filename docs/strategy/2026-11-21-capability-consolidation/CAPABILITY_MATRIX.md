@@ -29,13 +29,14 @@ Production is Build 187/186 at `E:\Pandesh`. Nothing below was installed there.
 | Two concurrent Claude workers | Kandev WIP 2 | ✔ | partial | ✘ | scratch | ✔ live | Overlap 15:09:37–15:09:45 |
 | GPU lane lock | `gpuLaneLimit`, `waitsOnGpuLane` | ✔ | ✔ | ✘ | ✔ | ✔ live | "Waits for: local GPU lane (1 at a time)" |
 | Scoped ChatGPT coding in a project (A5) | — | ✔ | | | | | Built cafb8a0; View diff cc79820; verified live on a synthetic read-write repo |
-| A5 intent contract (code / inspect / answer / research / operation; MCP `intent`) | `core/domain/taskIntent.ts` (18304c4, 1ac53e6) | ✔ | ✔ | b188f | B188c profile | ⏳ card shown live 2026-11-22, owner Allow pending | Fixes ptask_c00d7741 (coding task ran as inspection, "Finished and verified") |
-| Pandesh's own before/after project test run on A5 changes | `core/runtime/kandev/projectTests.ts` | ✔ | ✔ | b188f | ✔ | ⏳ | Per test for `node --test`; pre-existing failures reported, never hidden |
-| Requested-outcome status (worker finished ≠ change delivered) | `outcomeOf` in `pandaBridge.ts` | ✔ | ✔ | b188f | ✔ | ⏳ | "Finished and verified" removed |
-| Owner "Don't approve" for a reviewed change | `rejectBridgeChange`, `reject-change` route | ✔ | ✔ | b188f | ✔ | ⏳ | A refused change can never be approved later |
-| Multi-step missions + bounded development grant | `feat/supervised-missions` 395269d | ✔ | ✔ (7) | b188f | ✔ | ⏳ mission card shown live, Allow pending | One owner approval; steps passing Pandesh's tests integrate in the private copy; Stop revokes |
-| MCP `pandesh_list_projects`, `pandesh_updates` (changes since cursor) | gateway + `/v1/bridge/project-names`, `/v1/bridge/updates` | ✔ | ✔ | b188f | ✔ | ✔ list_projects live | Polling only: an MCP connector cannot start a ChatGPT conversation |
+| A5 intent contract (code / inspect / answer / research / operation; MCP `intent`) | `core/domain/taskIntent.ts` (18304c4, 1ac53e6) | ✔ | ✔ | b188h | B188c profile | ✔ live 2026-11-23 (Test A ptask_af136609, `-code` worktree) | Fixes ptask_c00d7741 (coding task ran as inspection, "Finished and verified") |
+| Pandesh's own before/after project test run on A5 changes | `core/runtime/kandev/projectTests.ts` | ✔ | ✔ | b188h | ✔ | ✔ live (Test A: 2 new pass, `adds` pre-existing) | Mission steps measured against main until c6d97b3 (committed, not yet built) |
+| Requested-outcome status (worker finished ≠ change delivered) | `outcomeOf` in `pandaBridge.ts` | ✔ | ✔ | b188h | ✔ | ✔ live (A: awaiting review → approved → completed) | "Finished and verified" removed |
+| Owner "Don't approve" for a reviewed change | `rejectBridgeChange`, `reject-change` route | ✔ | ✔ | b188h | ✔ | ✘ not pressed live (owner approved) | A refused change can never be approved later |
+| Multi-step missions + bounded development grant | `feat/supervised-missions` 395269d, de89cac, 2c6620c | ✔ | ✔ | b188h | ✔ | ✔ live (Test B ptask_3b30d620: 3 steps integrated after one Allow; survived 2 restarts) | Worker permission prompts still need the owner (by design); prompt shows `<path>` to the owner (open) |
+| MCP `pandesh_list_projects`, `pandesh_updates` (changes since cursor) | gateway + `/v1/bridge/project-names`, `/v1/bridge/updates` | ✔ | ✔ | b188h | ✔ | ✔ live (updates read across 2 restarts; needsOwner on a stalled step after 2c6620c) | Polling only: an MCP connector cannot start a ChatGPT conversation |
 | Claude usage-limit / sign-in detection | `accountProblem` (eadcdd7) | ✔ | ✔ | b188f | ✔ | ✘ not provoked live | Quotes Claude's message; no retries; no invented quota |
+| Unanswered approval card expires visibly | `expireStaleApproval` (d519c62) | ✔ | ✔ | b188h | ✔ | ✔ live (2 cards from 11-22 now say expired, nothing sent) | |
 
 ## Live agent workspace
 
