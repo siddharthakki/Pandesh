@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
@@ -7,8 +7,8 @@ import { openCoreDatabase } from '../db/openCore';
 import type { CoreDatabase } from '../db/connection';
 import { createPairingCode, getBridgeTask, redeemPairingCode, submitBridgeTask, type BridgePairing } from '../domain/pandaBridge';
 import { registerProject } from '../domain/projectRegistry';
-import { decideApproval, listApprovalEvents, listPendingApprovals, pendingApproval, usableApproval } from '../domain/bridgeApprovals';
-import { decideExternalApproval, dispatchBridgeTask, type BridgeRuntime } from '../runtime/kandev/pandaBridge';
+import { decideApproval, expireStaleApproval, listApprovalEvents, listPendingApprovals, pendingApproval, usableApproval } from '../domain/bridgeApprovals';
+import { decideExternalApproval, dispatchBridgeTask, refreshBridgeTask, type BridgeRuntime } from '../runtime/kandev/pandaBridge';
 import { activityItem } from '../runtime/kandev/bridgeActivity';
 import type { KandevClient } from '../runtime/kandev/kandevClient';
 
@@ -49,6 +49,24 @@ describe('external-agent approval', () => {
     expect(listPendingApprovals(db).map(a => a.taskId)).toEqual([t.id]);
     const item = activityItem(db, getBridgeTask(db, t.id), 'Browser');
     expect(item).toMatchObject({ state: 'waiting_for_approval' }); expect(item.reason).toMatch(/Nothing has been sent/);
+  });
+
+  it('a card nobody answered expires visibly: the task says nothing was sent, once, and the stale card can no longer be approved', async () => {
+    // Live b188f 2026-11-23: two unanswered cards still read "Waiting for your approval" over MCP the next morning.
+    const t = submit(TASK(), 'req-appr-expire1');
+    const { approval } = await ask(t.id);
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try {
+      vi.setSystemTime(Date.now() + 31 * 60_000);
+      const after = await refreshBridgeTask(rt, t.id);
+      expect(after.status).toBe('awaiting_executor');
+      expect(after.statusDetail).toMatch(/^The approval card expired at \d\d:\d\d UTC without an answer from the owner; nothing was sent to Claude Code\. Submit the task again/);
+      await refreshBridgeTask(rt, t.id);
+      expect(listApprovalEvents(db, t.id).map(e => e.event)).toEqual(['requested', 'expired']);
+      expect(expireStaleApproval(db, t.id)).toBeNull();
+      expect(listPendingApprovals(db)).toEqual([]);
+      expect(() => decideApproval(db, { taskId: t.id, requestId: approval!.requestId, decision: 'approve', by: 'host:x' })).toThrow(/no approval request waiting/);
+    } finally { vi.useRealTimers(); }
   });
 
   it('refusal stops the task: no executor starts, no substitute is tried, and the trail says who refused', async () => {

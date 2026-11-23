@@ -17,7 +17,7 @@ import { addComment, getStory, listComments, listStories } from '../../domain/st
 import type { StoryRecord } from '../../shared/wireTypes';
 import { loadProjects, projectAllows, resolveProject, type ProjectRecord } from '../../domain/projectRegistry';
 import { asksForChange, deriveMutationPolicy } from '../../domain/mutationPolicy';
-import { consumeApproval, decideApproval, pendingApproval, recordDirectApproval, requestApproval, usableApproval, withdrawApproval, type ExternalApprovalRequest } from '../../domain/bridgeApprovals';
+import { consumeApproval, decideApproval, expireStaleApproval, pendingApproval, recordDirectApproval, requestApproval, usableApproval, withdrawApproval, type ExternalApprovalRequest } from '../../domain/bridgeApprovals';
 import { getAttempt, requestCancelAttempt } from '../../domain/attempts';
 import { isTerminalAttemptStatus } from '../../domain/attemptTransitions';
 import { submitRequest } from '../../domain/submission';
@@ -894,8 +894,15 @@ async function refreshMission(rt: BridgeRuntime, task: BridgeTaskRecord): Promis
 }
 
 /** Brings a relayed task up to date from the work behind it and stores a checkpoint when something changed. */
+/** An approval card that expired unanswered: the task says so (nothing was sent) instead of waiting for the owner forever. */
+function closeExpiredCard(db: CoreDatabase, taskId: string): void {
+  const r = expireStaleApproval(db, taskId);
+  if (r) recordBridgeStatus(db, taskId, 'awaiting_executor', `The approval card expired at ${r.expiresAt.slice(11, 16)} UTC without an answer from the owner; nothing was sent to ${r.agentLabel}. Submit the task again to show a new card.`);
+}
+
 export async function refreshBridgeTask(rt: BridgeRuntime, taskId: string): Promise<BridgeTaskRecord> {
   const { db } = rt;
+  if (getBridgeTask(db, taskId).status === 'awaiting_executor') closeExpiredCard(db, taskId);
   const task = getBridgeTask(db, taskId);
   if (TERMINAL_BRIDGE_STATUSES.has(task.status) || !['dispatching', 'running', 'awaiting_approval', 'verifying', 'paused', 'needs_attention'].includes(task.status)) return task;
 
@@ -1126,6 +1133,7 @@ export function startPandaBridgeLoop(rt: BridgeRuntime, intervalMs = 5_000): () 
     busy = true;
     try {
       for (const t of listBridgeTasks(rt.db, { limit: 100 })) {
+        if (t.status === 'awaiting_executor') { closeExpiredCard(rt.db, t.id); continue; }
         // A dispatch claimed but never started (Core stopped in between) must not sit in "dispatching" forever.
         if (t.status === 'dispatching' && Date.now() - Date.parse(t.updatedAt) > DISPATCH_STALE_MS) {
           recordBridgeStatus(rt.db, t.id, 'failed', 'Starting the executor was interrupted. Start it again.');
