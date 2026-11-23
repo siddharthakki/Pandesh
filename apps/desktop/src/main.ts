@@ -16,6 +16,7 @@ import {
 } from 'electron';
 import { DesktopSession } from './host/desktopSession';
 import { DESIGN_PREVIEW_SCHEME, DesignPreviewStore, isDesignPreviewUrl } from './host/designPreview';
+import { isScenePage } from '../../../core/shared/workshop/scenePage';
 import { checkDesignHtml } from '../../../core/shared/workshop/design';
 import {
   formatDiagnosticsReport,
@@ -197,6 +198,12 @@ app.setPath('userData', desktopUserData);
 // requires. Not bypassCSP, no fetch, no service workers: a preview page gets nothing a web page would not.
 protocol.registerSchemesAsPrivileged([{ scheme: DESIGN_PREVIEW_SCHEME, privileges: { standard: true, secure: true } }]);
 const designPreviews = new DesignPreviewStore();
+/** The three.js scene runtime as text, read once: the preview inlines it into a 3D scene page (host/designPreview.ts). */
+let sceneRuntimeText: string | null = null;
+function sceneRuntimeScript(): string {
+  if (sceneRuntimeText === null) sceneRuntimeText = fs.readFileSync(path.join(__dirname, '..', 'renderer', 'v2', 'sceneRuntime.js'), 'utf8');
+  return sceneRuntimeText;
+}
 
 function resolveBundledCoreVersion(root: string): string {
   try {
@@ -1664,7 +1671,11 @@ function registerIpc(): void {
     if (content.type !== 'design') throw new Error('This file is not a Design workshop page');
     const check = checkDesignHtml(content.html);
     if (!check.ok) throw new Error(`The page cannot be shown: ${check.errors.join('; ')}`);
-    return { ...designPreviews.mint({ artifactId: content.artifactId, html: content.html }), warnings: check.warnings };
+    return { ...designPreviews.mint({ artifactId: content.artifactId, html: content.html, sceneRuntime: isScenePage(content.html) ? sceneRuntimeScript() : null }), warnings: check.warnings };
+  });
+  ipcMain.handle(DESKTOP_CHANNELS.saveSceneShot, async (_event, artifactId: unknown, dataUrl: unknown, view: unknown) => {
+    if (!session) throw new Error('desktop session is not started');
+    return session.saveSceneShot(String(artifactId ?? ''), String(dataUrl ?? ''), typeof view === 'string' ? view : null);
   });
   ipcMain.handle(DESKTOP_CHANNELS.saveWorkshopFile, async (_event, artifactId: unknown) => {
     if (!session || !window) throw new Error('desktop session is not started');
