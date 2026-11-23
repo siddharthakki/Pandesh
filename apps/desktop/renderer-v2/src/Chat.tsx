@@ -24,6 +24,11 @@ interface Props {
   openConversationId: string | null;
   onOpenPalette: () => void;
   onOpenBoard: () => void;
+  /** Shows or hides the conversation list beside the chat. Absent (narrow window): the button opens the palette's chat list. */
+  onToggleHistory?: () => void;
+  historyOpen?: boolean;
+  /** The shell shows what needs the person above the chat, so the welcome screen does not list it a second time. */
+  briefInShell?: boolean;
   /** Opens Settings (models, permissions, diagnostics). */
   onOpenSettings?: () => void;
   /** Text to place in the composer (from a workspace's "Ask Pandesh"). */
@@ -100,7 +105,7 @@ function pendingDecision(s: Snapshot | null): null | { kind: 'tool' | 'image' | 
   return null;
 }
 
-export function Chat({ snapshot, snapshotError, refresh, narrow, openConversationId, onOpenPalette, onOpenBoard, onOpenSettings, draft, onDraftUsed, wake, wakeTurn, onWakeTurnTaken, onVoiceBusy }: Props) {
+export function Chat({ snapshot, snapshotError, refresh, narrow, openConversationId, onOpenPalette, onOpenBoard, onToggleHistory, historyOpen, briefInShell, onOpenSettings, draft, onDraftUsed, wake, wakeTurn, onWakeTurnTaken, onVoiceBusy }: Props) {
   const [messages, setMessages] = useState<TranscriptMessage[]>([]);
   const [loadedFor, setLoadedFor] = useState<string | null | undefined>(undefined);
   const [live, setLive] = useState<{ attemptId: string | null; text: string }>({ attemptId: null, text: '' });
@@ -456,7 +461,9 @@ export function Chat({ snapshot, snapshotError, refresh, narrow, openConversatio
     <div style={{ flex: '1 1 auto', minHeight: 0, display: 'flex', position: 'relative' }}>
     <div style={{ flex: '1 1 auto', minWidth: 0, display: 'flex', flexDirection: 'column' }}>
       <div className="topbar">
-        <button type="button" className="ghost-icon" title="Chats (Ctrl K)" aria-label="Open chats" onClick={onOpenPalette}><Icon name="chats" size={18} /></button>
+        {onToggleHistory
+          ? (!historyOpen && <button type="button" className="ghost-icon" title="Show conversations" aria-label="Show conversations" aria-expanded={false} onClick={onToggleHistory}><Icon name="chats" size={18} /></button>)
+          : <button type="button" className="ghost-icon" title="Chats (Ctrl K)" aria-label="Open chats" onClick={onOpenPalette}><Icon name="chats" size={18} /></button>}
         <span className="title">{idle ? 'New chat' : 'Chat'}</span>
         {snapshot?.selectedAgentId && (
           <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8, padding: '2px 4px 2px 10px', border: '1px solid var(--pulse)', borderRadius: 999, fontSize: 13 }}>
@@ -492,14 +499,14 @@ export function Chat({ snapshot, snapshotError, refresh, narrow, openConversatio
             <div className="hero">
               <div className="dateline"><Mark size={28} /><span>{new Date().toLocaleDateString([], { weekday: 'long', day: 'numeric', month: 'long' })}</span></div>
               <h1>{greeting()}</h1>
-              {brief === null && <p>Ask me anything. I use local models by default; you decide what else is allowed.</p>}
-              {brief && needs === 0 && <p>Nothing needs you right now.</p>}
-              {brief && needs > 0 && (
+              {(briefInShell || brief === null) && <p>Ask me anything. I use local models by default; you decide what else is allowed.</p>}
+              {!briefInShell && brief && needs === 0 && <p>Nothing needs you right now.</p>}
+              {!briefInShell && brief && needs > 0 && (
                 <button type="button" className="btn" style={{ alignSelf: 'flex-start', borderRadius: 19, display: 'flex', alignItems: 'center', gap: 10 }} aria-expanded={briefOpen} onClick={() => setBriefOpen(!briefOpen)}>
                   <span className="dot attention" aria-hidden="true" />{needs === 1 ? '1 thing needs you' : `${needs} things need you`}<span style={{ color: 'var(--muted)', fontSize: 14 }}>{briefOpen ? 'Hide' : 'Show'}</span>
                 </button>
               )}
-              {brief && briefOpen && needs > 0 && (
+              {!briefInShell && brief && briefOpen && needs > 0 && (
                 <ul style={{ listStyle: 'none', margin: 0, padding: 0, border: '1px solid var(--line)', borderRadius: 12, background: 'var(--surface)' }}>
                   {brief.map((item, i) => (
                     <li key={item.id} style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '10px 12px', padding: '12px 14px', borderBottom: i < brief.length - 1 ? '1px solid var(--line)' : 0 }}>
