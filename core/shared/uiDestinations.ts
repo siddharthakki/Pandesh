@@ -52,7 +52,7 @@ export const UI_DESTINATIONS: readonly UiDestination[] = [
   { id: 'second_brain', label: 'Second Brain (memories, notes, documents)', keywords: ['brain', 'memory', 'memories', 'notes', 'documents', 'knowledge'],
     targets: { v2: 'view:brain' }, where: { v2: 'Second Brain, opened from the Search box (Ctrl K)' } },
   { id: 'automations', label: 'Automations (recurring work: next run, last result, run now, pause)', keywords: ['automations', 'routines', 'schedule', 'recurring', 'brief'],
-    targets: { v2: 'view:automations' }, where: { v2: 'Work (left sidebar) → Scheduled' } },
+    targets: { v2: 'view:automations' }, where: { v2: 'Work (left sidebar) → Scheduled → Automations' } },
   { id: 'mail_hub', label: 'Mail Hub (Outlook mail: overview, inbox, reader, Ask Pandesh, finance, career, calendar, tasks, rules, activity, settings)', keywords: ['mail', 'mail hub', 'email', 'emails', 'outlook', 'inbox', 'bills', 'invoices', 'recruiter', 'recruiters'],
     targets: { v2: 'view:mailhub' }, where: { v2: 'Mail Hub, opened from the Search box (Ctrl K) (screens open with view:mailhub#overview, inbox, reader, assistant, finance, career, calendar, tasks, rules, activity, settings)' } },
   { id: 'media_studio', label: 'Media Studio', keywords: ['media', 'images', 'image', 'studio', 'pictures'],

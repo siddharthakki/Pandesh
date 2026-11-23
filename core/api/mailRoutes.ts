@@ -102,7 +102,7 @@ export function registerMailRoutes(router: Router<ApiContext, ApiResult>, option
   router.post('/v1/mail/inbox-assistant', (ctx) => {
     requireHost(ctx);
     const { service, bot } = inboxBot(ctx);
-    if (!bot) throw new CoreError('invalid_request', 'Create the Inbox Assistant in My Bots first.');
+    if (!bot) throw new CoreError('invalid_request', 'Create the Inbox Assistant first, under Work → Scheduled → Bots.');
     const on = body(ctx).enabled !== false;
     const sources = on ? [...new Set([...bot.sources, 'outlook_mail' as const])] : bot.sources.filter((s) => s !== 'outlook_mail');
     service.update(bot.id, { sources });
@@ -115,7 +115,7 @@ export function registerMailRoutes(router: Router<ApiContext, ApiResult>, option
     const question = typeof body(ctx).question === 'string' ? String(body(ctx).question).trim().slice(0, 1500) : '';
     if (!question) throw new CoreError('invalid_request', 'Ask a question.');
     const { bot } = inboxBot(ctx);
-    if (!bot) throw new CoreError('invalid_request', 'The Inbox Assistant does not exist yet: create it in My Bots.');
+    if (!bot) throw new CoreError('invalid_request', 'The Inbox Assistant does not exist yet: create it under Work → Scheduled → Bots.');
     if (!bot.sources.includes('outlook_mail')) throw new CoreError('forbidden', 'The Inbox Assistant is not allowed to read Mail Hub yet. Allow it in Mail Hub → Settings.');
     const started = runBot({ db: ctx.db, broadcaster: options.broadcaster, dataDir: options.dataDir, connectorRegistry: options.connectors }, { botId: bot.id, trigger: 'chat', question });
     started.catch((err) => console.error(`[karkedikha-core ${new Date().toISOString()}] mail ask failed:`, err instanceof Error ? err.message : err));

@@ -3611,7 +3611,7 @@ export class PiAgentEngine implements EngineAdapter {
       },
       {
         // Alpha e2e T2: chat had no access to Software Discovery and guessed "Up to Date". This reads the stored result
-        // of the last update check (More → Software & Services); it never contacts the internet or installs anything.
+        // of the last update check (Settings → Diagnostics → Software & Services); it never contacts the internet or installs anything.
         name: 'software_updates',
         label: 'software_updates',
         description: "Read the result of Pandesh's last software update check on this PC (winget, pip, npm, GitHub): installed and available versions, status and when it was checked. Read-only, offline: it never checks online and never installs. If no check was run yet, tell the user to run System → Software & Services → Check for updates.",
@@ -3619,7 +3619,7 @@ export class PiAgentEngine implements EngineAdapter {
         execute: async (_id: string, args: any) => {
           if (!ctx.dataDir) return { content: [{ type: 'text', text: "NOT AVAILABLE: Pandesh's data folder is not known in this run, so the stored update check cannot be read." }], isError: true };
           const state = readUpdateState(ctx.dataDir);
-          if (!state.lastCheckedAt) return { content: [{ type: 'text', text: 'No update check has been run on this PC yet, so no versions are known. Nothing was checked now. The user can run More → Software & Services → Check for updates (read-only).' }] };
+          if (!state.lastCheckedAt) return { content: [{ type: 'text', text: 'No update check has been run on this PC yet, so no versions are known. Nothing was checked now. The user can run Settings → Diagnostics → Software & Services → Check for updates (read-only).' }] };
           const onlyUpdates = args?.onlyUpdates !== false;
           const filter = String(args?.nameContains ?? '').trim().toLowerCase();
           const rows = state.results
@@ -3672,7 +3672,7 @@ export class PiAgentEngine implements EngineAdapter {
         // Alpha e2e T10: no chat tool created projects, and the reply said "I have initiated the creation…".
         name: 'create_project',
         label: 'create_project',
-        description: "Create a project in Pandesh's Projects workspace (stored in Core, shown under Projects in the left sidebar), optionally with a list of open tasks. Only this tool creates a project; report the id it returns.",
+        description: "Create a project in Pandesh's Projects workspace (stored in Core, shown under Work → Projects), optionally with a list of open tasks. Only this tool creates a project; report the id it returns.",
         parameters: { type: 'object', properties: { name: { type: 'string' }, description: { type: 'string' }, tasks: { type: 'array', items: { type: 'string' }, description: 'Task titles.' }, taskStatus: { type: 'string', enum: ['pending', 'in_progress', 'done'], description: 'Status for every listed task (default pending). Use only what the user said; never mark work done that was not done.' } }, required: ['name'] },
         execute: async (_id: string, args: any) => {
           const name = String(args?.name ?? '').trim();
@@ -3687,7 +3687,7 @@ export class PiAgentEngine implements EngineAdapter {
           } catch (err: any) {
             return { content: [{ type: 'text', text: `NOT DONE: Core did not create the project: ${err?.message ?? String(err)}` }], isError: true };
           }
-          const summary = `Created project "${project.name}" (id ${project.id}, status ${project.status}) with ${tasks.length} task(s)${tasks.length ? `: ${tasks.map((t: { title: string; status: string }) => `${t.title} [${t.status}]`).join('; ')}` : ''}. It is shown under Projects in the left sidebar.`;
+          const summary = `Created project "${project.name}" (id ${project.id}, status ${project.status}) with ${tasks.length} task(s)${tasks.length ? `: ${tasks.map((t: { title: string; status: string }) => `${t.title} [${t.status}]`).join('; ')}` : ''}. It is shown under Work → Projects.`;
           return { content: [{ type: 'text', text: summary }], details: { activity: { kind: 'tool', title: `Created project ${project.name}`, excerpt: summary } } };
         },
       },
@@ -3726,7 +3726,7 @@ export class PiAgentEngine implements EngineAdapter {
               createProjectIfMissing: args?.createProject === true || !projectArg || /^inbox$/i.test(projectArg),
               source: `conversation:${conversationId || 'none'}`,
             }));
-            const text = `Added task ${formatTask(task)}. It is shown under Projects in the left sidebar.`;
+            const text = `Added task ${formatTask(task)}. It is shown under Work → Projects.`;
             return { content: [{ type: 'text', text }], details: { primaryId: task.id, taskRef: task.ref, activity: { kind: 'tool', title: `Added task ${task.title}`, excerpt: text } } };
           } catch (err: any) {
             return { content: [{ type: 'text', text: `NOT DONE: ${err?.message ?? String(err)}. Nothing was added.` }], isError: true };
