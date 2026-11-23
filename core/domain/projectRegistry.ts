@@ -38,7 +38,23 @@ export interface ProjectRecord {
 export interface ProjectRegistryFile { version: 1; projects: ProjectRecord[] }
 
 const FILE = 'projects.json';
-const pathKey = (p: string) => path.resolve(p).replace(/[\\/]+$/, '').toLowerCase();
+/**
+ * One spelling per folder, for comparing paths: absolute, real (symlinks/junctions and Windows 8.3 short names such as RUNNER~1
+ * expanded to the long name the registry stores), no trailing separator, case-folded. A path whose tail does not exist yet keeps
+ * that tail, appended to its nearest existing parent's real path. (CI 2026-11-23: GitHub's Windows runner temp folder is
+ * C:\Users\RUNNER~1\..., registration stored the long real path, a task naming the short one was "unauthorized".)
+ */
+function pathKey(p: string): string {
+  let head = path.resolve(p);
+  const tail: string[] = [];
+  for (;;) {
+    try { head = path.join(fs.realpathSync.native(head), ...tail); break; } catch { /* not there (yet): try its parent */ }
+    const parent = path.dirname(head);
+    if (parent === head) { head = path.join(head, ...tail); break; }
+    tail.unshift(path.basename(head)); head = parent;
+  }
+  return head.replace(/[\\/]+$/, '').toLowerCase();
+}
 
 function file(dataDir: string): string { return path.join(dataDir, FILE); }
 
