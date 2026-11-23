@@ -155,7 +155,7 @@ export interface BridgeTaskResult {
 }
 
 export type BridgeOutcomeState =
-  | 'worker_running' | 'worker_finished' | 'worker_failed' | 'verification_failed'
+  | 'waiting' | 'worker_running' | 'worker_finished' | 'worker_failed' | 'verification_failed'
   | 'awaiting_owner_review' | 'review_denied' | 'outcome_completed' | 'delivered';
 
 export interface BridgeTaskOutcome {

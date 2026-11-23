@@ -78,6 +78,19 @@ describe('mission submission and card', () => {
     expect(new Set(specs.map(s => s.integrationBranch))).toEqual(new Set([`panda/mission-${t.id.slice(-12)}`]));
     expect(specs.every(s => s.codeCopy?.grant && Date.parse(s.codeCopy.grant.expiresAt) > Date.now())).toBe(true);
     expect(git(specs[0]!.repoPath, 'remote').stdout.trim()).toBe('');
+    // Live b188f defect 2026-11-23: the steps share a creation instant, so ordering by time + id mislabelled them. Plan order is kept.
+    expect(specs.map(s => s.codeCopy?.step)).toEqual([1, 2, 3]);
+    expect(stories.map(s => s.title.match(/\d\/3: Add (\S+)/)?.[1])).toEqual(['divide(a,', 'multiply(a,', 'src/index.js']);
+  });
+
+  it('steps planned before the position was stored are still ordered by their "i/N:" title, never by their random ids', () => {
+    const fp = checkoutFingerprint(rw)!;
+    const codeCopy = { projectName: 'Calc', sourcePath: rw, ref: 'main', sourceHead: fp.head, sourceStatusSha: fp.statusSha };
+    for (let n = 0; n < 5; n++) {
+      const p = planDevStories(db, { projectName: `Panda mission old${n}`, repoPath: rw, baseBranch: 'main', integrationBranch: `panda/mission-old${n}`, verify: ['git', 'status', '--porcelain'],
+        stories: ['c', 'a', 'b'].map(k => ({ key: k, title: `Calc ${{ a: 1, b: 2, c: 3 }[k]}/3: step ${k}`, agent: 'claude' as const, maxFiles: 20, codeCopy })) });
+      expect(missionStories(db, p.projectId).map(s => s.title.slice(-1))).toEqual(['a', 'b', 'c']);
+    }
   });
 });
 
