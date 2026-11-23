@@ -204,7 +204,7 @@ function overlaps(a: string[] = [], b: string[] = []): string[] {
   return a.filter(x => b.some(y => { const nx = norm(x), ny = norm(y); return nx === ny || nx.startsWith(ny + '/') || ny.startsWith(nx + '/'); }));
 }
 
-function workerPrompt(story: StoryRecord, spec: DevStorySpec): string {
+export function workerPrompt(story: StoryRecord, spec: DevStorySpec): string {
   if (spec.mode === 'inspect' && spec.answerOnly) {
     return [
       `Task: ${story.title}`,
@@ -219,6 +219,7 @@ function workerPrompt(story: StoryRecord, spec: DevStorySpec): string {
       `Task: ${story.title}`,
       story.description ? `\n${story.description}` : '',
       `\nYour CURRENT WORKING DIRECTORY is your own worktree of a private copy of ${spec.codeCopy.projectName} at branch ${spec.codeCopy.ref}. Make the change here. If the task names a path on this PC, that is the owner's checkout: never read or write it; use the same relative path in your working directory.`,
+      'Name files by paths RELATIVE to your working directory (src/index.js, test/index.test.js), or absolute paths that start with your working directory (run `pwd` once if unsure). The folder named in your memory or settings instructions is NOT this project: never build file paths from it. Any read or write outside your working directory is refused automatically.',
       `\nRules: change at most ${spec.maxFiles ?? 'a few'} files and only what the task needs. Run the existing tests for the code you touch with single plain commands (no \`&&\`, no \`cd\`). Do NOT commit, push, merge, switch branches, add remotes, install packages or change any Kandev task state: KarkeDikha verifies the change, the owner reviews it, and only then is it committed to a branch in this copy.`,
       'This is a CODE CHANGE task: the owner approved changing files in this copy. Make the requested change and add or update tests for it when the task asks for tests. Pandesh runs the project\'s tests itself before and after your change: do not weaken, skip or delete existing tests, and do not fix unrelated failing tests unless the task asks (report them instead).',
       'If the change cannot be made here, change nothing and say plainly why in your last message. When done, stop and summarise exactly what you changed and which tests you ran with their results.',
@@ -489,6 +490,19 @@ function logPermission(storyId: string, p: KandevPermission, d: { allow: boolean
   } catch { /* logging must never affect a decision */ }
 }
 
+function isInsideWorktree(p: string, worktree: string): boolean {
+  const target = path.resolve(worktree, p.replace(/^\/([a-z])\//i, '$1:/')).toLowerCase();
+  const root = path.resolve(worktree).toLowerCase();
+  return target === root || target.startsWith(root + path.sep);
+}
+
+/** Directions for a worker that reached outside its worktree: where it is, how to name files, and what the wrong path was. */
+export function outsideWorktreeFeedback(p: string, worktree: string, exists: boolean): string {
+  return `Refused: ${p} is outside your working directory${exists ? '' : ' and does not exist'}. Your working directory is ${worktree}; `
+    + 'the project files are there. Use paths relative to it (for example src/index.js), or absolute paths that start with it. '
+    + 'The folder named in your memory or settings instructions is not the project.';
+}
+
 export function permissionDecision(p: KandevPermission, worktree: string | undefined, spec: DevStorySpec): { allow: boolean; reject?: boolean; reason: string } {
   const a = p.action ?? {};
   // Workers must not drive Kandev (task state, dependencies, permissions, new tasks) or reach personal memory tools.
@@ -514,6 +528,13 @@ export function permissionDecision(p: KandevPermission, worktree: string | undef
     const root = path.resolve(worktree).toLowerCase();
     if (target === root || target.startsWith(root + path.sep)) return { allow: true, reason: `read ${path.relative(worktree, a.path)}` };
     return { allow: false, reject: true, reason: `read outside your working directory refused: ${a.path}. The repository to inspect is your current working directory (a private copy); use relative paths there.` };
+  }
+  if ((a.type === 'file_read' || a.type === 'file_write' || a.type === 'file_edit' || a.type === 'file_delete') && a.path && worktree && !isInsideWorktree(a.path, worktree)) {
+    // A path outside the worker's own worktree is refused at once with directions, never put to the owner: in a private copy (A5,
+    // missions) nothing outside is part of the task, and a path that does not exist is a mistake whatever the task. Live b188g
+    // 2026-11-23: Claude built five Read paths from its memory folder's name and the owner was interrupted five times.
+    const exists = fs.existsSync(a.path);
+    if (spec.codeCopy || !exists) return { allow: false, reject: true, reason: outsideWorktreeFeedback(a.path, worktree, exists) };
   }
   if ((a.type === 'file_write' || a.type === 'file_edit') && a.path && worktree) {
     const target = path.resolve(a.path).toLowerCase();
@@ -1727,7 +1748,7 @@ export async function devStoryStatus(db: CoreDatabase, kandev: KandevClient, pro
       acceptanceChecks: automatedChecks(devSpec(s)!.acceptance ?? []).length,
       deviceVerification: deviceVerificationOf(s, devSpec(s)!, comments),
       attempts: { failedVerifications: comments.filter(c => c.body.startsWith('[kkd-dev:verify-failed]')).length, maxCorrections: MAX_VERIFY_RETRIES },
-      pendingApprovals: pending.map(p => ({ pendingId: p.pending_id, what: p.action?.command ?? p.action?.path ?? p.title ?? 'action' })),
+      pendingApprovals: pending.map(p => { const what = p.action?.command ?? p.action?.path ?? p.title ?? 'action'; rememberOwnerView(p.pending_id, what); return { pendingId: p.pending_id, what }; }),
       activity,
     });
   }
@@ -1746,6 +1767,18 @@ export async function devStoryStatus(db: CoreDatabase, kandev: KandevClient, pro
 }
 
 const TIMELINE_EVENTS = new Set(['dispatched', 'verify-failed', 'verified', 'integrated', 'inspected', 'awaiting-review', 'needs-human', 'stopped', 'retry', 'reassigned', 'decided', 'device-verified', 'device-failed']);
+
+/**
+ * What a pending worker permission really asks, paths included, for the OWNER's own approval card only. Task details and anything a
+ * paired client (ChatGPT) reads carry the redacted text; the owner must see the real path to decide (live b188h 2026-11-23: five cards
+ * read "<path>"). Memory only, refilled from Kandev on every status read, bounded.
+ */
+const ownerView = new Map<string, string>();
+function rememberOwnerView(pendingId: string, what: string): void {
+  ownerView.delete(pendingId); ownerView.set(pendingId, what);
+  while (ownerView.size > 500) ownerView.delete(ownerView.keys().next().value!);
+}
+export function ownerViewOfPending(pendingId: string): string | null { return ownerView.get(pendingId) ?? null; }
 
 /** Worktrees and home folders are private to this PC: absolute paths never leave Core in a task detail. */
 function redactPrivatePaths(text: string): string {

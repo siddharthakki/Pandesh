@@ -27,6 +27,7 @@ import { activityItem } from '../runtime/kandev/bridgeActivity';
 import { allDeclarations, BUILTIN_WORKFLOWS, routeTask, trackRecords } from '../runtime/kandev/capabilityRegistry';
 import { planWorkflow, runWorkflow } from '../runtime/kandev/workflowRouter';
 import { newId } from '../domain/ids';
+import { ownerViewOfPending } from '../runtime/kandev/devStories';
 import { loadProjects, registerProject, removeProject, resolveProject } from '../domain/projectRegistry';
 import type { RuntimeExecutor } from '../runtime/executor';
 
@@ -194,7 +195,9 @@ export function registerBridgeRoutes(router: Router<ApiContext, ApiResult>, opti
   router.get('/v1/bridge/activity', (ctx) => {
     requireHost(ctx);
     const labels = new Map(listPairings(ctx.db).map(p => [p.id, p.label]));
-    const items = listBridgeTasks(ctx.db, { limit: 50 }).map(t => activityItem(ctx.db, t, labels.get(t.pairingId) ?? 'Browser'));
+    // The owner's own list: a worker's permission request shows what it really asks (real paths); clients only ever get the redacted text.
+    const items = listBridgeTasks(ctx.db, { limit: 50 }).map(t => activityItem(ctx.db, t, labels.get(t.pairingId) ?? 'Browser'))
+      .map(i => ({ ...i, pendingWorkerActions: i.pendingWorkerActions.map(p => ({ ...p, what: ownerViewOfPending(p.pendingId) ?? p.what })) }));
     const live = (i: { state: string }) => !['completed', 'failed', 'cancelled'].includes(i.state);
     items.sort((a, b) => (Number(live(b)) - Number(live(a))) || b.createdAt.localeCompare(a.createdAt));
     return ok(200, { items });

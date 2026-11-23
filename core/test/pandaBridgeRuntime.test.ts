@@ -11,6 +11,7 @@ import { prepareTaskWorkspace, refreshBridgeTask, discoverExecutors, dispatchBri
 import { listMessages } from '../domain/conversations';
 import { getAttempt } from '../domain/attempts';
 import { activityItem } from '../runtime/kandev/bridgeActivity';
+import { ownerViewOfPending } from '../runtime/kandev/devStories';
 import type { RuntimeExecutor } from '../runtime/executor';
 import type { KandevClient, KandevPermission } from '../runtime/kandev/kandevClient';
 
@@ -248,6 +249,14 @@ describe('a mission whose worker waits on a permission', () => {
     const item = activityItem(db, waiting, 'ChatGPT');
     expect(item.pendingWorkerActions).toEqual([{ pendingId: 'p-1', what: 'src/one.js' }]);
     expect(item.storyId).toBe(plan.stories[0]!.id);
+
+    // A real path: redacted in everything a client reads, shown in full only to the owner (live b188h: five cards read "<path>").
+    const secret = ['C:', 'Users', 'someone', 'private', 'notes.txt'].join('\\');
+    state.pending = [{ ...permission, pending_id: 'p-abs', action: { type: 'read', path: secret } } as KandevPermission];
+    const abs = await refreshBridgeTask({ db, kandev: fakeKandev(state), dataDir: dir }, task.id);
+    expect(JSON.stringify(abs.result)).not.toContain('someone');
+    expect(activityItem(db, abs, 'ChatGPT').pendingWorkerActions).toEqual([{ pendingId: 'p-abs', what: '<path>' }]);
+    expect(ownerViewOfPending('p-abs')).toBe(secret);
 
     // The buttons follow the step that asks, not the mission's first story.
     const asking = { ...waiting, result: { ...waiting.result!, steps: waiting.result!.steps!.map((s, i) => ({ ...s, storyStatus: i === 0 ? 'done' : 'implementing', pendingApprovals: i === 0 ? [] : [{ pendingId: 'p-2', what: 'x' }] })) } };
