@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { APPS, BOARD_COLUMNS, HISTORY_BESIDE_CHAT_MIN_WIDTH, asksThePerson, homeCounts, isConnectorConversation, isInternalConversation, isMissionStepConversation, needsYouTotal, placeOf, settingsTabOf, subLinks, workTabOf } from '../renderer-v2/src/placesModel';
+import { APPS, BOARD_COLUMNS, HISTORY_BESIDE_CHAT_MIN_WIDTH, asksThePerson, isMissionStepTask, needsThePerson, homeCounts, isConnectorConversation, isInternalConversation, isMissionStepConversation, needsYouTotal, placeOf, settingsTabOf, subLinks, workTabOf } from '../renderer-v2/src/placesModel';
 import { parseV2Target } from '../renderer-v2/src/navigationTargets';
 import { addNote, usabilityReport } from '../renderer-v2/src/usability';
 
@@ -158,5 +158,41 @@ describe('the needs-you list follows the tasks', () => {
     expect(src('Places.tsx')).toContain("onOpenWork: () => void, taskPicture = '')");
     expect(src('Places.tsx')).toMatch(/snapshot\?\.pendingApproval\?\.approvalId,[\s\S]{0,200}taskPicture\]\);/);
     expect(src('App.tsx')).toContain('counts.needsYou}:${counts.inProgress}:${counts.stuck}:${counts.doneToday}:${counts.failedToday}');
+  });
+});
+
+describe('Home counts the person\'s own requests', () => {
+  const now = new Date(2026, 10, 23, 19, 0, 0);
+  const at = (h: number, day = 23) => new Date(2026, 10, day, h).toISOString();
+  const t = (status: string, extra: Record<string, unknown> = {}) => ({ status, live: true, interrupted: false, ...extra }) as never;
+  const step = 'Mission step 1 of 2 (run 4qxwc). Draft a short, practical weekend hiking packing list';
+
+  it('a mission\'s steps and a task the person stopped are not in the two "today" totals; unfinished work always is', () => {
+    expect(isMissionStepTask(step)).toBe(true);
+    expect(isMissionStepTask('Reviewer · Mission step 2 of 2 (run 5bg2a). Review')).toBe(true);
+    expect(isMissionStepTask('What was mission step 2 of 2 about?')).toBe(false);
+    const c = homeCounts([
+      t('completed', { completedAt: at(11), title: 'Write a short packing list' }),
+      t('completed', { completedAt: at(11), title: step }),
+      t('completed', { completedAt: at(11), title: 'Reviewer · Mission step 2 of 2 (run 5bg2a). Review' }),
+      t('failed', { completedAt: at(11), title: step }),
+      t('failed', { completedAt: at(12), title: 'Summarise my notes' }),
+      t('cancelled', { completedAt: at(18), title: 'Search the web for one current headline' }),
+      t('running', { title: step }),
+      t('running', { live: false, title: step }),
+    ], 0, 0, now);
+    expect(c).toEqual({ needsYou: 0, inProgress: 1, stuck: 1, doneToday: 1, failedToday: 1 });
+  });
+
+  it('a failure is "needs you" only while it is today\'s and the person\'s own; an approval always is', () => {
+    expect(needsThePerson({ kind: 'approval', at: at(9, 20) }, now)).toBe(true);
+    expect(needsThePerson({ kind: 'task_failed', at: at(12), detail: 'Summarise my notes — the model stopped (7 hours ago)' }, now)).toBe(true);
+    expect(needsThePerson({ kind: 'task_interrupted', at: at(12), detail: 'Summarise my notes — interrupted' }, now)).toBe(true);
+    // The live case: a mission step that failed in the morning, offered with Resume all day.
+    expect(needsThePerson({ kind: 'task_failed', at: at(11), detail: `${step}… — the requested work did not happen (8 hours ago)` }, now)).toBe(false);
+    expect(needsThePerson({ kind: 'task_failed', at: at(22, 22), detail: 'Summarise my notes — failed (21 hours ago)' }, now)).toBe(false);
+    expect(needsThePerson({ kind: 'task_running', at: at(18) }, now)).toBe(false);
+    expect(needsThePerson({ kind: 'task_completed', at: at(18) }, now)).toBe(false);
+    expect(fs.readFileSync(path.join(__dirname, '../renderer-v2/src/Places.tsx'), 'utf8')).toContain('.filter((i) => needsThePerson(i))');
   });
 });

@@ -87,22 +87,27 @@ export const BOARD_COLUMNS: Record<BoardShow, ReadonlyArray<string>> = {
 };
 
 export interface HomeCounts { needsYou: number; inProgress: number; stuck: number; doneToday: number; failedToday: number }
-type CountTask = BoardTask & { completedAt?: string | null };
+type CountTask = BoardTask & { completedAt?: string | null; title?: string | null };
 
-/** Home's one-line status, from the same Core task records the Work board shows. `needsYou` is the board's own count. */
+/**
+ * Home's one-line status, from the same Core task records the Work board shows. `needsYou` is the board's own count.
+ *
+ * Unfinished work is always counted, whatever it is: a running or stuck mission step is real activity. The two "today" totals
+ * count what the person asked for: a mission's steps are parts of one request (a two-step mission used to add three to "done
+ * today"), and a task the person stopped is not something that "did not finish". Both stay listed in Work, under Completed.
+ * LIMITATION: Core's task record does not say who started a task, so a task started from this window for a test cannot be
+ * told apart from everyday work here.
+ */
 export function homeCounts(tasks: CountTask[], queuedCommands: number, needsYou: number, now: Date = new Date()): HomeCounts {
-  const today = (iso: string | null | undefined): boolean => {
-    if (!iso) return false;
-    const d = new Date(iso);
-    return d.getFullYear() === now.getFullYear() && d.getMonth() === now.getMonth() && d.getDate() === now.getDate();
-  };
+  const today = (iso: string | null | undefined): boolean => sameDay(iso, now);
   let inProgress = queuedCommands; let stuck = 0; let doneToday = 0; let failedToday = 0;
   for (const t of tasks) {
     const c = columnOf(t);
+    const own = !isMissionStepTask(t.title);
     if (c === 'running' || c === 'queued') inProgress++;
     else if (c === 'blocked') stuck++;
-    else if (c === 'completed' && today(t.completedAt)) doneToday++;
-    else if (c === 'failed' && today(t.completedAt)) failedToday++;
+    else if (c === 'completed' && own && today(t.completedAt)) doneToday++;
+    else if (c === 'failed' && own && t.status === 'failed' && today(t.completedAt)) failedToday++;
   }
   return { needsYou, inProgress, stuck, doneToday, failedToday };
 }
@@ -165,4 +170,27 @@ export const HISTORY_BESIDE_CHAT_MIN_WIDTH = 1200;
 
 export function isMissionStepConversation(title: string | null | undefined): boolean {
   return /^.{1,60} · Mission step \d+ of \d+ \(run [a-z0-9]+\)/.test(title ?? '');
+}
+/**
+ * A task that is one step of a mission: Core gives the step this brief (core/runtime/missionRunner.ts), with or without the
+ * specialist's name in front. The person asked for the mission, not for its steps.
+ */
+export function isMissionStepTask(title: string | null | undefined): boolean {
+  return /^(?:.{1,60} · )?Mission step \d+ of \d+ \(run [a-z0-9]+\)/.test(title ?? '');
+}
+const sameDay = (iso: string | null | undefined, now: Date): boolean => {
+  if (!iso) return false;
+  const d = new Date(iso);
+  return d.getFullYear() === now.getFullYear() && d.getMonth() === now.getMonth() && d.getDate() === now.getDate();
+};
+/**
+ * Whether one item of Core's home brief belongs under "needs you" on Home. An approval always does. A failure or interruption
+ * does only while it is today's and is the person's own request: Core keeps offering Resume for a day, and for mission steps
+ * too (live finding 2026-11-23: a mission step that failed eight hours earlier, in a mission long over, was the one thing
+ * "needing" the person). Nothing is removed: the task stays in Work, under Completed.
+ */
+export function needsThePerson(item: { kind: string; at?: string | null; detail?: string | null }, now: Date = new Date()): boolean {
+  if (item.kind === 'approval') return true;
+  if (!asksThePerson(item.kind)) return false;
+  return sameDay(item.at, now) && !isMissionStepTask(item.detail);
 }

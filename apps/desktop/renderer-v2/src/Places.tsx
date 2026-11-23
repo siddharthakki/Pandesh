@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { api, errorText, type BriefAction, type BriefItem, type ConversationEntry, type Snapshot } from './bridge';
 import { Icon } from './ui';
-import { SETTINGS_TABS, WORK_TABS, asksThePerson, isInternalConversation, needsYouTotal, type HomeCounts, type Place, type SettingsTab, type SubLink, type WorkTab } from './placesModel';
+import { SETTINGS_TABS, WORK_TABS, isInternalConversation, needsThePerson, needsYouTotal, type HomeCounts, type Place, type SettingsTab, type SubLink, type WorkTab } from './placesModel';
 import { NOTE_ISSUES, type NoteIssue, type NoteOutcome, addNote, clearNotes, listNotes, usabilityReport, type UsabilityNote } from './usability';
 
 /** The tab bar of Work and Settings, with the few sibling pages of the current tab on a second row. */
@@ -83,7 +83,7 @@ export function HomeStatus({ counts, loading, error, brief, onOpen, onNote }: {
   const part = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
   const [open, setOpen] = useState(false);
   // Only what asks something of the person: a running task and a finished result are in the other chips.
-  const items = (brief.items ?? []).filter((i) => asksThePerson(i.kind));
+  const items = (brief.items ?? []).filter((i) => needsThePerson(i));
   const total = needsYouTotal(items.map((i) => i.kind), counts?.needsYou ?? 0);
   const timeOf = (iso: string) => { const d = new Date(iso); return Number.isNaN(d.getTime()) ? '' : d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }); };
   return (
