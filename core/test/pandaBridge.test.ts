@@ -1,4 +1,5 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { KandevClient } from '../runtime/kandev/kandevClient';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
@@ -202,6 +203,9 @@ describe('HTTP surface', () => {
   let base: string;
 
   beforeEach(async () => {
+    // The routes use their own Kandev client; this file's tests are about consent and pairing, not about whether Claude Code is
+    // installed on the machine running them (GitHub's runner has none). Scoped to this file, restored after each test.
+    vi.spyOn(KandevClient.prototype, 'agentBinaryInstalled').mockReturnValue(true);
     api = await startApiServer({
       db, token: TOKEN, hostToken: HOST, operatorToken: generateToken(), broadcaster: new EventBroadcaster(), dataDir: dir,
       coreInfo: () => ({ coreVersion: '0', apiVersion: 1, instanceId: 't', startedAt: new Date().toISOString(), nodeVersion: process.version, electronVersion: null, dataDir: dir }),
@@ -209,7 +213,7 @@ describe('HTTP surface', () => {
     });
     base = `http://127.0.0.1:${api.port}`;
   });
-  afterEach(async () => { await api.close(); });
+  afterEach(async () => { vi.restoreAllMocks(); await api.close(); });
 
   const call = async (method: string, p: string, opts: { host?: boolean; pairing?: string; body?: unknown } = {}) => {
     const headers: Record<string, string> = { Authorization: `Bearer ${TOKEN}`, 'Content-Type': 'application/json', 'X-Client-Id': 'native-host' };
