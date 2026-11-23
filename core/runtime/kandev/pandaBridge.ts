@@ -869,6 +869,11 @@ async function refreshMission(rt: BridgeRuntime, task: BridgeTaskRecord): Promis
   } else if (stopped && task.control === 'none') {
     status = 'needs_attention'; state = stopped.state;
     summary = `Step ${steps.indexOf(stopped) + 1} of ${steps.length} (${stopped.key}) stopped: ${stopped.summary} ${done} step(s) are done; the steps after it wait.`;
+  } else if (activeStep.pendingApprovals.length && task.control === 'none') {
+    // The worker is stopped on a permission prompt. Only the owner may answer it (the development grant covers integrating tested
+    // steps, not the worker's tool permissions), so the mission needs the owner, visibly, instead of reading "Working." forever.
+    status = 'awaiting_approval'; state = 'worker_running';
+    summary = `Step ${steps.indexOf(activeStep) + 1} of ${steps.length} (${activeStep.key}) is paused: the worker asks for your permission (${activeStep.pendingApprovals.map(p => p.what).join('; ').slice(0, 200)}) and does nothing until you allow or refuse it in Pandesh. ${done} step(s) are done.`;
   } else if (review) {
     status = 'awaiting_approval'; state = 'awaiting_owner_review';
     summary = `Step ${steps.indexOf(review) + 1} of ${steps.length} (${review.key}) waits for your review: ${review.summary}`;

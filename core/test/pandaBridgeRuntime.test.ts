@@ -10,6 +10,7 @@ import { planDevStories, DEV_ACTOR, permissionDecision } from '../runtime/kandev
 import { prepareTaskWorkspace, refreshBridgeTask, discoverExecutors, dispatchBridgeTask, cancelBridgeTask } from '../runtime/kandev/pandaBridge';
 import { listMessages } from '../domain/conversations';
 import { getAttempt } from '../domain/attempts';
+import { activityItem } from '../runtime/kandev/bridgeActivity';
 import type { RuntimeExecutor } from '../runtime/executor';
 import type { KandevClient, KandevPermission } from '../runtime/kandev/kandevClient';
 
@@ -221,5 +222,38 @@ describe('Deny cannot be circumvented by a repeat of the same permission', () =>
       const d = permissionDecision({ ...permission, action: { type: type as never, description: 'access the network' } }, worktree, spec);
       expect(d.allow, String(type)).toBe(false);
     }
+  });
+});
+
+describe('a mission whose worker waits on a permission', () => {
+  // Live b188g 2026-11-23: step 3 of a mission sat on five Read prompts for 10+ minutes while the mission read "running / Working.",
+  // needsOwner was false, and the desktop panel showed no Allow / Don't allow buttons (they render only for awaiting_approval).
+  it('needs the owner, says what the worker asks, and its buttons act on the asking step', async () => {
+    const { pairing } = redeemPairingCode(db, { code: createPairingCode(db).code, label: 'ChatGPT' });
+    const steps = [{ key: 'one', instruction: 'Add one.' }, { key: 'two', instruction: 'Add two.', dependsOn: ['one'] }];
+    const { task } = submitBridgeTask(db, pairing, { clientRequestId: 'req-mission-perm1', instruction: 'Extend Calc.', intent: 'code_change', steps });
+    const workspace = prepareTaskWorkspace(dir, task.id);
+    const codeCopy = { projectName: 'Calc', sourcePath: workspace, ref: 'main', sourceHead: 'h', sourceStatusSha: 's' };
+    const plan = planDevStories(db, { projectName: 'Panda mission p', repoPath: workspace, verify: ['git', 'status', '--porcelain'], integrationBranch: 'panda/mission-p',
+      stories: steps.map((s, i) => ({ key: s.key, title: `Calc ${i + 1}/2: ${s.instruction}`, agent: 'claude' as const, dependsOn: s.dependsOn, codeCopy: { ...codeCopy, step: i + 1 } })) });
+    for (const st of plan.stories) for (const to of ['assigned', 'planning', 'proposal_approval', 'implementing'] as const) transitionStory(db, st.id, { toStatus: to, actor: DEV_ACTOR, reason: 'test' });
+    attachBridgeExecution(db, task.id, { projectId: plan.projectId, storyId: plan.stories[0]!.id, workspacePath: workspace });
+    recordBridgeStatus(db, task.id, 'running', 'Working.');
+
+    const state: Parameters<typeof fakeKandev>[0] = { pending: [{ ...permission, action: { type: 'read', path: 'src/one.js' } } as KandevPermission] };
+    const waiting = await refreshBridgeTask({ db, kandev: fakeKandev(state), dataDir: dir }, task.id);
+    expect(waiting.status).toBe('awaiting_approval');
+    expect(waiting.result?.outcome?.summary).toMatch(/^Step 1 of 2 \(one\) is paused: the worker asks for your permission \(src\/one\.js\) and does nothing until you allow or refuse it/);
+    expect(waiting.result?.steps?.[1]).toMatchObject({ key: 'two', state: 'waiting', summary: 'Waits for one.' });
+    const item = activityItem(db, waiting, 'ChatGPT');
+    expect(item.pendingWorkerActions).toEqual([{ pendingId: 'p-1', what: 'src/one.js' }]);
+    expect(item.storyId).toBe(plan.stories[0]!.id);
+
+    // The buttons follow the step that asks, not the mission's first story.
+    const asking = { ...waiting, result: { ...waiting.result!, steps: waiting.result!.steps!.map((s, i) => ({ ...s, storyStatus: i === 0 ? 'done' : 'implementing', pendingApprovals: i === 0 ? [] : [{ pendingId: 'p-2', what: 'x' }] })) } };
+    expect(activityItem(db, asking, 'ChatGPT').storyId).toBe(plan.stories[1]!.id);
+
+    state.pending = [];
+    expect((await refreshBridgeTask({ db, kandev: fakeKandev(state), dataDir: dir }, task.id)).status).toBe('running');
   });
 });
