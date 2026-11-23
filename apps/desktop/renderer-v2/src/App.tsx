@@ -23,9 +23,10 @@ import { startWorkshopIntake } from './workshop/useWorkshop';
 import { JarvisHome } from './JarvisHome';
 import { MissionsHub, type MissionsTab } from './MissionsHub';
 import { useOperatorData } from './useOperatorData';
+import { Agents } from './Agents';
 import type { HomeTarget } from './jarvisModel';
 
-export type View = 'home' | 'missions' | 'chat' | 'bots' | 'automations' | 'board' | 'team' | 'space' | 'system' | 'software' | 'tools' | 'brain' | 'processes' | 'workspace' | 'radar' | 'revenue' | 'mailhub' | 'connections' | 'settings';
+export type View = 'home' | 'missions' | 'agents' | 'chat' | 'bots' | 'automations' | 'board' | 'team' | 'space' | 'system' | 'software' | 'tools' | 'brain' | 'processes' | 'workspace' | 'radar' | 'revenue' | 'mailhub' | 'connections' | 'settings';
 
 interface PaletteEntry { group: string; label: string; run: () => void }
 
@@ -99,6 +100,7 @@ export function App() {
   const rail: Array<{ id: string; label: string; text: string; icon: IconName; current: boolean; onClick: () => void }> = [
     { id: 'home', label: 'Home — results, work in flight, decisions, exceptions', text: 'Home', icon: 'home' as IconName, current: view === 'home', onClick: () => go('home') },
     { id: 'missions', label: needs ? `Missions — ${needs} need you` : 'Missions — flight, board and events', text: 'Missions', icon: 'board' as IconName, current: view === 'missions' || view === 'board', onClick: () => openMissions(missionsTab) },
+    { id: 'agents', label: 'Agents — specialists, coding engines and the review gate', text: 'Agents', icon: 'bots' as IconName, current: view === 'agents', onClick: () => go('agents') },
     { id: 'chat', label: 'Chat — talk to Pandesh', text: 'Chat', icon: 'chat', current: view === 'chat', onClick: () => go('chat') },
     { id: 'bots', label: 'My Bots — assistants with their own job and memory', text: 'My Bots', icon: 'bots', current: view === 'bots', onClick: () => go('bots') },
     { id: 'automations', label: 'Automations — recurring work, next run and last result', text: 'Automations', icon: 'clock', current: view === 'automations', onClick: () => go('automations') },
@@ -183,6 +185,7 @@ export function App() {
     { group: 'GO TO', label: 'Home', run: () => go('home') },
     { group: 'GO TO', label: 'Missions', run: () => openMissions('flight') },
     { group: 'GO TO', label: 'Missions: Events (execution log)', run: () => openMissions('events') },
+    { group: 'GO TO', label: 'Agents', run: () => go('agents') },
     { group: 'GO TO', label: 'Chat', run: () => go('chat') },
     { group: 'GO TO', label: 'My Bots', run: () => go('bots') },
     { group: 'GO TO', label: 'Automations', run: () => go('automations') },
@@ -232,6 +235,7 @@ export function App() {
         {view === 'home' && <JarvisHome snapshot={snapshot} tasks={overview.data?.tasks ?? []} queued={overview.data?.queued ?? []} data={operator} onOpen={openTarget} onAsk={(t) => { setDraft(t); go('chat'); }} />}
         {view === 'missions' && <MissionsHub tab={missionsTab} onTab={setMissionsTab} data={operator} overview={overview} narrow={narrow} focusId={missionFocus}
           onOpenPalette={() => openPop('palette')} onOpenConversation={(id) => { setOpenConversationId(id); go('chat'); }} />}
+        {view === 'agents' && <Agents data={operator} onOpenTeam={() => go('team')} onOpenTask={(id) => openMissions('flight', id)} />}
         {view === 'chat' && <Chat snapshot={snapshot} snapshotError={error} refresh={refresh} narrow={narrow} openConversationId={openConversationId} onOpenPalette={() => openPop('palette')} onOpenBoard={() => openMissions('board')} onOpenSettings={() => openSettings()} draft={draft} onDraftUsed={() => setDraft(null)}
           wake={wake} wakeTurn={wakeTurn} onWakeTurnTaken={() => setWakeTurn(null)} onVoiceBusy={setVoiceBusy} />}
         {view === 'bots' && <Bots onOpenConversation={(id) => { setOpenConversationId(id); go('chat'); }} onAskPandesh={(t) => { setDraft(t); go('chat'); }} />}
