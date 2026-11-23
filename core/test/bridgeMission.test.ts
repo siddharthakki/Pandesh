@@ -13,7 +13,7 @@ import { attachBridgeExecution, cleanMissionSteps, createPairingCode, getBridgeT
 import { registerProject } from '../domain/projectRegistry';
 import { addComment, getStory, listComments, transitionStory } from '../domain/stories';
 import { cancelBridgeTask, dispatchBridgeTask, missionStories, type BridgeRuntime } from '../runtime/kandev/pandaBridge';
-import { checkoutFingerprint, DEV_ACTOR, devSpec, GRANT_REVOKED_TAG, planDevStories, verifyAndIntegrate } from '../runtime/kandev/devStories';
+import { checkoutFingerprint, DEV_ACTOR, devSpec, GRANT_REVOKED_TAG, planDevStories, TESTS_TAG, verifyAndIntegrate } from '../runtime/kandev/devStories';
 import type { KandevClient } from '../runtime/kandev/kandevClient';
 
 const git = (cwd: string, ...a: string[]) => spawnSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@t', ...a], { cwd, encoding: 'utf8' });
@@ -129,6 +129,29 @@ describe('development grant at verification', () => {
       expect(getStory(db, storyId).status, name).toBe('delivery_approval');
       fs.rmSync(path.join(data, 'panda-workspaces'), { recursive: true, force: true }); fs.rmSync(wt, { recursive: true, force: true });
     }
+  });
+
+  it('a later step is measured against the mission branch it started from, not the project base', async () => {
+    // Live b188f 2026-11-23: step 2 (power) was compared with main and reported step 1's "multiplies" as its own new passing test.
+    const copy = path.join(data, 'panda-workspaces', 'copy');
+    fs.mkdirSync(path.dirname(copy), { recursive: true });
+    git(dir, 'clone', '-q', rw, copy); git(copy, 'remote', 'remove', 'origin'); git(copy, 'checkout', '-q', '-b', 'panda/mission-x', 'main');
+    fs.writeFileSync(path.join(copy, 'src', 'multiply.js'), 'export const multiply = (a, b) => a * b;\n');
+    fs.writeFileSync(path.join(copy, 'test', 'multiply.test.js'), "import { test } from 'node:test';\nimport assert from 'node:assert/strict';\nimport { multiply } from '../src/multiply.js';\ntest('multiplies', () => { assert.equal(multiply(2, 3), 6); });\n");
+    git(copy, 'add', '-A'); git(copy, 'commit', '-q', '-m', 'step 1'); git(copy, 'checkout', '-q', 'main');
+    const fp = checkoutFingerprint(rw)!;
+    const p = planDevStories(db, { projectName: 'Panda mission x', repoPath: copy, baseBranch: 'main', integrationBranch: 'panda/mission-x', verify: ['git', 'status', '--porcelain'],
+      stories: [{ key: 'power', title: 'Calc 2/2: power', agent: 'claude', maxFiles: 20, codeCopy: { projectName: 'Calc', sourcePath: rw, ref: 'main', sourceHead: fp.head, sourceStatusSha: fp.statusSha, testsRequested: true, grant: live, step: 2 } }] });
+    const storyId = p.stories[0]!.id;
+    for (const to of ['assigned', 'planning', 'proposal_approval', 'implementing'] as const) transitionStory(db, storyId, { toStatus: to, actor: DEV_ACTOR, reason: 't' });
+    const wt = path.join(dir, 'wt2'); git(copy, 'worktree', 'add', '-q', '-b', 'feature/p', wt, 'panda/mission-x');
+    fs.writeFileSync(path.join(wt, 'src', 'power.js'), "import { multiply } from './multiply.js';\nexport const power = (b, e) => { let r = 1; for (let i = 0; i < e; i++) r = multiply(r, b); return r; };\n");
+    fs.writeFileSync(path.join(wt, 'test', 'power.test.js'), "import { test } from 'node:test';\nimport assert from 'node:assert/strict';\nimport { power } from '../src/power.js';\ntest('raises', () => { assert.equal(power(2, 3), 8); });\n");
+    await verifyAndIntegrate(db, kandev, getStory(db, storyId), devSpec(getStory(db, storyId))!, 'kt', wt, 'ks');
+    expect(getStory(db, storyId).status).toBe('done');
+    const tests = listComments(db, storyId).map(c => c.body).filter(b => b.startsWith(TESTS_TAG)).join('\n');
+    expect(tests).toMatch(/raises/);
+    expect(tests).not.toMatch(/"newPassing":\[[^\]]*multiplies/);
   });
 
   it('a failing step is never committed under the grant: it goes back to the worker', async () => {
