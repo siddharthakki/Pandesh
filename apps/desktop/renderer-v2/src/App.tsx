@@ -24,9 +24,10 @@ import { JarvisHome } from './JarvisHome';
 import { MissionsHub, type MissionsTab } from './MissionsHub';
 import { useOperatorData } from './useOperatorData';
 import { Agents } from './Agents';
+import { TrustMap } from './TrustMap';
 import type { HomeTarget } from './jarvisModel';
 
-export type View = 'home' | 'missions' | 'agents' | 'chat' | 'bots' | 'automations' | 'board' | 'team' | 'space' | 'system' | 'software' | 'tools' | 'brain' | 'processes' | 'workspace' | 'radar' | 'revenue' | 'mailhub' | 'connections' | 'settings';
+export type View = 'home' | 'missions' | 'agents' | 'trust' | 'chat' | 'bots' | 'automations' | 'board' | 'team' | 'space' | 'system' | 'software' | 'tools' | 'brain' | 'processes' | 'workspace' | 'radar' | 'revenue' | 'mailhub' | 'connections' | 'settings';
 
 interface PaletteEntry { group: string; label: string; run: () => void }
 
@@ -112,17 +113,18 @@ export function App() {
 
   // Everything else stays one click away, out of the everyday sidebar.
   const spaces = [
-    { name: needs ? `Board · ${needs} need you` : 'Board', sub: 'Missions › Board: every task and its real status', run: () => openMissions('board') },
-    { name: 'Team', sub: 'Specialist agents', run: () => go('team') },
-    { name: 'Mail Hub', sub: 'Read-only Outlook mail: inbox, bills, recruiters, dates', run: () => go('mailhub') },
-    { name: 'Second Brain', sub: 'Search your memories, notes and documents', run: () => go('brain') },
-    { name: 'AI Radar', sub: 'New local-AI releases and advisories vs this PC', run: () => go('radar') },
-    { name: 'Media Studio', sub: 'Local image studio and media Pandesh made', run: () => openSpace('media') },
-    { name: 'Social Studio', sub: 'Drafts and your decisions (no publishing)', run: () => openSpace('social') },
-    { name: 'Wish to Reality', sub: 'Goals and offers (feature-frozen)', run: () => openSpace('wish') },
-    { name: 'Revenue', sub: 'Leads, offers, drafts awaiting you, verified results', run: () => go('revenue') },
-    { name: 'Processes', sub: 'Diagnostics: what Pandesh started, checked against Windows now', run: () => go('processes') },
-    { name: 'Software & Services', sub: 'Diagnostics: ports, installed tools, updates (read-only)', run: () => go('software') },
+    { name: needs ? `Board · ${needs} need you` : 'Board', sub: 'Missions › Board: every task and its real status', view: 'board', current: false, run: () => openMissions('board') },
+    { name: 'Trust Map', sub: 'What can act for you, and how far: read from the rules Core enforces', view: 'trust', current: view === 'trust', run: () => go('trust') },
+    { name: 'Team', sub: 'Specialist agents', view: 'team', current: view === 'team', run: () => go('team') },
+    { name: 'Mail Hub', sub: 'Read-only Outlook mail: inbox, bills, recruiters, dates', view: 'mailhub', current: view === 'mailhub', run: () => go('mailhub') },
+    { name: 'Second Brain', sub: 'Search your memories, notes and documents', view: 'brain', current: view === 'brain', run: () => go('brain') },
+    { name: 'AI Radar', sub: 'New local-AI releases and advisories vs this PC', view: 'radar', current: view === 'radar', run: () => go('radar') },
+    { name: 'Media Studio', sub: 'Local image studio and media Pandesh made', view: 'workspace', current: view === 'workspace' && space === 'media', run: () => openSpace('media') },
+    { name: 'Social Studio', sub: 'Drafts and your decisions (no publishing)', view: 'workspace', current: view === 'workspace' && space === 'social', run: () => openSpace('social') },
+    { name: 'Wish to Reality', sub: 'Goals and offers (feature-frozen)', view: 'workspace', current: view === 'workspace' && space === 'wish', run: () => openSpace('wish') },
+    { name: 'Revenue', sub: 'Leads, offers, drafts awaiting you, verified results', view: 'revenue', current: view === 'revenue', run: () => go('revenue') },
+    { name: 'Processes', sub: 'Diagnostics: what Pandesh started, checked against Windows now', view: 'processes', current: view === 'processes', run: () => go('processes') },
+    { name: 'Software & Services', sub: 'Diagnostics: ports, installed tools, updates (read-only)', view: 'software', current: view === 'software', run: () => go('software') },
   ];
   // On a narrow window the bottom bar holds three places; the rest of the seven lead the More list.
   const narrowExtra = rail.slice(3).map((r) => ({ name: r.text, sub: r.label.split(' — ')[1] ?? '', run: r.onClick }));
@@ -186,6 +188,7 @@ export function App() {
     { group: 'GO TO', label: 'Missions', run: () => openMissions('flight') },
     { group: 'GO TO', label: 'Missions: Events (execution log)', run: () => openMissions('events') },
     { group: 'GO TO', label: 'Agents', run: () => go('agents') },
+    { group: 'GO TO', label: 'Trust Map (what can act for you)', run: () => go('trust') },
     { group: 'GO TO', label: 'Chat', run: () => go('chat') },
     { group: 'GO TO', label: 'My Bots', run: () => go('bots') },
     { group: 'GO TO', label: 'Automations', run: () => go('automations') },
@@ -216,18 +219,27 @@ export function App() {
       {(labels || narrow) && <span className="label">{r.text}</span>}
     </button>
   ));
-  const moreCurrent = ['mailhub', 'team', 'brain', 'radar', 'revenue', 'processes', 'software'].includes(view) || (view === 'workspace' && space !== 'projects');
+  const moreCurrent = ['trust', 'mailhub', 'team', 'brain', 'radar', 'revenue', 'processes', 'software'].includes(view) || (view === 'workspace' && space !== 'projects');
 
   return (
     <div className={`app${narrow ? ' narrow' : ''}`}>
       {!narrow && (
         <nav className={`rail${labels ? ' labels' : ''}`} aria-label="Main">
           {navButtons}
+          {labels ? (
+            // With labels the sidebar has the room: every other place is listed directly, no More pop-up.
+            <div className="rail-group" role="group" aria-label="More places">
+              <span className="rail-group-title">More</span>
+              {spaces.filter((s) => s.view !== 'board').map((s) => (
+                <button key={s.name} type="button" className="rail-sub" title={s.sub} aria-current={s.current ? 'page' : undefined} onClick={s.run}>{s.name}</button>
+              ))}
+            </div>
+          ) : null}
           <div className="spacer" />
-          <button type="button" className="rail-btn rail-more" title={needs ? `More — ${needs} task${needs === 1 ? '' : 's'} need you on the Board` : 'More — Board, Team, Second Brain, studios, diagnostics'} aria-label={needs ? `More, ${needs} need you` : 'More'} aria-expanded={pop === 'spaces'} aria-current={moreCurrent ? 'page' : undefined} onClick={() => openPop('spaces')}>
+          {!labels && <button type="button" className="rail-btn rail-more" title={needs ? `More — ${needs} task${needs === 1 ? '' : 's'} need you on the Board` : 'More — Board, Team, Second Brain, studios, diagnostics'} aria-label={needs ? `More, ${needs} need you` : 'More'} aria-expanded={pop === 'spaces'} aria-current={moreCurrent ? 'page' : undefined} onClick={() => openPop('spaces')}>
             <Icon name="more" />{labels && <span className="label">More</span>}
             {needs ? <span className="badge" aria-hidden="true">{needs}</span> : null}
-          </button>
+          </button>}
         </nav>
       )}
 
@@ -235,6 +247,7 @@ export function App() {
         {view === 'home' && <JarvisHome snapshot={snapshot} tasks={overview.data?.tasks ?? []} queued={overview.data?.queued ?? []} data={operator} onOpen={openTarget} onAsk={(t) => { setDraft(t); go('chat'); }} />}
         {view === 'missions' && <MissionsHub tab={missionsTab} onTab={setMissionsTab} data={operator} overview={overview} narrow={narrow} focusId={missionFocus}
           onOpenPalette={() => openPop('palette')} onOpenConversation={(id) => { setOpenConversationId(id); go('chat'); }} />}
+        {view === 'trust' && <TrustMap snapshot={snapshot} onOpen={(v) => { if (v === 'permissions' || v === 'models') openSettings(v); else go(v as View); }} />}
         {view === 'agents' && <Agents data={operator} onOpenTeam={() => go('team')} onOpenTask={(id) => openMissions('flight', id)} />}
         {view === 'chat' && <Chat snapshot={snapshot} snapshotError={error} refresh={refresh} narrow={narrow} openConversationId={openConversationId} onOpenPalette={() => openPop('palette')} onOpenBoard={() => openMissions('board')} onOpenSettings={() => openSettings()} draft={draft} onDraftUsed={() => setDraft(null)}
           wake={wake} wakeTurn={wakeTurn} onWakeTurnTaken={() => setWakeTurn(null)} onVoiceBusy={setVoiceBusy} />}

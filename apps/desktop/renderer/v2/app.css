@@ -988,3 +988,61 @@ button.tl-row:hover { background: var(--raised); }
 .jv-gate-ring { align-self: center; }
 @media (max-width: 1100px) { .jv-agents-grid { grid-template-columns: 1fr; grid-template-areas: "orch" "gate" "engines" "detail"; } .jv-orchestra { height: auto; } }
 @media (max-width: 720px) { .jv-orchestra { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 4px; padding: 8px; } .jv-node { min-width: 0; padding: 4px; } .jv-node-orb { width: 34px; height: 34px; font-size: 10.5px; } .jv-node-name { font-size: 11.5px; white-space: normal; text-align: center; } .jv-chief-orb { width: 48px; height: 48px; } }
+
+/* Trust Map: static rings (no animation; it changes only when a permission record does). */
+.jv-trust { display: flex; flex-direction: column; gap: 14px; padding: 18px 28px 28px; min-height: 0; overflow: auto; flex: 1 1 auto; }
+.jv-trust > * { flex-shrink: 0; }
+.jv-trust-grid { display: grid; grid-template-columns: minmax(0, 1.5fr) minmax(300px, 1fr); gap: 16px; align-items: start; }
+.jv-trust-map { position: relative; aspect-ratio: 1 / 1; max-height: 74vh; width: 100%; margin: 0 auto; border: 1px solid var(--line); border-radius: 16px; background: radial-gradient(circle at 50% 50%, rgba(127,230,255,.07), transparent 62%); }
+.jv-trust-rings { position: absolute; inset: 0; width: 100%; height: 100%; }
+.jv-ring { fill: none; stroke-width: .25; }
+.jv-ring.free { stroke: rgba(127,230,255,.45); fill: rgba(127,230,255,.04); }
+.jv-ring.asks { stroke: rgba(255,181,71,.35); stroke-dasharray: 1 1.2; }
+.jv-ring.never { stroke: rgba(160,170,180,.25); }
+.jv-tie { stroke-width: .2; stroke: rgba(160,170,180,.25); }
+.jv-tie.free { stroke: rgba(127,230,255,.55); } .jv-tie.asks { stroke: rgba(255,181,71,.45); }
+.jv-tie.unknown { stroke-dasharray: .6 .8; } .jv-tie.on { stroke-width: .45; }
+.jv-ring-label { position: absolute; left: 50%; transform: translateX(-50%); font: 10.5px/1 var(--font-mono); letter-spacing: .12em; text-transform: uppercase; color: var(--faint); pointer-events: none; }
+.jv-ring-label.free { top: 31%; color: var(--pulse); } .jv-ring-label.asks { top: 18%; color: var(--attention); } .jv-ring-label.never { top: 5.5%; }
+.jv-you { position: absolute; left: 50%; top: 50%; width: 9%; aspect-ratio: 1; transform: translate(-50%, -50%); border-radius: 50%; display: grid; place-items: center; background: radial-gradient(circle, rgba(127,230,255,.35), rgba(127,230,255,.05) 70%); border: 1px solid rgba(127,230,255,.6); box-shadow: 0 0 24px rgba(127,230,255,.25); font-size: 13px; font-weight: 600; }
+.jv-trust-node { position: absolute; transform: translate(-50%, -50%); display: flex; flex-direction: column; align-items: center; gap: 1px; padding: 6px 10px; max-width: 150px; border-radius: 10px; border: 1px solid var(--line); background: var(--surface); color: var(--ink); font-size: 12.5px; text-align: center; cursor: pointer; }
+.jv-trust-node strong { font-weight: 600; white-space: nowrap; }
+.jv-trust-node.free { border-color: rgba(127,230,255,.6); } .jv-trust-node.asks { border-color: rgba(255,181,71,.55); }
+.jv-trust-node.never { color: var(--muted); } .jv-trust-node.unknown { border-style: dashed; }
+.jv-trust-node.on, .jv-trust-node:hover { background: var(--raised); box-shadow: 0 0 0 2px rgba(127,230,255,.35); }
+.jv-trust-node .jv-src { font-size: 10px; }
+.jv-trust-detail { position: sticky; top: 0; display: flex; flex-direction: column; gap: 8px; padding: 16px; border: 1px solid var(--line); border-radius: 14px; background: var(--surface); }
+.jv-trust-detail h2 { margin: 0; font-size: 18px; }
+.jv-trust-detail .jv-src.free { color: var(--pulse); } .jv-trust-detail .jv-src.asks { color: var(--attention); }
+.jv-trust-detail .btn { align-self: flex-start; }
+.jv-trust-facts { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; font-size: 13.5px; }
+.jv-trust-facts li { display: grid; grid-template-columns: 128px 1fr; gap: 8px; padding: 7px 10px; border-radius: 8px; background: var(--raised); overflow-wrap: anywhere; }
+.jv-lvl { font: 10.5px/1.6 var(--font-mono); text-transform: uppercase; letter-spacing: .06em; color: var(--faint); }
+.jv-trust-facts li.free .jv-lvl { color: var(--pulse); } .jv-trust-facts li.asks .jv-lvl { color: var(--attention); }
+.jv-trust-ledger { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; align-items: start; }
+.jv-ledger-col { display: flex; flex-direction: column; gap: 6px; padding: 12px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); }
+.jv-ledger-col.free { border-top: 2px solid var(--pulse); } .jv-ledger-col.asks { border-top: 2px solid var(--attention); } .jv-ledger-col.never { border-top: 2px solid var(--faint); }
+.jv-ledger-row { display: flex; flex-direction: column; gap: 2px; padding: 6px 8px; border: 0; border-radius: 8px; background: transparent; color: var(--ink); text-align: left; font-size: 13px; cursor: pointer; overflow-wrap: anywhere; }
+.jv-ledger-row:hover { background: var(--raised); }
+@media (max-width: 1100px) { .jv-trust-grid { grid-template-columns: 1fr; } .jv-trust-detail { position: static; } }
+@media (max-width: 720px) {
+  .jv-trust { padding: 12px 14px 20px; }
+  .jv-trust-ledger { grid-template-columns: 1fr; }
+  .jv-trust-node { max-width: 96px; padding: 4px 6px; font-size: 11px; }
+  .jv-trust-node .jv-src { display: none; }
+  .jv-ring-label { font-size: 8.5px; }
+  .jv-trust-facts li { grid-template-columns: 1fr; gap: 2px; }
+}
+
+/* Sidebar with labels: the former More places listed directly, smaller, under a quiet heading. */
+.rail-group { display: flex; flex-direction: column; gap: 1px; margin-top: 14px; padding-top: 10px; border-top: 1px solid var(--line); min-height: 0; overflow-y: auto; }
+.rail-group-title { padding: 0 10px 4px; font: 10.5px/1.4 var(--font-mono); letter-spacing: .12em; text-transform: uppercase; color: var(--faint); }
+.rail-sub { height: 28px; flex-shrink: 0; display: flex; align-items: center; padding: 0 10px 0 36px; border: 0; border-radius: 8px; background: transparent; color: var(--muted); font-size: 13px; text-align: left; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.rail-sub:hover { background: var(--raised); color: var(--ink); }
+.rail-sub[aria-current="page"] { background: var(--raised); color: var(--ink); }
+
+/* Trust Map: details and the by-level lists share the right column, so the width beside the map is used. */
+.jv-trust-side { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+.jv-trust-side .jv-trust-detail { position: static; }
+.jv-trust-side .jv-trust-ledger { grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); }
+@media (max-width: 720px) { .jv-trust-side .jv-trust-ledger { grid-template-columns: 1fr; } }
