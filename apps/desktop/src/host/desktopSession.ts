@@ -3045,6 +3045,8 @@ export class DesktopSession {
       // Trust Map (read-only): the owner's authorized-project registry and the paired clients that may send tasks.
       bridgeProjects: { path: '/v1/bridge/projects' },
       bridgePairings: { path: '/v1/bridge/pairings' },
+      // Every card waiting for the owner, whichever chat it belongs to (read-only; deciding stays resolveAssistantApproval).
+      pendingApprovals: { path: '/v1/approvals/pending' },
       // External-agent approval: the card in the Missions dock. Only these three fixed routes; the window names a task and a decision, never a path.
       bridgeApprovals: { path: '/v1/bridge/approvals' },
       bridgeApprove: { path: `/v1/bridge/tasks/${id}/approval`, method: 'POST', body: { requestId: String(args.requestId ?? ''), decision: args.decision === 'approve' ? 'approve' : 'refuse', confidentialOverride: args.confidentialOverride === true } },

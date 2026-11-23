@@ -136,32 +136,53 @@ export function codeJourney(b: BridgeActivityItem, approval: BridgeApproval | nu
   };
 }
 
-/** A wish sent from the Wish screen that has no mission or worker task (yet): its stage comes from its chat turn. */
-export function chatJourney(w: TrackedWish, tasks: TaskRow[], pending: { conversationId: string | null; approvalId: string; detail: string } | null): Journey {
+/** A card waiting in Core (GET /v1/approvals/pending), placed in its chat through the attempt that raised it. */
+export interface PendingCard { approvalId: string; attemptId: string; conversationId: string | null; toolName: string; text: string; requestedAt: string }
+
+/** Core's pending approvals with their conversation (from the task list) and the card's own text. */
+export function cardsFrom(approvals: Array<{ id: string; attemptId: string; status: string; requestedAt: string; presentation?: Record<string, unknown> | null; summary?: Record<string, unknown> | null }>, tasks: TaskRow[]): PendingCard[] {
+  const convOf = new Map(tasks.map((t) => [t.attemptId, t.conversationId]));
+  return approvals.filter((a) => a.status === 'pending').map((a) => {
+    const p = (a.presentation ?? a.summary ?? {}) as Record<string, unknown>;
+    const tool = String(p.toolName ?? '');
+    return { approvalId: a.id, attemptId: a.attemptId, conversationId: convOf.get(a.attemptId) ?? null, toolName: tool, text: typeof p.cardText === 'string' ? p.cardText : `${tool.replace(/_/g, ' ') || 'An action'} waits for your decision`, requestedAt: a.requestedAt };
+  });
+}
+
+/**
+ * A wish sent from the Wish screen that has no mission or worker task (yet): its stage comes from its chat turn.
+ * A card Core holds for that turn is decided right here (Allow once / Don't allow, by approval id, through the same
+ * Core approval path the chat uses): the chat only shows the card of the turn the window is running, so a card in
+ * another chat could not be reached there and expired unanswered (live run 2026-11-23).
+ */
+export function chatJourney(w: TrackedWish, tasks: TaskRow[], pending: { conversationId: string | null; approvalId: string; detail: string } | null, cards: PendingCard[] = []): Journey {
   // Newest turn first: a retry on a stronger model (Core's escalation) is a new turn in the same chat and decides the stage.
   const mine = tasks.filter((t) => t.conversationId === w.conversationId).sort((a, b) => b.createdAt.localeCompare(a.createdAt));
   const t = mine[0] ?? null;
-  const asking = pending && pending.conversationId === w.conversationId ? pending : null;
+  const card = cards.find((c) => c.conversationId === w.conversationId) ?? (pending && pending.conversationId === w.conversationId ? { approvalId: pending.approvalId, attemptId: t?.attemptId ?? '', conversationId: w.conversationId, toolName: '', text: pending.detail, requestedAt: '' } : null);
   const working = t && ['created', 'queued', 'running', 'validating'].includes(t.status);
-  const answered = t?.status === 'completed';
-  const failed = t && ['failed', 'cancelled'].includes(t.status);
+  // A turn can end (status completed) with Core's verdict that the request was NOT done (resultStatus failed/blocked).
+  const notDone = t?.status === 'completed' && ['failed', 'blocked'].includes(t.resultStatus ?? '');
+  const answered = t?.status === 'completed' && !notDone;
+  const failed = Boolean(t && (['failed', 'cancelled'].includes(t.status) || notDone));
+  const waitingCard = Boolean(card) || t?.status === 'waiting_for_approval';
+  const isMission = card?.toolName === 'mission_start' || Boolean(t?.activity?.includes('mission_start'));
   const stages = make({
     wish: ['done', w.text],
-    understand: !t ? ['now', 'Sent; waiting for Pandesh to pick it up'] : working && !asking ? ['now', t.activity || 'Pandesh is working out what you need'] : ['done', 'Pandesh read it'],
-    plan: answered ? ['skip', 'Answered directly; no mission was needed'] : asking ? ['done', 'Proposed in the chat'] : ['todo', ''],
-    permissions: asking || t?.status === 'waiting_for_approval' ? ['now', asking?.detail || 'A card in the chat waits for your decision'] : answered ? ['skip', 'Nothing needed your approval'] : ['todo', ''],
-    execute: answered ? ['done', 'Answered in the chat'] : failed ? ['fail', t?.failureReason ?? 'Stopped'] : ['todo', ''],
+    understand: !t ? ['now', 'Sent; waiting for Pandesh to pick it up'] : working && !waitingCard ? ['now', t.activity || 'Pandesh is working out what you need'] : ['done', 'Pandesh read it'],
+    plan: answered ? ['skip', 'Answered directly; no mission was needed'] : waitingCard ? ['done', isMission ? 'Proposed as a mission' : 'Proposed a step'] : ['todo', ''],
+    permissions: waitingCard ? ['now', card?.text || 'A card waits for your decision'] : answered ? ['skip', 'Nothing needed your approval'] : ['todo', ''],
+    execute: answered ? ['done', 'Answered in the chat'] : failed ? ['fail', t?.failureReason ?? (notDone ? 'Core\'s verdict: not done. Nothing was built; its chat says why' : 'Stopped')] : ['todo', ''],
     verify: answered ? ['skip', 'A chat answer is not independently checked; ask for a mission with a review if it matters'] : ['todo', ''],
     deliver: answered ? ['done', 'The answer is in the chat'] : ['todo', ''],
   });
-  // The task record says a card waits even when that chat is not the one open (the snapshot only carries the open chat's card).
-  const waitingCard = Boolean(asking) || t?.status === 'waiting_for_approval';
   const actions: JourneyAction[] = [];
-  if (waitingCard) actions.push({ kind: 'review_chat', conversationId: w.conversationId, text: 'Review the card in its chat' });
+  if (card) actions.push({ kind: 'allow', approvalId: card.approvalId, text: card.text });
+  else if (waitingCard) actions.push({ kind: 'review_chat', conversationId: w.conversationId, text: 'Review the card in its chat' });
   actions.push({ kind: 'open_chat', conversationId: w.conversationId });
   return {
     id: `c:${w.conversationId}`, kind: 'chat', title: w.text, source: 'Chat', conversationId: w.conversationId, stages, now: current(stages),
-    headline: waitingCard ? `Pandesh proposed ${t?.activity?.includes('mission_start') ? 'a mission' : 'a step'}; it waits for your decision in the chat.` : answered ? 'Answered in the chat.' : failed ? 'Stopped before an answer.' : 'Pandesh is on it.',
+    headline: waitingCard ? `Pandesh proposes ${isMission ? 'a mission' : 'a step'}. Read it and decide here.` : answered ? 'Answered in the chat.' : notDone ? 'Not done: Core recorded that nothing was built. Its chat says why and what you can do.' : failed ? 'Stopped before an answer.' : 'Pandesh is on it.',
     needsYou: waitingCard, live: Boolean(working), finished: Boolean(answered || failed), failed: Boolean(failed), actions, at: t?.lastEventAt ?? t?.createdAt ?? w.at,
   };
 }
@@ -170,7 +191,7 @@ export function chatJourney(w: TrackedWish, tasks: TaskRow[], pending: { convers
  * All journeys, newest first. A tracked wish shows as its mission or worker task once one exists for its conversation
  * (keeping the owner's words as the title); otherwise as its chat turn. Service tasks are not wishes.
  */
-export function buildJourneys(i: { tracked: TrackedWish[]; missions: MissionView[]; bridge: BridgeActivityItem[]; approvals: BridgeApproval[]; tasks: TaskRow[]; pending: { conversationId: string | null; approvalId: string; detail: string } | null; receipts: Record<string, ReceiptLite> }): Journey[] {
+export function buildJourneys(i: { tracked: TrackedWish[]; missions: MissionView[]; bridge: BridgeActivityItem[]; approvals: BridgeApproval[]; tasks: TaskRow[]; pending: { conversationId: string | null; approvalId: string; detail: string } | null; receipts: Record<string, ReceiptLite>; cards?: PendingCard[] }): Journey[] {
   const wordsFor = new Map(i.tracked.map((w) => [w.conversationId, w.text]));
   const covered = new Set<string>();
   const out: Journey[] = [];
@@ -180,6 +201,6 @@ export function buildJourneys(i: { tracked: TrackedWish[]; missions: MissionView
     if (b.conversationId && wordsFor.has(b.conversationId)) j.title = wordsFor.get(b.conversationId)!;
     out.push(j); if (b.conversationId) covered.add(b.conversationId);
   }
-  for (const w of i.tracked) if (!covered.has(w.conversationId)) out.push(chatJourney(w, i.tasks, i.pending));
+  for (const w of i.tracked) if (!covered.has(w.conversationId)) out.push(chatJourney(w, i.tasks, i.pending, i.cards ?? []));
   return out.sort((a, b) => Number(b.needsYou) - Number(a.needsYou) || Number(b.live) - Number(a.live) || b.at.localeCompare(a.at));
 }

@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { api, errorText, onDesktopEvent, type Snapshot, type TaskRow } from './bridge';
-import { buildJourneys, JOURNEY, type Journey, type JourneyAction, type ReceiptLite, type TrackedWish } from './journeyModel';
+import { buildJourneys, cardsFrom, JOURNEY, type Journey, type JourneyAction, type ReceiptLite, type TrackedWish } from './journeyModel';
 import { buildWish, money, type WishDetailRec, type WishView } from './wishModel';
 import type { OperatorData } from './useOperatorData';
 import { readTracked, sendWish } from './wishSend';
@@ -51,8 +51,19 @@ export function Wishes({ snapshot, tasks, data, focus, onOpenConversation, onOpe
       .then((rs) => setReceipts((r) => ({ ...r, ...Object.fromEntries(rs.filter(Boolean) as Array<readonly [string, ReceiptLite]>) })));
   }, [data.missions]);
 
+  // Every card Core holds, whichever chat it is in, so a wish's card is decided here (not only the open chat's card).
+  const [rawCards, setRawCards] = useState<Parameters<typeof cardsFrom>[0]>([]);
+  useEffect(() => {
+    let stop = false;
+    const tick = async () => { try { const r = (await api.household('pendingApprovals')) as { approvals?: Parameters<typeof cardsFrom>[0] }; if (!stop) setRawCards(r.approvals ?? []); } catch { /* an older host: cards stay reachable in chat */ } };
+    void tick();
+    const t = setInterval(() => void tick(), 4000);
+    const off = onDesktopEvent(() => void tick());
+    return () => { stop = true; clearInterval(t); off(); };
+  }, []);
+  const cards = useMemo(() => cardsFrom(rawCards, tasks), [rawCards, tasks]);
   const pending = snapshot?.pendingApproval ? { conversationId: snapshot.selectedConversationId, approvalId: snapshot.pendingApproval.approvalId, detail: snapshot.pendingApproval.detail } : null;
-  const journeys = useMemo(() => buildJourneys({ tracked, missions: data.missions, bridge: data.bridge, approvals: data.approvals, tasks, pending, receipts }), [tracked, data.missions, data.bridge, data.approvals, tasks, pending?.approvalId, pending?.conversationId, receipts]);
+  const journeys = useMemo(() => buildJourneys({ tracked, missions: data.missions, bridge: data.bridge, approvals: data.approvals, tasks, pending, receipts, cards }), [tracked, data.missions, data.bridge, data.approvals, tasks, pending?.approvalId, pending?.conversationId, receipts, cards]);
   const goalViews = useMemo(() => goals.map(buildWish), [goals]);
   const curJ = journeys.find((j) => j.id === sel) ?? (sel?.startsWith('g:') ? null : journeys[0]) ?? null;
   const curG = sel?.startsWith('g:') ? goalViews.find((g) => `g:${g.id}` === sel) ?? null : !curJ ? goalViews[0] ?? null : null;
@@ -75,7 +86,13 @@ export function Wishes({ snapshot, tasks, data, focus, onOpenConversation, onOpe
   const act = async (j: Journey, a: JourneyAction) => {
     setNote(null);
     try {
-      if (a.kind === 'allow') { setBusy(a.approvalId); await api.resolveAssistantApproval(a.approvalId, 'approved'); setNote({ text: 'Allowed once. Core continues the step.' }); }
+      if (a.kind === 'allow') {
+        setBusy(a.approvalId);
+        // Say only what Core recorded: the resolution comes back from Core, not from the click.
+        const r = await api.resolveAssistantApproval(a.approvalId, 'approved');
+        setNote(r.status === 'approved' ? { text: 'Allowed once. Core recorded your approval and continues.' } : { text: `Core did not record an approval (status: ${r.status}). Nothing was started.`, error: true });
+        setRawCards((cs) => cs.filter((c) => c.id !== a.approvalId));
+      }
       else if (a.kind === 'review_chat' || a.kind === 'open_chat') onOpenConversation(a.conversationId);
       else if (a.kind === 'open_mission') onOpenMissions(a.missionId);
       else if (a.kind === 'review_task' || a.kind === 'open_task') onOpenMissions(a.taskId);
@@ -90,7 +107,7 @@ export function Wishes({ snapshot, tasks, data, focus, onOpenConversation, onOpe
     void j;
   };
   const deny = async (approvalId: string) => {
-    try { setBusy(approvalId); await api.resolveAssistantApproval(approvalId, 'rejected'); setNote({ text: 'Not allowed. Nothing was done for that step.' }); data.refresh(); }
+    try { setBusy(approvalId); const r = await api.resolveAssistantApproval(approvalId, 'rejected'); setNote(r.status === 'rejected' ? { text: 'Not allowed. Core recorded it; nothing was done for that step.' } : { text: `Core reports status ${r.status}.`, error: true }); setRawCards((cs) => cs.filter((c) => c.id !== approvalId)); data.refresh(); }
     catch (err) { setNote({ text: errorText(err), error: true }); } finally { setBusy(null); }
   };
 

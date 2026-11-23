@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildJourneys, chatJourney, codeJourney, missionJourney } from '../renderer-v2/src/journeyModel';
+import { buildJourneys, cardsFrom, chatJourney, codeJourney, missionJourney } from '../renderer-v2/src/journeyModel';
 import type { MissionView } from '../renderer-v2/src/missionModel';
 import type { BridgeActivityItem } from '../renderer-v2/src/Missions';
 import type { TaskRow } from '../renderer-v2/src/bridge';
@@ -64,8 +64,18 @@ describe('Wish journeys', () => {
     // Regression (live 2026-11-23): a card in a chat that is not open was shown as "Pandesh is on it" with no way to review it.
     const notOpen = chatJourney(w, [{ ...task('waiting_for_approval'), activity: 'Running mission_start', createdAt: '2026-11-23T10:05:00Z' }, task('completed')], null);
     expect(notOpen).toMatchObject({ now: 'permissions', needsYou: true });
-    expect(notOpen.headline).toMatch(/proposed a mission; it waits for your decision/);
+    expect(notOpen.headline).toMatch(/proposes a mission\. Read it and decide here/);
     expect(notOpen.actions[0]).toMatchObject({ kind: 'review_chat' });
+    // Regression (live 2026-11-23): a card in a chat that was not open could not be approved there and expired. It is decided on the wish itself.
+    const cards = cardsFrom([{ id: 'appr_9', attemptId: 'a', status: 'pending', requestedAt: '2026-11-23T10:02:19Z', presentation: { toolName: 'mission_start', cardText: 'Pandesh wants to start a background mission: "X".' } }], [task('waiting_for_approval')]);
+    expect(cards[0]).toMatchObject({ conversationId: 'conv_1', toolName: 'mission_start' });
+    const decideHere = chatJourney(w, [task('waiting_for_approval')], null, cards);
+    expect(decideHere.actions[0]).toEqual({ kind: 'allow', approvalId: 'appr_9', text: 'Pandesh wants to start a background mission: "X".' });
+    expect(decideHere.stages[3].detail).toContain('background mission');
+    // Regression (live 2026-11-23): the turn ended with Core's "This request is not done" (resultStatus failed); it is not an answer.
+    const notDone = chatJourney(w, [{ ...task('completed'), resultStatus: 'failed' }], null);
+    expect(notDone).toMatchObject({ failed: true, now: 'execute' });
+    expect(notDone.stages[6].state).toBe('todo');
     const answered = chatJourney(w, [task('completed')], null);
     expect(answered.stages[5]).toMatchObject({ state: 'skip' });
     const all = buildJourneys({ tracked: [w], missions: [mission({})], bridge: [], approvals: [], tasks: [task('completed')], pending: null, receipts: {} });
