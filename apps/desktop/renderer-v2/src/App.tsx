@@ -25,9 +25,11 @@ import { MissionsHub, type MissionsTab } from './MissionsHub';
 import { useOperatorData } from './useOperatorData';
 import { Agents } from './Agents';
 import { TrustMap } from './TrustMap';
+import { Wishes } from './Wishes';
+import { sendWish } from './wishSend';
 import type { HomeTarget } from './jarvisModel';
 
-export type View = 'home' | 'missions' | 'agents' | 'trust' | 'chat' | 'bots' | 'automations' | 'board' | 'team' | 'space' | 'system' | 'software' | 'tools' | 'brain' | 'processes' | 'workspace' | 'radar' | 'revenue' | 'mailhub' | 'connections' | 'settings';
+export type View = 'home' | 'missions' | 'agents' | 'trust' | 'wishes' | 'chat' | 'bots' | 'automations' | 'board' | 'team' | 'space' | 'system' | 'software' | 'tools' | 'brain' | 'processes' | 'workspace' | 'radar' | 'revenue' | 'mailhub' | 'connections' | 'settings';
 
 interface PaletteEntry { group: string; label: string; run: () => void }
 
@@ -39,6 +41,9 @@ export function App() {
   const operator = useOperatorData();
   const [missionsTab, setMissionsTab] = useState<MissionsTab>('flight');
   const [missionFocus, setMissionFocus] = useState<string | null>(null);
+  const [wishFocus, setWishFocus] = useState<{ id: string; n: number } | null>(null);
+  // Home's intent line: send the wish for real in a new conversation and follow it in Wish to Reality.
+  const makeReal = async (text: string) => { const w = await sendWish(text); setWishFocus({ id: `c:${w.conversationId}`, n: Date.now() }); go('wishes'); };
   const [placeholder, setPlaceholder] = useState<{ title: string; text: string } | null>(null);
   const [pop, setPop] = useState<null | 'spaces' | 'system' | 'palette'>(null);
   const [labels, setLabels] = useState<boolean>(() => { try { return localStorage.getItem('pandesh.v2.labels') !== '0'; } catch { return true; } });
@@ -121,10 +126,10 @@ export function App() {
     { name: 'AI Radar', sub: 'New local-AI releases and advisories vs this PC', view: 'radar', current: view === 'radar', run: () => go('radar') },
     { name: 'Media Studio', sub: 'Local image studio and media Pandesh made', view: 'workspace', current: view === 'workspace' && space === 'media', run: () => openSpace('media') },
     { name: 'Social Studio', sub: 'Drafts and your decisions (no publishing)', view: 'workspace', current: view === 'workspace' && space === 'social', run: () => openSpace('social') },
-    { name: 'Wish to Reality', sub: 'Goals and offers (feature-frozen)', view: 'workspace', current: view === 'workspace' && space === 'wish', run: () => openSpace('wish') },
+    { name: 'Wish to Reality', sub: 'What Pandesh can accomplish for you: each wish from plan to delivery', view: 'wishes', current: view === 'wishes', run: () => go('wishes') },
     { name: 'Revenue', sub: 'Leads, offers, drafts awaiting you, verified results', view: 'revenue', current: view === 'revenue', run: () => go('revenue') },
-    { name: 'Processes', sub: 'Diagnostics: what Pandesh started, checked against Windows now', view: 'processes', current: view === 'processes', run: () => go('processes') },
-    { name: 'Software & Services', sub: 'Diagnostics: ports, installed tools, updates (read-only)', view: 'software', current: view === 'software', run: () => go('software') },
+    // One entry for the technical inventories (ports, services, installed tools, updates, processes): read on demand.
+    { name: 'Diagnostics', sub: 'On demand: ports and services in use, installed tools, updates, processes Pandesh started', view: 'software', current: view === 'software' || view === 'processes', run: () => go('software') },
   ];
   // On a narrow window the bottom bar holds three places; the rest of the seven lead the More list.
   const narrowExtra = rail.slice(3).map((r) => ({ name: r.text, sub: r.label.split(' — ')[1] ?? '', run: r.onClick }));
@@ -189,6 +194,7 @@ export function App() {
     { group: 'GO TO', label: 'Missions: Events (execution log)', run: () => openMissions('events') },
     { group: 'GO TO', label: 'Agents', run: () => go('agents') },
     { group: 'GO TO', label: 'Trust Map (what can act for you)', run: () => go('trust') },
+    { group: 'GO TO', label: 'Wish to Reality', run: () => go('wishes') },
     { group: 'GO TO', label: 'Chat', run: () => go('chat') },
     { group: 'GO TO', label: 'My Bots', run: () => go('bots') },
     { group: 'GO TO', label: 'Automations', run: () => go('automations') },
@@ -219,7 +225,7 @@ export function App() {
       {(labels || narrow) && <span className="label">{r.text}</span>}
     </button>
   ));
-  const moreCurrent = ['trust', 'mailhub', 'team', 'brain', 'radar', 'revenue', 'processes', 'software'].includes(view) || (view === 'workspace' && space !== 'projects');
+  const moreCurrent = ['trust', 'wishes','mailhub', 'team', 'brain', 'radar', 'revenue', 'processes', 'software'].includes(view) || (view === 'workspace' && space !== 'projects');
 
   return (
     <div className={`app${narrow ? ' narrow' : ''}`}>
@@ -244,17 +250,19 @@ export function App() {
       )}
 
       <div className="main" data-view={view}>
-        {view === 'home' && <JarvisHome snapshot={snapshot} tasks={overview.data?.tasks ?? []} queued={overview.data?.queued ?? []} data={operator} onOpen={openTarget} onAsk={(t) => { setDraft(t); go('chat'); }} />}
+        {view === 'home' && <JarvisHome snapshot={snapshot} tasks={overview.data?.tasks ?? []} queued={overview.data?.queued ?? []} data={operator} onOpen={openTarget} onAsk={makeReal} />}
         {view === 'missions' && <MissionsHub tab={missionsTab} onTab={setMissionsTab} data={operator} overview={overview} narrow={narrow} focusId={missionFocus}
           onOpenPalette={() => openPop('palette')} onOpenConversation={(id) => { setOpenConversationId(id); go('chat'); }} />}
         {view === 'trust' && <TrustMap snapshot={snapshot} onOpen={(v) => { if (v === 'permissions' || v === 'models') openSettings(v); else go(v as View); }} />}
+        {view === 'wishes' && <Wishes snapshot={snapshot} tasks={overview.data?.tasks ?? []} data={operator} focus={wishFocus}
+          onOpenConversation={(id) => { void api.openConversation(id, true).catch(() => undefined); setOpenConversationId(id); go('chat'); }} onOpenMissions={(id) => openMissions('flight', id)} />}
         {view === 'agents' && <Agents data={operator} onOpenTeam={() => go('team')} onOpenTask={(id) => openMissions('flight', id)} />}
         {view === 'chat' && <Chat snapshot={snapshot} snapshotError={error} refresh={refresh} narrow={narrow} openConversationId={openConversationId} onOpenPalette={() => openPop('palette')} onOpenBoard={() => openMissions('board')} onOpenSettings={() => openSettings()} draft={draft} onDraftUsed={() => setDraft(null)}
           wake={wake} wakeTurn={wakeTurn} onWakeTurnTaken={() => setWakeTurn(null)} onVoiceBusy={setVoiceBusy} />}
         {view === 'bots' && <Bots onOpenConversation={(id) => { setOpenConversationId(id); go('chat'); }} onAskPandesh={(t) => { setDraft(t); go('chat'); }} />}
         {view === 'automations' && <Automations onOpenConversation={(id) => { setOpenConversationId(id); go('chat'); }} onOpenBot={() => go('bots')} />}
         {view === 'board' && <Board overview={overview} narrow={narrow} onOpenPalette={() => openPop('palette')} onOpenConversation={(id) => { setOpenConversationId(id); go('chat'); }} />}
-        {view === 'software' && <Software narrow={narrow} />}
+        {view === 'software' && <Software narrow={narrow} onOpenProcesses={() => go('processes')} />}
         {view === 'radar' && <Radar onOpenChat={() => { setOpenConversationId(null); refresh(); go('chat'); }} />}
         {view === 'revenue' && <Revenue />}
         {view === 'mailhub' && <MailHub narrow={narrow} initial={mailScreen} onAskPandesh={(t) => { setDraft(t); go('chat'); }} onOpenBots={() => go('bots')} onOpenAutomations={() => go('automations')} />}

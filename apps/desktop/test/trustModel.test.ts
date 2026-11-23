@@ -57,3 +57,18 @@ describe('Trust Map model', () => {
     expect(r.facts[0].text).toContain('up to 8 files');
   });
 });
+
+describe('Trust Map review fixes (2026-11-23)', () => {
+  it('chat keeps reads and changes apart instead of implying everything asks', () => {
+    const a = area(base, 'chat');
+    expect(a.status).toBe('Reads freely · changes ask');
+    expect(a.facts.map((f) => f.level)).toEqual(['free', 'asks']);
+  });
+  it('an allowed phone with nothing paired shows policy and availability separately, permission unchanged', () => {
+    const a = area({ ...base, phone: { access: 'lan', pairedCount: 0, devices: [] } }, 'phone');
+    expect(a.level).toBe('asks');
+    expect(a.status).toBe('Approval required · no phone paired');
+    expect(a.facts.map((f) => f.text.split(':')[0])).toEqual(['Policy', 'Availability']);
+    expect(a.facts[1].level).toBe('never');
+  });
+});

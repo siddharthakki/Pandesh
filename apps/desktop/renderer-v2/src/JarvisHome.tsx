@@ -14,8 +14,9 @@ type Portal = 'ready' | 'flight' | 'decisions' | 'exceptions';
  */
 export function JarvisHome({ snapshot, tasks, queued, data, onOpen, onAsk }: {
   snapshot: Snapshot | null; tasks: TaskRow[]; queued: QueuedCommand[]; data: OperatorData;
-  onOpen: (t: HomeTarget) => void; onAsk: (text: string) => void;
+  onOpen: (t: HomeTarget) => void; onAsk: (text: string) => void | Promise<void>;
 }) {
+  const [sending, setSending] = useState(false);
   // Tick every second only while a worker has really sent an event in the last two minutes (event ages need it).
   const fresh = data.bridge.some((b) => b.lastEventAt && Date.now() - Date.parse(b.lastEventAt) < 120_000 && !['completed', 'failed', 'cancelled'].includes(b.state)) || data.missions.some((m) => m.status === 'running');
   const now = useTicker(fresh, 1000);
@@ -139,10 +140,17 @@ export function JarvisHome({ snapshot, tasks, queued, data, onOpen, onAsk }: {
 
       {note && <p className={`jv-status${note.error ? ' error' : ''}`} role={note.error ? 'alert' : 'status'}>{note.label ? <strong>{note.label}: </strong> : null}{note.text}</p>}
 
-      <form className="jv-intent" onSubmit={(e) => { e.preventDefault(); if (ask.trim()) { onAsk(ask.trim()); setAsk(''); } }}>
-        <label className="sr-only" htmlFor="jv-intent">Ask Pandesh or describe a task</label>
-        <input id="jv-intent" value={ask} onChange={(e) => setAsk(e.target.value)} placeholder="Say or type an intent…" autoComplete="off" />
-        <button type="submit" className="btn primary" disabled={!ask.trim()}>Send</button>
+      {/* A wish typed here is sent for real, in a new conversation, and followed in Wish to Reality: never appended to an old chat. */}
+      <form className="jv-intent" onSubmit={(e) => {
+        e.preventDefault();
+        const t = ask.trim();
+        if (!t || sending) return;
+        setSending(true);
+        void Promise.resolve(onAsk(t)).then(() => setAsk('')).catch((err) => setNote({ id: 'intent', text: errorText(err), error: true })).finally(() => setSending(false));
+      }}>
+        <label className="sr-only" htmlFor="jv-intent">What should Pandesh make real?</label>
+        <input id="jv-intent" value={ask} onChange={(e) => setAsk(e.target.value)} placeholder="What should Pandesh make real for you?" autoComplete="off" />
+        <button type="submit" className="btn primary" disabled={!ask.trim() || sending}>{sending ? 'Sending…' : 'Make it real'}</button>
       </form>
       <div className="jv-likely"><span className="jv-src">likely next</span>{likely.map((l) => <button key={l.label} type="button" className="jv-chip" onClick={l.run}>{l.label}</button>)}</div>
 

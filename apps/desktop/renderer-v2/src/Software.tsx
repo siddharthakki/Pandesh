@@ -16,7 +16,7 @@ interface UpdateState { results: Update[]; history: CheckRecord[]; settings: { p
 
 type Tab = 'ports' | 'tools' | 'github' | 'updates' | 'history';
 const TABS: Array<{ id: Tab; label: string }> = [
-  { id: 'ports', label: 'Services & Ports' },
+  { id: 'ports', label: 'Ports & services in use' },
   { id: 'tools', label: 'Installed Tools' },
   { id: 'github', label: 'GitHub Projects' },
   { id: 'updates', label: 'Available Updates' },
@@ -30,7 +30,7 @@ const cell: React.CSSProperties = { padding: '8px 10px', borderBottom: '1px soli
 const head: React.CSSProperties = { ...cell, color: 'var(--muted)', fontWeight: 600, fontSize: 12.5, letterSpacing: '0.03em', position: 'sticky', top: 0, background: 'var(--canvas)' };
 const mono: React.CSSProperties = { fontFamily: 'var(--font-mono)', fontSize: 13 };
 
-export function Software({ narrow }: { narrow: boolean }) {
+export function Software({ narrow, onOpenProcesses }: { narrow: boolean; onOpenProcesses?: () => void }) {
   const [tab, setTab] = useState<Tab>('ports');
   const [inv, setInv] = useState<Inventory | null>(null);
   const [upd, setUpd] = useState<UpdateState | null>(null);
@@ -63,14 +63,21 @@ export function Software({ narrow }: { narrow: boolean }) {
   const unavailable = (inv?.sections ?? []).filter((s) => !s.available);
   const available = upd?.results.filter((u) => ['update_available', 'prerelease_available', 'behind_development'].includes(u.status)) ?? [];
 
+  const [allServices, setAllServices] = useState(false);
+  const relevant = useMemo(() => {
+    if (!inv) return [];
+    const names = new Set<string>([...inv.ports.map((p) => p.windowsService).filter((s): s is string => Boolean(s)), ...inv.items.flatMap((i) => i.dependents.services)]);
+    return inv.services.filter((s) => names.has(s.name) || names.has(s.displayName));
+  }, [inv]);
   const toolItems = (inv?.items ?? []).filter((i) => i.kind !== 'git_repo' && (method === 'all' || i.installMethod === method) && match(i.name, i.version, i.installPath, i.packageId, i.upstream?.github));
   const repos = (inv?.items ?? []).filter((i) => i.kind === 'git_repo' && match(i.name, i.installPath, i.upstream?.url, i.details.branch as string));
 
   return (
     <>
       <div className="topbar">
-        <span className="title" style={{ color: 'var(--ink)', fontWeight: 600 }}>Software & Services</span>
+        <span className="title" style={{ color: 'var(--ink)', fontWeight: 600 }}>Diagnostics · Software & Services</span>
         <span className="grow" />
+        {onOpenProcesses && <button type="button" className="btn small" onClick={onOpenProcesses} title="Processes Pandesh started, checked against Windows now">Processes</button>}
         <button type="button" className="btn small" disabled={scanning} onClick={() => void scan(true)} title="Read the installed software, ports and services again">{scanning ? 'Scanning…' : 'Rescan'}</button>
         <button type="button" className="btn small primary" disabled={checking || !inv} onClick={() => void check()} title="Ask package managers and GitHub (public metadata only) for newer versions">{checking ? 'Checking…' : 'Check for updates'}</button>
       </div>
@@ -134,15 +141,21 @@ export function Software({ narrow }: { narrow: boolean }) {
                 </tbody>
               </table>
             </div>
-            <h2 style={{ margin: 0, fontSize: 15 }}>Running Windows services ({inv.services.filter((s) => s.state === 'Running').length} of {inv.services.length})</h2>
-            <div style={{ overflowX: 'auto' }}>
-              <table style={{ borderCollapse: 'collapse', width: '100%' }}>
-                <thead><tr><th style={head}>Service</th><th style={head}>State</th><th style={head}>Start</th><th style={head}>pid</th></tr></thead>
-                <tbody>{inv.services.filter((s) => s.state === 'Running' && match(s.name, s.displayName)).slice(0, MAX_ROWS).map((s) => (
-                  <tr key={s.name}><td style={cell}>{s.displayName} <span style={{ color: 'var(--muted)', ...mono }}>{s.name}</span></td><td style={cell}>{s.state}</td><td style={cell}>{s.startMode}</td><td style={{ ...cell, ...mono }}>{s.pid ?? '—'}</td></tr>
-                ))}</tbody>
-              </table>
-            </div>
+            {/* Only services that matter here: one behind a listening port, or one an installed tool depends on. */}
+            <h2 style={{ margin: 0, fontSize: 15 }}>Services in use ({relevant.length})</h2>
+            {relevant.length === 0 ? <p style={{ margin: 0, fontSize: 14, color: 'var(--muted)' }}>No Windows service is behind a listening port or needed by an installed tool.</p> : (
+              <ServiceTable rows={relevant.filter((s) => match(s.name, s.displayName))} />
+            )}
+            {/* The full inventory is diagnostics: rendered only when asked for, from the same bounded, cached scan. */}
+            <details onToggle={(e) => setAllServices((e.target as HTMLDetailsElement).open)}>
+              <summary style={{ cursor: 'pointer', fontSize: 14, color: 'var(--muted)' }}>Diagnostics: every Windows service on this PC</summary>
+              {allServices && (
+                <div style={{ marginTop: 8 }}>
+                  <p style={{ margin: '0 0 6px', fontSize: 13, color: 'var(--muted)' }}>From the scan at {timeOf(inv.generatedAt)}; Rescan reads it again. Read-only: starting or stopping a service goes through Pandesh and its approvals.</p>
+                  <ServiceTable rows={inv.services.filter((s) => match(s.name, s.displayName))} />
+                </div>
+              )}
+            </details>
           </section>
         )}
 
@@ -238,6 +251,19 @@ export function Software({ narrow }: { narrow: boolean }) {
         )}
       </div>
     </>
+  );
+}
+
+function ServiceTable({ rows }: { rows: Service[] }) {
+  return (
+    <div style={{ overflowX: 'auto' }}>
+      <table style={{ borderCollapse: 'collapse', width: '100%' }}>
+        <thead><tr><th style={head}>Service</th><th style={head}>State</th><th style={head}>Start</th><th style={head}>pid</th></tr></thead>
+        <tbody>{rows.slice(0, MAX_ROWS).map((s) => (
+          <tr key={s.name}><td style={cell}>{s.displayName} <span style={{ color: 'var(--muted)', ...mono }}>{s.name}</span></td><td style={cell}>{s.state}</td><td style={cell}>{s.startMode}</td><td style={{ ...cell, ...mono }}>{s.pid ?? '—'}</td></tr>
+        ))}</tbody>
+      </table>
+    </div>
   );
 }
 

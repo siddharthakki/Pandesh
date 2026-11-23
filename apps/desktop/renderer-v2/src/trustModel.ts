@@ -12,6 +12,8 @@ export type TrustLevel = 'free' | 'asks' | 'never';
 export interface TrustFact { text: string; level: TrustLevel }
 export interface TrustArea {
   id: string; name: string; level: TrustLevel; summary: string; facts: TrustFact[];
+  /** Short line under the node when the level alone would mislead (reads free but changes ask; allowed but nothing paired). */
+  status?: string;
   /** The screen where the owner changes it. */
   where: { view: string; label: string } | null;
   /** False when the source did not answer: the area says so instead of guessing. */
@@ -45,12 +47,13 @@ export function buildTrust(i: TrustInputs): TrustArea[] {
     const live = i.permission.authorizations.filter((a) => Date.parse(a.expiresAt) > i.now);
     const facts: TrustFact[] = [{ text: 'Reads and answers in chat without asking', level: 'free' }];
     if (i.permission.mode === 'plan') facts.push({ text: 'Plan only: nothing that changes anything can run in this chat', level: 'never' });
-    else facts.push({ text: 'Anything that changes something asks you first', level: 'asks' });
+    else facts.push({ text: 'Changes (files, commands, messages, purchases) ask you first', level: 'asks' });
     for (const a of live) facts.push({ text: `Auto until ${until(a.expiresAt)}: ${a.categories.map((c) => i.permission!.categories[c] ?? c).join('; ')}${a.workspaceRoot ? ` (in ${a.workspaceRoot})` : ''}`, level: 'free' });
     const mode = i.permission.mode === 'plan' ? 'Plan only' : i.permission.mode === 'auto' ? 'Auto' : 'Ask';
     areas.push({
       id: 'chat', name: 'Chat', level: live.length ? 'free' : i.permission.mode === 'plan' ? 'never' : 'asks', facts, known: true,
-      summary: live.length ? `${mode} mode · ${live.length} Auto grant${live.length === 1 ? '' : 's'} running` : `${mode} mode · every change asks`,
+      status: i.permission.mode === 'plan' ? 'Reads freely · cannot change' : live.length ? 'Reads freely · some changes on Auto' : 'Reads freely · changes ask',
+      summary: live.length ? `${mode} mode · reads without asking · ${live.length} Auto grant${live.length === 1 ? '' : 's'} running` : `${mode} mode · reads without asking; changes need your approval`,
       where: { view: 'permissions', label: 'Change in Settings › Permissions' },
     });
   } else areas.push(unknown('chat', 'Chat', { view: 'permissions', label: 'Open Settings › Permissions' }, 'The chat permission'));
@@ -84,9 +87,12 @@ export function buildTrust(i: TrustInputs): TrustArea[] {
   if (i.phone) {
     const off = i.phone.access === 'off';
     const facts: TrustFact[] = off ? [{ text: 'Phone access is off: no phone can reach Pandesh', level: 'never' }]
-      : [{ text: `${i.phone.access === 'tailscale' ? 'Tailscale only' : 'Home Wi-Fi and Tailscale'}; ${i.phone.pairedCount} phone${i.phone.pairedCount === 1 ? '' : 's'} paired${i.phone.devices.length ? `: ${i.phone.devices.map((d) => d.name).join(', ')}` : ''}`, level: 'asks' },
-        { text: 'A paired phone chats and approves as you; actions still pass the same approval gates', level: 'asks' }];
-    areas.push({ id: 'phone', name: 'Phone', level: off ? 'never' : 'asks', facts, known: true, summary: off ? 'Off' : `${i.phone.pairedCount} paired · ${i.phone.access === 'tailscale' ? 'Tailscale only' : 'Wi-Fi + Tailscale'}`, where: { view: 'connections', label: 'Change in Connections' } });
+      : [{ text: `Policy: approval required. A paired phone chats and approves as you; its actions pass the same gates (${i.phone.access === 'tailscale' ? 'Tailscale only' : 'home Wi-Fi and Tailscale'})`, level: 'asks' },
+        i.phone.pairedCount
+          ? { text: `Availability: ${i.phone.pairedCount} phone${i.phone.pairedCount === 1 ? '' : 's'} paired${i.phone.devices.length ? `: ${i.phone.devices.map((d) => d.name).join(', ')}` : ''}`, level: 'asks' }
+          : { text: 'Availability: no phone paired, so no phone can act now', level: 'never' }];
+    // The permission is unchanged (approval required); the status says whether any phone can use it today.
+    areas.push({ id: 'phone', name: 'Phone', level: off ? 'never' : 'asks', facts, known: true, status: off ? undefined : i.phone.pairedCount ? `Approval required · ${i.phone.pairedCount} paired` : 'Approval required · no phone paired', summary: off ? 'Off' : `${i.phone.pairedCount} paired · ${i.phone.access === 'tailscale' ? 'Tailscale only' : 'Wi-Fi + Tailscale'}`, where: { view: 'connections', label: 'Change in Connections' } });
   } else areas.push(unknown('phone', 'Phone', { view: 'connections', label: 'Open Connections' }, 'Phone access'));
 
   // Specialists' internet and their own always-ask lists.

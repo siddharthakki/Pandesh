@@ -1046,3 +1046,92 @@ button.tl-row:hover { background: var(--raised); }
 .jv-trust-side .jv-trust-detail { position: static; }
 .jv-trust-side .jv-trust-ledger { grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); }
 @media (max-width: 720px) { .jv-trust-side .jv-trust-ledger { grid-template-columns: 1fr; } }
+
+/* Wish to Reality: list of wishes beside one wish's journey; the meter fills only with money the owner verified. */
+.jv-wishes { display: flex; flex-direction: column; gap: 14px; padding: 18px 28px 28px; min-height: 0; overflow: auto; flex: 1 1 auto; }
+.jv-wishes > * { flex-shrink: 0; }
+.jv-wish-intent { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.jv-wish-intent input { flex: 1 1 420px; height: 40px; padding: 0 14px; border: 1px solid rgba(127,230,255,.35); border-radius: 12px; background: var(--surface); color: var(--ink); }
+.jv-wish-intent .jv-src { flex-basis: 100%; }
+.jv-wish-empty { padding: 18px; border: 1px dashed var(--line); border-radius: 14px; max-width: 900px; }
+.jv-wish-empty h2 { margin: 0 0 6px; font-size: 17px; }
+.jv-wish-grid { display: grid; grid-template-columns: 260px minmax(0, 1fr); gap: 16px; align-items: start; }
+.jv-wish-list { display: flex; flex-direction: column; gap: 6px; position: sticky; top: 0; }
+.jv-wish-item { display: flex; flex-direction: column; gap: 4px; padding: 10px 12px; text-align: left; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); color: var(--ink); cursor: pointer; }
+.jv-wish-item.on { border-color: rgba(127,230,255,.6); background: var(--raised); } .jv-wish-item.off { opacity: .55; }
+.jv-wish-main { display: flex; flex-direction: column; gap: 14px; padding: 16px 18px; border: 1px solid var(--line); border-radius: 16px; background: var(--surface); min-width: 0; }
+.jv-wish-head { display: flex; justify-content: space-between; gap: 12px; align-items: flex-start; flex-wrap: wrap; }
+.jv-wish-head h2 { margin: 2px 0 0; font-size: 20px; }
+.jv-flag { padding: 3px 10px; border-radius: 999px; border: 1px solid var(--attention); color: var(--attention); font-size: 12.5px; }
+.jv-stage-track { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 0; counter-reset: st; }
+.jv-stage-track li { position: relative; display: flex; flex-direction: column; align-items: center; gap: 6px; font-size: 12.5px; color: var(--faint); text-align: center; padding: 0 4px; }
+.jv-stage-track li::before { content: ''; position: absolute; top: 6px; left: -50%; width: 100%; height: 1px; background: var(--line); z-index: 0; }
+.jv-stage-track li:first-child::before { display: none; }
+.jv-stage-dot { position: relative; z-index: 1; width: 13px; height: 13px; border-radius: 50%; border: 1px solid var(--faint); background: var(--canvas); }
+.jv-stage-track li.done { color: var(--muted); } .jv-stage-track li.done .jv-stage-dot { background: var(--verified); border-color: var(--verified); }
+.jv-stage-track li.done::before, .jv-stage-track li.now::before { background: var(--verified); }
+.jv-stage-track li.now { color: var(--ink); font-weight: 600; } .jv-stage-track li.now .jv-stage-dot { border-color: var(--pulse); background: var(--pulse); box-shadow: 0 0 10px var(--pulse); }
+.jv-wish-money { display: grid; grid-template-columns: minmax(0, 1fr); gap: 10px; }
+.jv-meter { position: relative; display: flex; height: 12px; border-radius: 999px; background: var(--raised); overflow: hidden; border: 1px solid var(--line); }
+.jv-meter > span { display: block; height: 100%; background: linear-gradient(90deg, var(--verified), var(--pulse)); }
+.jv-meter > span.pending { background: repeating-linear-gradient(45deg, rgba(255,181,71,.35) 0 6px, transparent 6px 12px); }
+.jv-meter.small { height: 5px; }
+.jv-money-facts { margin: 0; display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; }
+.jv-money-facts div { padding: 8px 10px; border-radius: 10px; background: var(--raised); }
+.jv-money-facts dt { font-size: 12px; color: var(--muted); }
+.jv-money-facts dd { margin: 2px 0 0; font-size: 18px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.jv-money-facts dd small { font-size: 12px; font-weight: 400; color: var(--muted); }
+.jv-money-facts dd.attn { color: var(--attention); }
+.jv-wish-next { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; padding: 10px 12px; border-radius: 12px; border: 1px solid var(--line); }
+.jv-wish-next p { margin: 0; flex: 1 1 320px; font-size: 14px; }
+.jv-wish-next.need { border-color: rgba(255,181,71,.55); background: rgba(255,181,71,.06); }
+.jv-wish-next.ready { border-color: rgba(170,150,255,.6); background: rgba(170,150,255,.07); }
+.jv-wish-plan ol { margin: 6px 0 0; padding-left: 20px; font-size: 13.5px; display: flex; flex-direction: column; gap: 4px; }
+.jv-wish-cols { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; align-items: start; }
+.jv-wish-cols > section { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.jv-wish-row { display: flex; flex-direction: column; gap: 2px; padding: 8px 10px; border-radius: 10px; background: var(--raised); font-size: 13px; overflow-wrap: anywhere; }
+.jv-wish-row.quiet, .jv-wish-row.excluded, .jv-wish-row.rejected { opacity: .6; }
+.jv-wish-row.selected { box-shadow: inset 2px 0 0 var(--pulse); }
+.jv-wish-row.claimed { box-shadow: inset 2px 0 0 var(--attention); }
+.jv-wish-row.verified { box-shadow: inset 2px 0 0 var(--verified); }
+.jv-wish-row.demo { border: 1px dashed var(--attention); }
+@media (max-width: 1100px) { .jv-wish-grid { grid-template-columns: 1fr; } .jv-wish-list { position: static; flex-direction: row; overflow-x: auto; } .jv-wish-item { min-width: 220px; } .jv-wish-cols { grid-template-columns: 1fr; } }
+@media (max-width: 720px) {
+  .jv-wishes { padding: 12px 14px 20px; }
+  .jv-money-facts { grid-template-columns: 1fr 1fr; }
+  .jv-stage-track li { font-size: 10.5px; }
+}
+
+/* Trust Map review fixes: short names and a legend on phones (no labels on the rings there); status lines can be longer. */
+.jv-trust-node .short { display: none; }
+.jv-trust-node .jv-src { white-space: normal; line-height: 1.25; }
+.jv-ring-legend { display: none; }
+@media (max-width: 720px) {
+  .jv-trust-node .full { display: none; } .jv-trust-node .short { display: inline; }
+  .jv-ring-label { display: none; }
+  .jv-ring-legend { display: flex; flex-wrap: wrap; gap: 6px 14px; margin: -6px 0 0; font: 10.5px/1.4 var(--font-mono); letter-spacing: .06em; text-transform: uppercase; }
+  .jv-ring-legend .free { color: var(--pulse); } .jv-ring-legend .asks { color: var(--attention); } .jv-ring-legend .never { color: var(--faint); }
+}
+
+/* Wish journeys: seven stages from Core's records, each with what happened at it. */
+.jv-journey { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 8px; }
+.jv-journey li { position: relative; display: flex; flex-direction: column; gap: 3px; padding: 22px 8px 8px; border-radius: 10px; background: var(--raised); min-width: 0; font-size: 12.5px; color: var(--muted); }
+.jv-journey li .jv-stage-dot { position: absolute; top: 7px; left: 8px; }
+.jv-journey li strong { color: var(--ink); font-size: 13px; }
+.jv-journey li .jv-stage-detail { font-size: 12px; line-height: 1.35; overflow-wrap: anywhere; display: -webkit-box; -webkit-line-clamp: 5; -webkit-box-orient: vertical; overflow: hidden; }
+.jv-journey li.done .jv-stage-dot { background: var(--verified); border-color: var(--verified); }
+.jv-journey li.now { box-shadow: inset 0 0 0 1px var(--pulse); } .jv-journey li.now .jv-stage-dot { background: var(--pulse); border-color: var(--pulse); box-shadow: 0 0 8px var(--pulse); }
+.jv-journey li.warn .jv-stage-dot { background: var(--attention); border-color: var(--attention); }
+.jv-journey li.fail { box-shadow: inset 0 0 0 1px var(--danger); } .jv-journey li.fail .jv-stage-dot { background: var(--danger); border-color: var(--danger); }
+.jv-journey li.skip, .jv-journey li.todo { opacity: .6; }
+.jv-mini-track { display: grid; grid-template-columns: repeat(7, 1fr); gap: 3px; }
+.jv-mini-track i { height: 4px; border-radius: 2px; background: var(--line); }
+.jv-mini-track i.done { background: var(--verified); } .jv-mini-track i.now { background: var(--pulse); } .jv-mini-track i.warn { background: var(--attention); } .jv-mini-track i.fail { background: var(--danger); } .jv-mini-track i.skip { background: transparent; border: 1px dashed var(--line); }
+.jv-wish-item.need { border-color: rgba(255,181,71,.6); }
+.jv-allow { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; flex-basis: 100%; }
+.jv-allow .jv-detail { flex: 1 1 260px; }
+.jv-actions { display: flex; gap: 6px; flex-wrap: wrap; }
+@media (max-width: 1100px) { .jv-journey { grid-template-columns: repeat(4, minmax(0, 1fr)); } }
+@media (max-width: 720px) { .jv-journey { grid-template-columns: 1fr 1fr; } }
+.jv-wish-item strong { display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; font-size: 13px; line-height: 1.35; }
+.jv-wish-main h2 { display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }

@@ -4,6 +4,8 @@ import { buildTrust, type TrustArea, type TrustInputs, type TrustLevel } from '.
 import type { AgentStatus } from './agentsModel';
 
 const LEVEL_TEXT: Record<TrustLevel, string> = { free: 'Acts without asking', asks: 'Asks you first', never: 'Cannot' };
+/** Names that fit a phone-width map. */
+const SHORT: Record<string, string> = { internet: 'Online', clients: 'Clients', cloud: 'Cloud', workspace: 'Folder' };
 const RING: Record<TrustLevel, number> = { free: 0.3, asks: 0.58, never: 0.86 };
 type Extra = Omit<TrustInputs, 'permission' | 'workspace' | 'provider' | 'now'>;
 type Loose = Record<string, unknown>;
@@ -77,16 +79,19 @@ export function TrustMap({ snapshot, onOpen }: { snapshot: Snapshot | null; onOp
             const p = place(i, a);
             return (
               <button key={a.id} type="button" className={`jv-trust-node ${a.level}${a.known ? '' : ' unknown'}${sel === a.id ? ' on' : ''}`} style={{ left: `${p.x}%`, top: `${p.y}%` }}
-                onClick={() => setSel(a.id)} aria-label={`${a.name}: ${a.known ? LEVEL_TEXT[a.level] : 'not answering'}. ${a.summary}`}>
-                <strong>{a.name}</strong><span className="jv-src">{a.known ? LEVEL_TEXT[a.level] : 'not answering'}</span>
+                onClick={() => setSel(a.id)} aria-label={`${a.name}: ${a.known ? a.status ?? LEVEL_TEXT[a.level] : 'not answering'}. ${a.summary}`}>
+                <strong><span className="full">{a.name}</span><span className="short" aria-hidden="true">{SHORT[a.id] ?? a.name}</span></strong>
+                <span className="jv-src">{a.known ? a.status ?? LEVEL_TEXT[a.level] : 'not answering'}</span>
               </button>
             );
           })}
         </section>
+        {/* On a phone the ring names sit here instead of on the rings, where they collide with nodes. */}
+        <p className="jv-ring-legend" aria-hidden="true"><span className="free">inner: acts without asking</span><span className="asks">middle: asks you first</span><span className="never">outer: cannot</span></p>
 
         <aside className="jv-trust-side">
         <section className="jv-trust-detail" aria-label={`${selected.name} details`} aria-live="polite">
-          <span className={`jv-src ${selected.level}`}>{selected.known ? LEVEL_TEXT[selected.level] : 'Not answering'}</span>
+          <span className={`jv-src ${selected.level}`}>{selected.known ? selected.status ?? LEVEL_TEXT[selected.level] : 'Not answering'}</span>
           <h2>{selected.name}</h2>
           <p className="jv-detail">{selected.summary}</p>
           <ul className="jv-trust-facts">
