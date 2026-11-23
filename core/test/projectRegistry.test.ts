@@ -74,6 +74,23 @@ describe('project resolution', () => {
     if (r.status === 'resolved') expect(r.project.name).toBe('Pandesh');
   });
 
+  it('a Windows short (8.3) spelling of a registered path resolves to the same project, also for a file inside it', () => {
+    // CI 2026-11-23: GitHub's Windows runner temp folder is C:\Users\RUNNER~1\...; the registry stores the long real path.
+    if (process.platform !== 'win32') return;
+    const longDir = path.join(os.tmpdir(), `PandeshShortNameCheck-${process.pid}`, 'LongProjectFolderName');
+    fs.mkdirSync(longDir, { recursive: true });
+    try {
+      const short = spawnSync('cmd.exe', ['/d', '/s', '/c', `"for %I in ("${longDir}") do @echo %~sI"`], { encoding: 'utf8', windowsVerbatimArguments: true }).stdout.trim();
+      if (!short || short.toLowerCase() === longDir.toLowerCase()) return; // this volume makes no short names: nothing to check
+      const data2 = path.join(dir, 'data-short');
+      registerProject(data2, { name: 'ShortCheck', path: repo(path.dirname(longDir), path.basename(longDir)), access: 'read', authorizedBy: 'owner' });
+      for (const named of [short, path.join(short, 'README.md'), path.join(short, 'src', 'not-yet.js')]) {
+        const r = resolveProject(loadProjects(data2), `Inspect ${named} and report.`);
+        expect(r, named).toMatchObject({ status: 'resolved', via: 'path' });
+      }
+    } finally { fs.rmSync(path.dirname(longDir), { recursive: true, force: true }); }
+  });
+
   it('a name resolves to the project it names, never to another open workspace', () => {
     const r = resolve("Check Pandesh's deterministic router");
     expect(r).toMatchObject({ status: 'resolved', via: 'name' });
