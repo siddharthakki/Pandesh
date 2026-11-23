@@ -254,8 +254,9 @@ export class KandevClient {
   }
 
   /** The session's most recent agent turn; `completed_at` is absent while the turn is still running. */
-  async latestTurn(sessionId: string): Promise<{ started_at: string; completed_at?: string } | null> {
-    const res = await this.rest<{ turns?: Array<{ started_at: string; completed_at?: string }> }>('GET', `/task-sessions/${sessionId}/turns`);
+  /** The session's latest turn. `metadata.error_terminated` is Kandev's mark for a turn that ended because the agent process died. */
+  async latestTurn(sessionId: string): Promise<{ started_at: string; completed_at?: string; metadata?: { error_terminated?: boolean } } | null> {
+    const res = await this.rest<{ turns?: Array<{ started_at: string; completed_at?: string; metadata?: { error_terminated?: boolean } }> }>('GET', `/task-sessions/${sessionId}/turns`);
     const turns = [...(res?.turns ?? [])].sort((a, b) => a.started_at.localeCompare(b.started_at));
     return turns.at(-1) ?? null;
   }

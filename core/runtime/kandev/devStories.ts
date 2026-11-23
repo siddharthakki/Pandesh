@@ -37,6 +37,10 @@ import { compareTestRuns, judgeTests, runProjectTests, type ProjectTestRun } fro
 
 export const DEV_ACTOR = 'kkd:dev-coordinator';
 const MAX_VERIFY_RETRIES = 2;
+/** A worker process that died mid-turn is resumed in the same session this many times before the story needs a person. */
+const MAX_CRASH_RESUMES = 2;
+export const CRASH_TAG = '[kkd-dev:worker-crashed]';
+const RESUME_TEXT = 'Your previous run was interrupted: the worker process stopped before you finished. Your working directory is as you left it. Continue the task from where you were and finish it.';
 const MAX_WORKERS = Number(process.env.KARKEDIKHA_KANDEV_MAX_WORKERS || 2);
 const DEFAULT_CLAUDE_MODEL = process.env.KARKEDIKHA_KANDEV_CLAUDE_MODEL || 'sonnet';
 
@@ -1097,6 +1101,28 @@ export async function reconcileDevStories(db: CoreDatabase, kandev: KandevClient
     }
     if (!turnOver || !session.worktree_path) continue;
     if ((await kandev.pendingPermissions(task.id)).length) continue; // waiting on a human decision
+    // A turn that ended because the worker PROCESS died (killed, crashed) is not finished work, whatever it left in the worktree.
+    // Kandev closes it with a completion time like a normal turn but marks it error_terminated; without this it was verified, read as
+    // "the worker made no changes" and cost a verification attempt (live b188i 2026-11-23, claude.exe killed mid-step). Resume the
+    // same session (its context is restored), bounded. Usage limits and lost sign-ins were already parked above and never get here.
+    if (turnOver && turn?.metadata?.error_terminated === true) {
+      const marks = listComments(db, story.id).filter(c => c.body.startsWith(CRASH_TAG));
+      const thisTurn = `${CRASH_TAG} @${turn!.started_at}`;
+      // The same crashed turn is counted once (a resume message that could not be delivered is simply tried again next tick).
+      const crashes = marks.filter(c => !c.body.startsWith(thisTurn)).length;
+      if (marks.some(c => c.body.startsWith(thisTurn))) {
+        await sendFeedback(db, kandev, story.id, task.id, session.id, RESUME_TEXT);
+        continue;
+      }
+      if (crashes >= MAX_CRASH_RESUMES) {
+        walk(db, story, ['blocked'], 'the worker process stopped repeatedly');
+        addComment(db, story.id, { author: DEV_ACTOR, body: `[kkd-dev:needs-human] The worker process stopped ${crashes + 1} times before finishing; Pandesh resumed it ${crashes} time(s) and stops trying. The worktree is kept; Retry to start it again.` });
+        continue;
+      }
+      addComment(db, story.id, { author: DEV_ACTOR, body: `${thisTurn} The worker process stopped before it finished (Kandev: turn error-terminated); resuming the same session (${crashes + 1} of ${MAX_CRASH_RESUMES}).` });
+      await sendFeedback(db, kandev, story.id, task.id, session.id, RESUME_TEXT);
+      continue;
+    }
     integrating = true;
     try {
       await verifyAndIntegrate(db, kandev, getStory(db, story.id), spec, task.id, session.worktree_path, session.id);
