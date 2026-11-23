@@ -49,7 +49,7 @@ export function Agents({ data, onOpenTeam, onOpenTask }: { data: OperatorData; o
           <svg viewBox="0 0 1000 560" preserveAspectRatio="none" className="jv-orch-lines" aria-hidden="true">
             <ellipse cx="500" cy="70" rx="440" ry="420" className="jv-orch-orbit" />
             {/* A line exists only while Core reports the specialist as working or waiting for the owner. */}
-            {m.specialists.filter((s) => s.state === 'working' || s.state === 'needs_you').map((s) => { const p = pos(m.specialists.indexOf(s)); return <line key={s.id} x1="500" y1="96" x2={p.x} y2={p.y} className={`jv-thread live${s.state === 'needs_you' ? ' need' : ''}`} />; })}
+            {m.specialists.filter((s) => s.state === 'working' || s.state === 'needs_you').map((s) => { const p = pos(m.specialists.indexOf(s)); return <line key={s.id} x1="500" y1="96" x2={p.x} y2={p.y} className={`jv-thread moving${s.state === 'needs_you' ? ' need' : ''}`} />; })}
           </svg>
           {m.chief && (
             <button type="button" className={`jv-chief${sel === 'chief' ? ' on' : ''}`} onClick={() => setSel('chief')} aria-label={`${m.chief.name}, Chief of Staff, ${m.chief.stateText}`}>

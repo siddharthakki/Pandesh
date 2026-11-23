@@ -73,7 +73,7 @@ export function Connections({ snapshot, refresh }: { snapshot: Snapshot | null; 
         <span className="grow" />
         <button type="button" className="btn small" disabled={blocked} onClick={() => void run('checking', () => api.retryGmailProbe())}>Check again</button>
       </div>
-      <div className="board" style={{ display: 'flex', flexDirection: 'column', gap: 12, maxWidth: 760 }}>
+      <div className="board cols">
         <ProviderCards snapshot={snapshot} refresh={refresh} />
         <PhoneCard />
         <ChatgptConnectorCard />

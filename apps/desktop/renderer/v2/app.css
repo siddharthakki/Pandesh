@@ -222,6 +222,16 @@ kbd { font-family: var(--font-mono); font-size: 12px; color: var(--muted); borde
 /* Board */
 .board { flex: 1 1 auto; min-height: 0; overflow: auto; padding: 8px 40px 24px; }
 .narrow .board { padding: 8px 16px 16px; }
+/* Card pages use the width: as many ~420 px columns as fit, long panels (details) across the whole row. */
+.board.cols { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 420px), 1fr)); gap: 12px; align-items: start; align-content: start; }
+.board.cols > details, .board.cols > .span-all { grid-column: 1 / -1; }
+/* Tools & Skills: models beside tools on wide windows. */
+@media (min-width: 1300px) {
+  .board .ex { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.3fr); column-gap: 18px; row-gap: 16px; align-items: start; }
+  .board .ex > * { grid-column: 1 / -1; }
+  .board .ex > #ex-models { grid-column: 1; }
+  .board .ex > #ex-tools { grid-column: 2; }
+}
 .board-head { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; margin-bottom: 16px; }
 .board-head h1 { margin: 0; font-size: 22px; font-weight: 600; }
 .board-head .muted { color: var(--muted); font-size: 14px; }
@@ -833,7 +843,8 @@ button.tl-row:hover { background: var(--raised); }
 .jv-thread.focus { stroke: rgba(127,230,255,.45); }
 .jv-thread.need { stroke: rgba(255,181,71,.35); }
 .jv-thread.need.off { stroke: rgba(255,181,71,.07); }
-.jv-thread.live { stroke-dasharray: 3 8; animation: jv-flow 2.2s linear infinite; stroke-width: 1.4; }
+/* Only a thread whose portal holds live, event-backed work moves ("no event, no movement"). */
+.jv-thread.moving { stroke-dasharray: 3 8; animation: jv-flow 2.2s linear infinite; stroke-width: 1.4; }
 @keyframes jv-flow { to { stroke-dashoffset: -44; } }
 .jv-center { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -54%); display: flex; flex-direction: column; align-items: center; gap: 2px; width: min(460px, 40%); text-align: center; pointer-events: none; }
 .jv-canvas { display: block; max-width: 100%; }

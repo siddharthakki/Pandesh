@@ -115,7 +115,7 @@ export function JarvisHome({ snapshot, tasks, queued, data, onOpen, onAsk }: {
           {portals.map((p) => {
             const [x, y] = anchor[p.id];
             const d = `M500 300 C ${500 + (x - 500) * 0.45} 300, ${x} ${300 + (y - 300) * 0.3}, ${x} ${y}`;
-            return <path key={p.id} d={d} className={`jv-thread ${p.tone}${p.live ? ' live' : ''}${p.count ? '' : ' off'}${focus === p.id ? ' focus' : ''}`} />;
+            return <path key={p.id} d={d} className={`jv-thread ${p.tone}${p.live && p.count ? ' moving' : ''}${p.count ? '' : ' off'}${focus === p.id ? ' focus' : ''}`} />;
           })}
         </svg>
         <div className="jv-center">
