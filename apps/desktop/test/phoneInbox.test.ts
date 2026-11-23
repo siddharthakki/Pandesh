@@ -44,6 +44,13 @@ describe('Phone Inbox', () => {
     expect(buildPhoneInbox(base).items.some((i) => ['mission:msn_old', 'mission:msn_run', 'task:t2'].includes(i.id))).toBe(false);
   });
 
+  it('a failed step shows Core\'s reason as the description and keeps the agent\'s output behind Read result (live 2026-11-23)', () => {
+    const err = 'the Personal agent\'s task ended as "failed" after 29s. Its last message: **NOT DONE** (checked by Pandesh Core): gmail_create_draft reported that it could not do it.\n\nHere\'s your **Checklist**\n- water';
+    const { items } = buildPhoneInbox({ ...base, approvals: [], bridge: [], bridgeApprovals: [], missions: [{ id: 'm', conversationId: 'c', objective: 'Hiking list', status: 'failed', resultSummary: null, updatedAt: '2026-11-23T10:36:08Z', completedAt: '2026-11-23T10:36:08Z', steps: [{ kind: 'work', agentId: 'personal', title: 'Draft', status: 'failed', resultText: null, error: err }] }] });
+    expect(items[0].detail).toMatch(/^Draft: .*gmail_create_draft reported that it could not do it\.$/);
+    expect(items[0].body).toContain('Checklist');
+  });
+
   it('decisions come first, then problems, then results', () => {
     const { items } = buildPhoneInbox({ ...base, missions: [...base.missions, { id: 'msn_f', conversationId: 'c5', objective: 'Broke', status: 'failed', resultSummary: 'nope', updatedAt: '2026-11-23T10:50:00Z', completedAt: '2026-11-23T10:50:00Z', steps: [] }] });
     expect(items.map((i) => i.kind)).toEqual(['decision', 'decision', 'decision', 'problem', 'result']);

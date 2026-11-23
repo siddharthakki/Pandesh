@@ -78,7 +78,16 @@ export function buildPhoneInbox(i: { approvals: Approval[]; missions: Mission[];
       });
     } else {
       const failed = m.steps.find((s) => s.status === 'failed');
-      items.push({ id: `mission:${m.id}`, kind: 'problem', at, source: 'Mission', title: trim(m.objective, 140), detail: failed ? `${failed.title}: ${failed.error ?? 'failed'}` : m.status === 'interrupted' ? 'Interrupted. Continue it from Missions on your PC.' : m.resultSummary ?? m.status });
+      // The first line of a step error is Core's reason; what follows is the agent's own output, readable on request.
+      const err = failed?.error ?? '';
+      const nl = err.indexOf('\n');
+      const reason = nl > 0 ? err.slice(0, nl) : err;
+      const rest = nl > 0 ? err.slice(nl + 1).trim() : '';
+      items.push({
+        id: `mission:${m.id}`, kind: 'problem', at, source: 'Mission', title: trim(m.objective, 140),
+        detail: failed ? trim(`${failed.title}: ${reason || 'failed'}`, 320) : m.status === 'interrupted' ? 'Interrupted. Continue it from Missions on your PC.' : m.resultSummary ?? m.status,
+        body: rest ? trim(rest, BODY_MAX) : undefined,
+      });
     }
   }
   const order: Record<InboxKind, number> = { decision: 0, problem: 1, result: 2 };
