@@ -477,6 +477,14 @@ export function buildRouter(
     status: 200,
     body: await devStories.devStoryStatus(ctx.db, kandevClient, ctx.query.get('projectId') ?? undefined),
   }));
+  // Worker tasks waiting for the person, from Core's records only (registered before '/:id', which would take the name for an id).
+  router.get('/v1/dev-stories/needs-attention', (ctx) => {
+    const principal = ctx.principal;
+    if (!principal || principal.isModelOrTool || principal.role === 'unknown') {
+      return { status: 403, body: { error: 'forbidden', reason: 'Task details need an authenticated interactive client.' } };
+    }
+    return { status: 200, body: { items: devStories.devStoriesNeedingAttention(ctx.db) } };
+  });
   router.get('/v1/dev-stories/:id', async (ctx, match) => {
     // Bearer authentication already passed in the server. A model/tool/unidentified caller (a worker, for one) gets no task detail.
     const principal = ctx.principal;

@@ -1152,8 +1152,11 @@ export async function relayWorkerNarrative(db: CoreDatabase, kandev: KandevClien
   const fresh = (await kandev.agentMessages(sessionId)).filter(m => m.kind === 'message' && m.at > since && m.text.trim().length > 20);
   if (!fresh.length) return false;
   const text = fresh.map(m => m.text.trim()).join('\n\n').slice(0, 700);
-  try { appendMessage(db, conversationId, { role: 'assistant', content: `💬 **${story.title}** (${devSpec(story)?.agent ?? 'worker'}): ${text}`, actor: DEV_ACTOR }); } catch { /* conversation deleted */ }
-  addComment(db, story.id, { author: DEV_ACTOR, body: `[kkd-dev:said-until] ${fresh[fresh.length - 1].at}` });
+  // The "relayed until" marker and the message are written together: a failure between the two must not relay it again.
+  db.transaction(() => {
+    addComment(db, story.id, { author: DEV_ACTOR, body: `[kkd-dev:said-until] ${fresh[fresh.length - 1].at}` });
+    try { appendMessage(db, conversationId, { role: 'assistant', content: `💬 **${story.title}** (${devSpec(story)?.agent ?? 'worker'}): ${text}`, actor: DEV_ACTOR }); } catch { /* conversation deleted */ }
+  });
   return true;
 }
 
@@ -1894,6 +1897,60 @@ export async function devStoryDetail(db: CoreDatabase, kandev: KandevClient, sto
   return { story, timeline, changedFiles };
 }
 
+// ---------------------------------------------------------------- worker tasks that need the person
+
+export interface WorkerAttentionItem {
+  storyId: string; title: string; agent: string;
+  /** failed = the worker could not start or its result was rejected for good; awaiting_review = finished, waits for the person's review. */
+  state: 'failed' | 'awaiting_review';
+  /** The recorded reason, as KKD wrote it when it happened (private paths removed). */
+  reason: string;
+  /** When that failure or review request was recorded. */
+  since: string;
+  /** The chat the task was started from, when it still exists. */
+  conversationId: string | null;
+  /** The task's own recorded events, oldest first (the last ones). */
+  timeline: Array<{ at: string; event: string; text: string }>;
+  canRetry: boolean;
+}
+
+/**
+ * Worker tasks that wait for the person, read from Core's own records only (no call to Kandev, so the task screen can
+ * ask every few seconds and still sees them while Kandev is down). A failed task stays here, with its real reason and
+ * recorded events, until it is retried, reassigned or stopped: the chat is told once, the task screen keeps showing it.
+ */
+export function devStoriesNeedingAttention(db: CoreDatabase): WorkerAttentionItem[] {
+  const out: WorkerAttentionItem[] = [];
+  for (const s of listStories(db, { limit: 200 })) {
+    if (s.archivedAt || (s.status !== 'blocked' && s.status !== 'delivery_approval')) continue;
+    const spec = devSpec(s);
+    if (!spec) continue;
+    // Report markers are bookkeeping, not events (and one flooded story had 30,000 of them): never loaded here.
+    const comments = db.all<{ body: string; createdAt: string }>("SELECT body, createdAt FROM story_comments WHERE storyId = ? AND body NOT LIKE '[kkd-dev:reported]%' ORDER BY createdAt ASC", [s.id]);
+    const lastTag = comments.map(c => /^\[kkd-dev:(stopped|retry|verify-existing)\]/.test(c.body)).lastIndexOf(true);
+    if (s.status === 'blocked' && lastTag >= 0 && comments[lastTag].body.startsWith('[kkd-dev:stopped]')) continue; // stopped by the person: nothing to decide
+    const sinceRetry = comments.slice(comments.map(c => c.body.startsWith('[kkd-dev:retry]')).lastIndexOf(true) + 1).reverse();
+    const hit = s.status === 'delivery_approval'
+      ? [...comments].reverse().find(c => c.body.startsWith('[kkd-dev:awaiting-review]'))
+      : sinceRetry.find(c => c.body.startsWith('[kkd-dev:needs-human]')) ?? sinceRetry.find(c => c.body.startsWith('[kkd-dev:verify-failed]'));
+    const reason = hit ? hit.body.replace(/^(\[kkd-dev:[\w-]+\]\s*)+/, '').split('\n')[0].slice(0, 400) : (s.status === 'blocked' ? 'Blocked; no reason was recorded.' : 'The worker finished; nothing independent verified it. Review the change, then approve.');
+    const reportTo = comments.find(c => c.body.startsWith('[kkd-dev:report-to] '))?.body.split(' ')[1] ?? null;
+    const conversationId = reportTo && db.get('SELECT 1 AS x FROM conversations WHERE id = ?', [reportTo]) ? reportTo : null;
+    const timeline: WorkerAttentionItem['timeline'] = [];
+    for (const c of comments) {
+      const m = /^\[kkd-dev:([a-z-]+)\]\s*([\s\S]*)$/.exec(c.body);
+      if (m && TIMELINE_EVENTS.has(m[1])) timeline.push({ at: c.createdAt, event: m[1], text: redactPrivatePaths(m[2].replace(/^(\[kkd-dev:[\w-]+\]\s*)+/, '').trim()).slice(0, 400) });
+    }
+    out.push({
+      storyId: s.id, title: s.title, agent: spec.agent,
+      state: s.status === 'blocked' ? 'failed' : 'awaiting_review',
+      reason: redactPrivatePaths(reason), since: hit?.createdAt ?? s.updatedAt, conversationId,
+      timeline: timeline.slice(-8), canRetry: true,
+    });
+  }
+  return out.sort((a, b) => Date.parse(b.since) - Date.parse(a.since));
+}
+
 // ---------------------------------------------------------------- reporting back to the chat
 
 /**
@@ -1902,6 +1959,34 @@ export async function devStoryDetail(db: CoreDatabase, kandev: KandevClient, sto
  * is derived from KKD's own evidence comments and posted once (tracked by `[kkd-dev:reported]` markers), so restarts
  * neither lose nor repeat reports.
  */
+/**
+ * A report key in the form it is stored and compared. `addComment` trims the comment body, so a key cut from a longer
+ * text that happened to end in a space was stored without it and never matched again: one failed worker story posted
+ * its "needs you" message on every 5-second poll, 30,163 times in three days (found 2026-11-24). Every key goes through
+ * this before it is written or looked up, so what is compared is always what is stored.
+ */
+export function reportKey(raw: string): string {
+  return raw.replace(/\s+/g, ' ').trim();
+}
+
+/**
+ * Posts one report into a conversation at most once per (story, key), whoever calls it and however often: the marker
+ * is looked up in the database in its stored form, and the marker and the message are written in ONE transaction, so
+ * neither a repeated poll, a restart, a replayed event nor a failure between the two writes can post it a second time.
+ * Returns true when a message was written now. A deleted conversation still records the marker (nothing to retry).
+ */
+export function postStoryReportOnce(db: CoreDatabase, input: { storyId: string; conversationId: string; key: string; content: string }): boolean {
+  const marker = `[kkd-dev:reported] ${reportKey(input.key)}`;
+  return db.transaction(() => {
+    if (db.get('SELECT 1 AS x FROM story_comments WHERE storyId = ? AND body = ? LIMIT 1', [input.storyId, marker])) return false;
+    addComment(db, input.storyId, { author: DEV_ACTOR, body: marker });
+    try {
+      appendMessage(db, input.conversationId, { role: 'assistant', content: input.content, actor: DEV_ACTOR });
+    } catch { /* conversation deleted: the marker stays, so this is not retried forever */ }
+    return true;
+  });
+}
+
 export function reportDevStoryProgress(db: CoreDatabase): number {
   const rows = db.all<{ storyId: string; body: string }>(
     "SELECT storyId, body FROM story_comments WHERE body LIKE '[kkd-dev:report-to]%'",
@@ -1917,13 +2002,9 @@ export function reportDevStoryProgress(db: CoreDatabase): number {
   let posted = 0;
   for (const [batchId, batch] of batches) {
     const stories = batch.storyIds.map(id => { try { return getStory(db, id); } catch { return null; } }).filter((s): s is StoryRecord => Boolean(s));
-    const reported = (id: string) => new Set(listComments(db, id).filter(c => c.body.startsWith('[kkd-dev:reported]')).map(c => c.body.slice('[kkd-dev:reported] '.length)));
-    const post = (storyId: string, key: string, content: string) => {
-      try {
-        appendMessage(db, batch.conversationId, { role: 'assistant', content, actor: DEV_ACTOR });
-      } catch { /* conversation deleted: keep the marker so we do not retry forever */ }
-      addComment(db, storyId, { author: DEV_ACTOR, body: `[kkd-dev:reported] ${key}` });
-      posted++;
+    const reported = (id: string) => new Set(listComments(db, id).filter(c => c.body.startsWith('[kkd-dev:reported]')).map(c => reportKey(c.body.slice('[kkd-dev:reported]'.length))));
+    const post = (storyId: string, rawKey: string, content: string) => {
+      if (postStoryReportOnce(db, { storyId, conversationId: batch.conversationId, key: rawKey, content })) posted++;
     };
     const tag = (s: StoryRecord, t: string) => [...listComments(db, s.id)].reverse().find(c => c.body.startsWith(`[kkd-dev:${t}]`))?.body ?? null;
     for (const s of stories) {
@@ -1931,7 +2012,7 @@ export function reportDevStoryProgress(db: CoreDatabase): number {
       const integrated = tag(s, 'integrated');
       if (s.status === 'done' && integrated) {
         const key = `integrated ${integrated.slice(0, 60)}`;
-        if (!done.has(key)) post(s.id, key, `✅ **${s.title}** is done — ${devSpec(s)!.agent} finished; ${verificationPhrase(integrated, devSpec(s)!)}: ${integrated.replace('[kkd-dev:integrated] ', '')}${deviceVerificationOf(s, devSpec(s)!, listComments(db, s.id))?.state === 'awaiting' ? '\n⏳ Awaiting device verification: automated checks passed, but this has not been verified on a physical phone.' : ''}`);
+        if (!done.has(reportKey(key))) post(s.id, key, `✅ **${s.title}** is done — ${devSpec(s)!.agent} finished; ${verificationPhrase(integrated, devSpec(s)!)}: ${integrated.replace('[kkd-dev:integrated] ', '')}${deviceVerificationOf(s, devSpec(s)!, listComments(db, s.id))?.state === 'awaiting' ? '\n⏳ Awaiting device verification: automated checks passed, but this has not been verified on a physical phone.' : ''}`);
       } else if (s.status === 'implementing') {
         // A worker action KKD's policy cannot allow on its own is waiting for a person. Without a chat message the run
         // just looks hung (and every story queued behind it with it).
@@ -1943,21 +2024,21 @@ export function reportDevStoryProgress(db: CoreDatabase): number {
           const lines = lastApproval.body.split(/\r?\n/);
           const pendingId = lines[0].slice('[kkd-dev:approval] '.length);
           const key = `approval ${pendingId}`;
-          if (!done.has(key)) post(s.id, key, `⏸ **${s.title}** is paused and needs your decision: ${lines.slice(1).join(' ').slice(0, 400)}\nAllow or deny it in Panda → Tasks. The run does not continue until you decide.`);
+          if (!done.has(reportKey(key))) post(s.id, key, `⏸ **${s.title}** is paused and needs your decision: ${lines.slice(1).join(' ').slice(0, 400)}\nAllow or deny it in Panda → Tasks. The run does not continue until you decide.`);
         }
         // KKD rejected the worker's result and sent it back: say so (otherwise the repair loop is invisible).
         const sinceRetry = comments.slice(comments.map(c => c.body.startsWith('[kkd-dev:retry]')).lastIndexOf(true) + 1);
         const failures = sinceRetry.filter(c => c.body.startsWith('[kkd-dev:verify-failed]'));
         failures.forEach((f, i) => {
           const key = `verify-failed ${f.createdAt}`;
-          if (done.has(key)) return;
+          if (done.has(reportKey(key))) return;
           const text = f.body.replace(/^\[kkd-dev:verify-failed\]\s*/, '').split(/\r?\n/).filter(Boolean).slice(0, 2).join(' — ').slice(0, 420);
           post(s.id, key, `🔁 **${s.title}** — KKD rejected the worker's result (attempt ${i + 1} of ${MAX_VERIFY_RETRIES + 1}) and sent it back for repair: ${text}`);
         });
       } else if (s.status === 'delivery_approval') {
         const hit = tag(s, 'awaiting-review');
         const key = `awaiting-review ${hit?.slice(0, 80)}`;
-        if (hit && !done.has(key)) post(s.id, key, `🔎 **${s.title}** is waiting for your review — ${hit.replace(/^\[kkd-dev:[\w-]+\]\s*/, '').split('\n')[0].slice(0, 300)}\nSay "approve ${s.title}" after you looked at it, or open Tasks.`);
+        if (hit && !done.has(reportKey(key))) post(s.id, key, `🔎 **${s.title}** is waiting for your review — ${hit.replace(/^\[kkd-dev:[\w-]+\]\s*/, '').split('\n')[0].slice(0, 300)}\nSay "approve ${s.title}" after you looked at it, or open Tasks.`);
       } else if (s.status === 'blocked' && !isStopped(db, s.id)) {
         // The block that happened since the latest retry (an earlier, already-retried one must not hide or repeat it).
         const comments = listComments(db, s.id);
@@ -1965,8 +2046,12 @@ export function reportDevStoryProgress(db: CoreDatabase): number {
         const hit = sinceRetry.find(c => c.body.startsWith('[kkd-dev:needs-human]')) ?? sinceRetry.find(c => c.body.startsWith('[kkd-dev:verify-failed]'));
         const why = hit?.body ?? null;
         if (why) {
-          const key = `needs-human ${hit!.createdAt} ${why.slice(0, 60)}`;
-          if (!done.has(key)) post(s.id, key, `⚠️ **${s.title}** needs you: ${why.replace(/^\[kkd-dev:[\w-]+\]\s*/g, '').replace(/^\[kkd-dev:[\w-]+\]\s*/, '').split('\n')[0].slice(0, 300)}\nSay "retry" or "reassign to claude/opencode", or open Tasks.`);
+          // One notification per failure EVENT: the key is the id of the comment that recorded it. A new failure after a
+          // retry is a new comment and so a new notification; the same failure seen by another poll is not. Markers
+          // written before 2026-11-24 used the comment's time and text, and still count.
+          const key = `needs-human ${hit!.id}`;
+          const legacyKey = `needs-human ${hit!.createdAt} ${why.slice(0, 60)}`;
+          if (!done.has(reportKey(key)) && !done.has(reportKey(legacyKey))) post(s.id, key, `⚠️ **${s.title}** needs you: ${why.replace(/^\[kkd-dev:[\w-]+\]\s*/g, '').replace(/^\[kkd-dev:[\w-]+\]\s*/, '').split('\n')[0].slice(0, 300)}\nSay "retry" or "reassign to claude/opencode", or open Tasks.`);
         }
       }
     }
@@ -1974,7 +2059,7 @@ export function reportDevStoryProgress(db: CoreDatabase): number {
     const head = stories[0];
     const settledDone = stories.filter(s => s.status === 'done').length;
     // Keyed by the completed count: a batch that settled with a story needing you reports again once it is fixed.
-    if (allSettled && head && !reported(head.id).has(`final ${batchId} ${settledDone}/${stories.length}`)) {
+    if (allSettled && head && !reported(head.id).has(reportKey(`final ${batchId} ${settledDone}/${stories.length}`))) {
       const doneCount = settledDone;
       const spec = devSpec(head)!;
       const lines = stories.map(s => {

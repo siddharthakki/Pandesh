@@ -22,4 +22,5 @@ Windows 11, PowerShell primary. Work tracker (git-excluded): `WORK_TRACKER.md` â
 ## Workflow
 - Feature work in worktrees/branches; open PRs, do not merge to `main` unasked.
 - Prefer evidence (test output, screenshots) over claiming PASS.
+- Background routines (anything on a timer or a poll: reminders, automations, worker reports, nightly maintenance) must be idempotent and bounded. Each one needs: a stable id for the event it acts on, a "done" record written in the same transaction as the effect and looked up in its stored form, a retry limit, and a failure state that stops it. Test it by running the tick hundreds of times and across a restart with nothing changed: nothing may be written. (2026-11-24: a report key that lost a trailing space posted one message every 5 s, 30,163 times.)
 - Known flaky CI tests: missionRepair "bounded repair, then commits", conversationRelevanceSequence "operator declines". Re-run before judging.

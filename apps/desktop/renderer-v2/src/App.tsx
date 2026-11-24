@@ -38,7 +38,7 @@ export function App() {
   const [variantForced, setVariantForced] = useState(false);
   useEffect(() => { api.getUiVariant().then((v) => setVariantForced(v.forcedByEnv)).catch(() => setVariantForced(false)); }, []);
 
-  const needs = needsYouCount(overview.data?.tasks ?? [], snapshot);
+  const needs = needsYouCount(overview.data?.tasks ?? [], snapshot) + (overview.data?.workers?.length ?? 0);
 
   // The wake word listens on every view: a detection opens the chat and starts a voice turn there.
   const [voiceBusy, setVoiceBusy] = useState(false);

@@ -3066,6 +3066,9 @@ export class DesktopSession {
       bridgeDeliver: { path: `/v1/bridge/tasks/${id}/deliver`, method: 'POST', body: {} },
       bridgeDiff: { path: `/v1/bridge/tasks/${id}/diff` },
       // A worker action held for a person (Kandev permission). Core accepts this only over the host transport.
+      // Worker tasks that failed or wait for review, for the task screen's "Needs you" column, and the retry Core already offers.
+      workerAttention: { path: '/v1/dev-stories/needs-attention' },
+      devStoryRetry: { path: `/v1/dev-stories/${encodeURIComponent(String(args.storyId ?? ''))}/retry`, method: 'POST', body: {} },
       devStoryPermission: { path: `/v1/dev-stories/${encodeURIComponent(String(args.storyId ?? ''))}/permissions/${encodeURIComponent(String(args.pendingId ?? ''))}`, method: 'POST', body: { allow: args.allow === true, via: 'window' } },
       mission: { path: `/v1/missions/${id}` },
       missionReceipt: { path: `/v1/missions/${id}/receipt` },
