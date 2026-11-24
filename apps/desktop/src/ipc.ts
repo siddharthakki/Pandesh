@@ -184,6 +184,8 @@ export const DESKTOP_CHANNELS = {
   designPreview: 'desktop:designPreview',
   /** A picture a 3D scene page rendered of itself, saved for the check of that scene (never shown as a result). */
   saveSceneShot: 'desktop:saveSceneShot',
+  /** The model a 3D scene page exported of itself (binary glTF), saved for a render outside the preview. */
+  saveSceneModel: 'desktop:saveSceneModel',
   /** Bounded local deep-links into the standalone Image Generation Studio
    * app (:8989) for one already-verified Core artifact — never an
    * arbitrary/user-supplied URL. */

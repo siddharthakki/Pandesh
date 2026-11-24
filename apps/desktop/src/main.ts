@@ -1677,6 +1677,11 @@ function registerIpc(): void {
     if (!session) throw new Error('desktop session is not started');
     return session.saveSceneShot(String(artifactId ?? ''), String(dataUrl ?? ''), typeof view === 'string' ? view : null);
   });
+  ipcMain.handle(DESKTOP_CHANNELS.saveSceneModel, async (_event, artifactId: unknown, bytes: unknown, info: unknown) => {
+    if (!session) throw new Error('desktop session is not started');
+    if (!(bytes instanceof Uint8Array)) throw new Error('the model must be binary data');
+    return session.saveSceneModel(String(artifactId ?? ''), bytes, info);
+  });
   ipcMain.handle(DESKTOP_CHANNELS.saveWorkshopFile, async (_event, artifactId: unknown) => {
     if (!session || !window) throw new Error('desktop session is not started');
     const source = await session.artifactPath(String(artifactId ?? ''));

@@ -14,6 +14,9 @@
  * standing authorization in Auto, refused in Plan Only. Everything here runs on this PC; nothing goes online.
  */
 import * as crypto from 'node:crypto';
+import * as fs from 'node:fs';
+import { registerArtifact } from '../domain/artifacts';
+import { findAssetLibrary, findBlender, releaseLocalModels, renderSceneInBlender } from './workshopBlender';
 import type { CoreDatabase } from '../db/connection';
 import { canonicalJson } from '../domain/approvalArguments';
 import type { RuntimeEventRecord } from '../shared/wireTypes';
@@ -60,6 +63,8 @@ export interface WorkshopCapabilityOptions {
   /** Test seams: writes a 3D scene function with the local model, and has its pictures looked at (workshopSceneWriter.ts). */
   sceneWriter?: typeof writeSceneCode;
   sceneJudge?: typeof judgeScenePictures;
+  /** Test seams for render_scene: where Blender and the asset library are, the render itself, and freeing graphics memory. */
+  blender?: { find?: () => string | null; library?: typeof findAssetLibrary; render?: typeof renderSceneInBlender; release?: () => Promise<string[]> };
   /** Test seam: the models on this PC, for choosing a second local writer. */
   sceneModels?: () => Promise<ModelSnapshot>;
   /** How long the window may take to draw a scene and render its pictures. */
@@ -685,6 +690,82 @@ export function createWorkshopCapabilityAdapter(options: WorkshopCapabilityOptio
     return ok(`CREATED${judgement ? ' and CHECKED' : ''}: ${where} ${drew} ${looked} The viewer can orbit, zoom, and show or hide each group.`, 'workshop_scene_created', act);
   }
 
+  /**
+   * Renders the conversation's 3D scene in Blender on this PC: the scene exports its own geometry from the preview, a fixed
+   * script puts real assets from the library where the scene's simple trees, bushes, rocks and lamps stood, and the
+   * pictures Blender rendered are looked at by a local vision model. What was not found, not rendered or not checked is said.
+   */
+  async function renderScene(call: ModelToolCall, ctx: ToolExecutionContext): Promise<ToolExecutionResult> {
+    const a = call.arguments ?? {};
+    const conversationId = ctx.correlationId ?? null;
+    const sceneOf = (w: WorkshopSummary): ReturnType<typeof parseScenePage> => {
+      if (w.type !== 'design') return null;
+      try { return parseScenePage(fs.readFileSync(readWorkshopVersion(db, w.versions[w.versions.length - 1].artifactId).artifact.absolutePath, 'utf8')); } catch { return null; }
+    };
+    let summary: WorkshopSummary | null = null;
+    if (typeof a.workshop === 'string' && a.workshop.trim()) {
+      const target = resolveWorkshopTarget(db, { conversationId, named: a.workshop });
+      if (!target.ok) return fail(`NOT RENDERED: ${target.reason}.${CANDIDATES(target.candidates)}`, 'workshop_target_ambiguous');
+      summary = target.workshop;
+    } else {
+      // "The scene" is this conversation's latest 3D scene, whatever else was made after it (a picture, a page): found
+      // live 2026-11-24, when a generated picture made later in the chat was taken for the scene.
+      const scenes = (conversationId ? listWorkshops(db, { conversationId }) : []).filter((w) => sceneOf(w)).sort((x, y) => String(y.updatedAt).localeCompare(String(x.updatedAt)));
+      summary = scenes[0] ?? null;
+      if (!summary) return fail('NOT RENDERED: this conversation has no 3D scene yet. Only a scene built with build_scene can be rendered in Blender; build the scene first.', 'workshop_type_unsupported');
+    }
+    const latest = summary.versions[summary.versions.length - 1];
+    const page = sceneOf(summary);
+    if (!page) return fail(`NOT RENDERED: "${summary.title}" is not a 3D scene. Only a scene built with build_scene can be rendered in Blender; build the scene first.`, 'workshop_type_unsupported');
+    const blender = (options.blender?.find ?? findBlender)();
+    if (!blender) return fail('NOT RENDERED: Blender was not found on this PC (set PANDESH_BLENDER to blender.exe, or install Blender). The interactive scene in the Workshop is unchanged.', 'workshop_blender_missing');
+    const found = (options.blender?.library ?? findAssetLibrary)(dataDir);
+    if (!found.ok) return fail(`NOT RENDERED: ${found.reason}. Nothing is downloaded automatically: tell the user, and ask before fetching any asset.`, 'workshop_assets_missing');
+    const library = found.library;
+    const progress = (stage: string) => recordWorkshopProgress(db, { workshopId: summary.workshopId, conversationId, attemptId: ctx.attemptId ?? null, stage, actor: 'core:workshop', publish: options.publish });
+
+    progress(`Taking "${summary.title}" out of the Workshop`);
+    await openInWindow(conversationId, ctx.attemptId ?? null, summary, latest.artifactId);
+    const exported = await requestWorkshopCommand(db, {
+      conversationId, attemptId: ctx.attemptId ?? null, workshopId: summary.workshopId, artifactId: latest.artifactId, action: 'export', args: { format: 'scene-model', replace: library.replaces },
+      actor: 'core:workshop', publish: options.publish, timeoutMs: Math.max(options.sceneCheckTimeoutMs ?? 0, 90_000),
+    });
+    const model = (exported.state as { model?: { path?: unknown; infoPath?: unknown } } | undefined)?.model;
+    // Only the files the host saved for this very version, in its own folder, are used.
+    const mine = (p: unknown, name: string) => (typeof p === 'string' && path.basename(path.dirname(p)) === 'workshop-shots' && path.basename(p) === `${latest.artifactId}-${name}` ? p : null);
+    const glb = mine(model?.path, 'scene.glb'); const infoPath = mine(model?.infoPath, 'scene.json');
+    if (exported.status !== 'done' || !glb || !infoPath) {
+      return fail(exported.status === 'not_confirmed'
+        ? 'NOT RENDERED: the Pandesh window did not answer (the scene is exported from the open Workshop). Ask the user to open the scene in the Workshop and try again.'
+        : `NOT RENDERED: the scene could not be exported: ${exported.detail ?? 'no model came back'}.`, 'workshop_render_export_failed');
+    }
+    let sceneInfo: unknown = {};
+    try { sceneInfo = JSON.parse(fs.readFileSync(infoPath, 'utf8')); } catch { /* the render then has no stand-ins to replace */ }
+
+    const draft = a.quality === 'draft';
+    const outDir = path.join(dataDir, 'workshop-renders', `${latest.artifactId}-${Date.now()}`);
+    progress('Freeing graphics memory for the render');
+    const released = await (options.blender?.release ?? releaseLocalModels)();
+    progress('Rendering in Blender with real assets (a few minutes)');
+    const rendered = await (options.blender?.render ?? renderSceneInBlender)({ blender, library, glb, scene: sceneInfo, outDir, signal: ctx.signal, samples: draft ? 48 : 128, width: draft ? 1280 : 1600 });
+    if (!rendered.ok) return fail(`NOT RENDERED: Blender did not produce a picture: ${rendered.error ?? 'unknown reason'}.${rendered.log ? ` Last output: ${rendered.log.replace(/\s+/g, ' ').slice(-400)}` : ''} The interactive scene in the Workshop is unchanged.`, 'workshop_render_failed');
+
+    const conversationExists = conversationId ? db.get('SELECT id FROM conversations WHERE id = ?', [conversationId]) : undefined;
+    const artifacts = rendered.pictures.map((p) => registerArtifact(db, {
+      conversationId: conversationExists ? conversationId : null, attemptId: ctx.attemptId ?? null, kind: 'image', title: `${summary.title} — Blender render (${p.view})`.slice(0, 200), mimeType: 'image/jpeg',
+      absolutePath: p.path, source: 'blender-render', metadata: { workshopId: summary.workshopId, sceneArtifactId: latest.artifactId, view: p.view, assets: rendered.used, assetLicence: library.licence }, actor: 'core:workshop', clientId: null,
+    }));
+    progress('Looking at the rendered pictures on this PC');
+    const judged = await (options.sceneJudge ?? judgeScenePictures)(page.description, rendered.pictures.map((p) => p.path), { signal: ctx.signal, prefer: localModelFor(db, conversationId) });
+    const used = Object.entries(rendered.used).map(([id, n]) => `${id} ×${n}`).join(', ') || 'none';
+    const where = `"${summary.title}" (version ${latest.number}) rendered in Blender on this PC (Cycles, ${rendered.device ?? 'device unknown'}, ${Math.round(rendered.seconds)} s). ${rendered.pictures.length} picture(s): ${rendered.pictures.map((p, i) => `${p.view} [artifact ${artifacts[i].id}] ${p.path}`).join('; ')}.${rendered.blend ? ` Editable Blender project: ${rendered.blend}.` : ' The Blender project was not saved.'} Assets from the library on this PC (${library.licence}): ${used}.${rendered.warnings.length ? ` Notes: ${rendered.warnings.join('; ')}.` : ''}${released.length ? ` To free graphics memory the local model(s) ${released.join(', ')} were unloaded; they load again on the next message.` : ''}`;
+    const act = { activity: { kind: 'workshop' as const, title: `Rendered ${summary.title} in Blender`, artifactIds: artifacts.map((x) => x.id), workshop: { workshopId: summary.workshopId, type: summary.type, action: 'render', version: latest.number } } };
+    if (!judged.ok) return ok(`RENDERED, NOT CHECKED BY EYE: ${where} How the pictures look was not checked: ${judged.reason}. Say that plainly.`, 'workshop_scene_rendered_unchecked', act);
+    const j = judged.judgement;
+    if (j.verdict !== 'matches') return ok(`RENDERED, BUT NOT ALL RECOGNISED: ${where} ${j.model} looked at the pictures: it could not recognise ${j.missing.join(', ') || 'some requested things'} (the pictures look like: ${j.looksLike}). Tell the user what is missing; do not call the render finished.`, 'workshop_scene_rendered_partly', act);
+    return ok(`RENDERED and CHECKED: ${where} ${j.model} looked at the pictures on this PC and recognised ${j.visible.join(', ') || 'the requested things'}.`, 'workshop_scene_rendered', act);
+  }
+
   // ------------------------------------------------------------------ status (read-only)
 
   async function status(call: ModelToolCall, ctx: ToolExecutionContext): Promise<ToolExecutionResult> {
@@ -728,6 +809,7 @@ export function createWorkshopCapabilityAdapter(options: WorkshopCapabilityOptio
         case 'workshop_view': return await view(call, ctx);
         case 'build_3d_model': return await create({ ...call, arguments: { ...(call.arguments ?? {}), type: '3d' } }, ctx);
         case 'build_scene': return await buildScene(call, ctx);
+        case 'render_scene': return await renderScene(call, ctx);
         case 'create_simulation': return await create({ ...call, arguments: { ...(call.arguments ?? {}), type: 'simulation' } }, ctx);
         case 'create_design': return await create({ ...call, arguments: { ...(call.arguments ?? {}), type: 'design' } }, ctx);
         case 'create_video': return await create({ ...call, arguments: { ...(call.arguments ?? {}), type: 'video' } }, ctx);
@@ -773,6 +855,11 @@ export function createWorkshopCapabilityAdapter(options: WorkshopCapabilityOptio
       name: 'build_scene',
       description: 'Build ANY 3D scene the user describes (a house with a garden, a street, a room, a landscape, a vehicle, a solar system, a playground …) as an interactive three.js scene in the Pandesh Workshop: orbit, zoom, lights and shadows, and a show/hide toggle for each part. Pass description = everything the scene should contain, in the user\'s words. Pandesh writes the scene on this PC with the local model, draws it in a sandboxed preview, and checks it from pictures of the running scene; the result says what was recognised and what was not. Use this instead of build_3d_model for anything that is not a mechanical assembly of simple parts. If the result is NOT ACHIEVED, tell the user plainly and ask whether to hand the scene to a stronger model; with their yes, a stronger model may call build_scene again with code = the scene function it wrote. Approval-gated.',
       parameters: { type: 'object', properties: { description: { type: 'string', description: 'what the scene should contain, in the user\'s words' }, title: { type: 'string', description: 'a short name (optional)' }, code: { type: 'string', description: 'optional: the body of function (THREE, kit) { ... } yourself, instead of letting the local model write it' } }, required: ['description'] },
+    },
+    {
+      name: 'render_scene',
+      description: 'Render the 3D scene of this conversation as realistic pictures in Blender on this PC (Cycles, real sky light and shadows). The scene built with build_scene is taken as it is; its simple trees, bushes, rocks and lamps are replaced with real 3D assets from the asset library on this PC, and a grass ground gets real grass. Returns three pictures (street-level, from above, front) and an editable .blend project, and says what a local vision model recognised in the pictures. Use it when the user asks for a realistic, photo-like or Blender render of a scene; build the scene with build_scene first. Takes a few minutes and unloads the local chat model from graphics memory while it renders. Nothing is downloaded. Approval-gated.',
+      parameters: { type: 'object', properties: { workshop: { type: 'string', description: 'scene id or title (optional: the scene of this conversation)' }, quality: { type: 'string', enum: ['draft', 'final'], description: 'draft is faster and grainier; final is the default' } }, required: [] },
     },
     {
       name: 'create_simulation',

@@ -4104,6 +4104,24 @@ export class DesktopSession {
     return { path: file, bytes: bytes.byteLength };
   }
 
+  /**
+   * The model a 3D scene page exported of itself inside the sandboxed preview (binary glTF), with what it left out for a
+   * renderer to replace. Like the pictures it is working material for a check or a render, not a result: replaced per version.
+   * The numbers and names are the page's own report: data, never instructions.
+   */
+  async saveSceneModel(artifactId: string, bytes: Uint8Array, info: unknown): Promise<{ path: string; infoPath: string; bytes: number }> {
+    if (!/^[A-Za-z0-9_-]{1,80}$/.test(artifactId)) throw new Error('not an artifact id');
+    if (bytes.byteLength < 20 || bytes.byteLength > 96 * 1024 * 1024) throw new Error('the model is empty or larger than 96 MB');
+    if (Buffer.from(bytes.buffer, bytes.byteOffset, 4).toString('latin1') !== 'glTF') throw new Error('the model is not a binary glTF file');
+    const text = JSON.stringify(info ?? {});
+    if (text.length > 400_000) throw new Error('the scene report is too large');
+    const dir = path.join(this.dataDir, 'workshop-shots');
+    fs.mkdirSync(dir, { recursive: true });
+    const file = path.join(dir, `${artifactId}-scene.glb`); const infoPath = path.join(dir, `${artifactId}-scene.json`);
+    fs.writeFileSync(file, bytes); fs.writeFileSync(infoPath, text);
+    return { path: file, infoPath, bytes: bytes.byteLength };
+  }
+
   async listArtifacts(conversationId?: string): Promise<DesktopArtifactView[]> {
     const result = await this.durableReadClient().listArtifacts(conversationId);
     // A page screenshot is a preview of work in the workspace, not a result.
@@ -4906,6 +4924,9 @@ export class DesktopSession {
   private async planMediaRequest(text: string, staged: StagedForSend[] = []): Promise<MediaPlan | null> {
     // A video to be produced (script, narration, subtitles, music, a platform package) is the lead's work, not one render.
     if (isVideoProductionRequest(text) && /\b(?:videos?|clips?|movies?|films?|shorts?|reels?)\b/i.test(text)) return null;
+    // Rendering a 3D scene (in Blender, or "render this scene") is work on the real scene, for Core's Workshop tools: a
+    // generated picture "in Blender style" is not a render of it (found live 2026-11-24).
+    if (/\bblender\b/i.test(text) || /\brender(?:ing|ed|s)?\b[^.?!]{0,40}\b(?:this|the|that|my|our|it)\b[^.?!]{0,20}\b(?:scene|3d|model)\b/i.test(text)) return null;
     const followUp = detectImageFollowUp(text);
     const videoAsk = detectVideoGenerationIntent(text);
     const attachedImage = staged.find((item) => item.kind === 'image');

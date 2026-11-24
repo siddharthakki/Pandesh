@@ -287,6 +287,8 @@ const desktopApi = {
     ipcRenderer.invoke(DESKTOP_CHANNELS.designPreview, artifactId),
   saveSceneShot: (artifactId: string, dataUrl: string, view: string | null): Promise<{ path: string; bytes: number }> =>
     ipcRenderer.invoke(DESKTOP_CHANNELS.saveSceneShot, artifactId, dataUrl, view),
+  saveSceneModel: (artifactId: string, bytes: Uint8Array, info: unknown): Promise<{ path: string; infoPath: string; bytes: number }> =>
+    ipcRenderer.invoke(DESKTOP_CHANNELS.saveSceneModel, artifactId, bytes, info),
   openArtifactInStudio: (artifactId: string): Promise<{ opened: boolean }> =>
     ipcRenderer.invoke(DESKTOP_CHANNELS.openArtifactInStudio, artifactId),
   useArtifactAsReference: (artifactId: string): Promise<{ opened: boolean }> =>

@@ -245,6 +245,8 @@ export interface DesktopApi {
   designPreview(artifactId: string): Promise<{ url: string; nonce: string; expiresAt: string; warnings: string[] }>;
   /** Saves the picture a 3D scene page rendered of itself, for the check of that scene. */
   saveSceneShot(artifactId: string, dataUrl: string, view: string | null): Promise<{ path: string; bytes: number }>;
+  /** Saves the model a 3D scene page exported of itself (binary glTF) with its report of what it left out. */
+  saveSceneModel(artifactId: string, bytes: Uint8Array, info: unknown): Promise<{ path: string; infoPath: string; bytes: number }>;
   /** Settings → Diagnostics and Updates: the host's own reports (no credentials in either). */
   getAppMetadata(): Promise<AppMetadata>;
   getDiagnosticsReport(): Promise<string>;

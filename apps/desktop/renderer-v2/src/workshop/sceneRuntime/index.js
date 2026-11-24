@@ -12,6 +12,7 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js';
+import { GLTFExporter } from 'three/examples/jsm/exporters/GLTFExporter.js';
 import { installAssets } from './assets.js';
 
 const NONCE = typeof window.__PANDESH_SCENE_NONCE === 'string' ? window.__PANDESH_SCENE_NONCE : '';
@@ -133,7 +134,8 @@ function createKit(scene, camera, controls, sun, state) {
     ground(size = 60, color = '#5f9a3d', surface = null) {
       const reach = Math.max(Number(size) || 60, 900);
       const g = new THREE.Mesh(new THREE.PlaneGeometry(reach, reach), mat(color, surface ? { surface, repeat: [reach / 3, reach / 3], roughness: 1 } : { roughness: 1 }));
-      g.rotation.x = -Math.PI / 2; g.name = 'ground'; g.userData.noCast = true; scene.add(g); return g;
+      g.rotation.x = -Math.PI / 2; g.name = 'ground'; g.userData.noCast = true; scene.add(g);
+      state.ground = { color: String(color), surface: surface ? String(surface) : null }; return g;
     },
     sky(top = '#5fa8e6', horizon = '#eef6fb') {
       // A dome, not a flat backdrop: the pale band sits at the real horizon, where the ground fades into it.
@@ -245,6 +247,12 @@ function createKit(scene, camera, controls, sun, state) {
     },
   };
   installAssets(kit, { SURFACES, canvasTexture, shade, seeded, state });
+  // Simple shapes that stand in for something a renderer with real assets can replace (a tree, a bush, a rock…): each
+  // carries its kind, so an export can leave it out and say where it stood.
+  for (const [name, kind] of [['tree', 'tree'], ['shrub', 'shrub'], ['hedge', 'hedge'], ['rock', 'rock'], ['lamp', 'lamp'], ['patioSet', 'tableset'], ['cloud', 'cloud']]) {
+    const make = kit[name]; if (typeof make !== 'function') continue;
+    kit[name] = (...args) => { const o = make(...args); if (o && o.userData) o.userData.standIn = kind; return o; };
+  }
   return kit;
 }
 
@@ -379,7 +387,34 @@ function run(build) {
     camera.position.copy(keep.position); controls.target.copy(keep.target); controls.update(); renderer.render(scene, camera);
     return { dataUrl, width: w, height: hgt };
   };
-  window.PandeshScene.api = { facts, setGroup, setRotating, setView, shot, scene, camera, renderer };
+  /**
+   * The scene as one binary glTF, for a renderer outside this page. Ground, sky, lights and backdrop clouds are left out
+   * (the other renderer has its own), and so is every stand-in whose kind is in `replace`: those come back as a list of
+   * what stood where, how large, and turned how far.
+   */
+  const exportModel = async (replace = []) => {
+    const swap = new Set(replace.map(String)); const hidden = []; const standIns = [];
+    const hide = (o) => { if (o.visible) { o.visible = false; hidden.push(o); } };
+    const box = new THREE.Box3(); const v = new THREE.Vector3();
+    scene.traverse((o) => {
+      if (o.isLight || o.name === 'ground' || o.name === 'sky' || o.name === 'backdrop') { hide(o); return; }
+      const kind = o.userData && o.userData.standIn;
+      if (!kind || !(swap.has(kind) || kind === 'cloud')) return;
+      for (let p = o.parent; p; p = p.parent) if (p.userData && p.userData.standIn && swap.has(p.userData.standIn)) return;
+      if (kind !== 'cloud' && o.visible) {
+        // Its size is measured unturned, so a hedge reports its real length and thickness.
+        const turn = o.rotation.y; o.rotation.y = 0; o.updateMatrixWorld(true); box.setFromObject(o); const s = box.getSize(v).toArray();
+        o.rotation.y = turn; o.updateMatrixWorld(true); const at = o.getWorldPosition(new THREE.Vector3());
+        if (Number.isFinite(s[0] + s[1] + s[2])) standIns.push({ kind, name: String(o.name || '').slice(0, 40), x: round(at.x), z: round(at.z), base: round(box.min.y), w: round(s[0]), h: round(s[1]), d: round(s[2]), turn: round(turn) });
+      }
+      hide(o);
+    });
+    try {
+      const glb = await new GLTFExporter().parseAsync(scene, { binary: true, onlyVisible: true });
+      return { glb, standIns: standIns.slice(0, 600), ground: state.ground ?? null, center: center.toArray().map(round), radius: round(radius), size: [round(size.x), round(size.y), round(size.z)] };
+    } finally { for (const o of hidden) o.visible = true; }
+  };
+  window.PandeshScene.api = { facts, setGroup, setRotating, setView, shot, exportModel, scene, camera, renderer };
 
   // Requests from the Workshop (only with this page's nonce): facts, a picture, a group toggle, a camera view.
   window.addEventListener('message', (e) => {
@@ -389,6 +424,12 @@ function run(build) {
     else if (d.kind === 'scene-group') post('scene', { ...facts(), changed: setGroup(String(d.group), d.on !== false) });
     else if (d.kind === 'scene-view') post('scene', { ...facts(), changed: setView(String(d.view)) });
     else if (d.kind === 'scene-rotate') { setRotating(d.on !== false); post('scene', facts()); }
+    else if (d.kind === 'scene-model') {
+      exportModel(Array.isArray(d.replace) ? d.replace.slice(0, 20) : []).then(
+        (m) => { try { window.parent.postMessage({ pandeshPreview: NONCE, kind: 'model', data: { id: d.id, ...m } }, '*', [m.glb]); } catch { post('model', { id: d.id, error: 'the model could not be handed over' }); } },
+        (err) => post('model', { id: d.id, error: String(err?.message ?? err).slice(0, 300) }),
+      );
+    }
   });
   // First report once a few frames have really been drawn.
   const ready = () => { if (state.frames >= 3 || state.error) post('scene', facts()); else setTimeout(ready, 120); };

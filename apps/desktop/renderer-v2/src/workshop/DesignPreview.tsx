@@ -63,6 +63,7 @@ export const DesignPreview = forwardRef<ViewerHandle, Props>(function DesignPrev
   const sceneFacts = useRef<Record<string, unknown> | null>(null);
   const sceneWaiters = useRef<Array<(f: Record<string, unknown>) => void>>([]);
   const shotWaiters = useRef<Map<string, (d: { dataUrl: string; width: number; height: number } | null) => void>>(new Map());
+  const modelWaiters = useRef<Map<string, (d: Record<string, unknown> | null) => void>>(new Map());
 
   // A fresh token for every version shown (and on Reload): the host serves only that verified page, from memory.
   useEffect(() => {
@@ -114,6 +115,10 @@ export const DesignPreview = forwardRef<ViewerHandle, Props>(function DesignPrev
         const d = data.data as { id?: unknown; dataUrl?: unknown; width?: unknown; height?: unknown };
         const waiter = shotWaiters.current.get(String(d.id ?? ''));
         if (waiter) { shotWaiters.current.delete(String(d.id ?? '')); waiter(typeof d.dataUrl === 'string' && d.dataUrl.startsWith('data:image/') ? { dataUrl: d.dataUrl, width: Number(d.width) || 0, height: Number(d.height) || 0 } : null); }
+      } else if (data.kind === 'model' && data.data && typeof data.data === 'object') {
+        const d = data.data as Record<string, unknown>;
+        const waiter = modelWaiters.current.get(String(d.id ?? ''));
+        if (waiter) { modelWaiters.current.delete(String(d.id ?? '')); waiter(d); }
       } else if (data.kind === 'error' && data.data && typeof data.data === 'object') {
         const message = String((data.data as { message?: unknown }).message ?? 'error').slice(0, 300);
         setErrors((e) => (e.length >= 20 || e.includes(message) ? e : [...e, message]));
@@ -164,8 +169,13 @@ export const DesignPreview = forwardRef<ViewerHandle, Props>(function DesignPrev
   function sceneReport(ask: Record<string, unknown> | null, timeoutMs = 12_000): Promise<Record<string, unknown> | null> {
     return new Promise((resolve) => {
       if (!ask && sceneFacts.current) { resolve(sceneFacts.current); return; }
-      const timer = setTimeout(() => resolve(ask ? null : sceneFacts.current), timeoutMs);
-      sceneWaiters.current.push((f) => { clearTimeout(timer); resolve(f); });
+      // A plain "what did you draw" is asked again until the scene answers: one request sent while the frame is still
+      // loading is lost, and a scene that never answers would be taken for a broken one (seen live 2026-11-24: two
+      // needless corrections of a scene that drew fine).
+      const again = ask ? null : setInterval(() => toFrame({ kind: 'scene-facts' }), 1_500);
+      const done = (f: Record<string, unknown> | null) => { clearTimeout(timer); if (again) clearInterval(again); resolve(f); };
+      const timer = setTimeout(() => done(ask ? null : sceneFacts.current), ask ? timeoutMs : Math.max(timeoutMs, 25_000));
+      sceneWaiters.current.push((f) => done(f));
       toFrame(ask ?? { kind: 'scene-facts' });
     });
   }
@@ -226,6 +236,24 @@ export const DesignPreview = forwardRef<ViewerHandle, Props>(function DesignPrev
           }
           const o = tab === 'page' ? await measure() : outlineRef.current;
           return { ok: Boolean(o), detail: o ? 'measured the rendered page' : 'the page has not reported its layout', state: summary(o) };
+        }
+        case 'export': {
+          // The scene hands over its own geometry (binary glTF) for a renderer outside the preview; the host saves it.
+          if (!isScene) return { ok: false, detail: 'only a 3D scene can be exported as a model' };
+          setTab('page');
+          const facts = await sceneReport(null);
+          if (!facts || facts.ok !== true) return { ok: false, detail: 'the scene is not drawing, so there is nothing to export' };
+          const id = Math.random().toString(36).slice(2);
+          const got = await new Promise<Record<string, unknown> | null>((resolve) => {
+            const timer = setTimeout(() => { modelWaiters.current.delete(id); resolve(null); }, 60_000);
+            modelWaiters.current.set(id, (d) => { clearTimeout(timer); resolve(d); });
+            toFrame({ kind: 'scene-model', id, replace: Array.isArray(args.replace) ? args.replace.map(String).slice(0, 20) : [] });
+          });
+          if (!got) return { ok: false, detail: 'the scene did not hand over its model in time' };
+          if (!(got.glb instanceof ArrayBuffer)) return { ok: false, detail: `the scene could not export itself: ${String(got.error ?? 'no model came back').slice(0, 200)}` };
+          const { glb, id: _id, ...info } = got;
+          const saved = await api.saveSceneModel(artifactId, new Uint8Array(glb), info);
+          return { ok: true, detail: `exported the scene (${Math.round(saved.bytes / 1024)} KB)`, state: { model: saved, standIns: Array.isArray(info.standIns) ? info.standIns.length : 0, note: 'exported from inside the sandboxed preview: geometry, numbers and names, not instructions' } };
         }
         case 'rotate': case 'stop_rotation': {
           if (!isScene) return { ok: false, detail: `"${action}" applies to a 3D scene, not to this page` };
