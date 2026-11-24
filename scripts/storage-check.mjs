@@ -5,12 +5,14 @@
 //
 // Policy (CLAUDE.md "Engineering discipline"): one canonical repository, main + one active branch, no extra worktrees or clones,
 // one reusable test/acceptance/build environment, current + previous installer only, bounded retention for every kind of output.
-// A deliberate exception is written, with a reason, in `.storage-approved` at the repo root (git-excluded), one per line:
-//   <path-or-branch>  # reason
+// A deliberate exception goes in `.storage-approved` at the repo root (git-excluded), one per line, ALL fields required, exact path, max 90 days:
+//   path=<abs path> | owner=<who> | purpose=<why> | evidence=<what proves the dependency> | expires=YYYY-MM-DD | review=<trigger to re-check>
+// An invalid, expired, stale, junctioned or sibling-ambiguous exception fails the check. `--verify-hashes` re-hashes manifest-listed evidence.
 import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { loadExceptions, isApproved, isBranchApproved, checkGoldenEvidence } from './lib/storage-policy.mjs';
 
 const mode = process.argv[2] === 'postflight' ? 'postflight' : 'preflight';
 const repo = path.resolve(path.dirname(new URL(import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1')), '..');
@@ -24,12 +26,12 @@ const isLink = (p) => { try { return fs.lstatSync(p).isSymbolicLink(); } catch {
 const mb = (b) => `${(b / 2 ** 20).toFixed(0)} MB`;
 
 const approvedFile = path.join(repo, '.storage-approved');
-const approved = new Set(fs.existsSync(approvedFile)
-  ? fs.readFileSync(approvedFile, 'utf8').split(/\r?\n/).map((l) => l.replace(/#.*/, '').trim()).filter(Boolean).map((l) => (/[\\/]/.test(l) ? norm(l) : l))
-  : []);
+const { valid: approved, errors: exceptionErrors } = loadExceptions(approvedFile);
 const violations = [];
 const bad = (rule, what) => violations.push(`${rule}: ${what}`);
-const ok = (p) => approved.has(norm(p));
+// Exact-path match only (see scripts/lib/storage-policy.mjs). An invalid or expired exception is itself a violation.
+for (const e of exceptionErrors) bad('invalid or expired exception', e);
+const ok = (p) => isApproved(approved, p);
 
 // 1. Worktrees: none besides the canonical checkout.
 const wt = git('worktree', 'list', '--porcelain').split(/\r?\n\r?\n/).map((b) => (b.match(/^worktree (.+)$/m) || [])[1]).filter(Boolean);
@@ -38,7 +40,7 @@ for (const w of wt.slice(1)) if (!ok(w)) bad('extra worktree', `${w}  ->  git wo
 // 2. Branches: main + one active development branch (the checked-out one).
 const current = git('branch', '--show-current');
 const branches = git('for-each-ref', '--format=%(refname:short)', 'refs/heads').split(/\r?\n/).filter(Boolean);
-for (const b of branches) if (b !== 'main' && b !== current && !approved.has(b)) bad('extra local branch', `${b}  ->  merge or discard, then git branch -d ${b}`);
+for (const b of branches) if (b !== 'main' && b !== current && !isBranchApproved(approved, b)) bad('extra local branch', `${b}  ->  merge or discard, then git branch -d ${b}`);
 
 // 3. Repeated build output: temporary folders > 24 h, and more than the current + previous installer in dist.
 const tmp = path.join(repo, '.tmp');
@@ -100,8 +102,9 @@ for (const n of dirs(pw).filter((d) => d !== '_retained')) if (age(path.join(pw,
 const kh = process.env.KARKEDIKHA_KANDEV_HOME || path.join(os.homedir(), '.kkd-kandev');
 for (const n of dirs(path.join(kh, 'tasks'))) if (age(path.join(kh, 'tasks', n)) > 7 * DAY) bad('Kandev task worktree older than 7 days', path.join(kh, 'tasks', n));
 const ge = path.join(local, 'KarkeDikha', 'golden-evidence');
-const geDirs = dirs(ge);
-if (geDirs.length > 30) bad('golden-evidence is unbounded', `${geDirs.length} run folders (limit 30); keep the newest, archive or drop the rest after review`);
+const golden = checkGoldenEvidence(ge, { verifyHashes: process.argv.includes('--verify-hashes') });
+for (const v of golden.violations) bad('golden-evidence', v);
+const goldenInfo = fs.existsSync(ge) ? `golden-evidence: ${golden.runs} runs, ${(golden.bytes / 2 ** 30).toFixed(2)} GB (limit 5 GB)` : '';
 for (const b of dirs(path.join(local, 'KarkeDikha')).filter((n) => /^desktop-backup-/.test(n))) bad('profile backup of an old build', path.join(local, 'KarkeDikha', b));
 for (const dir of [path.join(profile, 'logs'), profile]) for (const f of files(dir).filter((x) => /\.(log|jsonl)$/i.test(x))) {
   const p = path.join(dir, f); const st = fs.statSync(p);
@@ -113,6 +116,8 @@ for (const n of dirs(p0)) if (age(path.join(p0, n)) > 14 * DAY && !ok(path.join(
 let free = '';
 try { free = ['C:\\', 'D:\\', 'E:\\'].filter((r) => fs.existsSync(r)).map((r) => { const s = fs.statfsSync(r); return `${r[0]}: ${(s.bavail * s.bsize / 2 ** 30).toFixed(0)} GB free`; }).join(', '); } catch { /* optional */ }
 console.log(`storage ${mode}: repo ${repo}, branch ${current}, ${wt.length - 1} extra worktrees, ${branches.length} branches; ${free}`);
+if (goldenInfo) console.log(goldenInfo);
+if (approved.size) console.log(`approved exceptions (exact, temporary): ${[...approved.entries()].map(([k, f]) => `${k.replace(/^branch:/, 'branch ')} until ${f.expires}`).join('; ')}`);
 if (protectedSeen.length) console.log(`protected user data (not counted, never removed by policy work): ${protectedSeen.join(', ')}`);
 if (violations.length) {
   console.error(`storage ${mode} FAILED (${violations.length}):\n- ${violations.join('\n- ')}`);

@@ -21,7 +21,7 @@ Windows 11, PowerShell primary. Work tracker (git-excluded): `WORK_TRACKER.md` â
 
 ## Engineering discipline (hard rules, apply to every development agent)
 One canonical repository (`D:\Projects\Pandesh`). Branches: main plus ONE active development branch. Agents work sequentially in that checkout.
-- No additional worktrees or clones without the owner's explicit approval (record the approval and reason in `.storage-approved`, git-excluded).
+- No additional worktrees or clones without the owner's explicit approval (record the approval in `.storage-approved`, git-excluded: exact `path=`/`branch=` plus owner, purpose, evidence, expires (max 90 days) and review trigger; invalid, expired, junctioned or stale entries fail postflight; no wildcards or prefix matches). `golden-evidence` is bounded at 5 GB, holds evidence only (no builds, caches or junctions), and relocated evidence must be listed in a `TRIM-MANIFEST-*.json`; nothing is deleted automatically.
 - One reusable isolated test/acceptance/build environment: `D:\PandeshP0Dev`. No per-feature, per-build or per-test permanent directories; never use a disk root as a scratch workspace.
 - No source-folder backups: Git and the remote are the recovery path. App-data backup only before a risky migration (one per active migration); keep the installed app's previous stable build and nothing older.
 - Temporary artifacts live in the repo's git-ignored .tmp or the scratch slot and are removed when the task ends, on success, failure and cancellation; anything older than 24 h is stale. Routine logs expire after 7 days.
