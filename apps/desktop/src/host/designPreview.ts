@@ -14,6 +14,7 @@
  *   with its nonce. What it reports is the page's own content: data for the person, never instructions.
  */
 import * as crypto from 'node:crypto';
+import { withSceneRuntime } from '../../../../core/shared/workshop/scenePage';
 
 export const DESIGN_PREVIEW_SCHEME = 'pandesh-preview';
 const TTL_MS = 30 * 60_000;
@@ -91,12 +92,14 @@ export class DesignPreviewStore {
 
   constructor(private readonly now: () => number = Date.now) {}
 
-  mint(input: { artifactId: string; html: string }): { url: string; nonce: string; expiresAt: string } {
+  /** `sceneRuntime`: the three.js scene runtime, for a 3D scene page; it is inlined where the page's marker stands. */
+  mint(input: { artifactId: string; html: string; sceneRuntime?: string | null }): { url: string; nonce: string; expiresAt: string } {
     this.prune();
     const token = crypto.randomBytes(16).toString('hex');
     const nonce = crypto.randomBytes(12).toString('hex');
     const expires = this.now() + TTL_MS;
-    this.entries.set(token, { document: buildPreviewDocument(input.html, nonce), artifactId: input.artifactId, expires });
+    const page = input.sceneRuntime ? withSceneRuntime(input.html, input.sceneRuntime, nonce) : input.html;
+    this.entries.set(token, { document: buildPreviewDocument(page, nonce), artifactId: input.artifactId, expires });
     while (this.entries.size > MAX_ENTRIES) this.entries.delete(this.entries.keys().next().value as string);
     return { url: `${DESIGN_PREVIEW_SCHEME}://${token}/`, nonce, expiresAt: new Date(expires).toISOString() };
   }

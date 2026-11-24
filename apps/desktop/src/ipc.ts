@@ -190,6 +190,8 @@ export const DESKTOP_CHANNELS = {
   saveWorkshopFile: 'desktop:saveWorkshopFile',
   /** A short-lived pandesh-preview: URL for one Design page (host/designPreview.ts). */
   designPreview: 'desktop:designPreview',
+  /** A picture a 3D scene page rendered of itself, saved for the check of that scene (never shown as a result). */
+  saveSceneShot: 'desktop:saveSceneShot',
   /** Bounded local deep-links into the standalone Image Generation Studio
    * app (:8989) for one already-verified Core artifact — never an
    * arbitrary/user-supplied URL. */

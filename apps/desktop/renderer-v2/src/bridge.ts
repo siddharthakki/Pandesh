@@ -253,6 +253,8 @@ export interface DesktopApi {
   saveWorkshopFile(artifactId: string): Promise<{ saved: boolean; path: string | null }>;
   /** A short-lived pandesh-preview: URL for a Design page (served from memory, sandboxed, no network). */
   designPreview(artifactId: string): Promise<{ url: string; nonce: string; expiresAt: string; warnings: string[] }>;
+  /** Saves the picture a 3D scene page rendered of itself, for the check of that scene. */
+  saveSceneShot(artifactId: string, dataUrl: string, view: string | null): Promise<{ path: string; bytes: number }>;
   /** Settings → Diagnostics and Updates: the host's own reports (no credentials in either). */
   getAppMetadata(): Promise<AppMetadata>;
   getDiagnosticsReport(): Promise<string>;

@@ -63,6 +63,21 @@ async function bundle() {
     outfile: path.join(desktopRoot, 'renderer', 'v2', 'workshop3d.js'),
     logLevel: 'info',
   });
+  // The 3D scene runtime (three.js, MIT): not loaded by the window at all. The host inlines it into a scene page when it
+  // serves that page to the sandboxed preview (host/designPreview.ts), so the preview's policy stays "no network".
+  await esbuild.build({
+    entryPoints: [path.join(desktopRoot, 'renderer-v2', 'src', 'workshop', 'sceneRuntime', 'index.js')],
+    bundle: true,
+    platform: 'browser',
+    format: 'iife',
+    target: 'chrome156',
+    minify: process.env.PANDESH_UI_V2_DEV !== '1',
+    nodePaths: [path.join(desktopRoot, '..', '..', 'node_modules')],
+    // three.js is MIT: keep its licence comment in the shipped script.
+    legalComments: 'eof',
+    outfile: path.join(desktopRoot, 'renderer', 'v2', 'sceneRuntime.js'),
+    logLevel: 'info',
+  });
 }
 
 bundle().catch((err) => {

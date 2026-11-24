@@ -4118,6 +4118,24 @@ export class DesktopSession {
     }
   }
 
+  /**
+   * The picture a 3D scene page rendered of itself inside the sandboxed preview, saved so Core can have it looked at by a
+   * vision model on this PC. It is a check, not a result: it is not registered as an artifact and is replaced per view.
+   */
+  async saveSceneShot(artifactId: string, dataUrl: string, view: string | null): Promise<{ path: string; bytes: number }> {
+    if (!/^[A-Za-z0-9_-]{1,80}$/.test(artifactId)) throw new Error('not an artifact id');
+    const match = /^data:image\/(jpeg|png);base64,([A-Za-z0-9+/=]+)$/.exec(dataUrl);
+    if (!match) throw new Error('the picture must be a JPEG or PNG data URL');
+    const bytes = Buffer.from(match[2], 'base64');
+    if (bytes.byteLength < 200 || bytes.byteLength > 8 * 1024 * 1024) throw new Error('the picture is empty or larger than 8 MB');
+    const dir = path.join(this.dataDir, 'workshop-shots');
+    fs.mkdirSync(dir, { recursive: true });
+    const name = `${artifactId}-${(view ?? 'view').replace(/[^a-z0-9]/gi, '').slice(0, 12) || 'view'}.${match[1] === 'png' ? 'png' : 'jpg'}`;
+    const file = path.join(dir, name);
+    fs.writeFileSync(file, bytes);
+    return { path: file, bytes: bytes.byteLength };
+  }
+
   async listArtifacts(conversationId?: string): Promise<DesktopArtifactView[]> {
     const result = await this.durableReadClient().listArtifacts(conversationId);
     // A page screenshot is a preview of work in the workspace, not a result.
