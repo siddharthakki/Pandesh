@@ -5,7 +5,7 @@ Windows 11, PowerShell primary. Work tracker (git-excluded): `WORK_TRACKER.md` â
 ## Commands
 - Typecheck: `npm run compile` (extension), `npm run typecheck:webview-v2`
 - Tests: `npm test` (heap wrapper around vitest). The Core suite loads the real Ollama 27B; use a dead `KARKEDIKHA_OLLAMA_URL` on branches cut before PR #61.
-- Docs check: `node scripts/check-ai-os-docs.mjs`
+- Storage: `npm run storage:preflight` before a task, `npm run storage:postflight` before calling it done (exit 1 = clean up first)
 - Secrets: `npm run secrets:scan:staged` before committing
 
 ## Production safety (hard rules)
@@ -18,6 +18,15 @@ Windows 11, PowerShell primary. Work tracker (git-excluded): `WORK_TRACKER.md` â
 ## Shell quirks on this PC
 - Heredocs and `python -c` with quotes/backslashes fail or silently do nothing. Write scripts to a file and run them.
 - Check `tsc` and bundle time before a live run.
+
+## Engineering discipline (hard rules, apply to every development agent)
+One canonical repository (`D:\Projects\Pandesh`). Branches: main plus ONE active development branch. Agents work sequentially in that checkout.
+- No additional worktrees or clones without the owner's explicit approval (record the approval and reason in `.storage-approved`, git-excluded).
+- One reusable isolated test/acceptance/build environment: `D:\PandeshP0Dev`. No per-feature, per-build or per-test permanent directories; never use a disk root as a scratch workspace.
+- No source-folder backups: Git and the remote are the recovery path. App-data backup only before a risky migration (one per active migration); keep the installed app's previous stable build and nothing older.
+- Temporary artifacts live in the repo's git-ignored .tmp or the scratch slot and are removed when the task ends, on success, failure and cancellation; anything older than 24 h is stale. Routine logs expire after 7 days.
+- After a merge: delete the branch (local and remote) and remove its temporary directories.
+- Lifecycle: update main -> one branch -> implement and review -> test in the reusable env -> merge and push -> delete branch and clean artifacts -> verify storage and production. No cleanup, no completion: `npm run storage:postflight` must pass.
 
 ## Workflow
 - Feature work in worktrees/branches; open PRs, do not merge to `main` unasked.

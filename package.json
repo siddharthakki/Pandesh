@@ -805,6 +805,8 @@
     "test": "node scripts/run-vitest-with-heap.mjs",
     "secrets:scan": "node scripts/secret-scan.mjs --history",
     "secrets:scan:staged": "node scripts/secret-scan.mjs --staged",
+    "storage:preflight": "node scripts/storage-check.mjs preflight",
+    "storage:postflight": "node scripts/storage-check.mjs postflight",
     "hooks:install": "git config core.hooksPath .githooks",
     "test:unit": "node scripts/test-tiers.mjs unit",
     "test:regression": "node scripts/test-tiers.mjs regression",
