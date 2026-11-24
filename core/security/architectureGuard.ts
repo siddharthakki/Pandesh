@@ -77,6 +77,9 @@ export const AUTHORITATIVE_PROCESS_SPAWN_ALLOWLIST: ReadonlySet<string> = new Se
   'core/runtime/watchdogRoutine.ts',
   // Reads the local GPU's name and VRAM with one fixed-argument `nvidia-smi` query (no caller-supplied input); bounds concurrent GPU workloads.
   'core/runtime/hardwareCapacity.ts',
+  // Opens one named everyday app (Notepad, Calculator, a registered app) from a fixed target table, never with
+  // arguments, never a shell, script host or installer (deny-list), and probes the result with a fixed `tasklist` argv.
+  'core/runtime/appLaunch.ts',
   // Local OCR and PDF text extraction: runs Poppler's `pdftoppm`/`pdftotext`
   // and Tesseract with a fixed argv (no shell, no model-supplied flags), a
   // sanitized child environment, a bounded timeout and a verified

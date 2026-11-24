@@ -321,10 +321,15 @@ describe('Personal context and continuity (black-box)', () => {
     await turn(newConversation('Wed').id, 'Dismiss the old dentist reminder');
     const t = await turn(newConversation('Fri').id, 'What did you actually finish this week?');
     const journal = db.all<{ invocationId: string; toolName: string; status: string }>("SELECT invocationId, toolName, status FROM tool_execution_journal WHERE effect IN ('created', 'modified', 'undone')");
-    for (const j of journal.filter((x) => x.status === 'succeeded')) expect(t.reply).toContain(j.invocationId);
+    // Since the daily-operator report (298f0cf) Core writes the answer itself from its task and tool records, in
+    // plain words: the counts and the tool of each action must equal the journal, instead of raw invocation ids.
+    const succeeded = journal.filter((x) => x.status === 'succeeded');
     const failed = journal.filter((x) => x.status !== 'succeeded');
     expect(failed.length).toBeGreaterThan(0);
-    for (const j of failed) expect(t.reply).toMatch(new RegExp(`FAILED[^\\n]*${j.invocationId}`));
+    expect(t.reply).toContain(`${succeeded.length} recorded action${succeeded.length === 1 ? '' : 's'} succeeded and ${failed.length} did not`);
+    for (const j of succeeded) expect(t.reply).toContain(`Done: ${j.toolName.replace(/_/g, ' ')}`);
+    for (const j of failed) expect(t.reply).toContain(`Tried, did not work: ${j.toolName.replace(/_/g, ' ')}`);
+    expect(t.reply).toContain("From Core's task and tool records");
   }, 90_000);
 
   // G ──────────────────────────────────────────────────────────────────────────────────────────────────────────────
