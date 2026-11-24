@@ -70,6 +70,29 @@ describe('what is in the mailbox is claimed only after a mailbox read that succe
     expect(withholdUnsupportedActionClaims(gml011, ['gmail_search']).withheld).toEqual([]);
     expect(withholdUnsupportedActionClaims('I found 2 messages from Alex in your inbox.', ['gmail_read_thread']).withheld).toEqual([]);
   });
+  it('"You have unread emails" after a failed Gmail tool is withheld (live test 2026-11-24), and stands after a successful read', () => {
+    for (const reply of [
+      'You have unread emails.',
+      'You have 3 unread emails waiting.',
+      "You've got 12 new emails since yesterday.",
+      'There are 5 unread emails.',
+      'Good news: you currently have several new emails from Alex.',
+    ]) {
+      const failed = withholdUnsupportedActionClaims(reply, ['navigate_to']); // gmail_search returned NOT DONE, so it is not listed
+      expect(failed.withheld.map((w) => w.kind), reply).toEqual(['mailbox']);
+      expect(failed.text).toMatch(/\[Not done: no mailbox read was performed/);
+      expect(withholdUnsupportedActionClaims(reply, ['gmail_search']).withheld, reply).toEqual([]);
+    }
+  });
+  it('sentences that only look like it are untouched', () => {
+    for (const reply of [
+      'You have no unread emails.',
+      'You have to connect Gmail first, so I cannot check your emails.',
+      'You have a question about the email template.',
+      'You have nothing new in your inbox.',
+      'To read your emails I need Gmail connected.',
+    ]) expect(withholdUnsupportedActionClaims(reply, []).withheld, reply).toEqual([]);
+  });
   it('honest answers about an empty or unreachable mailbox are untouched', () => {
     for (const reply of [
       "I couldn't find anything in your inbox.",

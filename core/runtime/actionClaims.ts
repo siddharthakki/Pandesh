@@ -92,7 +92,9 @@ const CATEGORIES: ActionClaimCategory[] = [
     kind: 'mailbox',
     object: /\b(?:gmail|inbox|mailbox|e-?mails?|mail)\b/i,
     verbs: '',
-    claim: /\bi\s+(?:can\s+|could\s+)?(?:see|found|noticed|spotted)\s+(?!no\b|nothing\b|none\b|(?:that\s+)?you\b)[^.!?]{0,80}?\bin\s+your\s+(?:gmail|inbox|mailbox|e-?mails?|mail)\b|\bi(?:'ve|\s+have)\s+found\s+(?!no\b|nothing\b|none\b)[^.!?]{0,80}?\bin\s+your\s+(?:gmail|inbox|mailbox|e-?mails?|mail)\b|\bthere\s+(?:is|are)\s+(?!no\b|nothing\b|none\b)[^.!?]{0,80}?\bin\s+your\s+(?:gmail|inbox|mailbox)\b|\byour\s+(?:gmail|inbox|mailbox)\s+(?:has|contains|shows)\s+(?!no\b|nothing\b)/i,
+    claim: /\bi\s+(?:can\s+|could\s+)?(?:see|found|noticed|spotted)\s+(?!no\b|nothing\b|none\b|(?:that\s+)?you\b)[^.!?]{0,80}?\bin\s+your\s+(?:gmail|inbox|mailbox|e-?mails?|mail)\b|\bi(?:'ve|\s+have)\s+found\s+(?!no\b|nothing\b|none\b)[^.!?]{0,80}?\bin\s+your\s+(?:gmail|inbox|mailbox|e-?mails?|mail)\b|\bthere\s+(?:is|are)\s+(?!no\b|nothing\b|none\b)[^.!?]{0,80}?\bin\s+your\s+(?:gmail|inbox|mailbox)\b|\byour\s+(?:gmail|inbox|mailbox)\s+(?:has|contains|shows)\s+(?!no\b|nothing\b)|\byou\s+(?:currently\s+|now\s+)?(?:have|'ve\s+got|got)\s+(?!no\b|nothing\b|none\b|to\b|a\s+(?:question|problem|point)\b)(?:\d+|an?|some|several|many|new|unread|\w+\s+new|\w+\s+unread)\s+(?:(?:new|unread|important|unanswered)\s+)*(?:e-?mails?|messages?|mails?|threads?)\b|\bthere\s+(?:is|are)\s+(?!no\b|nothing\b|none\b)(?:\d+|an?|some|several|many)\s+(?:new|unread)\s+(?:e-?mails?|messages?|mails?)\b|\b\d+\s+(?:new|unread)\s+(?:e-?mails?|messages?)\b/i,
+    // Live test 2026-11-24: gmail_search returned NOT DONE, yet the reply said "You have unread emails." The second half
+    // of the pattern above covers "you have N unread emails", "there are 3 unread emails" and "5 new messages" without "in your inbox".
     tools: /^gmail_(?:search|read_thread|read_attachment|analyze_inbox|task_next_batch|task_status|plan_changes)$/i,
     label: 'mailbox read',
   },
