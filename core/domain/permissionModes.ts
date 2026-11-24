@@ -739,7 +739,7 @@ export const READ_ONLY_WORKSPACE_ACTOR = 'core:workspace_access:read_only';
 
 /** Tools that create or change files, or run programs, in a folder. A read-only workspace refuses all of them. */
 export const WORKSPACE_CHANGE_TOOLS: ReadonlySet<string> = new Set([
-  'write_file', 'propose_file_change', 'propose_text_edit', 'authorize_mission', 'run_command', 'run_checks',
+  'write_file', 'move_file', 'propose_file_change', 'propose_text_edit', 'authorize_mission', 'run_command', 'run_checks',
   'workspace_validation', 'delegate_to_opencode', 'delegate_to_coding_agent', 'file_modification',
 ]);
 

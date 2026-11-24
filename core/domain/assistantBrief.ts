@@ -137,6 +137,8 @@ const APPROVAL_TOOL_PHRASE: Record<string, string> = {
   run_checks: 'run a command',
   run_command: 'run a command',
   write_file: 'write a file',
+  move_file: 'rename or move a file',
+  open_app: 'open an app',
   propose_file_change: 'change a file',
   propose_text_edit: 'edit a file',
   web_research: 'search the web',
