@@ -4,7 +4,7 @@ import { elapsed } from './ui';
 import { missionHeadline, missionProgress, describeStep } from './missionModel';
 import type { MissionView, StepView } from './missionModel';
 import type { BridgeActivityItem } from './Missions';
-import { changeCounts, changeFlag, changeStatusLabel, changeSummary, eventAge, eventLabel, groupWorkers, workerControls, type ChangeDiffView, type WorkerEvent } from './workerModel';
+import { changeCounts, changeFlag, changeStatusLabel, changeSummary, eventAge, eventLabel, groupWorkers, plainProgress, workerControls, type ChangeDiffView, type WorkerEvent } from './workerModel';
 import { DiffView } from './Activity';
 
 const DONE = new Set(['completed', 'failed', 'cancelled']);
@@ -14,7 +14,7 @@ const DONE = new Set(['completed', 'failed', 'cancelled']);
  * nothing here is simulated or paraphrased. "Running" is never shown without the newest event and its age; a worker that has
  * been silent for a minute says so. Worker actions held for a person are answered here (Core accepts that from this window only).
  */
-export function WorkerPanels({ items, now, onChanged }: { items: BridgeActivityItem[]; now: number; onChanged: () => void }) {
+export function WorkerPanels({ items, now, onChanged, compact = false }: { items: BridgeActivityItem[]; now: number; onChanged: () => void; /** In the chat: a short card (what it is doing, what needs you); the full panel with its execution log is in Work. */ compact?: boolean }) {
   const [open, setOpen] = useState<Record<string, boolean>>({});
   const [diffOpen, setDiffOpen] = useState<Record<string, boolean>>({});
   const [busy, setBusy] = useState<string | null>(null);
@@ -57,7 +57,7 @@ export function WorkerPanels({ items, now, onChanged }: { items: BridgeActivityI
     <div className="worker-panels" aria-label="Agent workers">
       {groups.map((g) => (
         <div key={g.agent} className="worker-group">
-          <div className="worker-group-head">{g.label} · {g.items.filter((b) => !DONE.has(b.state)).length} active</div>
+          {!compact && <div className="worker-group-head">{g.label} · {g.items.filter((b) => !DONE.has(b.state)).length} active</div>}
           {g.items.map((b) => {
             const age = eventAge(b, now);
             const live = !DONE.has(b.state);
@@ -71,12 +71,19 @@ export function WorkerPanels({ items, now, onChanged }: { items: BridgeActivityI
                   <span className="mission-meta">{b.elapsedMs !== null && live ? `active ${elapsed(b.elapsedMs)}` : ''}</span>
                 </header>
                 <div className="mission-body">
-                  {b.branch && <p className="worker-age" data-testid="worker-branch">Branch {b.branch} · isolated worktree</p>}
-                  <p className="worker-latest" data-testid="worker-latest">
-                    {b.latest ? <><span className="worker-kind">{eventLabel(b.latest.kind)}</span> {b.latest.text}</> : <span className="muted">No worker event recorded yet.</span>}
-                  </p>
-                  <p className={`worker-age${age.quiet && live ? ' attention' : ''}`} data-testid="worker-age">{age.text}</p>
-                  <p className="mission-summary">{workerOutcome(b)}</p>
+                  {compact ? (
+                    // In the chat: one plain sentence. The raw events, branch and log are in Work.
+                    <p className={`worker-latest${age.quiet && live ? ' attention' : ''}`} data-testid="worker-progress">{plainProgress(b, b.stateLabel)}{age.quiet && live ? ' · no news for a while' : ''}</p>
+                  ) : (
+                    <>
+                      {b.branch && <p className="worker-age" data-testid="worker-branch">Branch {b.branch} · isolated worktree</p>}
+                      <p className="worker-latest" data-testid="worker-latest">
+                        {b.latest ? <><span className="worker-kind">{eventLabel(b.latest.kind)}</span> {b.latest.text}</> : <span className="muted">No worker event recorded yet.</span>}
+                      </p>
+                      <p className={`worker-age${age.quiet && live ? ' attention' : ''}`} data-testid="worker-age">{age.text}</p>
+                      <p className="mission-summary">{workerOutcome(b)}</p>
+                    </>
+                  )}
                   {b.pendingWorkerActions.map((p) => (
                     <div key={p.pendingId} className="approval worker-action" role="group" aria-label={`The worker asks to: ${p.what}`}>
                       <div className="head"><span className="dot attention" aria-hidden="true" /><span style={{ fontWeight: 600 }}>The worker asks to:</span> <code>{p.what}</code></div>
@@ -114,10 +121,14 @@ export function WorkerPanels({ items, now, onChanged }: { items: BridgeActivityI
                       ))}
                     </div>
                   )}
-                  <button type="button" className="btn link small" aria-expanded={open[b.id] === true} onClick={() => setOpen({ ...open, [b.id]: !open[b.id] })}>
-                    {open[b.id] ? 'Hide execution log' : `Show full execution log (${b.eventCount} event${b.eventCount === 1 ? '' : 's'})`}
-                  </button>
-                  {open[b.id] && <WorkerLog taskId={b.id} eventCount={b.eventCount} />}
+                  {!compact && (
+                    <>
+                      <button type="button" className="btn link small" aria-expanded={open[b.id] === true} onClick={() => setOpen({ ...open, [b.id]: !open[b.id] })}>
+                        {open[b.id] ? 'Hide execution log' : `Show full execution log (${b.eventCount} event${b.eventCount === 1 ? '' : 's'})`}
+                      </button>
+                      {open[b.id] && <WorkerLog taskId={b.id} eventCount={b.eventCount} />}
+                    </>
+                  )}
                 </div>
               </section>
             );

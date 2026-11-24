@@ -61,7 +61,8 @@ describe('mission card model', () => {
     const old = mission({ id: 'b', status: 'completed', completedAt: '2026-11-16T08:00:00.000Z' });
     const elsewhereRunning = mission({ id: 'c', conversationId: 'c2' });
     const elsewhereDone = mission({ id: 'd', conversationId: 'c2', status: 'completed', completedAt: '2026-11-16T09:59:00.000Z' });
-    expect(visibleMissions([here, old, elsewhereRunning, elsewhereDone], 'c1', NOW).map((m) => m.id)).toEqual(['c', 'a']);
+    const elsewhereAsking = mission({ id: 'e', conversationId: 'c2', pendingApprovals: [{ approvalId: 'p', toolName: 'run_checks', text: 't', agentName: null, requestedAt: '2026-11-16T10:00:30.000Z' }] });
+    expect(visibleMissions([here, old, elsewhereRunning, elsewhereDone, elsewhereAsking], 'c1', NOW).map((m) => m.id)).toEqual(['e', 'a']);
   });
 });
 

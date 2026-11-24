@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { changeCounts, changeFlag, changeStatusLabel, changeSummary, eventAge, eventLabel, groupWorkers, QUIET_MS, workerControls, type ChangeDiffView, type ChangeFile, type WorkerItem } from '../renderer-v2/src/workerModel';
+import { changeCounts, changeFlag, changeStatusLabel, changeSummary, eventAge, eventLabel, groupWorkers, plainProgress, QUIET_MS, workerControls, workersInChat, workersInWork, type ChangeDiffView, type ChangeFile, type WorkerItem } from '../renderer-v2/src/workerModel';
 
 const item = (o: Partial<WorkerItem> = {}): WorkerItem => ({
   id: 't', executor: 'claude', state: 'running', createdAt: '2026-11-21T10:00:00Z', latest: null, lastEventAt: null, heartbeatAgeMs: null, ...o,
@@ -67,5 +67,32 @@ describe('A5 View diff helpers', () => {
     const d: ChangeDiffView = { available: true, reason: null, source: 'worker worktree', base: 'a25faaf', head: '3c1d2e0 + uncommitted', files: [], ignored: [], summary: { files: 2, additions: 5, deletions: 1, binary: 1, large: 0, unavailable: 0 } };
     expect(changeSummary(d)).toBe('2 files changed · +5 −1 · 1 binary · read from the worker worktree (a25faaf → 3c1d2e0 + uncommitted)');
     expect(changeSummary({ ...d, available: false, reason: 'The worker has not started, so there is no change yet.' })).toBe('Diff unavailable: The worker has not started, so there is no change yet.');
+  });
+});
+
+describe('worker cards are scoped to where they belong', () => {
+  const t = (o: Record<string, unknown>) => ({ ...item(), conversationId: 'c1', ...o }) as ReturnType<typeof item> & { conversationId: string | null; pendingWorkerActions?: unknown[]; codeChange?: { awaitingReview: boolean } | null };
+  it('the chat shows only its own live tasks and the ones waiting for a decision', () => {
+    const mine = t({ id: 'mine' });
+    const other = t({ id: 'other', conversationId: 'c2' });
+    const none = t({ id: 'none', conversationId: null });
+    const done = t({ id: 'done', state: 'completed' });
+    const asking = t({ id: 'asking', state: 'completed', codeChange: { awaitingReview: true } });
+    const permission = t({ id: 'perm', pendingWorkerActions: [{}] });
+    expect(workersInChat([mine, other, none, done, asking, permission], 'c1').map((b) => b.id)).toEqual(['mine', 'asking', 'perm']);
+    expect(workersInChat([mine], null)).toEqual([]); // no chat open: no worker cards
+    expect(workersInChat([other, none, done], 'c1')).toEqual([]); // nothing relevant: the panel is hidden
+  });
+  it('Work files every task: live under Running, finished under Completed, failed or stopped under Failed', () => {
+    const w = workersInWork([t({ id: 'a' }), t({ id: 'b', state: 'completed' }), t({ id: 'c', state: 'failed' }), t({ id: 'd', state: 'cancelled' }), t({ id: 'e', state: 'completed', codeChange: { awaitingReview: true } })]);
+    expect(w.running.map((b) => b.id)).toEqual(['a']);
+    expect(w.completed.map((b) => b.id)).toEqual(['b']); // 'e' still needs a decision: it stays in the chat and under Needs you
+    expect(w.failed.map((b) => b.id)).toEqual(['c', 'd']);
+  });
+  it('says in one plain sentence what the worker is doing', () => {
+    expect(plainProgress({ state: 'running', latest: { at: 'x', kind: 'tool_edit', text: 'C:\a\b.ts' } }, 'Running')).toBe('Editing files');
+    expect(plainProgress({ state: 'running', latest: { at: 'x', kind: 'tool_execute', text: 'npm test' } }, 'Running')).toBe('Running a command');
+    expect(plainProgress({ state: 'running', latest: null }, 'Starting')).toBe('Starting');
+    expect(plainProgress({ state: 'completed', latest: { at: 'x', kind: 'tool_edit', text: 'x' } }, 'Finished')).toBe('Finished');
   });
 });

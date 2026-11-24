@@ -103,9 +103,7 @@ kbd { font-family: var(--font-mono); font-size: 12px; color: var(--muted); borde
 /* The start view scrolls as one column; the message box stays at the bottom of the window however many cards are above it
    (found 2026-11-24: with two task cards on the start view the box sat 160 px below the window's edge). */
 .body.idle-wide .footer { padding: 10px 40px 14px; position: sticky; bottom: 0; z-index: 2; background: var(--canvas); }
-/* The task cards above the message box scroll in their own area: with several workers and bridge tasks listed they were
-   1,254 px tall and pushed the message box out of the window (found 2026-11-24). */
-.footer .missions { max-height: 36vh; overflow-y: auto; overscroll-behavior: contain; }
+/* The cards above the message box are only this chat's own tasks, short, with no log inside them: the box never has to scroll them. */
 .footer-inner { max-width: 720px; margin: 0 auto; display: flex; flex-direction: column; gap: 8px; }
 .body.idle-wide .footer-inner { max-width: 680px; }
 .composer { display: flex; align-items: flex-end; gap: 8px; padding: 8px 8px 8px 16px; border: 1px solid var(--line); border-radius: 16px; background: var(--surface); }
@@ -583,7 +581,7 @@ button.tl-row:hover { background: var(--raised); }
 .worker-action { display: flex; flex-direction: column; gap: 6px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; }
 .worker-action code { overflow-wrap: anywhere; font-size: 12.5px; }
 .worker-action .btns { display: flex; gap: 8px; }
-.worker-log { margin: 4px 0 0; padding: 8px 10px; list-style: none; max-height: 280px; overflow: auto; border: 1px solid var(--line); border-radius: 8px; font-family: var(--font-mono, ui-monospace, monospace); font-size: 12px; display: flex; flex-direction: column; gap: 3px; }
+.worker-log { margin: 4px 0 0; padding: 8px 10px; list-style: none; border: 1px solid var(--line); border-radius: 8px; font-family: var(--font-mono, ui-monospace, monospace); font-size: 12px; display: flex; flex-direction: column; gap: 3px; }
 .worker-log li { overflow-wrap: anywhere; }
 .worker-log time { color: var(--muted); margin-right: 4px; }
 
@@ -704,7 +702,7 @@ button.tl-row:hover { background: var(--raised); }
 .approval-facts dt { color: var(--muted, #6b7280); font-weight: 600; }
 .approval-facts dd { margin: 0; min-width: 0; }
 .approval-facts ul { margin: 0; padding-left: 18px; }
-.approval-instruction { margin: 0; white-space: pre-wrap; word-break: break-word; max-height: 9em; overflow: auto; padding: 6px 8px; border-radius: 8px; background: color-mix(in srgb, currentColor 6%, transparent); font: inherit; }
+.approval-instruction { margin: 0; white-space: pre-wrap; word-break: break-word; padding: 6px 8px; border-radius: 8px; background: color-mix(in srgb, currentColor 6%, transparent); font: inherit; }
 .approval-override { display: flex; gap: 8px; align-items: flex-start; margin: 6px 0; font-size: 0.92em; }
 .worker-controls { display: flex; gap: 8px; flex-wrap: wrap; }
 

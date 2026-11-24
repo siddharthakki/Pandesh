@@ -112,7 +112,8 @@ export function describeStep(step: StepView, mission: MissionView, now: number):
 export function visibleMissions(all: MissionView[], conversationId: string | null, now: number): MissionView[] {
   const keepMs = 30 * 60_000;
   return all
-    .filter((m) => m.status === 'running' || (m.conversationId === conversationId && now - Date.parse(m.completedAt ?? m.updatedAt) < keepMs))
+    // This chat's own missions (running, or finished within the last half hour) and any mission anywhere that waits for a decision.
+    .filter((m) => (m.conversationId === conversationId && (m.status === 'running' || now - Date.parse(m.completedAt ?? m.updatedAt) < keepMs)) || (m.status === 'running' && m.pendingApprovals.length > 0))
     .sort((a, b) => (a.status === 'running' ? 0 : 1) - (b.status === 'running' ? 0 : 1) || b.createdAt.localeCompare(a.createdAt))
     .slice(0, 3);
 }

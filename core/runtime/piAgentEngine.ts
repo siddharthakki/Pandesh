@@ -154,6 +154,7 @@ import { agentScopeForAttempt, allowedMemoryScopes, BUILTIN_AGENTS, SPECIALIST_C
 import { delegationOutcome, isTerminalAttemptStatus as isTerminalDelegation, startDelegation } from '../domain/delegation';
 import { aMissionIsRunning, buildMissionTools, lastMissionRefusal, onlyAsksBack, MISSION_START_REASK, missionNotStartedReply, missionOutcome, missionTurnFact, wantsBackgroundWork } from './missionTools';
 import { asksForIndependentCheck, independentCheckBrief, reviewerReport, reviewerTookPart } from './independentCheck';
+import { drivesAsked, formatDiskSpace, isDiskSpaceRequest } from './directSystemAnswers';
 import {
   isGmailContractExtractionRequest,
   isTaskStatusRequest,
@@ -1095,6 +1096,30 @@ export class PiAgentEngine implements EngineAdapter {
     warmCommandReview(readCommandReviewSettings(db));
     warmQueryPrivacy(readQueryPrivacySettings(db));
 
+    /** Ends the turn with a reply Core wrote itself (no model ran): the message, the outcome, the attempt's completion. */
+    const finishWithoutModel = (reply: string, performed: string, reason: string): EngineExecutionResult => {
+      let assistantMessageRecord: any = null;
+      if (conversationId) {
+        try {
+          mutateWithBroadcast(db, broadcaster, () => {
+            assistantMessageRecord = appendMessage(db, conversationId, { role: 'assistant', content: reply, actor });
+          });
+        } catch {}
+      }
+      try {
+        mutateWithBroadcast(db, broadcaster, () => {
+          finalizeTaskOutcome(db, attemptId, { verdict: 'verified', reason, performed: [performed], refused: [], failed: [] }, { answerMessageId: assistantMessageRecord?.id ?? null });
+        });
+      } catch {}
+      try {
+        mutateWithBroadcast(db, broadcaster, () => {
+          transitionAttempt(db, attemptId, { toStatus: 'completed', fenceToken, actor });
+        });
+      } catch {}
+      safeRecordRuntimeEvent(db, broadcaster, attemptId, 'step_finish', { step: 1, engine: 'pi', durationMs: Date.now() - startTime, outcome: 'completed' }, actor);
+      return { success: true, reply };
+    };
+
     // Fast nonblocking delegation for long-running Gmail contract extraction or control queries
     const routing = routeBackgroundTaskIntent(db, conversationId, requestText);
 
@@ -1171,47 +1196,22 @@ export class PiAgentEngine implements EngineAdapter {
         }
       }
 
-      let assistantMessageRecord: any = null;
-      if (conversationId) {
-        try {
-          mutateWithBroadcast(db, broadcaster, () => {
-            assistantMessageRecord = appendMessage(db, conversationId, {
-              role: 'assistant',
-              content: delegationReply,
-              actor,
-            });
-          });
-        } catch {}
+      return finishWithoutModel(delegationReply, 'background_delegation', 'Interactive delegation request handled');
+    }
+
+    // A plain "how much free space is left on C: and D:" is answered from the read-only disk tool itself: no model is loaded for it.
+    if (isDiskSpaceRequest(requestText) && !(ctx.images?.length) && ctx.capabilities?.definitions.some((d) => d.name === 'system_hardware_telemetry')) {
+      try {
+        const outcome = await ctx.capabilities.dispatch('system_hardware_telemetry', {});
+        if (outcome.outcome === 'executed' && outcome.toolInvocation.status === 'succeeded') {
+          const evidence = outcome.toolInvocation.evidence as Record<string, unknown>;
+          const answer = formatDiskSpace(typeof evidence.output === 'string' ? evidence.output : JSON.stringify(evidence), drivesAsked(requestText));
+          if (answer) return finishWithoutModel(answer, 'system_hardware_telemetry', 'Answered directly from a read-only system tool');
+        }
+      } catch (err: any) {
+        safeRecordRuntimeEvent(db, broadcaster, attemptId, 'direct_answer_failed', { error: err?.message ?? String(err) }, actor);
       }
-
-      try {
-        mutateWithBroadcast(db, broadcaster, () => {
-          finalizeTaskOutcome(db, attemptId, {
-            verdict: 'verified',
-            reason: 'Interactive delegation request handled',
-            performed: ['background_delegation'],
-            refused: [],
-            failed: [],
-          }, {
-            answerMessageId: assistantMessageRecord?.id ?? null,
-          });
-        });
-      } catch {}
-
-      try {
-        mutateWithBroadcast(db, broadcaster, () => {
-          transitionAttempt(db, attemptId, { toStatus: 'completed', fenceToken, actor });
-        });
-      } catch {}
-
-      safeRecordRuntimeEvent(db, broadcaster, attemptId, 'step_finish', {
-        step: 1,
-        engine: 'pi',
-        durationMs: Date.now() - startTime,
-        outcome: 'completed',
-      }, actor);
-
-      return { success: true, reply: delegationReply };
+      // Anything unexpected falls through to the model, which asks the same tool itself.
     }
 
     const { Agent, createProvider, createModels, openAICompletionsApi } = await getPiModules();

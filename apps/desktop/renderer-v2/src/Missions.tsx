@@ -3,6 +3,7 @@ import { api, errorText, onDesktopEvent } from './bridge';
 import { elapsed } from './ui';
 import { describeStep, missionActiveMs, missionHeadline, missionHeartbeatMs, missionProgress, visibleMissions, type MissionView, type StepView } from './missionModel';
 import { WorkerPanels } from './MissionControlPane';
+import { workersInChat } from './workerModel';
 
 /** One task relayed from the browser (Panda bridge), as Core's activity feed reports it. Same vocabulary as missions. */
 export interface BridgeActivityItem {
@@ -17,10 +18,10 @@ export interface BridgeActivityItem {
   outcome?: { intent: string; state: string; summary: string } | null;
 }
 /** Tasks a Kandev worker runs get a live worker panel instead of a one-line row. */
-const isWorkerTask = (b: BridgeActivityItem) => Boolean(b.storyId) && ['claude', 'opencode', 'antigravity', 'hermes'].includes(b.executor ?? '');
+export const isWorkerTask = (b: BridgeActivityItem) => Boolean(b.storyId) && ['claude', 'opencode', 'antigravity', 'hermes'].includes(b.executor ?? '');
 const BRIDGE_DONE = new Set(['completed', 'failed', 'cancelled']);
 /** An item from an older Core lacks the worker fields; give them their empty values instead of undefined. */
-const normalizeWorker = (b: BridgeActivityItem): BridgeActivityItem => ({ ...b, latest: b.latest ?? null, lastEventAt: b.lastEventAt ?? null, eventCount: b.eventCount ?? 0, branch: b.branch ?? null, pendingWorkerActions: b.pendingWorkerActions ?? [] });
+export const normalizeWorker = (b: BridgeActivityItem): BridgeActivityItem => ({ ...b, latest: b.latest ?? null, lastEventAt: b.lastEventAt ?? null, eventCount: b.eventCount ?? 0, branch: b.branch ?? null, pendingWorkerActions: b.pendingWorkerActions ?? [] });
 
 /** A cloud agent the browser asked for, waiting for the owner. Everything the owner needs to decide is here, from Core's own record. */
 export interface BridgeApproval {
@@ -108,7 +109,9 @@ export function MissionDock({ conversationId, narrow, onReport }: { conversation
   };
 
   const shown = visibleMissions(missions, conversationId, now).filter((m) => !hidden[m.id]);
-  const bridgeShown = [...bridge.filter((b) => !BRIDGE_DONE.has(b.state)), ...bridge.filter((b) => BRIDGE_DONE.has(b.state)).slice(0, 2)].filter((b) => !hidden[b.id]);
+  // Only this chat's own tasks (live, or waiting for a decision). Finished tasks and other chats' tasks are in Work.
+  const bridgeShown = bridge.filter((b) => b.conversationId !== null && b.conversationId === conversationId).filter((b) => !hidden[b.id])
+    .filter((b) => !BRIDGE_DONE.has(b.state) || isWorkerTask(b) && workersInChat([normalizeWorker(b)], conversationId).length > 0);
   if (!shown.length && !bridgeShown.length && !approvals.length && !note) return null;
   const openTask = async (b: BridgeActivityItem) => {
     if (!b.conversationId) return;
@@ -148,7 +151,7 @@ export function MissionDock({ conversationId, narrow, onReport }: { conversation
         </section>
       ))}
       {note && !approvals.length && !shown.length && !bridgeShown.length && <p className={`mission-note${note.error ? ' error' : ''}`} role="status">{note.text}</p>}
-      <WorkerPanels items={bridgeShown.filter(isWorkerTask).map(normalizeWorker)} now={now} onChanged={() => void load()} />
+      <WorkerPanels compact items={bridgeShown.filter(isWorkerTask).map(normalizeWorker)} now={now} onChanged={() => void load()} />
       {bridgeShown.filter((b) => !isWorkerTask(b)).map((b) => (
         <section key={b.id} className={`mission bridge ${b.state}`} aria-label={`From ${b.origin.client}: ${b.instruction}`}>
           <header className="mission-head">

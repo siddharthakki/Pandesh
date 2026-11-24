@@ -33,6 +33,38 @@ export function groupWorkers<T extends WorkerItem>(items: T[]): Array<{ agent: s
     }));
 }
 
+/** What decides where a worker task is shown: the chat it belongs to, and whether a person still has to decide something. */
+export interface ScopedWorker extends WorkerItem { conversationId: string | null; pendingWorkerActions?: unknown[]; codeChange?: { awaitingReview: boolean } | null }
+const needsDecision = (b: ScopedWorker) => (b.pendingWorkerActions?.length ?? 0) > 0 || b.codeChange?.awaitingReview === true;
+
+/**
+ * The worker cards a chat shows: this chat's own tasks that are still running or wait for a decision. A finished task, or one
+ * that belongs to another chat or to no chat, is not shown here; it lives in Work (workersInWork).
+ */
+export function workersInChat<T extends ScopedWorker>(items: T[], conversationId: string | null): T[] {
+  if (!conversationId) return [];
+  return items.filter((b) => b.conversationId === conversationId && (!DONE.has(b.state) || needsDecision(b)));
+}
+
+/** Work's view of every worker task: live ones under Running, finished ones under Completed or Failed (execution details stay folded). */
+export function workersInWork<T extends ScopedWorker>(items: T[]): { running: T[]; completed: T[]; failed: T[] } {
+  return {
+    running: items.filter((b) => !DONE.has(b.state)),
+    completed: items.filter((b) => b.state === 'completed' && !needsDecision(b)),
+    failed: items.filter((b) => b.state === 'failed' || b.state === 'cancelled'),
+  };
+}
+
+const DOING: Record<string, string> = {
+  tool_execute: 'Running a command', tool_read: 'Reading files', tool_edit: 'Editing files', tool_search: 'Searching the project', tool_fetch: 'Looking something up',
+  permission_request: 'Waiting for your permission', message: 'Working it out',
+};
+/** One short human sentence for a card in the chat: what the worker is doing now. The raw event text stays in Work's execution log. */
+export function plainProgress(b: Pick<WorkerItem, 'latest' | 'state'>, stateLabel: string): string {
+  if (DONE.has(b.state)) return stateLabel;
+  return b.latest ? (DOING[b.latest.kind] ?? stateLabel) : stateLabel;
+}
+
 const secs = (ms: number) => elapsedText(Math.max(0, ms));
 function elapsedText(ms: number): string {
   const s = Math.round(ms / 1000);

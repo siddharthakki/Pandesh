@@ -3,6 +3,9 @@ import { api, errorText, onDesktopEvent, type QueuedCommand, type Snapshot, type
 import { Icon, elapsed, timeOf } from './ui';
 import { columnOf, needsYouCount as countNeeds, type Column } from './boardModel';
 import { BOARD_COLUMNS, type BoardShow } from './placesModel';
+import { isWorkerTask, normalizeWorker, type BridgeActivityItem } from './Missions';
+import { WorkerPanels } from './MissionControlPane';
+import { workersInWork } from './workerModel';
 
 /** A worker task (Claude Code, OpenCode…) that failed or waits for review, as Core records it. */
 export interface WorkerAttention {
@@ -10,7 +13,7 @@ export interface WorkerAttention {
   conversationId: string | null; timeline: Array<{ at: string; event: string; text: string }>; canRetry: boolean;
 }
 
-export interface Overview { data: { tasks: TaskRow[]; queued: QueuedCommand[]; workers?: WorkerAttention[] } | null; error: string | null; loadedAt: number | null; refresh: () => void }
+export interface Overview { data: { tasks: TaskRow[]; queued: QueuedCommand[]; workers?: WorkerAttention[]; workerTasks?: BridgeActivityItem[] } | null; error: string | null; loadedAt: number | null; refresh: () => void }
 
 /** Core's task overview, refreshed on Core events (coalesced) and every 5 s. */
 export function useTaskOverview(): Overview {
@@ -25,11 +28,13 @@ export function useTaskOverview(): Overview {
       pending.current = false;
       try {
         // A failed worker task is told to its chat once; this is where it stays visible until someone acts on it.
-        const [tasks, workers] = await Promise.all([
+        const [tasks, workers, workerTasks] = await Promise.all([
           api.getTaskOverview(),
           api.household('workerAttention').then((r) => ((r as { items?: WorkerAttention[] } | null)?.items ?? [])).catch(() => [] as WorkerAttention[]),
+          // The worker tasks themselves (Claude Code, OpenCode…): their execution details are shown here, not in the chat.
+          api.household('bridgeActivity').then((r) => ((r as { items?: BridgeActivityItem[] } | null)?.items ?? []).filter(isWorkerTask).map(normalizeWorker)).catch(() => [] as BridgeActivityItem[]),
         ]);
-        setData({ ...tasks, workers }); setError(null); setLoadedAt(Date.now());
+        setData({ ...tasks, workers, workerTasks }); setError(null); setLoadedAt(Date.now());
       } catch (err) { setError(errorText(err)); }
     }, 120);
   };
@@ -80,6 +85,9 @@ export function Board({ overview, narrow, show, onOpenPalette, onOpenConversatio
     overview.refresh();
   };
   const workers = overview.data?.workers ?? [];
+  const workerWork = workersInWork(overview.data?.workerTasks ?? []);
+  const [workerNow, setWorkerNow] = useState(Date.now());
+  useEffect(() => { const t = setInterval(() => setWorkerNow(Date.now()), 5000); return () => clearInterval(t); }, []);
   // What a retry did, remembered with the failure it was pressed on: when the task comes back with a NEW failure, the
   // card says the retry failed again instead of repeating "retry started" beside the new reason.
   const [retried, setRetried] = useState<Record<string, { since: string; text: string }>>({});
@@ -122,10 +130,12 @@ export function Board({ overview, narrow, show, onOpenPalette, onOpenConversatio
               const items = byCol(c.id);
               const extra = c.id === 'queued' ? queued : [];
               const waiting = c.id === 'needs' ? workers : [];
+              const workerCards = c.id === 'running' ? workerWork.running : c.id === 'completed' ? workerWork.completed : c.id === 'failed' ? workerWork.failed : [];
               return (
                 <section key={c.id} className="column" aria-label={c.label}>
-                  <h2>{c.label} <span className="count">{items.length + extra.length + waiting.length}</span></h2>
-                  {items.length + extra.length + waiting.length === 0 && <div className="empty">None</div>}
+                  <h2>{c.label} <span className="count">{items.length + extra.length + waiting.length + workerCards.length}</span></h2>
+                  {items.length + extra.length + waiting.length + workerCards.length === 0 && <div className="empty">None</div>}
+                  <WorkerPanels items={workerCards} now={workerNow} onChanged={overview.refresh} />
                   {waiting.map((w) => (
                     <article key={w.storyId} className="card needs-you" data-story-id={w.storyId} data-status={w.state}>
                       <span className="title">{w.title || 'Worker task'}</span>
