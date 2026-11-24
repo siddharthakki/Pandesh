@@ -75,7 +75,7 @@ import {
   checkWorkspaceFolder, clearWorkspaceRecord, folderInside, isWorkspaceAccess, readRecentWorkspaces, readWorkspaceRecord,
   rememberWorkspace, writeWorkspaceRecord, type FolderCheck, type RecentWorkspace, type WorkspaceAccess, type WorkspaceSource,
 } from './workspaceAccess';
-import { findFolderMentionWithin } from './folderMention';
+import { asksToChangeFiles, findFolderMentionWithin, findFolderOfNamedFile } from './folderMention';
 import { emptyMissionCockpit, projectMissionCockpit } from './missionCockpit';
 import { WorkspaceActivityLog, activityTitle } from './workspaceActivity';
 import { BROWSER_SCREENSHOT_SOURCE, sanitizeToolActivity } from '../../../../core/shared/toolActivity';
@@ -1624,12 +1624,22 @@ export class DesktopSession {
    * sent. Null when there is nothing to ask. The disk search is bounded, so a slow drive never holds a message long.
    */
   async inspectFolderMention(text: string): Promise<DesktopFolderMention | null> {
-    const mention = await findFolderMentionWithin(String(text ?? ''), FOLDER_MENTION_TIMEOUT_MS);
+    const needsWrite = asksToChangeFiles(String(text ?? ''));
+    // A request to create or change one file names the file, not its folder: its folder is then the one to ask about.
+    const mention = await findFolderMentionWithin(String(text ?? ''), FOLDER_MENTION_TIMEOUT_MS)
+      ?? (needsWrite ? await Promise.race([findFolderOfNamedFile(String(text ?? '')), new Promise<null>((resolve) => setTimeout(() => resolve(null), FOLDER_MENTION_TIMEOUT_MS))]).catch(() => null) : null);
     if (!mention) return null;
-    if (this.folder && folderInside(mention.folder, this.folder)) return null;
+    if (this.folder && folderInside(mention.folder, this.folder)) {
+      // Already the workspace. Nothing to ask, unless it is read-only and the message asks to change files there: then the
+      // same card comes back for this workspace with Write offered, instead of a refusal in words that sends the person
+      // to find a menu.
+      if (!(needsWrite && this.workspaceAccess === 'read')) return null;
+      const here = checkWorkspaceFolder(this.folder, { dataDir: this.dataDir });
+      return { folder: here.folder, spelled: mention.spelled, check: here, rememberedAccess: 'read', needsWrite: true };
+    }
     const check = checkWorkspaceFolder(mention.folder, { dataDir: this.dataDir });
     const remembered = this.recentWorkspaces.find((r) => folderInside(r.folder, check.folder) && folderInside(check.folder, r.folder));
-    return { folder: check.folder, spelled: mention.spelled, check, rememberedAccess: remembered?.access ?? null };
+    return { folder: check.folder, spelled: mention.spelled, check, rememberedAccess: remembered?.access ?? null, ...(needsWrite ? { needsWrite: true } : {}) };
   }
 
   /** The workspace as the window shows it: the folder, what Pandesh may do there, and since when. */

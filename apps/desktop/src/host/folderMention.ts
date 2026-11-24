@@ -32,6 +32,28 @@ const MAX_PATH_STARTS = 6;
 const MAX_WORDS = 24;
 const MAX_PROBES = 120;
 
+/**
+ * Does the message ask to create or change files (as opposed to reading them)? Used only to decide whether the folder
+ * card should offer Write: a read-only workspace cannot carry out "create a file …", and without the card Pandesh could
+ * only refuse in words (found with everyday tasks, 2026-11-24). The person still decides on the card.
+ */
+export function asksToChangeFiles(text: string): boolean {
+  return /\b(?:create|write|save|rename|move|delete|remove|edit|update|append|copy|overwrite|replace|put|organi[sz]e|clean\s+up|make\s+(?:a|an|the)\s+(?:new\s+)?(?:file|folder|copy))\b/i.test(String(text ?? ''));
+}
+
+/**
+ * The folder of the one file a message names by its full path ("create D:\Notes\shopping.txt"): the file may not exist
+ * yet, its folder must. Null when no such path is named, or its folder is not there. A path with spaces must be quoted.
+ */
+export async function findFolderOfNamedFile(text: string, isDirectory: IsDirectory = defaultIsDirectory): Promise<FolderMention | null> {
+  const match = /(?:^|[\s"'`(])([A-Za-z]:[\\/][^\s"'`<>|?*]+)/.exec(String(text ?? ''));
+  if (!match) return null;
+  const spelled = match[1].replace(/[.,;:!?)\]}>]+$/, '');
+  const folder = path.dirname(path.resolve(spelled));
+  if (folder === path.resolve(spelled) || !(await isDirectory(folder))) return null;
+  return { folder, spelled };
+}
+
 export async function defaultIsDirectory(fullPath: string): Promise<boolean> {
   try {
     return (await fs.promises.stat(fullPath)).isDirectory();

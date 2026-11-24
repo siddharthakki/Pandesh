@@ -14,8 +14,13 @@ const TEXT_FORM = /\b(?:haiku|poem|poetry|limerick|verse|lyrics|song|rhyme|story
 /** Signs that the result must exist outside the chat. */
 const ARTIFACT = /\b(?:file|folder|directory|document|docx?|pdf|spreadsheet|xlsx?|csv|slides?|deck|app|application|website|web\s*page|page|script|program|code|project|repo(?:sitory)?|widget|dashboard|component|function|image|picture|photo|video|reminder|task|event|calendar|label|filter|draft in|gmail|send|save|install|delete|fix|organi[sz]e|open)\b|\.[a-z0-9]{1,5}\b/i;
 
+/** "Add up the Amount column", "add these together": arithmetic, answered in the reply. Not "add a file". */
+const ARITHMETIC_ADD = /\badd(?:ing)?\s+(?:up|together)\b|\badd\s+(?:up\s+)?(?:the\s+|all\s+|these\s+|those\s+)?(?:numbers?|figures?|amounts?|totals?|values?|column|rows?)\b/gi;
+
 export function asksToMakeSomething(requestText: string): boolean {
-  const text = String(requestText ?? '');
+  // "Add up the Amount column in expenses.csv and tell me the total" was counted as an unbuilt file: a correct answer was
+  // reported as not done and handed to a stronger model twice (everyday tasks, 2026-11-24).
+  const text = String(requestText ?? '').replace(ARITHMETIC_ADD, ' sum ');
   if (!MAKE_VERB.test(text)) return false;
   // "Write a haiku / a poem / an email text" without anything that must be saved or sent is a chat answer.
   if (TEXT_FORM.test(text) && !ARTIFACT.test(text)) return false;
