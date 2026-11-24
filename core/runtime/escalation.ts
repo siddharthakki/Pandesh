@@ -176,6 +176,58 @@ export function unfinishedTurnOf(db: CoreDatabase, attemptId: string, isMutating
   return null;
 }
 
+/**
+ * When a turn ended with nothing done because a PERMISSION stopped it, the reason in plain words; otherwise null.
+ *
+ * Everyday tasks, 2026-11-24: "create a file" in a read-only folder was refused by Core, counted as "nothing built",
+ * handed to two stronger models that were refused the same way, and the final report said the stronger models "do not
+ * fit in its graphics memory". The model was never the problem. A permission block is the person's decision (or the
+ * mode they chose): no other model may be tried against it, and nothing about models or memory is its cause.
+ */
+export const READ_ONLY_FOLDER_BLOCK = 'this folder is read-only for Pandesh: you allowed it to read here, not to change anything';
+export const PLAN_ONLY_BLOCK = 'this chat is in Plan Only mode, where nothing is created, changed or run';
+
+export function permissionBlockOf(db: CoreDatabase, attemptId: string): string | null {
+  const events = db.all<{ eventType: string; metadata: string }>(
+    "SELECT eventType, metadata FROM runtime_events WHERE entityId = ? AND eventType IN ('file_write_refused','file_move_refused','app_open_refused','permission_mode_blocked','permission_block_reported') ORDER BY sequence DESC LIMIT 40", [attemptId]);
+  for (const e of events) {
+    let reason = '';
+    try {
+      const meta = JSON.parse(e.metadata) as { reason?: unknown; block?: unknown };
+      // What the turn itself already told the person (piAgentEngine), word for word.
+      if (e.eventType === 'permission_block_reported' && typeof meta.block === 'string' && meta.block) return meta.block;
+      reason = String(meta.reason ?? '');
+    } catch { /* unreadable: not a known permission reason */ }
+    if (/read-only folder/i.test(reason)) return READ_ONLY_FOLDER_BLOCK;
+    if (/plan only/i.test(reason)) return PLAN_ONLY_BLOCK;
+    if (/declined/i.test(reason)) return 'you declined the approval';
+    if (/timed_out|no answer/i.test(reason)) return 'the approval request was not answered';
+    if (/outside every authorized folder|outside the authorized/i.test(reason)) return 'the place is outside the folders Pandesh may use';
+    if (e.eventType === 'permission_mode_blocked') return 'the permission mode of this chat does not allow it';
+  }
+  const approval = db.get<{ status: string }>("SELECT status FROM approvals WHERE attemptId = ? AND status IN ('rejected','expired') ORDER BY requestedAt DESC LIMIT 1", [attemptId]);
+  if (approval) return approval.status === 'rejected' ? 'you declined the approval' : 'the approval request was not answered';
+  return null;
+}
+
+/** What the person can do about a permission block, in the product's own terms (the model once advised "switch to Auto" for a read-only folder). */
+function permissionBlockFix(block: string): string {
+  if (/read-only/.test(block)) return 'To allow it: open the folder menu next to the message box (it shows the folder as "read only"), choose "Allow writing", and ask again. Switching the permission mode does not change this.';
+  if (/Plan Only/.test(block)) return 'To allow it: switch the permission menu next to the message box from "Plan only" to "Ask permission", and ask again.';
+  if (/declined/.test(block)) return 'Ask again and approve the card if you want it done.';
+  if (/not answered/.test(block)) return 'Ask again and answer the approval card.';
+  if (/outside the folders/.test(block)) return 'To allow it: choose that folder from the folder menu next to the message box, and ask again.';
+  return 'Change the permission from the menus next to the message box and ask again.';
+}
+
+/**
+ * The line Core adds to the reply of a turn a permission stopped: what stopped it, that no model or hardware limit did,
+ * and the one thing that changes it. Written by Core, so the reason and the remedy never depend on the model's wording.
+ */
+export function permissionBlockNotice(block: string): string {
+  return `**Stopped by a permission, not by the model or this PC:** ${block}. No stronger model was tried, because it would be stopped the same way. ${permissionBlockFix(block)}`;
+}
+
 function counted(tools: readonly string[]): string {
   const counts = new Map<string, number>();
   for (const t of tools) counts.set(t, (counts.get(t) ?? 0) + 1);
@@ -337,6 +389,16 @@ export async function maybeEscalate(deps: EscalationDeps, attemptId: string): Pr
     if (!why) return undefined;
     const context = getAttemptContext(db, attemptId);
     const request = getRequest(db, attempt.requestId);
+    // A permission stopped it: no other model is tried against the person's decision, and the report never blames
+    // models or graphics memory for it.
+    const block = why.reason === 'nothing_built' ? permissionBlockOf(db, attemptId) : null;
+    if (block) {
+      // The turn's own reply already carries Core's line about it (piAgentEngine adds permissionBlockNotice).
+      deps.mutate(() => {
+        recordRuntimeEvent(db, { domain: 'attempt', entityId: attemptId, eventType: 'escalation_skipped_permission', actor: deps.actor, metadata: { block, model: context.selectedModel } });
+      });
+      return undefined;
+    }
     const chain = chainOf(db, attempt);
     const stepsOf = () => chain.slice().reverse().map((a) => ({ model: getAttemptContext(db, a.id).selectedModel, why: unfinishedTurnOf(db, a.id, deps.isMutatingTool) }))
       .filter((s): s is { model: string; why: UnfinishedTurn } => Boolean(s.why));

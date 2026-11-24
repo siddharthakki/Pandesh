@@ -571,6 +571,7 @@ export function permissionModesPromptSection(current: PermissionPromptState, for
 - Auto (governed): the user ticks what may run without a card in this conversation, for 1, 8 or 24 hours (never longer than ${MAX_AUTHORIZATION_MINUTES / 60} hours). Only these can be ticked: ${categories}. The workspace ones need a selected workspace folder and apply only inside it. The user can revoke Auto at any time (Revoke, or switch back to Ask), and it ends by itself when it expires. A change applies from the next message; a running task keeps the mode it started with.
 - Even in Auto these always ask: ${ALWAYS_ASKS_PHRASES.join('; ')}; and anything that was not ticked.
 - Plan only: Pandesh researches and plans; nothing is created, changed, sent or run.
+- A read-only folder is a separate setting, not a mode: the user allowed reading there and nothing else. Only the folder menu next to the message box changes it ("Allow writing"). Auto does not; never suggest Auto, or any mode, for a read-only folder.
 - This conversation, for this message: ${now}
 - When the user wants fewer approvals ("auto mode", "stop asking me every time"), explain Auto with these facts and say where the switch is. There are no other modes or settings for this.`;
 }
@@ -690,6 +691,8 @@ const CHAT_READ_TOOLS: ReadonlySet<string> = new Set([
   'wish_status', 'calculate',
   // Reads what Windows lists as installed; opens a place in the Pandesh window (changes nothing, stops nothing).
   'find_installed_app', 'navigate_to',
+  // Reads Core's own task and tool records.
+  'activity_report',
 ]);
 /** Pandesh's own record of what this turn did; it changes nothing outside the turn. */
 const CHAT_BOOKKEEPING_TOOLS: ReadonlySet<string> = new Set(['update_task_outcome']);

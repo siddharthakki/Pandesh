@@ -53,6 +53,7 @@ import { collectListeningPorts } from './software/inventory';
 import { findInstalledApp, formatInstalledAppLookup, validAppQuery } from './installedAppLookup';
 import { describeFileMove, performFileMove, planFileMove } from './fileMove';
 import { launchApp, resolveAppTarget } from './appLaunch';
+import { answerActivityQuestion, collectActivity, renderActivityReport } from './activityReport';
 import { FolderReadLedger, requestedOutputFiles, requiresSourceEvidence, requiresWholeFolder, unreadFilesNotice } from './folderCompleteness';
 import * as cp from 'node:child_process';
 import { holdAwaitedApproval } from './cancellationRecovery';
@@ -134,7 +135,7 @@ import { ensureModelResident } from './ollamaResidency';
 import { OLLAMA_IMPLICIT_NUM_CTX_BUCKETS, resolveOllamaChatControls } from './ollamaChatControls';
 import { createPiOllamaFetch, type OllamaCallMetrics } from './piOllamaNativeFetch';
 import { createPiCloudFetch, resolvePiCloudTarget } from './piCloudTarget';
-import { CLOUD_OFFER_DECLINED_REPLY, classifyOfferReply, cloudOfferAcceptedReply, pendingCloudOffer } from './escalation';
+import { CLOUD_OFFER_DECLINED_REPLY, classifyOfferReply, cloudOfferAcceptedReply, pendingCloudOffer, permissionBlockNotice, permissionBlockOf, PLAN_ONLY_BLOCK, READ_ONLY_FOLDER_BLOCK } from './escalation';
 import { asksToMakeSomething as asksToMakeOutsideChat } from './makeIntent';
 import { modelLacksTools } from './ollamaModelInfo';
 import { unbackedScreenClaims } from './screenClaims';
@@ -3666,6 +3667,24 @@ export class PiAgentEngine implements EngineAdapter {
         },
       },
       {
+        // Everyday tasks 2026-11-24: "what did you do in the last hour" was answered "nothing" from the model's own view.
+        name: 'activity_report',
+        label: 'activity_report',
+        description: "What Pandesh actually did in a period, from Core's task and tool records across ALL chats: each request with its recorded actions, split into completed, attempted-but-not-finished and failed. Use it for any question about what you did, got done, tried or failed (today, in the last hour, yesterday…). Never answer such a question from memory; give this report as it is. Read-only.",
+        parameters: { type: 'object', properties: { minutes: { type: 'number', description: 'How far back to look, in minutes (60 = last hour, 1440 = last 24 hours). Default 60.' } } },
+        execute: async (_id: string, args: any) => {
+          const minutes = Math.min(Math.max(Number(args?.minutes) || 60, 1), 31 * 1440);
+          const nowMs = Date.now();
+          const window = { sinceMs: nowMs - minutes * 60_000, label: minutes === 60 ? 'in the last hour' : minutes % 1440 === 0 ? `in the last ${minutes / 1440} day${minutes === 1440 ? '' : 's'}` : minutes % 60 === 0 ? `in the last ${minutes / 60} hours` : `in the last ${minutes} minutes` };
+          try {
+            const text = renderActivityReport(collectActivity(db, { sinceMs: window.sinceMs, nowMs, excludeRequestId: requestId }), window, nowMs);
+            return { content: [{ type: 'text', text }], details: { success: true, activity: { kind: 'tool', title: `What Pandesh did ${window.label}`, excerpt: text.slice(0, 1500) } } };
+          } catch (err: any) {
+            return { content: [{ type: 'text', text: `NOT AVAILABLE: Core's task records could not be read: ${err?.message ?? String(err)}. Say that you cannot report what was done; do not answer from memory.` }], isError: true };
+          }
+        },
+      },
+      {
         // Everyday tasks 2026-11-24: "Open Notepad" was answered with "I cannot open applications".
         name: 'open_app',
         label: 'open_app',
@@ -5152,6 +5171,24 @@ Report this to the user, saying the ${name} agent did the work. Do not add facts
       try { mutateWithBroadcast(db, broadcaster, () => { transitionAttempt(db, attemptId, { toStatus: 'completed', fenceToken, actor }); }); } catch {}
       safeRecordRuntimeEvent(db, broadcaster, attemptId, 'step_finish', { step: 1, engine: 'pi', durationMs: Date.now() - startTime, outcome: 'completed' }, actor);
       return { success: true, reply: taskStatusAnswer };
+    }
+    // "What did you do for me in the last hour?" is answered from Core's task and tool records across all chats, never
+    // by the model: in a new chat it knows nothing of the others and said "I have not performed any actions" after
+    // eleven tasks (everyday tasks, 2026-11-24). Completed, attempted and failed work are kept apart.
+    const activityAnswer = !projectInspection ? (() => { try { return answerActivityQuestion(db, requestText, { excludeRequestId: requestId }); } catch (err) { console.error('[piAgentEngine] activity report failed:', err); return null; } })() : null;
+    if (activityAnswer) {
+      let replyRecord: any = null;
+      try { mutateWithBroadcast(db, broadcaster, () => { replyRecord = appendMessage(db, conversationId, { role: 'assistant', content: activityAnswer, actor }); }); } catch {}
+      safeRecordRuntimeEvent(db, broadcaster, attemptId, 'activity_report_answered', { chars: activityAnswer.length }, actor);
+      try {
+        mutateWithBroadcast(db, broadcaster, () => {
+          ensureTaskOutcome(db, { attemptId, conversationId: conversationId || null, requestId, objective: objectiveFromRequest(requestText) });
+          finalizeTaskOutcome(db, attemptId, { verdict: 'conversational', reason: 'Answered from the recorded task and tool history; no action was taken', performed: [], refused: [], failed: [] }, { answerMessageId: replyRecord?.id ?? null });
+        });
+      } catch {}
+      try { mutateWithBroadcast(db, broadcaster, () => { transitionAttempt(db, attemptId, { toStatus: 'completed', fenceToken, actor }); }); } catch {}
+      safeRecordRuntimeEvent(db, broadcaster, attemptId, 'step_finish', { step: 1, engine: 'pi', durationMs: Date.now() - startTime, outcome: 'completed' }, actor);
+      return { success: true, reply: activityAnswer };
     }
     // The answer to Pandesh's cloud offer (escalation.ts): a short yes/no right after it. Answered by Core, no model; on
     // "yes" the executor starts the offered task on the cloud model once this turn ends. Nothing is sent before that.
@@ -7326,6 +7363,24 @@ ${screenCorrection}`;
         nothingMade: asksToBuildOutsideChat && !producedSomething,
       });
       if (correction) finalReply += "\n\n" + correction;
+      // Nothing was done because a permission stopped it: Core states the real reason and the remedy itself. The
+      // model's own explanation told the user to "switch to Auto" for a read-only folder (live, 2026-11-24), and an
+      // earlier build ended such a turn blaming graphics memory.
+      if (asksToBuildOutsideChat && !producedSomething && !signal?.aborted) {
+        try {
+          // A recorded refusal, or the turn's own frozen state when the model did not even try the tool: in a read-only
+          // folder (or Plan Only) a requested file that does not exist is missing because of that, whatever the model
+          // says it attempted (live: "I attempted to call write_file" with no call recorded).
+          const filesMissing = (deliverables?.missing.length ?? 0) > 0;
+          const block = permissionBlockOf(db, attemptId)
+            ?? (filesMissing && selectedWorkspace && frozenWorkspaceAccess(db, [attemptId]) === 'read' ? READ_ONLY_FOLDER_BLOCK
+              : filesMissing && frozenPermissionFor(db, [attemptId]).mode === 'plan' ? PLAN_ONLY_BLOCK : null);
+          if (block) {
+            finalReply += `\n\n${permissionBlockNotice(block)}`;
+            safeRecordRuntimeEvent(db, broadcaster, attemptId, 'permission_block_reported', { block }, actor);
+          }
+        } catch { /* the reply stands as it is */ }
+      }
       // The durable signal for escalation (executor → stronger model): a request to build something that ended with
       // nothing built, or a turn with no reply. A question ("…, possible?"), a stopped turn or work still running in
       // this chat is not an unfinished turn.

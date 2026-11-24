@@ -178,7 +178,7 @@ export const NATIVE_GROUP: Record<string, string> = {
   software_updates: 'pc', listening_ports: 'pc', find_installed_app: 'pc',
   create_project: 'projects', list_projects: 'projects',
   add_task: 'projects', update_task: 'projects', list_tasks: 'projects',
-  personal_overview: 'personal', search_second_brain: 'personal',
+  personal_overview: 'personal', search_second_brain: 'personal', activity_report: 'personal',
 };
 
 /** Governed capability id → group. */
