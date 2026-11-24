@@ -158,7 +158,7 @@ sequenceDiagram
     Core-->>You: Result with the real test output
 ```
 
-<img src="docs/media/architecture.svg" alt="You → Pandesh Desktop → Pandesh Core (Chief Agent, approvals, agent scopes, tool ledger, claim guards, memory) → specialists, local models, tools and consented internet → verified result" width="100%">
+<img src="docs/media/architecture.png" alt="You → Pandesh Desktop → Pandesh Core (Chief Agent, approvals, agent scopes, tool ledger, claim guards, memory) → specialists, local models, tools and consented internet → verified result" width="100%">
 
 Core is a local Node service bound to `127.0.0.1` with a SQLite database. It owns the permission modes and approvals,
 each agent's scope (tools, folders, network), the tool ledger, the checks on written files, and the final verdict for

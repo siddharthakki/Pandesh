@@ -1,6 +1,6 @@
 # Pandesh architecture
 
-![Architecture](media/architecture.svg)
+![Architecture](media/architecture.png)
 
 Pandesh has two processes that you run locally: the **desktop app** (Electron) and **Pandesh Core** (a Node.js service).
 Core is the authority. The model proposes tool calls, and Core decides whether each one may run, asks you when it has
