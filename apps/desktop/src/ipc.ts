@@ -650,6 +650,8 @@ export interface DesktopFolderMention {
   check: DesktopFolderCheck;
   /** The access the person last chose for this folder, if it is a recent one. */
   rememberedAccess: DesktopWorkspaceAccess | null;
+  /** The message asks to create or change files there, which a read-only workspace cannot do: the card offers Write. */
+  needsWrite?: boolean;
 }
 
 export interface DesktopSnapshot {

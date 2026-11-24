@@ -51,6 +51,9 @@ import { searchBrainForChat } from '../domain/secondBrain';
 import { readUpdateState } from './software/updates';
 import { collectListeningPorts } from './software/inventory';
 import { findInstalledApp, formatInstalledAppLookup, validAppQuery } from './installedAppLookup';
+import { describeFileMove, performFileMove, planFileMove } from './fileMove';
+import { launchApp, resolveAppTarget } from './appLaunch';
+import { answerActivityQuestion, collectActivity, renderActivityReport } from './activityReport';
 import { FolderReadLedger, requestedOutputFiles, requiresSourceEvidence, requiresWholeFolder, unreadFilesNotice } from './folderCompleteness';
 import * as cp from 'node:child_process';
 import { holdAwaitedApproval } from './cancellationRecovery';
@@ -132,7 +135,7 @@ import { ensureModelResident } from './ollamaResidency';
 import { OLLAMA_IMPLICIT_NUM_CTX_BUCKETS, resolveOllamaChatControls } from './ollamaChatControls';
 import { createPiOllamaFetch, type OllamaCallMetrics } from './piOllamaNativeFetch';
 import { createPiCloudFetch, resolvePiCloudTarget } from './piCloudTarget';
-import { CLOUD_OFFER_DECLINED_REPLY, classifyOfferReply, cloudOfferAcceptedReply, pendingCloudOffer } from './escalation';
+import { CLOUD_OFFER_DECLINED_REPLY, classifyOfferReply, cloudOfferAcceptedReply, pendingCloudOffer, permissionBlockNotice, permissionBlockOf, PLAN_ONLY_BLOCK, READ_ONLY_FOLDER_BLOCK, withoutWrongRemedy } from './escalation';
 import { asksToMakeSomething as asksToMakeOutsideChat } from './makeIntent';
 import { modelLacksTools } from './ollamaModelInfo';
 import { unbackedScreenClaims } from './screenClaims';
@@ -1326,6 +1329,8 @@ export class PiAgentEngine implements EngineAdapter {
     /** How many times this turn wrote each file; a model stuck in a loop stops here (micro-test DRV-010: 321 writes). */
     const writesPerFile = new Map<string, number>();
     const MAX_WRITES_PER_FILE = 20;
+    /** Where move_file put files in this turn (absolute paths, each checked on disk by the tool). */
+    const movedThisTurn: string[] = [];
     /**
      * What write_file must not do, whoever authorized it: empty a file that has text (write_file replaces the whole
      * file, so an empty write erases it), turn an empty write into a "folder", write over a folder, rewrite a file with
@@ -1343,7 +1348,7 @@ export class PiAgentEngine implements EngineAdapter {
       }
       const empty = content.trim().length === 0;
       if (empty && existing && existing.length > 0) {
-        return { reason: 'the write would erase the file', text: `NOT WRITTEN: this would erase all ${existing.length} bytes of ${name}, because write_file replaces the whole file. Nothing was changed. To change part of it, write the complete new text. write_file cannot rename, move or delete a file; if that is what the user asked for, tell them Pandesh cannot do it here.` };
+        return { reason: 'the write would erase the file', text: `NOT WRITTEN: this would erase all ${existing.length} bytes of ${name}, because write_file replaces the whole file. Nothing was changed. To change part of it, write the complete new text. To rename or move a file call move_file. write_file cannot delete a file; if that is what the user asked for, tell them Pandesh cannot do it here.` };
       }
       if (empty && !existing && !path.extname(name) && !name.startsWith('.')) {
         return { reason: 'an empty file named like a folder', text: `NOT WRITTEN: write_file writes a file's text; "${name}" would be an empty file with no extension, not a folder. Pandesh has no tool that creates folders here, so tell the user that instead of saying a folder was created.` };
@@ -3610,6 +3615,117 @@ export class PiAgentEngine implements EngineAdapter {
         },
       },
       {
+        // Everyday tasks 2026-11-24: "Rename draft.txt to final.txt" had no tool; the model wrote a junk final.txt instead.
+        name: 'move_file',
+        label: 'move_file',
+        description: 'Rename a file, or move it to another folder, inside the selected folder. Use it for "rename X to Y" and "move X into Z"; never use write_file for that. It never overwrites (the new name must be free), the file\'s contents are untouched, and the user approves each one. One file per call; not for folders.',
+        parameters: {
+          type: 'object',
+          properties: {
+            from: { type: 'string', description: 'The existing file, relative to the selected folder or its absolute path inside it.' },
+            to: { type: 'string', description: 'The new name (e.g. final.txt: stays in the same folder), or a place inside the selected folder (e.g. archive/final.txt, or archive/ to keep the name).' },
+          },
+          required: ['from', 'to'],
+        },
+        execute: async (_id: string, args: any) => {
+          const plan = planFileMove({ from: args?.from, to: args?.to, workspaceRoot: selectedWorkspace || null });
+          const refuse = (text: string, reason: string) => {
+            safeRecordRuntimeEvent(db, broadcaster, attemptId, 'file_move_refused', { from: String(args?.from ?? ''), to: String(args?.to ?? ''), reason }, actor);
+            return { content: [{ type: 'text', text }], details: { success: false, error: reason }, isError: true };
+          };
+          if (!plan.ok) return refuse(plan.text, plan.reason);
+          if (frozenPermissionFor(db, [attemptId]).mode === 'plan') return refuse('NOT DONE (Plan Only mode): move_file would change something, so nothing was renamed or moved. Describe this step in the plan instead.', 'Plan Only');
+          if (frozenWorkspaceAccess(db, [attemptId]) === 'read') return refuse('NOT DONE (read-only folder): the user let Pandesh read this folder but not change it, so nothing was renamed or moved. The user can allow changes and ask again.', 'read-only folder');
+          // Where the paths really land (a junction inside the folder that points elsewhere is not the folder).
+          if (!isPathAuthorized(plan.from) || !isPathAuthorized(path.dirname(plan.to))) return refuse('NOT MOVED: the file or its new place is outside the authorized folder. Nothing was changed.', 'outside every authorized folder');
+          for (const p of [plan.from, plan.to]) {
+            const protectedReason = protectedWriteReason(p) ?? (isCredentialFilePath(p) ? 'credential files are not authorized' : null);
+            if (protectedReason) return refuse(`NOT MOVED: "${workspaceRelative(p) ?? path.basename(p)}" cannot be renamed or moved: ${protectedReason}. Nothing was changed.`, protectedReason);
+          }
+          const what = describeFileMove(plan);
+          const shownState = fileFingerprint(plan.from);
+          const outcome = await requestToolApproval({
+            toolName: 'move_file',
+            filePath: plan.from,
+            arguments: { from: plan.from, to: plan.to },
+            workspaceRoot: selectedWorkspace || null,
+            cardText: `Pandesh wants to ${what} in ${selectedWorkspace}.\nThe file's contents stay as they are and nothing is overwritten (${plan.relTo} does not exist yet).`,
+          });
+          if (outcome.outcome === 'rejected') return refuse(`Not done: the user did not approve this (${what}). Nothing was changed. Ask the user how to proceed.`, 'the user declined');
+          if (outcome.outcome !== 'approved') return refuse(`Not done: ${outcome.outcome === 'timed_out' ? 'no answer to the approval request was recorded' : 'the approval request could not be created'}. Nothing was changed. The request can be made again.`, `approval ${outcome.outcome}`);
+          if (fileFingerprint(plan.from) !== shownState) return refuse(`NOT MOVED: ${plan.relFrom} changed while the approval card was open, so the approval no longer describes it. Nothing was changed; tell the user why.`, 'the file changed while the approval card was open');
+          const done = performFileMove(plan);
+          if (!done.ok) return refuse(`NOT MOVED: ${done.error}. Check the folder with list_directory before saying what happened.`, done.error);
+          if (fileFingerprint(plan.to) !== shownState) return refuse(`NOT VERIFIED: ${plan.relTo} exists but its contents differ from ${plan.relFrom} before the move. Tell the user plainly.`, 'contents differ after the move');
+          movedThisTurn.push(plan.to);
+          safeRecordRuntimeEvent(db, broadcaster, attemptId, 'file_moved', { from: plan.from, to: plan.to, kind: plan.kind, bytes: done.bytes, approvalId: outcome.approvalId ?? null }, actor);
+          const title = plan.kind === 'rename' ? `Renamed ${path.basename(plan.from)} to ${path.basename(plan.to)}` : `Moved ${plan.relFrom} to ${plan.relTo}`;
+          return {
+            content: [{ type: 'text', text: `${title} (checked on disk: ${plan.relTo} is there with the same ${done.bytes} bytes${plan.caseOnly ? '' : `, ${plan.relFrom} is gone`}).` }],
+            details: { success: true, output: plan.to, activity: { kind: 'tool', title, path: plan.relTo } },
+          };
+        },
+      },
+      {
+        // Everyday tasks 2026-11-24: "what did you do in the last hour" was answered "nothing" from the model's own view.
+        name: 'activity_report',
+        label: 'activity_report',
+        description: "What Pandesh actually did in a period, from Core's task and tool records across ALL chats: each request with its recorded actions, split into completed, attempted-but-not-finished and failed. Use it for any question about what you did, got done, tried or failed (today, in the last hour, yesterday…). Never answer such a question from memory; give this report as it is. Read-only.",
+        parameters: { type: 'object', properties: { minutes: { type: 'number', description: 'How far back to look, in minutes (60 = last hour, 1440 = last 24 hours). Default 60.' } } },
+        execute: async (_id: string, args: any) => {
+          const minutes = Math.min(Math.max(Number(args?.minutes) || 60, 1), 31 * 1440);
+          const nowMs = Date.now();
+          const window = { sinceMs: nowMs - minutes * 60_000, label: minutes === 60 ? 'in the last hour' : minutes % 1440 === 0 ? `in the last ${minutes / 1440} day${minutes === 1440 ? '' : 's'}` : minutes % 60 === 0 ? `in the last ${minutes / 60} hours` : `in the last ${minutes} minutes` };
+          try {
+            const text = renderActivityReport(collectActivity(db, { sinceMs: window.sinceMs, nowMs, excludeRequestId: requestId }), window, nowMs);
+            return { content: [{ type: 'text', text }], details: { success: true, activity: { kind: 'tool', title: `What Pandesh did ${window.label}`, excerpt: text.slice(0, 1500) } } };
+          } catch (err: any) {
+            return { content: [{ type: 'text', text: `NOT AVAILABLE: Core's task records could not be read: ${err?.message ?? String(err)}. Say that you cannot report what was done; do not answer from memory.` }], isError: true };
+          }
+        },
+      },
+      {
+        // Everyday tasks 2026-11-24: "Open Notepad" was answered with "I cannot open applications".
+        name: 'open_app',
+        label: 'open_app',
+        description: "Open an app on the user's screen by its name: Notepad, Calculator, Paint, File Explorer, Settings, or a program installed on this PC (as Windows lists it). Use it when the user asks to open, start or launch an app. The app is started without arguments and nothing else is run; an installed program asks the user first. Never opens command shells, installers or system tools. To open a file use open_local_file instead.",
+        parameters: { type: 'object', properties: { name: { type: 'string', description: 'The app name only, e.g. "Notepad" or "Obsidian".' } }, required: ['name'] },
+        execute: async (_id: string, args: any) => {
+          const fail = (text: string, reason: string) => {
+            safeRecordRuntimeEvent(db, broadcaster, attemptId, 'app_open_refused', { name: String(args?.name ?? '').slice(0, 80), reason }, actor);
+            return { content: [{ type: 'text', text }], details: { success: false, error: reason }, isError: true };
+          };
+          const raw = String(args?.name ?? '').trim();
+          if (process.platform !== 'win32') return fail('NOT AVAILABLE: opening an app by name works on Windows only.', 'not Windows');
+          if (frozenPermissionFor(db, [attemptId]).mode === 'plan') return fail('NOT DONE (Plan Only mode): nothing is started in Plan Only. Describe this step in the plan instead.', 'Plan Only');
+          let target = resolveAppTarget(raw, null);
+          if (!target.ok && target.reason === 'not looked up') {
+            const query = validAppQuery(raw);
+            if (!query) return fail('NOT OPENED: give the app name only (letters, digits, spaces, dots, dashes; 2-60 characters). Nothing was opened.', 'not an app name');
+            try { target = resolveAppTarget(query, await findInstalledApp(query)); } catch (err: any) {
+              return fail(`NOT OPENED: Windows did not answer the installed-app lookup: ${err?.message ?? String(err)}. Nothing was opened.`, 'lookup failed');
+            }
+          }
+          if (!target.ok) return fail(target.text, target.reason);
+          let approvalId: string | null = null;
+          if (!target.builtin) {
+            const outcome = await requestToolApproval({
+              toolName: 'open_app',
+              arguments: { name: target.name, file: target.file },
+              workspaceRoot: selectedWorkspace || null,
+              cardText: `Pandesh wants to open ${target.name} on your screen.\nProgram: ${target.file}\nIt is started the way a double-click starts it, without any arguments. Nothing else is run.`,
+            });
+            if (outcome.outcome === 'rejected') return fail(`Not opened: the user did not approve opening ${target.name}. Nothing was opened.`, 'the user declined');
+            if (outcome.outcome !== 'approved') return fail(`Not opened: ${outcome.outcome === 'timed_out' ? 'no answer to the approval request was recorded' : 'the approval request could not be created'}. Nothing was opened.`, `approval ${outcome.outcome}`);
+            approvalId = outcome.approvalId ?? null;
+          }
+          const result = await launchApp(target);
+          safeRecordRuntimeEvent(db, broadcaster, attemptId, result.opened ? 'app_opened' : 'app_open_refused', { name: target.name, builtin: target.builtin, file: target.builtin ? null : target.file, verified: result.verified, processesBefore: result.before, processesAfter: result.after, approvalId, ...(result.opened ? {} : { reason: 'no process appeared' }) }, actor);
+          if (!result.opened) return { content: [{ type: 'text', text: result.text }], details: { success: false, error: 'no process appeared' }, isError: true };
+          return { content: [{ type: 'text', text: result.text }], details: { success: true, verified: result.verified, activity: { kind: 'tool', title: `Opened ${target.name}` } } };
+        },
+      },
+      {
         // Alpha e2e T2: chat had no access to Software Discovery and guessed "Up to Date". This reads the stored result
         // of the last update check (More → Software & Services); it never contacts the internet or installs anything.
         name: 'software_updates',
@@ -5056,6 +5172,24 @@ Report this to the user, saying the ${name} agent did the work. Do not add facts
       safeRecordRuntimeEvent(db, broadcaster, attemptId, 'step_finish', { step: 1, engine: 'pi', durationMs: Date.now() - startTime, outcome: 'completed' }, actor);
       return { success: true, reply: taskStatusAnswer };
     }
+    // "What did you do for me in the last hour?" is answered from Core's task and tool records across all chats, never
+    // by the model: in a new chat it knows nothing of the others and said "I have not performed any actions" after
+    // eleven tasks (everyday tasks, 2026-11-24). Completed, attempted and failed work are kept apart.
+    const activityAnswer = !projectInspection ? (() => { try { return answerActivityQuestion(db, requestText, { excludeRequestId: requestId }); } catch (err) { console.error('[piAgentEngine] activity report failed:', err); return null; } })() : null;
+    if (activityAnswer) {
+      let replyRecord: any = null;
+      try { mutateWithBroadcast(db, broadcaster, () => { replyRecord = appendMessage(db, conversationId, { role: 'assistant', content: activityAnswer, actor }); }); } catch {}
+      safeRecordRuntimeEvent(db, broadcaster, attemptId, 'activity_report_answered', { chars: activityAnswer.length }, actor);
+      try {
+        mutateWithBroadcast(db, broadcaster, () => {
+          ensureTaskOutcome(db, { attemptId, conversationId: conversationId || null, requestId, objective: objectiveFromRequest(requestText) });
+          finalizeTaskOutcome(db, attemptId, { verdict: 'conversational', reason: 'Answered from the recorded task and tool history; no action was taken', performed: [], refused: [], failed: [] }, { answerMessageId: replyRecord?.id ?? null });
+        });
+      } catch {}
+      try { mutateWithBroadcast(db, broadcaster, () => { transitionAttempt(db, attemptId, { toStatus: 'completed', fenceToken, actor }); }); } catch {}
+      safeRecordRuntimeEvent(db, broadcaster, attemptId, 'step_finish', { step: 1, engine: 'pi', durationMs: Date.now() - startTime, outcome: 'completed' }, actor);
+      return { success: true, reply: activityAnswer };
+    }
     // The answer to Pandesh's cloud offer (escalation.ts): a short yes/no right after it. Answered by Core, no model; on
     // "yes" the executor starts the offered task on the cloud model once this turn ends. Nothing is sent before that.
     const cloudOffer = conversationId ? pendingCloudOffer(db, conversationId, requestId) : null;
@@ -5493,7 +5627,7 @@ ${hasBriefing ? `- For a daily briefing call 'get_briefing_data' once and presen
 Product: KarkeDikha (KKD).
 Assistant Name: Pandesh. (You are Pandesh; the user is the human operator. The user is NOT Pandesh. When the user addresses you as Pandesh, acknowledge that you are Pandesh).
 Visual Mascot: Cyber Panda (the approved futuristic mascot of KarkeDikha).
-Where you run: on the user's own PC, inside the KarkeDikha desktop app, with a local model. You are not a cloud or remote service; never say you are. To show the user a file from the selected folder on their screen (an HTML page in their browser, a PDF, an image), call 'open_local_file'; never claim you opened something unless that tool succeeded.
+Where you run: on the user's own PC, inside the KarkeDikha desktop app, with a local model. You are not a cloud or remote service; never say you are. To show the user a file from the selected folder on their screen (an HTML page in their browser, a PDF, an image), call 'open_local_file'; to open an app (Notepad, Calculator, an installed program) call 'open_app'; never claim you opened something unless that tool succeeded. To rename or move a file in the selected folder call 'move_file' (never write a new file in its place).
 Running on: ${process.platform}. TIME: the current local time, time zone and reference days are in the Pandesh state block at the start of the user's newest message. Interpret every time the user mentions in that zone. NEVER calculate dates or weekdays yourself: call 'resolve_time' for any relative expression (tomorrow, next Friday, in 8 days, 3pm on Thursday) and use its date/time/iso verbatim.
 
 ${TURN_STATE_PROMPT_RULE}
@@ -7111,7 +7245,10 @@ When the user asks to continue, resume, or check progress/updates, resume this w
           .filter(Boolean).map((p) => path.resolve(selectedWorkspace, p));
       }
       const unchangedFilesNow = () => toolCallsRecorded.filter((t) => t.status === 'completed' && t.tool === 'write_file' && /^UNCHANGED:/i.test(extractToolResultText(t.result).trim())).map((t) => path.resolve(selectedWorkspace, String((t.args as { filePath?: string } | undefined)?.filePath ?? ''))).filter(Boolean);
-      const judge = () => deliverableLedger({ requestText, workspace: selectedWorkspace, writtenFiles: [...priorWrites, ...writtenFilesNow(), ...unchangedFilesNow()], unchangedFiles: unchangedFilesNow(), turnStartMs: chainStartMs });
+      // A file this turn renamed or moved into place is there, checked on disk by move_file, though its date did not change:
+      // asking for it to be "created with write_file" would overwrite the file the user just had renamed.
+      const movedFilesNow = () => [...movedThisTurn];
+      const judge = () => deliverableLedger({ requestText, workspace: selectedWorkspace, writtenFiles: [...priorWrites, ...writtenFilesNow(), ...unchangedFilesNow(), ...movedFilesNow()], unchangedFiles: [...unchangedFilesNow(), ...movedFilesNow()], turnStartMs: chainStartMs });
       try {
         deliverables = judge();
         if (deliverables.missing.length > 0 && tools.some((t) => t.name === 'write_file')) {
@@ -7226,6 +7363,26 @@ ${screenCorrection}`;
         nothingMade: asksToBuildOutsideChat && !producedSomething,
       });
       if (correction) finalReply += "\n\n" + correction;
+      // Nothing was done because a permission stopped it: Core states the real reason and the remedy itself. The
+      // model's own explanation told the user to "switch to Auto" for a read-only folder (live, 2026-11-24), and an
+      // earlier build ended such a turn blaming graphics memory.
+      if (asksToBuildOutsideChat && !producedSomething && !signal?.aborted) {
+        try {
+          // A recorded refusal, or the turn's own frozen state when the model did not even try the tool: in a read-only
+          // folder (or Plan Only) a requested file that does not exist is missing because of that, whatever the model
+          // says it attempted (live: "I attempted to call write_file" with no call recorded).
+          const filesMissing = (deliverables?.missing.length ?? 0) > 0;
+          const block = permissionBlockOf(db, attemptId)
+            ?? (filesMissing && selectedWorkspace && frozenWorkspaceAccess(db, [attemptId]) === 'read' ? READ_ONLY_FOLDER_BLOCK
+              : filesMissing && frozenPermissionFor(db, [attemptId]).mode === 'plan' ? PLAN_ONLY_BLOCK : null);
+          if (block) {
+            // A remedy that cannot work ("switch to Auto" for a read-only folder) is taken out before Core's line goes in.
+            const cleaned = withoutWrongRemedy(finalReply, block);
+            finalReply = `${cleaned.text}\n\n${permissionBlockNotice(block)}`;
+            safeRecordRuntimeEvent(db, broadcaster, attemptId, 'permission_block_reported', { block, wrongRemedySentencesRemoved: cleaned.removed }, actor);
+          }
+        } catch { /* the reply stands as it is */ }
+      }
       // The durable signal for escalation (executor → stronger model): a request to build something that ended with
       // nothing built, or a turn with no reply. A question ("…, possible?"), a stopped turn or work still running in
       // this chat is not an unfinished turn.

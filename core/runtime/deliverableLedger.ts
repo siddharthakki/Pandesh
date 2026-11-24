@@ -19,7 +19,9 @@ import * as path from 'node:path';
 
 const EXT = 'md|markdown|txt|csv|tsv|json|jsonl|xlsx?|docx?|pptx?|pdf|html?|xml|ya?ml|toml|ini|log|js|mjs|cjs|ts|tsx|jsx|py|ps1|bat|sh|sql|css|png|jpe?g|gif|webp|svg|zip';
 const FILE_TOKEN = new RegExp(`(?<![\\w/\\\\:.-])((?:[\\w.-]+[\\\\/])*[\\w][\\w.-]*\\.(?:${EXT}))(?![\\w/-])`, 'gi');
-const OUTPUT_VERB = /\b(create|creates|created|write|writes|save|saves|produce|produces|generate|generates|make|makes|export|exports|output|store|put|build|draft|compose)\b/i;
+// A verb, not part of a file name or path: "Rename draft.txt to final.txt" has no output verb (everyday tasks 2026-11-24:
+// "draft" in draft.txt made final.txt an expected new file, and a correct rename was reported "Missing: final.txt").
+const OUTPUT_VERB = /(?<![\\/.\w-])(create|creates|created|write|writes|save|saves|produce|produces|generate|generates|make|makes|export|exports|output|store|put|build|draft|compose)\b(?![\w-]*\.\w)/i;
 const INPUT_CUTOFF = /\b(?:from|using|based on|by reading|reading|reads?|out of|given|taken from|in the file|about|for|that|which|of)\b/i;
 const INPUT_WORDS = /\b(?:of|about|from|using|reading|reads?|based on|given|for|see)\b/gi;
 const NEGATED_SENTENCE = /\b(?:not|n't|never|without|no need|unchanged|leave|keep)\b/i;

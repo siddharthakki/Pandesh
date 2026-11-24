@@ -3,7 +3,13 @@ import { api, errorText, onDesktopEvent, type QueuedCommand, type Snapshot, type
 import { Icon, elapsed, timeOf } from './ui';
 import { columnOf, needsYouCount as countNeeds, type Column } from './boardModel';
 
-export interface Overview { data: { tasks: TaskRow[]; queued: QueuedCommand[] } | null; error: string | null; loadedAt: number | null; refresh: () => void }
+/** A worker task (Claude Code, OpenCode…) that failed or waits for review, as Core records it. */
+export interface WorkerAttention {
+  storyId: string; title: string; agent: string; state: 'failed' | 'awaiting_review'; reason: string; since: string;
+  conversationId: string | null; timeline: Array<{ at: string; event: string; text: string }>; canRetry: boolean;
+}
+
+export interface Overview { data: { tasks: TaskRow[]; queued: QueuedCommand[]; workers?: WorkerAttention[] } | null; error: string | null; loadedAt: number | null; refresh: () => void }
 
 /** Core's task overview, refreshed on Core events (coalesced) and every 5 s. */
 export function useTaskOverview(): Overview {
@@ -16,7 +22,14 @@ export function useTaskOverview(): Overview {
     pending.current = true;
     setTimeout(async () => {
       pending.current = false;
-      try { setData(await api.getTaskOverview()); setError(null); setLoadedAt(Date.now()); } catch (err) { setError(errorText(err)); }
+      try {
+        // A failed worker task is told to its chat once; this is where it stays visible until someone acts on it.
+        const [tasks, workers] = await Promise.all([
+          api.getTaskOverview(),
+          api.household('workerAttention').then((r) => ((r as { items?: WorkerAttention[] } | null)?.items ?? [])).catch(() => [] as WorkerAttention[]),
+        ]);
+        setData({ ...tasks, workers }); setError(null); setLoadedAt(Date.now());
+      } catch (err) { setError(errorText(err)); }
     }, 120);
   };
   useEffect(() => {
@@ -64,6 +77,25 @@ export function Board({ overview, narrow, onOpenPalette, onOpenConversation }: {
     } catch (err) { setNotes((n) => ({ ...n, [t.attemptId]: errorText(err) })); }
     overview.refresh();
   };
+  const workers = overview.data?.workers ?? [];
+  // What a retry did, remembered with the failure it was pressed on: when the task comes back with a NEW failure, the
+  // card says the retry failed again instead of repeating "retry started" beside the new reason.
+  const [retried, setRetried] = useState<Record<string, { since: string; text: string }>>({});
+  const retryNote = (w: WorkerAttention): string | null => {
+    const r = retried[w.storyId];
+    if (!r) return null;
+    return r.since === w.since ? r.text : `You retried this; the worker failed again at ${timeOf(w.since)}. The reason above is the new one.`;
+  };
+  const retryWorker = async (w: WorkerAttention) => {
+    const note = (text: string) => setRetried((n) => ({ ...n, [w.storyId]: { since: w.since, text } }));
+    note('Retry requested…');
+    try {
+      // Core says what really happened: started, recorded but not started yet, or nothing changed.
+      const r = await api.household('devStoryRetry', { storyId: w.storyId }) as { detail?: string } | null;
+      note(r?.detail ?? 'Retry requested.');
+    } catch (err) { note(`Retry was refused: ${errorText(err)}`); }
+    overview.refresh();
+  };
   const resume = async (t: TaskRow) => {
     try { await api.resumeTask(t.attemptId); setNotes((n) => ({ ...n, [t.attemptId]: 'Resume requested.' })); } catch (err) { setNotes((n) => ({ ...n, [t.attemptId]: errorText(err) })); }
     overview.refresh();
@@ -87,10 +119,29 @@ export function Board({ overview, narrow, onOpenPalette, onOpenConversation }: {
             {COLUMNS.map((c) => {
               const items = byCol(c.id);
               const extra = c.id === 'queued' ? queued : [];
+              const waiting = c.id === 'needs' ? workers : [];
               return (
                 <section key={c.id} className="column" aria-label={c.label}>
-                  <h2>{c.label} <span className="count">{items.length + extra.length}</span></h2>
-                  {items.length + extra.length === 0 && <div className="empty">None</div>}
+                  <h2>{c.label} <span className="count">{items.length + extra.length + waiting.length}</span></h2>
+                  {items.length + extra.length + waiting.length === 0 && <div className="empty">None</div>}
+                  {waiting.map((w) => (
+                    <article key={w.storyId} className="card needs-you" data-story-id={w.storyId} data-status={w.state}>
+                      <span className="title">{w.title || 'Worker task'}</span>
+                      <span className="meta"><span>{w.agent} worker</span><span>· {w.state === 'failed' ? 'stopped and needs you since' : 'waiting for your review since'} {timeOf(w.since)} {new Date(w.since).toLocaleDateString()}</span></span>
+                      <span className="failure">{w.reason}</span>
+                      {w.timeline.length > 0 && (
+                        <details>
+                          <summary className="meta">What happened ({w.timeline.length} recorded events)</summary>
+                          {w.timeline.map((e, i) => <span key={i} className="evidence" style={{ display: 'block' }}>{timeOf(e.at)} · {e.event.replace(/-/g, ' ')}{e.text ? `: ${e.text}` : ''}</span>)}
+                        </details>
+                      )}
+                      {retryNote(w) && <span className="meta" role="status">{retryNote(w)}</span>}
+                      <div className="actions">
+                        {w.canRetry && w.state === 'failed' && <button type="button" className="btn small" onClick={() => void retryWorker(w)}>Retry</button>}
+                        {w.conversationId && <button type="button" className="btn small" onClick={() => onOpenConversation(w.conversationId!)}>{w.state === 'failed' ? 'Open chat' : 'Review in chat'}</button>}
+                      </div>
+                    </article>
+                  ))}
                   {items.map((t) => (
                     <article key={t.attemptId} className={`card${c.id === 'needs' ? ' needs-you' : ''}`} data-attempt-id={t.attemptId} data-status={t.status}>
                       <span className="title">{t.title || 'Untitled task'}</span>

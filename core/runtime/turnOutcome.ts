@@ -62,6 +62,9 @@ export interface TurnOutcome {
  */
 export const CONSEQUENTIAL_PI_TOOLS: ReadonlySet<string> = new Set([
   'write_file',
+  // A declined rename or an app that did not start is a refused action, not a conversation.
+  'move_file',
+  'open_app',
   'run_command',
   // Pi's own shell tool and printer: a declined deletion or print is a refused action, not a conversation.
   'run_checks',

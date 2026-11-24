@@ -477,6 +477,14 @@ export function buildRouter(
     status: 200,
     body: await devStories.devStoryStatus(ctx.db, kandevClient, ctx.query.get('projectId') ?? undefined),
   }));
+  // Worker tasks waiting for the person, from Core's records only (registered before '/:id', which would take the name for an id).
+  router.get('/v1/dev-stories/needs-attention', (ctx) => {
+    const principal = ctx.principal;
+    if (!principal || principal.isModelOrTool || principal.role === 'unknown') {
+      return { status: 403, body: { error: 'forbidden', reason: 'Task details need an authenticated interactive client.' } };
+    }
+    return { status: 200, body: { items: devStories.devStoriesNeedingAttention(ctx.db) } };
+  });
   router.get('/v1/dev-stories/:id', async (ctx, match) => {
     // Bearer authentication already passed in the server. A model/tool/unidentified caller (a worker, for one) gets no task detail.
     const principal = ctx.principal;
@@ -505,8 +513,8 @@ export function buildRouter(
   });
   router.post('/v1/dev-stories/:id/retry', async (ctx, match) => {
     const body = asRecord(ctx.body);
-    await devStories.retryDevStory(ctx.db, kandevClient, match.params.id, typeof body.note === 'string' ? body.note : undefined);
-    return { status: 200, body: { ok: true } };
+    // What really happened, never a bare "internal error": started, recorded but not started yet, or nothing changed.
+    return { status: 200, body: await devStories.retryDevStoryReported(ctx.db, kandevClient, match.params.id, typeof body.note === 'string' ? body.note : undefined) };
   });
   router.post('/v1/dev-stories/:id/verify-existing', async (ctx, match) => {
     // Bearer authentication already passed in the server. This also stops a model/tool/unidentified caller (which

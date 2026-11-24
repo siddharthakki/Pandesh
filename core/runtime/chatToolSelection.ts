@@ -147,6 +147,8 @@ export const TOOL_GROUPS: Record<string, ToolGroup> = {
 export const BASE_TOOLS = new Set([
   'request_tools', 'get_system_info', 'resolve_time', 'calculate', 'update_task_outcome',
   'list_directory', 'read_file', 'write_file', 'search_files', 'open_local_file',
+  // Everyday tasks 2026-11-24: renaming a file and opening an app had no tool at all. Two small definitions.
+  'move_file', 'open_app',
   // Challenge (Project Birch): "When and where is the Project Birch review?" in a new chat searched files and said
   // nothing was known, because recall was only offered when the request said "remember"/"memory". Read-only.
   'memory_recall',
@@ -176,7 +178,7 @@ export const NATIVE_GROUP: Record<string, string> = {
   software_updates: 'pc', listening_ports: 'pc', find_installed_app: 'pc',
   create_project: 'projects', list_projects: 'projects',
   add_task: 'projects', update_task: 'projects', list_tasks: 'projects',
-  personal_overview: 'personal', search_second_brain: 'personal',
+  personal_overview: 'personal', search_second_brain: 'personal', activity_report: 'personal',
 };
 
 /** Governed capability id → group. */

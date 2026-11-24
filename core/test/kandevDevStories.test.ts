@@ -174,6 +174,138 @@ describe('chat reporting', () => {
     expect(texts.at(-1)).toMatch(/"B" started only after "A" were integrated/);
   });
 
+  // Found 2026-11-24: one failed worker story posted "needs you: Kandev worker session failed" on every 5-second poll,
+  // 30,163 times in three days. The "already reported" key was cut at 60 characters, ended in a space, and addComment
+  // stored it trimmed, so it never matched again.
+  const LAUNCH_FAILED = '[kkd-dev:needs-human] [kkd-dev:launch-failed] Kandev worker session failed: The agent could not start.. Fix the cause, then retry.';
+  const blockedStory = async (name: string) => {
+    const { createConversation } = await import('../domain/conversations');
+    const { addComment, transitionStory } = await import('../domain/stories');
+    const repo = path.join(dir, name);
+    fs.mkdirSync(repo);
+    spawnSync('git', ['init', '-q', repo]);
+    const planned = planDevStories(db, { projectName: name, repoPath: repo, verify: ['npm', 'test'], stories: [{ key: 'a', title: 'Inspect', agent: 'claude' }] });
+    const conv = createConversation(db, { mode: 'baat_kar', title: 'chat', actor: 'user' });
+    const a = planned.stories[0].id;
+    addComment(db, a, { author: 'kkd', body: `[kkd-dev:report-to] ${conv.id} batch=${a}` });
+    for (const to of ['assigned', 'planning', 'proposal_approval', 'implementing', 'blocked'] as const) transitionStory(db, a, { toStatus: to, actor: 'kkd', reason: 't' });
+    return { conv, a };
+  };
+  const needsYou = async (conversationId: string) => {
+    const { listMessages } = await import('../domain/conversations');
+    return listMessages(db, conversationId).filter((m: any) => /needs you:/.test(m.content)).length;
+  };
+
+  it('a failed worker is announced once, however often it is polled, and across a restart', async () => {
+    const { addComment, transitionStory, listComments } = await import('../domain/stories');
+    const { reportDevStoryProgress } = await import('../runtime/kandev/devStories');
+    const { conv, a } = await blockedStory('flood');
+    addComment(db, a, { author: 'kkd', body: LAUNCH_FAILED });
+    expect(reportDevStoryProgress(db)).toBe(2); // "needs you" + the final report
+    let later = 0;
+    for (let i = 0; i < 300; i++) later += reportDevStoryProgress(db);
+    expect(later).toBe(0);
+    expect(await needsYou(conv.id)).toBe(1);
+    const commentsBefore = listComments(db, a).length;
+    // Restart: the same database, a new process.
+    db.close();
+    db = openCoreDatabase(path.join(dir, 'core.db')).db;
+    for (let i = 0; i < 50; i++) later += reportDevStoryProgress(db);
+    expect(later).toBe(0);
+    expect(await needsYou(conv.id)).toBe(1);
+    expect(listComments(db, a).length).toBe(commentsBefore); // nothing is written while nothing changes
+    // The story is still what it was: blocked, with its real reason, ready to be retried.
+    expect(getStory(db, a).status).toBe('blocked');
+    expect(listComments(db, a).some(c => c.body === LAUNCH_FAILED)).toBe(true);
+    // And it stays on the task screen's "Needs you" list with that reason and its recorded events, however long it waits.
+    const { devStoriesNeedingAttention } = await import('../runtime/kandev/devStories');
+    const waiting = devStoriesNeedingAttention(db);
+    expect(waiting).toHaveLength(1);
+    expect(waiting[0]).toMatchObject({ storyId: a, state: 'failed', agent: 'claude', conversationId: conv.id, canRetry: true, reason: 'Kandev worker session failed: The agent could not start.. Fix the cause, then retry.' });
+    expect(waiting[0].timeline.map(e => e.event)).toEqual(['needs-human']);
+    // Stopped by the person: nothing to decide, so not listed; retried: listed again only when it fails again.
+    addComment(db, a, { author: 'user', body: '[kkd-dev:stopped] Stop All' });
+    expect(devStoriesNeedingAttention(db)).toHaveLength(0);
+    // A genuine new failure after a retry is a new event: exactly one more notification.
+    addComment(db, a, { author: 'user', body: '[kkd-dev:retry] go' });
+    transitionStory(db, a, { toStatus: 'implementing', actor: 'kkd', reason: 't' });
+    transitionStory(db, a, { toStatus: 'blocked', actor: 'kkd', reason: 't' });
+    addComment(db, a, { author: 'kkd', body: LAUNCH_FAILED });
+    expect(reportDevStoryProgress(db)).toBe(1);
+    for (let i = 0; i < 50; i++) later += reportDevStoryProgress(db);
+    expect(later).toBe(0);
+    expect(await needsYou(conv.id)).toBe(2);
+  });
+
+  // Live 2026-11-24: Retry answered "an internal error occurred" although the retry was on record and the task was moving.
+  it('a retry reports what really happened: started, recorded but not started yet, or nothing changed', async () => {
+    const { addComment, listComments } = await import('../domain/stories');
+    const { retryDevStoryReported } = await import('../runtime/kandev/devStories');
+    const { a } = await blockedStory('retry');
+    addComment(db, a, { author: 'kkd', body: LAUNCH_FAILED });
+    const kandev = (over: Record<string, unknown>) => new Proxy(over, { get: (t, p) => (p in t ? (t as any)[p] : async () => { throw new Error(`Kandev ${String(p)}: connection refused`); }) }) as any;
+
+    // The worker service is down: nothing is recorded, the task still waits, and the message says so.
+    const down = await retryDevStoryReported(db, kandev({}), a);
+    expect(down).toMatchObject({ ok: false, recorded: false, state: 'not_started' });
+    expect(down.detail).toMatch(/^Retry not started, nothing was changed: the worker service did not answer \(Kandev ensureRunning: connection refused\)/);
+    expect(getStory(db, a).status).toBe('blocked');
+    expect(listComments(db, a).some(c => c.body.startsWith('[kkd-dev:retry]'))).toBe(false);
+
+    // The retry is recorded, then starting the worker fails: recorded and pending, never "internal error".
+    const half = await retryDevStoryReported(db, kandev({ ensureRunning: async () => {}, defaultWorkspaceId: async () => 'ws', taskByExternalId: async () => ({ id: 'task-1', workflow_step_id: 's' }) }), a);
+    expect(half).toMatchObject({ ok: true, recorded: true, state: 'pending' });
+    expect(half.detail).toMatch(/^Retry recorded\. The worker has not started yet \(Kandev \w+: connection refused\); Pandesh keeps trying/);
+    expect(half.detail).not.toMatch(/internal error/i);
+    expect(getStory(db, a).status).toBe('implementing');
+    expect(listComments(db, a).filter(c => c.body.startsWith('[kkd-dev:retry]'))).toHaveLength(1);
+
+    // A task that is not waiting for a retry keeps its own plain reason.
+    await expect(retryDevStoryReported(db, kandev({}), a)).rejects.toThrow(/story is implementing, not blocked/);
+  });
+
+  it('a retry that goes through says it started', async () => {
+    const { addComment } = await import('../domain/stories');
+    const { retryDevStoryReported } = await import('../runtime/kandev/devStories');
+    const { a } = await blockedStory('retry-ok');
+    addComment(db, a, { author: 'kkd', body: LAUNCH_FAILED });
+    const ok = await retryDevStoryReported(db, { ensureRunning: async () => {}, defaultWorkspaceId: async () => 'ws', taskByExternalId: async () => null } as any, a);
+    expect(ok).toMatchObject({ ok: true, recorded: true, state: 'started' });
+    expect(getStory(db, a).status).toBe('implementing');
+  });
+
+  it('a failure already announced by an older build is not announced again', async () => {
+    const { addComment, listComments } = await import('../domain/stories');
+    const { reportDevStoryProgress } = await import('../runtime/kandev/devStories');
+    const { conv, a } = await blockedStory('legacy');
+    const failure = addComment(db, a, { author: 'kkd', body: LAUNCH_FAILED });
+    // The marker as the older build stored it: keyed by time and text, its trailing space trimmed away.
+    addComment(db, a, { author: 'kkd', body: `[kkd-dev:reported] needs-human ${failure.createdAt} ${LAUNCH_FAILED.slice(0, 60)}` });
+    addComment(db, a, { author: 'kkd', body: `[kkd-dev:reported] final ${a} 0/1` });
+    const before = listComments(db, a).length;
+    for (let i = 0; i < 20; i++) expect(reportDevStoryProgress(db)).toBe(0);
+    expect(await needsYou(conv.id)).toBe(0);
+    expect(listComments(db, a).length).toBe(before);
+  });
+
+  it('a report is written once per story and key, with the marker and the message together', async () => {
+    const { listMessages } = await import('../domain/conversations');
+    const { listComments } = await import('../domain/stories');
+    const { postStoryReportOnce, reportKey } = await import('../runtime/kandev/devStories');
+    const { conv, a } = await blockedStory('once');
+    expect(reportKey('needs-human  x Kandev worker ')).toBe('needs-human x Kandev worker');
+    expect(postStoryReportOnce(db, { storyId: a, conversationId: conv.id, key: 'needs-human evt-1 Kandev worker ', content: 'first' })).toBe(true);
+    // The same event again: replayed, retried, or spelled with other spacing.
+    expect(postStoryReportOnce(db, { storyId: a, conversationId: conv.id, key: 'needs-human evt-1 Kandev worker ', content: 'first' })).toBe(false);
+    expect(postStoryReportOnce(db, { storyId: a, conversationId: conv.id, key: ' needs-human evt-1  Kandev worker', content: 'first' })).toBe(false);
+    expect(listMessages(db, conv.id).filter((m: any) => m.content === 'first')).toHaveLength(1);
+    expect(listComments(db, a).filter(c => c.body.startsWith('[kkd-dev:reported]'))).toHaveLength(1);
+    // A different event is a different notification; a deleted conversation is recorded and not retried.
+    expect(postStoryReportOnce(db, { storyId: a, conversationId: conv.id, key: 'needs-human evt-2', content: 'second' })).toBe(true);
+    expect(postStoryReportOnce(db, { storyId: a, conversationId: 'conv_gone', key: 'needs-human evt-3', content: 'third' })).toBe(true);
+    expect(postStoryReportOnce(db, { storyId: a, conversationId: 'conv_gone', key: 'needs-human evt-3', content: 'third' })).toBe(false);
+  });
+
   it('tells the chat when a worker action is waiting for a decision, once, and not after it was decided', async () => {
     const { createConversation, listMessages } = await import('../domain/conversations');
     const { addComment, transitionStory } = await import('../domain/stories');
