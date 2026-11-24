@@ -221,6 +221,44 @@ function permissionBlockFix(block: string): string {
 }
 
 /**
+ * Takes a remedy that cannot work out of the model's own text. Live, 2026-11-24: in a read-only folder the model wrote
+ * "you must change the permission mode to **Auto**" twice, in the same reply as Core's correct line; a reply must not
+ * give two contradicting instructions. Only for a read-only folder block, and only sentences that tell the person to
+ * change the permission MODE (Auto, Ask, Plan only): the mode has no effect on a read-only folder. Returns the cleaned
+ * text and how many sentences were removed.
+ */
+export function withoutWrongRemedy(reply: string, block: string): { text: string; removed: number } {
+  if (block !== READ_ONLY_FOLDER_BLOCK) return { text: reply, removed: 0 };
+  const names = /\bauto(?:\s+mode|\s*\(governed\))?\b|\bpermission\s+(?:mode|menu|setting)s?\b|\bask\s+permission\b|\bplan\s+only\b/i;
+  const tells = /\b(?:change|switch|set|select|choose|enable|turn|use|pick|move|toggle|adjust|update)\b/i;
+  let removed = 0;
+  const lines = reply.split('\n').map((line) => {
+    const lead = /^\s*(?:[-*•]\s+|\d+[.)]\s+|>\s*)?/.exec(line)?.[0] ?? '';
+    let afterWrong = false;
+    const kept = line.slice(lead.length).split(/(?<=[.!?])\s+/).filter((sentence) => {
+      const plain = sentence.replace(/[*_`]/g, '');
+      // The wrong instruction itself, and the promise hanging on it ("Once that is done, I will be able to…").
+      const wrong = (names.test(plain) && tells.test(plain)) || (afterWrong && /^\s*(?:once|after\s+that|then|when\s+(?:that|you))\b/i.test(plain));
+      if (wrong) removed += 1;
+      afterWrong = wrong;
+      return !wrong;
+    });
+    return kept.length ? lead + kept.join(' ') : (line.trim() ? null : line);
+  });
+  if (!removed) return { text: reply, removed: 0 };
+  // A heading left with nothing under it ("**To complete this request:**") goes too.
+  const out: string[] = [];
+  const kept = lines.filter((l): l is string => l !== null);
+  for (let i = 0; i < kept.length; i++) {
+    const isHeading = /:\**\s*$/.test(kept[i].trim()) && kept[i].trim().length < 80;
+    const next = kept.slice(i + 1).find((l) => l.trim());
+    if (isHeading && (next === undefined || /:\**\s*$/.test(next.trim()))) continue;
+    out.push(kept[i]);
+  }
+  return { text: out.join('\n').replace(/\n{3,}/g, '\n\n').trim(), removed };
+}
+
+/**
  * The line Core adds to the reply of a turn a permission stopped: what stopped it, that no model or hardware limit did,
  * and the one thing that changes it. Written by Core, so the reason and the remedy never depend on the model's wording.
  */

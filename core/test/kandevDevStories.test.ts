@@ -237,6 +237,43 @@ describe('chat reporting', () => {
     expect(await needsYou(conv.id)).toBe(2);
   });
 
+  // Live 2026-11-24: Retry answered "an internal error occurred" although the retry was on record and the task was moving.
+  it('a retry reports what really happened: started, recorded but not started yet, or nothing changed', async () => {
+    const { addComment, listComments } = await import('../domain/stories');
+    const { retryDevStoryReported } = await import('../runtime/kandev/devStories');
+    const { a } = await blockedStory('retry');
+    addComment(db, a, { author: 'kkd', body: LAUNCH_FAILED });
+    const kandev = (over: Record<string, unknown>) => new Proxy(over, { get: (t, p) => (p in t ? (t as any)[p] : async () => { throw new Error(`Kandev ${String(p)}: connection refused`); }) }) as any;
+
+    // The worker service is down: nothing is recorded, the task still waits, and the message says so.
+    const down = await retryDevStoryReported(db, kandev({}), a);
+    expect(down).toMatchObject({ ok: false, recorded: false, state: 'not_started' });
+    expect(down.detail).toMatch(/^Retry not started, nothing was changed: the worker service did not answer \(Kandev ensureRunning: connection refused\)/);
+    expect(getStory(db, a).status).toBe('blocked');
+    expect(listComments(db, a).some(c => c.body.startsWith('[kkd-dev:retry]'))).toBe(false);
+
+    // The retry is recorded, then starting the worker fails: recorded and pending, never "internal error".
+    const half = await retryDevStoryReported(db, kandev({ ensureRunning: async () => {}, defaultWorkspaceId: async () => 'ws', taskByExternalId: async () => ({ id: 'task-1', workflow_step_id: 's' }) }), a);
+    expect(half).toMatchObject({ ok: true, recorded: true, state: 'pending' });
+    expect(half.detail).toMatch(/^Retry recorded\. The worker has not started yet \(Kandev \w+: connection refused\); Pandesh keeps trying/);
+    expect(half.detail).not.toMatch(/internal error/i);
+    expect(getStory(db, a).status).toBe('implementing');
+    expect(listComments(db, a).filter(c => c.body.startsWith('[kkd-dev:retry]'))).toHaveLength(1);
+
+    // A task that is not waiting for a retry keeps its own plain reason.
+    await expect(retryDevStoryReported(db, kandev({}), a)).rejects.toThrow(/story is implementing, not blocked/);
+  });
+
+  it('a retry that goes through says it started', async () => {
+    const { addComment } = await import('../domain/stories');
+    const { retryDevStoryReported } = await import('../runtime/kandev/devStories');
+    const { a } = await blockedStory('retry-ok');
+    addComment(db, a, { author: 'kkd', body: LAUNCH_FAILED });
+    const ok = await retryDevStoryReported(db, { ensureRunning: async () => {}, defaultWorkspaceId: async () => 'ws', taskByExternalId: async () => null } as any, a);
+    expect(ok).toMatchObject({ ok: true, recorded: true, state: 'started' });
+    expect(getStory(db, a).status).toBe('implementing');
+  });
+
   it('a failure already announced by an older build is not announced again', async () => {
     const { addComment, listComments } = await import('../domain/stories');
     const { reportDevStoryProgress } = await import('../runtime/kandev/devStories');

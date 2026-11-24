@@ -12,7 +12,7 @@ import { submitRequest } from '../domain/submission';
 import { createConversation, listMessages } from '../domain/conversations';
 import { getAttemptContext } from '../domain/attemptContext';
 import { recordRuntimeEvent } from '../domain/runtimeEvents';
-import { classifyOfferReply, maybeEscalate, parseParamsB, pendingCloudOffer, permissionBlockNotice, permissionBlockOf, planEscalation, startAcceptedCloudOffer, type InstalledModel } from '../runtime/escalation';
+import { classifyOfferReply, maybeEscalate, parseParamsB, pendingCloudOffer, permissionBlockNotice, permissionBlockOf, planEscalation, startAcceptedCloudOffer, withoutWrongRemedy, type InstalledModel } from '../runtime/escalation';
 import { getAttempt } from '../domain/attempts';
 
 /** The owner's PC on 2026-11-12 (Ollama /api/show), trimmed. */
@@ -145,6 +145,19 @@ describe('maybeEscalate', () => {
     // The remedy is the product's real one: a read-only folder is changed in the folder menu, never by "Auto".
     expect(permissionBlockNotice('this folder is read-only for Pandesh: you allowed it to read here, not to change anything')).toMatch(/open the folder menu next to the message box.*Switching the permission mode does not change this/);
     expect(permissionBlockNotice('this chat is in Plan Only mode, where nothing is created, changed or run')).toMatch(/from "Plan only" to "Ask permission"/);
+    // The model's own wrong remedy is taken out of the reply (both live replies of 2026-11-24, word for word).
+    const readOnly = 'this folder is read-only for Pandesh: you allowed it to read here, not to change anything';
+    const live1 = 'I could not create the file `notes-today.txt`.\n\nAs I attempted to do, the `write_file` tool returned an error because the folder `D:\\sandbox` is in **Read-only** mode. This means I am only permitted to read and list files here, not create or modify them.\n\nTo allow me to actually create the file, please use the permission menu next to the message box to change the mode to **Auto**. Once that is changed, I will be able to complete the task.';
+    const cleaned1 = withoutWrongRemedy(live1, readOnly);
+    expect(cleaned1.removed).toBe(2);
+    expect(cleaned1.text).not.toMatch(/Auto|permission menu|Once that is changed/);
+    expect(cleaned1.text).toMatch(/I could not create the file[\s\S]*not create or modify them\.$/);
+    const live2 = '**Why it failed:**\nI attempted to use `write_file` to create the file, but it was blocked.\n\n**To complete this request:**\nYou must change the permission mode to **Auto** using the menu next to the model choice box at the bottom of your window. Once that is done, I will be able to create the file.';
+    const cleaned2 = withoutWrongRemedy(live2, readOnly);
+    expect(cleaned2.text).toBe('**Why it failed:**\nI attempted to use `write_file` to create the file, but it was blocked.');
+    // Nothing else is touched: other blocks, and text that only mentions a mode.
+    expect(withoutWrongRemedy(live1, 'you declined the approval')).toEqual({ text: live1, removed: 0 });
+    expect(withoutWrongRemedy('This chat is in Ask permission mode. The folder is read-only.', readOnly).removed).toBe(0);
     // The block Core's own mode check records (live, 2026-11-24).
     const blocked = submit('Create a file notes-today.txt with one line');
     recordRuntimeEvent(db, { domain: 'attempt', entityId: blocked, eventType: 'permission_mode_blocked', actor: 'test', metadata: { toolName: 'write_file', reason: 'Read-only folder: the person let Pandesh read this folder but not change it, so write_file was not done.' } });

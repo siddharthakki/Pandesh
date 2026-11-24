@@ -135,7 +135,7 @@ import { ensureModelResident } from './ollamaResidency';
 import { OLLAMA_IMPLICIT_NUM_CTX_BUCKETS, resolveOllamaChatControls } from './ollamaChatControls';
 import { createPiOllamaFetch, type OllamaCallMetrics } from './piOllamaNativeFetch';
 import { createPiCloudFetch, resolvePiCloudTarget } from './piCloudTarget';
-import { CLOUD_OFFER_DECLINED_REPLY, classifyOfferReply, cloudOfferAcceptedReply, pendingCloudOffer, permissionBlockNotice, permissionBlockOf, PLAN_ONLY_BLOCK, READ_ONLY_FOLDER_BLOCK } from './escalation';
+import { CLOUD_OFFER_DECLINED_REPLY, classifyOfferReply, cloudOfferAcceptedReply, pendingCloudOffer, permissionBlockNotice, permissionBlockOf, PLAN_ONLY_BLOCK, READ_ONLY_FOLDER_BLOCK, withoutWrongRemedy } from './escalation';
 import { asksToMakeSomething as asksToMakeOutsideChat } from './makeIntent';
 import { modelLacksTools } from './ollamaModelInfo';
 import { unbackedScreenClaims } from './screenClaims';
@@ -7376,8 +7376,10 @@ ${screenCorrection}`;
             ?? (filesMissing && selectedWorkspace && frozenWorkspaceAccess(db, [attemptId]) === 'read' ? READ_ONLY_FOLDER_BLOCK
               : filesMissing && frozenPermissionFor(db, [attemptId]).mode === 'plan' ? PLAN_ONLY_BLOCK : null);
           if (block) {
-            finalReply += `\n\n${permissionBlockNotice(block)}`;
-            safeRecordRuntimeEvent(db, broadcaster, attemptId, 'permission_block_reported', { block }, actor);
+            // A remedy that cannot work ("switch to Auto" for a read-only folder) is taken out before Core's line goes in.
+            const cleaned = withoutWrongRemedy(finalReply, block);
+            finalReply = `${cleaned.text}\n\n${permissionBlockNotice(block)}`;
+            safeRecordRuntimeEvent(db, broadcaster, attemptId, 'permission_block_reported', { block, wrongRemedySentencesRemoved: cleaned.removed }, actor);
           }
         } catch { /* the reply stands as it is */ }
       }

@@ -78,10 +78,22 @@ export function Board({ overview, narrow, onOpenPalette, onOpenConversation }: {
     overview.refresh();
   };
   const workers = overview.data?.workers ?? [];
+  // What a retry did, remembered with the failure it was pressed on: when the task comes back with a NEW failure, the
+  // card says the retry failed again instead of repeating "retry started" beside the new reason.
+  const [retried, setRetried] = useState<Record<string, { since: string; text: string }>>({});
+  const retryNote = (w: WorkerAttention): string | null => {
+    const r = retried[w.storyId];
+    if (!r) return null;
+    return r.since === w.since ? r.text : `You retried this; the worker failed again at ${timeOf(w.since)}. The reason above is the new one.`;
+  };
   const retryWorker = async (w: WorkerAttention) => {
-    setNotes((n) => ({ ...n, [w.storyId]: 'Retry requested…' }));
-    try { await api.household('devStoryRetry', { storyId: w.storyId }); setNotes((n) => ({ ...n, [w.storyId]: 'Retry requested. If it fails again it comes back here with the new reason.' })); }
-    catch (err) { setNotes((n) => ({ ...n, [w.storyId]: `Retry did not start: ${errorText(err)}` })); }
+    const note = (text: string) => setRetried((n) => ({ ...n, [w.storyId]: { since: w.since, text } }));
+    note('Retry requested…');
+    try {
+      // Core says what really happened: started, recorded but not started yet, or nothing changed.
+      const r = await api.household('devStoryRetry', { storyId: w.storyId }) as { detail?: string } | null;
+      note(r?.detail ?? 'Retry requested.');
+    } catch (err) { note(`Retry was refused: ${errorText(err)}`); }
     overview.refresh();
   };
   const resume = async (t: TaskRow) => {
@@ -123,7 +135,7 @@ export function Board({ overview, narrow, onOpenPalette, onOpenConversation }: {
                           {w.timeline.map((e, i) => <span key={i} className="evidence" style={{ display: 'block' }}>{timeOf(e.at)} · {e.event.replace(/-/g, ' ')}{e.text ? `: ${e.text}` : ''}</span>)}
                         </details>
                       )}
-                      {notes[w.storyId] && <span className="meta" role="status">{notes[w.storyId]}</span>}
+                      {retryNote(w) && <span className="meta" role="status">{retryNote(w)}</span>}
                       <div className="actions">
                         {w.canRetry && w.state === 'failed' && <button type="button" className="btn small" onClick={() => void retryWorker(w)}>Retry</button>}
                         {w.conversationId && <button type="button" className="btn small" onClick={() => onOpenConversation(w.conversationId!)}>{w.state === 'failed' ? 'Open chat' : 'Review in chat'}</button>}

@@ -1385,6 +1385,38 @@ export async function retryDevStory(db: CoreDatabase, kandev: KandevClient, stor
   ].join('\n'));
 }
 
+export interface RetryReport {
+  /** True when the retry is on record (the task left "needs you"), whether or not the worker is running yet. */
+  ok: boolean;
+  recorded: boolean;
+  /** started = the worker was handed the task; pending = recorded, the worker has not started yet; not_started = nothing changed. */
+  state: 'started' | 'pending' | 'not_started';
+  /** What to tell the person, in plain words. */
+  detail: string;
+}
+
+/**
+ * A retry asked for by a person, reported as what really happened. `retryDevStory` records the retry first and then
+ * starts the worker; when only that second half failed, the old route answered "an internal error occurred" and the
+ * task screen said "Retry did not start" although the retry was on record and the task was already moving (live,
+ * 2026-11-24: it then failed again normally and came back with its reason). Three different outcomes, three messages.
+ */
+export async function retryDevStoryReported(db: CoreDatabase, kandev: KandevClient, storyId: string, note?: string): Promise<RetryReport> {
+  try {
+    await retryDevStory(db, kandev, storyId, note);
+    return { ok: true, recorded: true, state: 'started', detail: 'Retry started. If it fails again, the task comes back to "Needs you" with the new reason.' };
+  } catch (err) {
+    if (err instanceof CoreError) throw err; // e.g. the task is not waiting for a retry: the caller shows that reason as it is
+    const why = (err instanceof Error ? err.message : String(err)).replace(/\s+/g, ' ').slice(0, 200);
+    let status: string | null = null;
+    try { status = getStory(db, storyId).status; } catch { /* the story is gone */ }
+    if (status === 'implementing') {
+      return { ok: true, recorded: true, state: 'pending', detail: `Retry recorded. The worker has not started yet (${why}); Pandesh keeps trying, and if it cannot start the task comes back to "Needs you" with the reason.` };
+    }
+    return { ok: false, recorded: false, state: 'not_started', detail: `Retry not started, nothing was changed: the worker service did not answer (${why}). The task is still waiting here.` };
+  }
+}
+
 // ---------------------------------------------------------------- recovery: verify work that already exists
 
 /** Content fingerprint of the files KKD is about to commit, so a worktree that changes mid-verification is caught. */
