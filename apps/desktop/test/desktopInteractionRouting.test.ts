@@ -246,3 +246,37 @@ describe('isStopIntent', () => {
     }
   });
 });
+
+describe('a development brief is not a picture request (live run 2026-11-23)', () => {
+  // What the owner typed into Pandesh; the Image Studio answered with a picture of a house.
+  const brief = [
+    'Investigate the poor 3D house result in Pandesh Workshop.',
+    'The current scene is technically valid but visually unacceptable: an oversized copper cylinder on a grey box, with minimal recognizable landscaping.',
+    'Do not treat an artifact existing on disk as proof that the requested scene was created successfully.',
+    'Then run one real end-to-end test: Build a detailed, attractive, interactive two-storey independent house.',
+    'Use a capable coding agent with Three.js or Blender rather than forcing everything through primitive-only Workshop tools.',
+    'Capture and inspect actual screenshots, correct visible defects and repeat until the requested features are recognizable.',
+  ].join('\n\n');
+  const second = [
+    'This is NOT an image-generation task.',
+    'You must treat this as a developer task.',
+    'Do not call any image-generation model or image-generation workflow as a substitute for the requested work.',
+    'Build one real replacement scene and capture screenshots.',
+  ].join('\n\n');
+
+  it('neither brief goes to the Image Studio, as a new picture or as an edit of the last one', async () => {
+    const { detectImageFollowUp, isDeveloperBrief } = await import('../src/host/desktopInteractionRouting');
+    for (const text of [brief, second]) {
+      expect(isDeveloperBrief(text)).toBe(true);
+      expect(detectImageGenerationIntent(text)).toBe(false);
+      expect(detectImageFollowUp(text)).toBeNull();
+    }
+  });
+  it('ordinary picture requests still do', async () => {
+    const { detectImageFollowUp, isDeveloperBrief } = await import('../src/host/desktopInteractionRouting');
+    expect(isDeveloperBrief('Create a picture of a two-storey house with a garden')).toBe(false);
+    expect(detectImageGenerationIntent('Create a picture of a two-storey house with a garden')).toBe(true);
+    expect(detectImageGenerationIntent('Render a scene of a sunset over the sea')).toBe(true);
+    expect(detectImageFollowUp('make the sky purple')).toEqual({ kind: 'edit' });
+  });
+});

@@ -149,6 +149,9 @@ function resultText(result: unknown): string {
  * a call that started and never finished counts as refused, because an action
  * that never reported success never happened.
  */
+/** Tools that keep Core's own records. A refusal or failure of one still counts; its success is not an action. */
+const BOOKKEEPING_TOOL = /^(?:update_task_outcome|request_tools)$/;
+
 export function evaluateTurnOutcome(calls: readonly TurnToolCall[]): TurnOutcome {
   const performed: string[] = [];
   const refused: string[] = [];
@@ -181,6 +184,10 @@ export function evaluateTurnOutcome(calls: readonly TurnToolCall[]): TurnOutcome
       if (!refused.includes(tool)) refused.push(tool);
     } else if (errored) {
       if (!failed.includes(tool)) failed.push(tool);
+    } else if (BOOKKEEPING_TOOL.test(tool)) {
+      // Writing "in progress" into the task record, or asking for more tools, changed nothing the person asked for
+      // (live run 2026-11-23: a turn whose only successful call was update_task_outcome(in_progress) was "verified").
+      continue;
     } else if (!performed.includes(tool)) {
       performed.push(tool);
     }

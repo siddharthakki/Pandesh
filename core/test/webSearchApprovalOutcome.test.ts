@@ -136,3 +136,38 @@ describe('an unanswered approval is retired as expired, never as rejected', () =
     expect(getApproval(db, approvalId).status).toBe('rejected');
   });
 });
+
+describe('a refusal of web access holds for the rest of the task', () => {
+  // Live finding 2026-11-23 (scratch instance, attempt att_1b8c83f6): the person pressed "Don't allow" on a web search; the
+  // model called web_research again with other words and a second approval card was raised two seconds later.
+  const engine = fs.readFileSync(path.join(__dirname, '../runtime/piAgentEngine.ts'), 'utf8');
+
+  it('tells the assistant it was not asked again, forbids another request, and names what is still possible', async () => {
+    const { describeRepeatedWebAccessRequest } = await import('../runtime/piAgentEngine');
+    const text = describeRepeatedWebAccessRequest();
+    expect(text).toContain('already declined web access for this task');
+    expect(text).toContain('they were not asked again');
+    expect(text).toContain('Do not ask for web access again in this turn');
+    expect(text).toMatch(/allow a search by asking again.*paste the text or a link.*needs no web access/);
+  });
+
+  it('only a recorded refusal sets the flag, and the flag is checked before any approval is requested', () => {
+    // Set from the recorded decision only: an unanswered or failed request stays retryable.
+    expect(engine).toContain("if (decision.outcome === 'rejected') webResearchDeclined = true;");
+    expect(engine).toContain("if (decision.outcome === 'rejected') agentReachDeclined = true;");
+    expect(engine).not.toMatch(/outcome === 'timed_out'[^\n]*Declined = true/);
+    // web_research: the refusal is honoured before the approval request.
+    const guard = engine.indexOf('if (webResearchDeclined) {');
+    const ask = engine.indexOf('if (!webResearchApproved || privacyFlag) {');
+    const review = engine.indexOf("const privacyFlag = await queryPrivacyFlag('web_research', query);");
+    expect(guard).toBeGreaterThan(0);
+    expect(guard).toBeLessThan(ask);
+    // ...and before the local privacy review: a query that will not be sent is not reviewed or recorded as "asked".
+    expect(guard).toBeLessThan(review);
+    expect(engine.slice(guard, review)).toContain('describeRepeatedWebAccessRequest()');
+    expect(engine.slice(guard, review)).toContain("'web_access_request_not_repeated'");
+    // agent_reach and the offer search behind advance_wish follow the same rule.
+    expect(engine.indexOf('if (agentReachDeclined) {')).toBeLessThan(engine.indexOf('if (!agentReachApproved) {'));
+    expect(engine).toContain('if (webResearchDeclined) return { approved: false, message: describeRepeatedWebAccessRequest() };');
+  });
+});

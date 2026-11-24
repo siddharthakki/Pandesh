@@ -22,6 +22,8 @@ interface Props {
   variantForced: boolean;
   onUseClassic: () => void;
   onGo: (view: GoTarget) => void;
+  /** The shell's Settings tabs choose the section (through initialSection), so the section list is not drawn a second time. */
+  hideNav?: boolean;
 }
 
 /**
@@ -30,7 +32,7 @@ interface Props {
  * reports afterwards. Secrets are not handled here: provider keys and Google sign-in stay in Connections, which keeps
  * them in write-only password fields backed by encrypted storage.
  */
-export function Settings({ snapshot, refresh, narrow, initialSection, theme, setTheme, labels, setLabels, variantForced, onUseClassic, onGo }: Props) {
+export function Settings({ snapshot, refresh, narrow, initialSection, theme, setTheme, labels, setLabels, variantForced, onUseClassic, onGo, hideNav }: Props) {
   const [section, setSection] = useState<SettingsSection>(initialSection ?? 'models');
   useEffect(() => { if (initialSection) setSection(initialSection); }, [initialSection]);
   const [notice, setNotice] = useState<Notice>(null);
@@ -48,9 +50,9 @@ export function Settings({ snapshot, refresh, narrow, initialSection, theme, set
 
   return (
     <>
-      <div className="topbar"><span className="title" style={{ color: 'var(--ink)', fontWeight: 600 }}>Settings</span></div>
+      {!hideNav && <div className="topbar"><span className="title" style={{ color: 'var(--ink)', fontWeight: 600 }}>Settings</span></div>}
       <div className={`settings${narrow ? ' narrow' : ''}`} data-section={section}>
-        {nav}
+        {!hideNav && nav}
         <div className="settings-body">
           {notice && <div className={`notice${notice.error ? ' error' : ''}`} role={notice.error ? 'alert' : 'status'}>{notice.text}</div>}
           {section === 'models' && <ModelsSection snapshot={snapshot} refresh={refresh} modelControl={controls.modelControl} cloudConfirm={controls.cloudConfirm} chooseModel={controls.chooseModel} pendingCloud={controls.pendingCloud} setNotice={setNotice} onGo={onGo} />}

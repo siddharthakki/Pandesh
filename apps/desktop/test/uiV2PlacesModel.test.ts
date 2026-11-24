@@ -1,0 +1,198 @@
+import fs from 'node:fs';
+import path from 'node:path';
+import { describe, expect, it } from 'vitest';
+import { APPS, BOARD_COLUMNS, HISTORY_BESIDE_CHAT_MIN_WIDTH, asksThePerson, isMissionStepTask, needsThePerson, homeCounts, isConnectorConversation, isInternalConversation, isMissionStepConversation, needsYouTotal, placeOf, settingsTabOf, subLinks, workTabOf } from '../renderer-v2/src/placesModel';
+import { parseV2Target } from '../renderer-v2/src/navigationTargets';
+import { addNote, usabilityReport } from '../renderer-v2/src/usability';
+
+describe('three places', () => {
+  it('every view navigate_to can open belongs to Home, Work, Settings or is a specialist app', () => {
+    const want: Record<string, string> = {
+      chat: 'home', board: 'work', automations: 'work', bots: 'work',
+      settings: 'settings', connections: 'settings', tools: 'settings', processes: 'settings', software: 'settings',
+      team: 'app', brain: 'app', radar: 'app', revenue: 'app', mailhub: 'app',
+    };
+    for (const [view, place] of Object.entries(want)) {
+      expect(parseV2Target(`view:${view}`).kind, view).toBe('view');
+      expect(placeOf({ view }), view).toBe(place);
+    }
+    expect(placeOf({ view: 'workspace', space: 'projects' })).toBe('work');
+    expect(placeOf({ view: 'workspace', space: 'wish' })).toBe('work');
+    expect(placeOf({ view: 'workspace', space: 'media' })).toBe('app');
+  });
+
+  it('Work has four tabs and each existing page sits under exactly one', () => {
+    expect(workTabOf({ view: 'board' })).toBe('active');
+    expect(workTabOf({ view: 'board', boardShow: 'completed' })).toBe('completed');
+    expect(workTabOf({ view: 'automations' })).toBe('scheduled');
+    expect(workTabOf({ view: 'bots' })).toBe('scheduled');
+    expect(workTabOf({ view: 'workspace', space: 'wish' })).toBe('projects');
+    // The two halves of the board show every column once.
+    expect([...BOARD_COLUMNS.active, ...BOARD_COLUMNS.completed].sort()).toEqual(['blocked', 'completed', 'failed', 'needs', 'queued', 'running']);
+    expect(subLinks({ view: 'bots' }).map((s) => [s.label, s.current])).toEqual([['Automations', false], ['Bots', true]]);
+    expect(subLinks({ view: 'board' })).toEqual([]);
+  });
+
+  it('Settings tabs cover connections, models, tools, permissions, appearance and a nested diagnostics area', () => {
+    expect(settingsTabOf({ view: 'connections' })).toBe('connections');
+    expect(settingsTabOf({ view: 'tools' })).toBe('tools');
+    expect(settingsTabOf({ view: 'settings' })).toBe('models');
+    expect(settingsTabOf({ view: 'settings', settingsSection: 'permissions' })).toBe('permissions');
+    expect(settingsTabOf({ view: 'settings', settingsSection: 'appearance' })).toBe('appearance');
+    for (const s of [{ view: 'settings', settingsSection: 'diagnostics' }, { view: 'settings', settingsSection: 'updates' }, { view: 'processes' }, { view: 'software' }]) {
+      expect(settingsTabOf(s)).toBe('diagnostics');
+      expect(subLinks(s).filter((x) => x.current)).toHaveLength(1);
+    }
+    expect(subLinks({ view: 'settings', settingsSection: 'models' })).toEqual([]);
+  });
+
+  it('every specialist page that left the sidebar is in the palette list, with a target the window can open', () => {
+    expect(APPS.map((a) => a.label)).toEqual(['Mail Hub', 'AI Radar', 'Second Brain', 'Media Studio', 'Social Studio', 'Wish to Reality', 'Revenue', 'Team']);
+    for (const a of APPS) expect(parseV2Target(a.key.includes(':') ? a.key : `view:${a.key}`).kind, a.label).not.toBe('unknown');
+  });
+
+  it('Home counts come from the board columns; only today counts as today', () => {
+    const now = new Date(2026, 10, 23, 15, 0, 0);
+    const at = (h: number, day = 23) => new Date(2026, 10, day, h).toISOString();
+    const t = (status: string, extra: Record<string, unknown> = {}) => ({ status, live: true, interrupted: false, ...extra }) as never;
+    const c = homeCounts([
+      t('running'), t('queued'), t('running', { live: false }), t('paused'),
+      t('completed', { completedAt: at(9) }), t('completed', { completedAt: at(9, 22) }), t('failed', { completedAt: at(11) }), t('waiting_for_approval'),
+    ], 1, 1, now);
+    expect(c).toEqual({ needsYou: 1, inProgress: 3, stuck: 2, doneToday: 1, failedToday: 1 });
+  });
+});
+
+describe('daily-use notes', () => {
+  it('keeps a note with where it was written, and reports notes and per-day counts as plain text', () => {
+    const store = new Map<string, string>();
+    (globalThis as { localStorage?: unknown }).localStorage = { getItem: (k: string) => store.get(k) ?? null, setItem: (k: string, v: string) => { store.set(k, v); } };
+    try {
+      expect(addNote('work/board', '   ')).toEqual([]);
+      const notes = addNote('work/board', ' looked for the backup automation under Projects ', new Date('2026-11-23T10:00:00Z'));
+      expect(notes).toEqual([{ at: '2026-11-23T10:00:00.000Z', where: 'work/board', text: 'looked for the backup automation under Projects' }]);
+      const report = usabilityReport(notes, { '2026-11-23': { home: 4, work: 2, palette: 1 } });
+      expect(report).toMatch(/1 day\(s\) with use, 1 note\(s\)/);
+      expect(report).toMatch(/2026-11-23: home 4, work 2, palette 1/);
+      expect(report).toMatch(/\[work\/board\] looked for the backup automation/);
+      // The seven-day trial's fields: the task, whether it was completed, and the kind of trouble. All optional.
+      const more = addNote('home', '', new Date('2026-11-24T09:00:00Z'), { task: ' find yesterday\'s report ', outcome: 'blocked', issues: ['navigation', 'clicks'] });
+      expect(more[1]).toEqual({ at: '2026-11-24T09:00:00.000Z', where: 'home', text: '', task: 'find yesterday\'s report', outcome: 'blocked', issues: ['navigation', 'clicks'] });
+      const full = usabilityReport(more, {});
+      expect(full).toContain('[home] task: find yesterday\'s report | blocked | Confusing navigation, Extra clicks or decisions');
+      expect(full).toContain('Tasks noted: 0 completed, 1 blocked.');
+    } finally { delete (globalThis as { localStorage?: unknown }).localStorage; }
+  });
+});
+
+describe('new chat after opening an earlier conversation', () => {
+  // Live finding 2026-11-23: with an earlier conversation opened from the list, "+" started a new chat, the answer was
+  // stored there, and the window then jumped back to the earlier conversation.
+  it('the chat tells the shell, and the shell forgets the conversation it had opened', () => {
+    const src = (name: string) => fs.readFileSync(path.join(__dirname, '../renderer-v2/src', name), 'utf8');
+    expect(src('Chat.tsx')).toContain('api.newConversation().then(() => { onNewChat?.();');
+    expect(src('App.tsx')).toContain('onNewChat={() => setOpenConversationId(null)}');
+  });
+});
+
+describe('the Home conversation list', () => {
+  it('leaves out the conversations Pandesh held with its own specialists for mission steps', () => {
+    expect(isMissionStepConversation('Reviewer · Mission step 2 of 2 (run 5bg2a). Review the checklist')).toBe(true);
+    expect(isMissionStepConversation('Skill Engineering · Mission step 2 of 4 (run 4if0q). Find or draft')).toBe(true);
+    expect(isMissionStepConversation('Make me a short checklist for backing up my phone photos')).toBe(false);
+    expect(isMissionStepConversation('What was mission step 2 of 2 about?')).toBe(false);
+    expect(isMissionStepConversation('ChatGPT → Panda: Fix the typo')).toBe(false);
+    expect(isMissionStepConversation(null)).toBe(false);
+    const places = fs.readFileSync(path.join(__dirname, '../renderer-v2/src/Places.tsx'), 'utf8');
+  });
+});
+
+describe('what counts as needing the person', () => {
+  // Live finding 2026-11-23: an ordinary chat raised "needs you" by one while it ran, because every item of Core's home brief
+  // (which also carries a running task and a recent result) was counted.
+  it('only a pending approval and a failed or interrupted task ask something; running and finished work never do', () => {
+    expect(['approval', 'task_failed', 'task_interrupted'].every(asksThePerson)).toBe(true);
+    expect(['task_running', 'task_completed', 'routine', 'commitment', 'reminder'].some(asksThePerson)).toBe(false);
+    expect(needsYouTotal(['task_running'], 0)).toBe(0);
+    expect(needsYouTotal(['task_completed', 'task_running'], 0)).toBe(0);
+    expect(needsYouTotal(['approval', 'task_failed', 'task_completed'], 1)).toBe(2);
+    // Core's brief shows one approval at most; the board knows of three tasks waiting.
+    expect(needsYouTotal(['approval'], 3)).toBe(3);
+    expect(needsYouTotal([], 2)).toBe(2);
+  });
+});
+
+describe('task transcripts in the Home conversation list', () => {
+  it('a connector task is recognised only by the exact title prefix Core gives it', () => {
+    expect(isConnectorConversation('ChatGPT → Panda: Fix the typo in the README')).toBe(true);
+    expect(isConnectorConversation('How do I connect ChatGPT → Panda: is it safe?')).toBe(false);
+    expect(isConnectorConversation('ChatGPT and Panda bridge notes')).toBe(false);
+    expect(isConnectorConversation('ChatGPT -> Panda: typed by hand')).toBe(false);
+    expect(isInternalConversation('Reviewer · Mission step 2 of 2 (run 5bg2a). Review')).toBe(true);
+    expect(isInternalConversation('Make me a short checklist')).toBe(false);
+    const src = (name: string) => fs.readFileSync(path.join(__dirname, '../renderer-v2/src', name), 'utf8');
+    // Hidden by default, found by the search, shown again on request; the palette's recent chats follow the same rule.
+    expect(src('Places.tsx')).toContain('all || !isInternalConversation(c.title)');
+    expect(src('App.tsx')).toContain('conversations.filter((c) => !isInternalConversation(c.title))');
+    // Core really does title them this way.
+    expect(fs.readFileSync(path.join(__dirname, '../../../core/domain/pandaBridge.ts'), 'utf8')).toContain('title: `ChatGPT → Panda: ${title}`');
+  });
+});
+
+describe('room for the conversation list', () => {
+  // Live finding 2026-11-23: at the default 1086 px window, the list plus the Activity panel left the chat about 250 px wide.
+  it('the list sits beside the chat only in a window wide enough for both; otherwise the chat button opens the search', () => {
+    expect(HISTORY_BESIDE_CHAT_MIN_WIDTH).toBeGreaterThan(1086);
+    const app = fs.readFileSync(path.join(__dirname, '../renderer-v2/src/App.tsx'), 'utf8');
+    expect(app).toContain('const tight = useNarrow(HISTORY_BESIDE_CHAT_MIN_WIDTH);');
+    expect(app).toContain('{historyOpen && !tight && <HistoryPanel');
+    expect(app).toContain('onToggleHistory={tight ? undefined : () => showHistory(!historyOpen)}');
+  });
+});
+
+describe('the needs-you list follows the tasks', () => {
+  // Live finding 2026-11-23: a task waiting for an approval was stopped; the approval expired in Core, but Home went on
+  // offering Approve and Reject for it until the next chat turn.
+  it('is read again when the board numbers change', () => {
+    const src = (name: string) => fs.readFileSync(path.join(__dirname, '../renderer-v2/src', name), 'utf8');
+    expect(src('Places.tsx')).toContain("onOpenWork: () => void, taskPicture = '')");
+    expect(src('Places.tsx')).toMatch(/snapshot\?\.pendingApproval\?\.approvalId,[\s\S]{0,200}taskPicture\]\);/);
+    expect(src('App.tsx')).toContain('counts.needsYou}:${counts.inProgress}:${counts.stuck}:${counts.doneToday}:${counts.failedToday}');
+  });
+});
+
+describe('Home counts the person\'s own requests', () => {
+  const now = new Date(2026, 10, 23, 19, 0, 0);
+  const at = (h: number, day = 23) => new Date(2026, 10, day, h).toISOString();
+  const t = (status: string, extra: Record<string, unknown> = {}) => ({ status, live: true, interrupted: false, ...extra }) as never;
+  const step = 'Mission step 1 of 2 (run 4qxwc). Draft a short, practical weekend hiking packing list';
+
+  it('a mission\'s steps and a task the person stopped are not in the two "today" totals; unfinished work always is', () => {
+    expect(isMissionStepTask(step)).toBe(true);
+    expect(isMissionStepTask('Reviewer · Mission step 2 of 2 (run 5bg2a). Review')).toBe(true);
+    expect(isMissionStepTask('What was mission step 2 of 2 about?')).toBe(false);
+    const c = homeCounts([
+      t('completed', { completedAt: at(11), title: 'Write a short packing list' }),
+      t('completed', { completedAt: at(11), title: step }),
+      t('completed', { completedAt: at(11), title: 'Reviewer · Mission step 2 of 2 (run 5bg2a). Review' }),
+      t('failed', { completedAt: at(11), title: step }),
+      t('failed', { completedAt: at(12), title: 'Summarise my notes' }),
+      t('cancelled', { completedAt: at(18), title: 'Search the web for one current headline' }),
+      t('running', { title: step }),
+      t('running', { live: false, title: step }),
+    ], 0, 0, now);
+    expect(c).toEqual({ needsYou: 0, inProgress: 1, stuck: 1, doneToday: 1, failedToday: 1 });
+  });
+
+  it('a failure is "needs you" only while it is today\'s and the person\'s own; an approval always is', () => {
+    expect(needsThePerson({ kind: 'approval', at: at(9, 20) }, now)).toBe(true);
+    expect(needsThePerson({ kind: 'task_failed', at: at(12), detail: 'Summarise my notes — the model stopped (7 hours ago)' }, now)).toBe(true);
+    expect(needsThePerson({ kind: 'task_interrupted', at: at(12), detail: 'Summarise my notes — interrupted' }, now)).toBe(true);
+    // The live case: a mission step that failed in the morning, offered with Resume all day.
+    expect(needsThePerson({ kind: 'task_failed', at: at(11), detail: `${step}… — the requested work did not happen (8 hours ago)` }, now)).toBe(false);
+    expect(needsThePerson({ kind: 'task_failed', at: at(22, 22), detail: 'Summarise my notes — failed (21 hours ago)' }, now)).toBe(false);
+    expect(needsThePerson({ kind: 'task_running', at: at(18) }, now)).toBe(false);
+    expect(needsThePerson({ kind: 'task_completed', at: at(18) }, now)).toBe(false);
+    expect(fs.readFileSync(path.join(__dirname, '../renderer-v2/src/Places.tsx'), 'utf8')).toContain('.filter((i) => needsThePerson(i))');
+  });
+});

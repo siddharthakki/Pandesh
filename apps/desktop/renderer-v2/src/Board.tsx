@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import { api, errorText, onDesktopEvent, type QueuedCommand, type Snapshot, type TaskRow } from './bridge';
 import { Icon, elapsed, timeOf } from './ui';
 import { columnOf, needsYouCount as countNeeds, type Column } from './boardModel';
+import { BOARD_COLUMNS, type BoardShow } from './placesModel';
 
 /** A worker task (Claude Code, OpenCode…) that failed or waits for review, as Core records it. */
 export interface WorkerAttention {
@@ -61,7 +62,8 @@ function blockedReason(t: TaskRow): string {
   return t.failureReason ?? 'Blocked.';
 }
 
-export function Board({ overview, narrow, onOpenPalette, onOpenConversation }: { overview: Overview; narrow: boolean; onOpenPalette: () => void; onOpenConversation: (id: string) => void }) {
+export function Board({ overview, narrow, show, onOpenPalette, onOpenConversation }: { overview: Overview; narrow: boolean; /** Which half of the board: tasks still open, or tasks that ended. Absent: all six columns. */ show?: BoardShow; onOpenPalette: () => void; onOpenConversation: (id: string) => void }) {
+  const columns = show ? COLUMNS.filter((c) => BOARD_COLUMNS[show].includes(c.id)) : COLUMNS;
   const [notes, setNotes] = useState<Record<string, string>>({});
   // While Core is not answering, the last read is history, not live state:
   // nothing may still claim to be running.
@@ -104,7 +106,7 @@ export function Board({ overview, narrow, onOpenPalette, onOpenConversation }: {
   return (
     <>
       <div className="topbar">
-        <span className="title" style={{ color: 'var(--ink)', fontWeight: 600 }}>Board</span>
+        <span className="title" style={{ color: 'var(--ink)', fontWeight: 600 }}>{show === 'completed' ? 'Tasks that ended' : show === 'active' ? 'Tasks still open' : 'Board'}</span>
         <span className="grow" />
         <button type="button" className="search-btn" title="Search everything (Ctrl K)" onClick={onOpenPalette}><Icon name="search" size={16} /><span>Search</span>{!narrow && <kbd>Ctrl K</kbd>}</button>
       </div>
@@ -116,7 +118,7 @@ export function Board({ overview, narrow, onOpenPalette, onOpenConversation }: {
         {!overview.data && !overview.error && <div className="notice" role="status">Reading tasks from Core…</div>}
         {overview.data && (
           <div className="columns">
-            {COLUMNS.map((c) => {
+            {columns.map((c) => {
               const items = byCol(c.id);
               const extra = c.id === 'queued' ? queued : [];
               const waiting = c.id === 'needs' ? workers : [];
@@ -155,7 +157,7 @@ export function Board({ overview, narrow, onOpenPalette, onOpenConversation }: {
                       {c.id === 'failed' && t.failureReason && <span className="failure">{t.failureReason}</span>}
                       {notes[t.attemptId] && <span className="meta" role="status">{notes[t.attemptId]}</span>}
                       <div className="actions">
-                        {t.conversationId && <button type="button" className="btn small" onClick={() => onOpenConversation(t.conversationId!)}>{c.id === 'needs' ? 'Review in chat' : 'Open chat'}</button>}
+                        {t.conversationId && <button type="button" className="btn small" onClick={() => onOpenConversation(t.conversationId!)}>{c.id === 'needs' ? 'Review in chat' : c.id === 'failed' || c.id === 'blocked' ? 'View details' : c.id === 'completed' ? 'Open result' : 'Open chat'}</button>}
                         {t.cancellable && !t.cancelRequestedAt && <button type="button" className="btn small" onClick={() => void stop(t)}>Stop</button>}
                         {t.cancelRequestedAt && c.id !== 'failed' && <span className="meta">Stop requested {timeOf(t.cancelRequestedAt)}</span>}
                         {(t.resumable || t.status === 'recovery_required' || t.interrupted) && <button type="button" className="btn small" onClick={() => void resume(t)}>Resume</button>}

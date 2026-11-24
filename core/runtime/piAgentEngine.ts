@@ -12,7 +12,7 @@ import { checkPublicQuery, derivePublicQuery, explicitlyRequestsWebSearch, refer
 import { commandOpinionWarnings, readCommandReviewSettings, recordCommandReview, reviewCommand, warmCommandReview, type CommandOpinion, type CommandReviewOutcome } from './commandSecondOpinion';
 import { queryPrivacySummary, queryPrivacyWarning, readQueryPrivacySettings, recordQueryPrivacyReview, reviewQueryPrivacy, warmQueryPrivacy, type QueryPrivacyOpinion } from './queryPrivacySecondOpinion';
 import { checkStatedTotals, evaluateExpression } from './arithmeticCheck';
-import { enforceDeclineWording } from './declineWording';
+import { enforceDeclineWording, withholdUnsourcedLinksAfterWebDecline } from './declineWording';
 import { csvShapeProblem } from './csvShape';
 import { describeRequestTools, groupOfTool, groupsForText, hiddenGroups, offerActiveTools, selectChatTools, toolsInGroups } from './chatToolSelection';
 import { recordResearchProvenance, researchSourcesForTurn } from '../domain/researchProvenance';
@@ -427,6 +427,50 @@ export function failedProductSearchReply(toolError: string): string {
     return `I could not read current prices: ${reason}. These are the pages the search found; I have not read them, so I am not quoting a price:\n\n${links.join('\n')}\n\nTell me which one to open in the browser and I will read the offers from the page.`;
   }
   return `I could not get current prices: ${reason}. I have no verified offer, so I am not naming shops or prices from memory.\n\nYou can ask me again in a minute, or tell me to open a price-comparison site in the browser (for example "open geizhals.de and look up this model") and I will read the offers from the page.`;
+}
+
+/**
+ * What the assistant is told when it asks for web access again in a task where the person already said no (live finding
+ * 2026-11-23: after "Don't allow", the model re-sent the search with other words and the person was asked a second time).
+ * An approval covers the whole task, so a refusal does too: the person is not asked again, and the assistant is pointed at
+ * what remains possible. A new message from the person starts a new task, where they can be asked again.
+ */
+export function describeRepeatedWebAccessRequest(): string {
+  return 'The user already declined web access for this task, so they were not asked again and nothing was searched. '
+    + 'Do not ask for web access again in this turn. Answer from what you already know and say plainly that it is unverified, '
+    + 'then tell the user what is still possible: they can allow a search by asking again, paste the text or a link they already have, '
+    + 'or ask for something that needs no web access.';
+}
+
+/** A last paragraph that ends on a colon introduces something that did not follow (a code fence closing the reply is fine). */
+export function endsOnAnnouncingColon(reply: string): boolean {
+  const tail = (reply.trim().split(/\n\s*\n/).pop() ?? '').trim();
+  return tail.length > 0 && tail.length <= 400 && /[:：]\s*\**\s*$/.test(tail);
+}
+
+/**
+ * True when the last thing the model wrote into its task record in this turn was "in_progress" and no tool that acts
+ * ran after it. `lookupOnly` is the engine's own list of tools that only look things up or keep records.
+ */
+export function declaredInProgressWithoutAction(
+  calls: ReadonlyArray<{ tool: string; status: string; args?: unknown; isError?: boolean }>,
+  lookupOnly: RegExp,
+): boolean {
+  let at = -1;
+  calls.forEach((c, i) => { if (c.tool === 'update_task_outcome' && c.status === 'completed' && !c.isError) at = i; });
+  if (at < 0) return false;
+  if ((calls[at].args as { status?: unknown } | undefined)?.status !== 'in_progress') return false;
+  return !calls.slice(at + 1).some((c) => c.status === 'completed' && !c.isError && !lookupOnly.test(c.tool));
+}
+
+/** What the person reads under a reply the model did not finish. States what happened and what was not done. */
+export function cutOffReplyCorrection(error: string, producedSomething: boolean): string {
+  const why = /^no output from Ollama/.test(error)
+    ? 'the local model stopped producing output and the call was stopped'
+    : error ? `the model call failed (${error.slice(0, 160)})` : 'the model call failed';
+  return `Correction: this reply was cut off — ${why}. ${producedSomething
+    ? 'The step it was about to take was not carried out; what the tools above report is all that was done.'
+    : 'The step it announced was not carried out: nothing was built or changed in this turn.'} Ask me to continue, or to try again.`;
 }
 
 export function describeUnansweredApproval(outcome: PiToolApprovalOutcome): string {
@@ -1576,6 +1620,10 @@ export class PiAgentEngine implements EngineAdapter {
 
     let webResearchApproved = false;
     let agentReachApproved = false;
+    // The person's recorded "no" to going online in this task. Only a recorded refusal sets these; an unanswered or failed
+    // request stays retryable.
+    let webResearchDeclined = false;
+    let agentReachDeclined = false;
     const agentReachConfig = readAgentReachConfig(ctx.dataDir);
     let webResearchCount = 0;
     const seenResearchQueries = new Set<string>();
@@ -2603,11 +2651,13 @@ export class PiAgentEngine implements EngineAdapter {
               research: runWebResearch,
               approveNetwork: async (queries) => {
                 if (webResearchApproved) return { approved: true };
+                if (webResearchDeclined) return { approved: false, message: describeRepeatedWebAccessRequest() };
                 const decision = await requestToolApproval({
                   toolName: 'web_research',
                   query: queries.join(' | '),
                   cardText: `Pandesh wants to search the web for current offers: ${queries.map((q) => `"${q.slice(0, 80)}"`).join(', ')}. Each query goes to a public search engine and up to 3 public pages are fetched per query for this task.`,
                 });
+                if (decision.outcome === 'rejected') webResearchDeclined = true;
                 if (decision.outcome !== 'approved') return { approved: false, message: describeUnansweredApproval(decision) };
                 webResearchApproved = true;
                 return { approved: true };
@@ -3029,6 +3079,12 @@ export class PiAgentEngine implements EngineAdapter {
               isError: true,
             };
           }
+          // The person already said no to web access in this task: they are not asked again, whatever the wording, and
+          // the query is not sent anywhere, not even to the local privacy review.
+          if (webResearchDeclined) {
+            safeRecordRuntimeEvent(db, broadcaster, attemptId, 'web_access_request_not_repeated', { tool: 'web_research', queryChars: query.length }, actor);
+            return { content: [{ type: 'text', text: describeRepeatedWebAccessRequest() }], isError: true };
+          }
           const normQuery = query.toLowerCase().replace(/\s+/g, ' ');
           if (seenResearchQueries.has(normQuery)) {
             webResearchCount += 1;
@@ -3053,6 +3109,7 @@ export class PiAgentEngine implements EngineAdapter {
               ...(privacyFlag ? { privacySecondOpinion: queryPrivacySummary(privacyFlag) } : {}),
               cardText: `${privacyFlag ? `${queryPrivacyWarning(privacyFlag)}\n` : ''}Pandesh wants to search the web for: "${query.slice(0, 200)}". The query is sent to a public search engine and up to 3 public pages are fetched per search for this task.`,
             });
+            if (decision.outcome === 'rejected') webResearchDeclined = true;
             if (decision.outcome !== 'approved') {
               // Say exactly what happened. Only a recorded decision is a refusal.
               return { content: [{ type: 'text', text: describeUnansweredApproval(decision) }], isError: true };
@@ -3112,12 +3169,17 @@ export class PiAgentEngine implements EngineAdapter {
             safeRecordRuntimeEvent(db, broadcaster, attemptId, 'agent_reach_query_refused', { reason: queryCheck.reason, queryChars: call.target.length }, actor);
             return { content: [{ type: 'text', text: `NOT READ: ${queryCheck.reason}. Nothing was sent off this computer. Call agent_reach again with a short public query.` }], isError: true };
           }
+          if (agentReachDeclined) {
+            safeRecordRuntimeEvent(db, broadcaster, attemptId, 'web_access_request_not_repeated', { tool: 'agent_reach', queryChars: call.target.length }, actor);
+            return { content: [{ type: 'text', text: describeRepeatedWebAccessRequest() }], isError: true };
+          }
           if (!agentReachApproved) {
             const decision = await requestToolApproval({
               toolName: 'agent_reach',
               query: call.target,
               cardText: `Pandesh wants to ${call.action} ${call.channel === 'web' ? 'a public web page' : `public ${call.channel} content`}: "${call.target.slice(0, 200)}". The ${checked.isSearch ? 'query' : 'link'} is sent to ${call.channel === 'web' ? 'a public page reader service (r.jina.ai, a third party) and the site' : `${call.channel}`}. Nothing from your files, accounts or messages is sent.`,
             });
+            if (decision.outcome === 'rejected') agentReachDeclined = true;
             if (decision.outcome !== 'approved') return { content: [{ type: 'text', text: describeUnansweredApproval(decision) }], isError: true };
             agentReachApproved = true;
           }
@@ -3727,7 +3789,7 @@ export class PiAgentEngine implements EngineAdapter {
       },
       {
         // Alpha e2e T2: chat had no access to Software Discovery and guessed "Up to Date". This reads the stored result
-        // of the last update check (More → Software & Services); it never contacts the internet or installs anything.
+        // of the last update check (Settings → Diagnostics → Software & Services); it never contacts the internet or installs anything.
         name: 'software_updates',
         label: 'software_updates',
         description: "Read the result of Pandesh's last software update check on this PC (winget, pip, npm, GitHub): installed and available versions, status and when it was checked. Read-only, offline: it never checks online and never installs. If no check was run yet, tell the user to run System → Software & Services → Check for updates.",
@@ -3735,7 +3797,7 @@ export class PiAgentEngine implements EngineAdapter {
         execute: async (_id: string, args: any) => {
           if (!ctx.dataDir) return { content: [{ type: 'text', text: "NOT AVAILABLE: Pandesh's data folder is not known in this run, so the stored update check cannot be read." }], isError: true };
           const state = readUpdateState(ctx.dataDir);
-          if (!state.lastCheckedAt) return { content: [{ type: 'text', text: 'No update check has been run on this PC yet, so no versions are known. Nothing was checked now. The user can run More → Software & Services → Check for updates (read-only).' }] };
+          if (!state.lastCheckedAt) return { content: [{ type: 'text', text: 'No update check has been run on this PC yet, so no versions are known. Nothing was checked now. The user can run Settings → Diagnostics → Software & Services → Check for updates (read-only).' }] };
           const onlyUpdates = args?.onlyUpdates !== false;
           const filter = String(args?.nameContains ?? '').trim().toLowerCase();
           const rows = state.results
@@ -3788,7 +3850,7 @@ export class PiAgentEngine implements EngineAdapter {
         // Alpha e2e T10: no chat tool created projects, and the reply said "I have initiated the creation…".
         name: 'create_project',
         label: 'create_project',
-        description: "Create a project in Pandesh's Projects workspace (stored in Core, shown under Projects in the left sidebar), optionally with a list of open tasks. Only this tool creates a project; report the id it returns.",
+        description: "Create a project in Pandesh's Projects workspace (stored in Core, shown under Work → Projects), optionally with a list of open tasks. Only this tool creates a project; report the id it returns.",
         parameters: { type: 'object', properties: { name: { type: 'string' }, description: { type: 'string' }, tasks: { type: 'array', items: { type: 'string' }, description: 'Task titles.' }, taskStatus: { type: 'string', enum: ['pending', 'in_progress', 'done'], description: 'Status for every listed task (default pending). Use only what the user said; never mark work done that was not done.' } }, required: ['name'] },
         execute: async (_id: string, args: any) => {
           const name = String(args?.name ?? '').trim();
@@ -3803,7 +3865,7 @@ export class PiAgentEngine implements EngineAdapter {
           } catch (err: any) {
             return { content: [{ type: 'text', text: `NOT DONE: Core did not create the project: ${err?.message ?? String(err)}` }], isError: true };
           }
-          const summary = `Created project "${project.name}" (id ${project.id}, status ${project.status}) with ${tasks.length} task(s)${tasks.length ? `: ${tasks.map((t: { title: string; status: string }) => `${t.title} [${t.status}]`).join('; ')}` : ''}. It is shown under Projects in the left sidebar.`;
+          const summary = `Created project "${project.name}" (id ${project.id}, status ${project.status}) with ${tasks.length} task(s)${tasks.length ? `: ${tasks.map((t: { title: string; status: string }) => `${t.title} [${t.status}]`).join('; ')}` : ''}. It is shown under Work → Projects.`;
           return { content: [{ type: 'text', text: summary }], details: { activity: { kind: 'tool', title: `Created project ${project.name}`, excerpt: summary } } };
         },
       },
@@ -3842,7 +3904,7 @@ export class PiAgentEngine implements EngineAdapter {
               createProjectIfMissing: args?.createProject === true || !projectArg || /^inbox$/i.test(projectArg),
               source: `conversation:${conversationId || 'none'}`,
             }));
-            const text = `Added task ${formatTask(task)}. It is shown under Projects in the left sidebar.`;
+            const text = `Added task ${formatTask(task)}. It is shown under Work → Projects.`;
             return { content: [{ type: 'text', text }], details: { primaryId: task.id, taskRef: task.ref, activity: { kind: 'tool', title: `Added task ${task.title}`, excerpt: text } } };
           } catch (err: any) {
             return { content: [{ type: 'text', text: `NOT DONE: ${err?.message ?? String(err)}. Nothing was added.` }], isError: true };
@@ -6391,9 +6453,14 @@ When the user asks to continue, resume, or check progress/updates, resume this w
       const beforeFailure: any = messagesNow[messagesNow.length - 2];
       if (!signal?.aborted && supersedeWith === null
         && failedCall?.role === 'assistant' && (failedCall.stopReason === 'error' || failedCall.errorMessage)
-        && !(failedCall.content || []).some((c: any) => (c.type === 'text' && String(c.text ?? '').trim()) || c.type === 'toolCall')
+        // A call that had begun to write and was then cut off is retried too: its half sentence is not an answer
+        // (2026-11-23: "Now the detailed build ...:" and nothing after it). A call that already issued a tool call is not.
+        && !(failedCall.content || []).some((c: any) => c.type === 'toolCall')
         && (beforeFailure?.role === 'toolResult' || beforeFailure?.role === 'tool')) {
-        safeRecordRuntimeEvent(db, broadcaster, attemptId, 'model_call_retried_after_error', { error: String(failedCall.errorMessage ?? '').slice(0, 300) }, actor);
+        safeRecordRuntimeEvent(db, broadcaster, attemptId, 'model_call_retried_after_error', {
+          error: String(failedCall.errorMessage ?? '').slice(0, 300),
+          partialChars: (failedCall.content || []).reduce((n: number, c: any) => n + (c.type === 'text' ? String(c.text ?? '').length : 0), 0),
+        }, actor);
         agent.state.messages = messagesNow.slice(0, -1);
         await tolerateSupersede(async () => {
           await agent.continue();
@@ -7133,11 +7200,14 @@ When the user asks to continue, resume, or check progress/updates, resume this w
       // A request to make something whose reply says the work is starting, anywhere in it, with nothing produced yet,
       // gets the same one continuation.
       const startsWithoutWork = !didRealWork && asksToMakeSomething && announcesWorkStarting(finalReply);
-      if (announcesNextStep || startsWithoutWork) {
-        safeRecordRuntimeEvent(db, broadcaster, attemptId, 'announced_step_continued', { tail: tail.slice(0, 200), reason: announcesNextStep ? 'announced_next_step' : 'said_work_is_starting' }, actor);
+      // "Now the detailed build — proper storeys, visible floor slabs ...:" — a last paragraph that ends on a colon
+      // introduces something that never came. It gets the same one continuation.
+      const endsOnColon = endsOnAnnouncingColon(finalReply);
+      if (announcesNextStep || endsOnColon || startsWithoutWork) {
+        safeRecordRuntimeEvent(db, broadcaster, attemptId, 'announced_step_continued', { tail: tail.slice(0, 200), reason: announcesNextStep ? 'announced_next_step' : endsOnColon ? 'ended_on_a_colon' : 'said_work_is_starting' }, actor);
         try {
           const floor = agent.state.messages.length;
-          await agent.prompt(announcesNextStep
+          await agent.prompt(announcesNextStep || endsOnColon
             ? 'Continue now: you said what you would do next but stopped before doing it. Carry out that step with your tools in this turn (write the file, run the check, open it), then give the final answer with what really happened.'
             : 'Continue now: you said the work is starting, but nothing has been built — no file was written in this turn, and nothing runs after your reply ends. Do the first real step with your tools in this turn (create the files with write_file, run them), then give the final answer with what really exists. If you cannot build it, say plainly that nothing has been built yet and why.');
           await agent.waitForIdle();
@@ -7356,11 +7426,16 @@ ${screenCorrection}`;
       // A call that returned an error result produced nothing (M0 F03: pc_organize_scan failed twice, the turn ended with
       // "completed" and an attempt that never moved a file).
       const producedSomething = (predecessorChain(db, attemptId).length > 0 && Number(db.get<{ n: number }>(`SELECT COUNT(*) AS n FROM tool_invocations WHERE toolName = 'write_file' AND status = 'succeeded' AND attemptId IN (${predecessorChain(db, attemptId).map(() => '?').join(',')})`, predecessorChain(db, attemptId))?.n ?? 0) > 0) /* a resumed task: what the interrupted attempts already wrote counts */ || toolCallsRecorded.some((t) => t.status === 'completed' && !LOOKUP_ONLY.test(t.tool) && !(t.result as { isError?: boolean } | undefined)?.isError);
+      // Two facts that do not depend on how the request was worded ("Try buuilding agai" names no artifact):
+      // the model's own task record still says "in progress" with nothing done after it, and the last model call failed.
+      const stillInProgress = declaredInProgressWithoutAction(toolCallsRecorded.map((t) => ({ tool: t.tool, status: t.status, args: t.args, isError: Boolean((t.result as { isError?: boolean } | undefined)?.isError) })), LOOKUP_ONLY);
+      const lastModelCall = modelCalls[modelCalls.length - 1];
+      const replyCutOff = !signal?.aborted && !isUnanswered && lastModelCall?.status === 'error' && Boolean(finalReply.trim());
       const correction = auditPromises(finalReply, {
         activeWorker: hasActiveWorker(db, conversationId, attemptId),
         canNotify: capability.canNotify,
         notifyStatement: capability.statement,
-        nothingMade: asksToBuildOutsideChat && !producedSomething,
+        nothingMade: (asksToBuildOutsideChat || stillInProgress) && !producedSomething,
       });
       if (correction) finalReply += "\n\n" + correction;
       // Nothing was done because a permission stopped it: Core states the real reason and the remedy itself. The
@@ -7383,16 +7458,24 @@ ${screenCorrection}`;
           }
         } catch { /* the reply stands as it is */ }
       }
+      if (replyCutOff) {
+        finalReply += "\n\n" + cutOffReplyCorrection(String(lastModelCall?.error ?? ''), producedSomething);
+        safeRecordRuntimeEvent(db, broadcaster, attemptId, 'reply_cut_off', { error: String(lastModelCall?.error ?? '').slice(0, 300), producedSomething }, actor);
+      }
       // The durable signal for escalation (executor → stronger model): a request to build something that ended with
       // nothing built, or a turn with no reply. A question ("…, possible?"), a stopped turn or work still running in
       // this chat is not an unfinished turn.
       const isQuestion = /\?\s*$/.test(requestText.trim()) || /^\s*(?:can|could|would|is|are|do|does|how|what|why|which|should)\b/i.test(requestText);
       // A reply that ends by asking the user something is waiting for them, not a failure.
-      const asksUser = /\?\s*\**\s*$/.test(finalReply.replace(/\n\nCorrection:[\s\S]*$/, '').trim());
+      const asksUser = !replyCutOff && /\?\s*\**\s*$/.test(finalReply.replace(/\n\nCorrection:[\s\S]*$/, '').trim());
       const unfinishedReason = signal?.aborted || asksUser || hasActiveWorker(db, conversationId, attemptId) ? null
         : isUnanswered ? 'no_reply'
           : asksToBuildOutsideChat && !isQuestion && !producedSomething ? 'nothing_built'
-            : null;
+            // The model's own record says the task is in progress and nothing acted: it is not finished, however the
+            // request was worded. A cut-off reply with nothing done is unfinished too.
+            : stillInProgress && !isQuestion && !producedSomething ? 'nothing_built'
+              : replyCutOff && !producedSomething ? 'reply_cut_off'
+                : null;
       if (unfinishedReason) {
         const ran = toolCallsRecorded.filter((t) => t.status === 'completed' && !/^(?:update_task_outcome|request_tools)$/.test(t.tool)).map((t) => t.tool);
         safeRecordRuntimeEvent(db, broadcaster, attemptId, 'turn_unfinished', { reason: unfinishedReason, model: selectedModel, toolsRun: ran }, actor);
@@ -7581,6 +7664,16 @@ ${screenCorrection}`;
       if (decline.corrected) {
         finalReply = decline.text;
         safeRecordRuntimeEvent(db, broadcaster, attemptId, 'decline_wording_corrected', {}, actor);
+      }
+      // The person declined web access and nothing was searched: links no tool returned are not shown as findings.
+      const unsourced = withholdUnsourcedLinksAfterWebDecline(
+        finalReply,
+        declineResults,
+        [requestText, ctx.currentMessage ?? '', prompt, ...toolCallsRecorded.filter((t) => t.status === 'completed').map((t) => extractToolResultText(t.result))],
+      );
+      if (unsourced.withheld.length) {
+        finalReply = unsourced.text;
+        safeRecordRuntimeEvent(db, broadcaster, attemptId, 'unsourced_links_withheld_after_web_decline', { links: unsourced.withheld.length }, actor);
       }
       // The task record refused "satisfied" (no evidence) and no tool did anything this turn: the reply's "done" has
       // nothing behind it (tool-selection run: "I've noted that you are vegetarian and will keep that in mind for our

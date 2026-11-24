@@ -72,9 +72,22 @@ const IMAGE_GENERATION_LEADING_PHRASE =
  * requests, and requiring the earlier "imagine" keeps this pattern narrow. */
 const IMAGE_GENERATION_IMAGINE_REFERENT = /\bimagine\b[\s\S]*?\b(generate|draw|paint|render)\s+(?:that|this|it)\b/i;
 
+/**
+ * A brief for development work is never a picture request, whatever nouns it contains. Live run 2026-11-23: a brief that
+ * began "Investigate the poor 3D house result in Pandesh Workshop. The current scene is technically valid ..." and went on
+ * to ask for a Three.js project with tests was sent straight to the Image Studio ("create" + "scene"), and a picture of a
+ * house came back. Saying outright that it is not an image task settles it too.
+ */
+const DEVELOPER_WORK = /\b(?:investigate|implement(?:ation)?|reproduce|worktree|three\.?js|blender|babylon(?:\.?js)?|coding agent|end-to-end|tool (?:interface|schema)|unit tests?|regression tests?|pull request)\b/i;
+const SAYS_NOT_AN_IMAGE = /\bnot an? (?:image|picture)(?:[- ]generation)? (?:task|request|job)\b|\bdo not (?:call|use|run)\b[^.\n]{0,40}\bimage[- ]generation\b/i;
+export function isDeveloperBrief(text: string): boolean {
+  return DEVELOPER_WORK.test(text) || SAYS_NOT_AN_IMAGE.test(text);
+}
+
 export function detectImageGenerationIntent(text: string): boolean {
   const trimmed = text.trim();
   if (!trimmed) return false;
+  if (isDeveloperBrief(trimmed)) return false;
   // "Build an app that generates images" is software work: the build intent always wins over media keywords.
   if (hasSoftwareBuildIntent(trimmed)) return false;
   if (IMAGE_GENERATION_IMAGINE_REFERENT.test(trimmed)) return true;
@@ -100,6 +113,7 @@ export function detectImageFollowUp(text: string): MediaFollowUp | null {
   const t = text.trim();
   if (!t) return null;
   if (hasSoftwareBuildIntent(t)) return null;
+  if (isDeveloperBrief(t)) return null;
   if (ANIMATE_REQUEST.test(t)) return { kind: 'animate' };
   if (VARIATIONS_REQUEST.test(t)) {
     const m = /\b(\d+|one|two|three|four|couple)\b\s+(?:more\s+)?(?:variations?|versions|alternatives|variants)/i.exec(t);

@@ -63,10 +63,10 @@ export function timeOf(iso: string | null | undefined): string {
 }
 
 /** Tracks the window width so the layout can switch to the narrow form (< 900 px). */
-export function useNarrow(): boolean {
-  const [narrow, setNarrow] = React.useState(() => window.innerWidth < 900);
+export function useNarrow(below = 900): boolean {
+  const [narrow, setNarrow] = React.useState(() => window.innerWidth < below);
   React.useEffect(() => {
-    const on = () => setNarrow(window.innerWidth < 900);
+    const on = () => setNarrow(window.innerWidth < below);
     window.addEventListener('resize', on);
     return () => window.removeEventListener('resize', on);
   }, []);

@@ -305,7 +305,7 @@ describe('UI v2 wake word — end to end in the renderer', () => {
     currentSnapshot = snap();
     render(h(App));
     // Away from the chat, the wake word still listens.
-    fireEvent.click(await screen.findByRole('button', { name: 'Tools & Skills — what Pandesh can do' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Work — everything Pandesh is doing' }));
     await waitFor(() => expect(captureModule.startWakeMonitor).toHaveBeenCalledTimes(1), { timeout: 3000 });
     act(() => monitors[0].opts.onFrame(new Int16Array([1, 2, 3]), { framesEmitted: 1 }));
     await waitFor(() => expect(bridge.pushWakeAudio).toHaveBeenCalledTimes(1));
