@@ -95,6 +95,7 @@ import type { AttachmentRecord, AttemptContextRecord } from '../shared/wireTypes
 import { readBoundedFile, sha256OfFile, finalPath } from '../attachments/storage';
 import { getAttachment, listAttachmentsByMessageForConversation } from '../domain/attachments';
 import { MAX_CONTINUATION_IMAGES, MAX_CONTINUATION_TEXT_BYTES, continuationApplies, selectContinuationAttachments } from '../attachments/continuation';
+import { PICTURE_ARTIFACT_HINT, ensurePictureArtifact, type AttachedPicture } from '../attachments/pictureArtifacts';
 import { registerResponseAlternative } from '../domain/workbench';
 import { listCitationsForMessage, recordCitations } from '../domain/research';
 import { dispatchConnectorAction } from '../domain/connectorDispatch';
@@ -3553,6 +3554,12 @@ export class RuntimeExecutor {
         const buffer = readBoundedFile(absPath, MAX_IMAGE_ATTACHMENT_BYTES);
         images.push(buffer.toString('base64'));
         imageMimeTypes.push(attachment.detectedMimeType);
+        // Seeing a picture is not enough to use it: tools take artifact ids (see attachments/pictureArtifacts.ts).
+        const artifactId = this.pictureArtifactId({ conversationId, attachmentId: attachment.attachmentId, originalName: attachment.originalName, mimeType: attachment.detectedMimeType, sha256: attachment.sha256 });
+        if (artifactId) pictureIds += 1;
+        appendedText += artifactId
+          ? `\n\n[Attached picture: ${attachment.originalName} — artifact id ${artifactId}]`
+          : `\n\n[Attached picture: ${attachment.originalName} — it could not be saved as an artifact, so tools cannot use it]`;
       } else if (attachment.kind === 'document') {
         // The model never sees raw document bytes — only the already-frozen,
         // durably-recorded extraction result (never re-run here). An honest
