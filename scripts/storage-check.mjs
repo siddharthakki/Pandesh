@@ -1,70 +1,119 @@
-// Pandesh storage discipline check. Plain Git + directory listings; no state, no daemon.
+// Pandesh storage discipline check. Plain Git + directory listings; no state, no daemon, never deletes anything.
 //   node scripts/storage-check.mjs preflight   run before starting a task
 //   node scripts/storage-check.mjs postflight  run before calling a task complete
-// Exit 0 = clean, 1 = violations. Nothing is ever deleted by this script; it names what to clean.
+// Exit 0 = clean, 1 = violations. A violation names what to clean and how.
 //
-// Policy (see CLAUDE.md "Engineering discipline"): one canonical repository, main + one active branch,
-// no extra worktrees or clones, one reusable test/acceptance env, one reusable build dir, current + previous installer only.
-// A deliberate exception is written, with a reason, in `.storage-approved` at the repo root (git-excluded):
-//   one line per approved path or branch:  <path-or-branch>  # reason
+// Policy (CLAUDE.md "Engineering discipline"): one canonical repository, main + one active branch, no extra worktrees or clones,
+// one reusable test/acceptance/build environment, current + previous installer only, bounded retention for every kind of output.
+// A deliberate exception is written, with a reason, in `.storage-approved` at the repo root (git-excluded), one per line:
+//   <path-or-branch>  # reason
 import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 
 const mode = process.argv[2] === 'postflight' ? 'postflight' : 'preflight';
 const repo = path.resolve(path.dirname(new URL(import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1')), '..');
 const git = (...a) => execFileSync('git', ['-C', repo, ...a], { encoding: 'utf8' }).trim();
 const norm = (p) => path.resolve(p).replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase();
+const DAY = 24 * 3600 * 1000;
+const age = (p) => { try { return Date.now() - fs.statSync(p).mtimeMs; } catch { return 0; } };
+const dirs = (p) => { try { return fs.readdirSync(p, { withFileTypes: true }).filter((d) => d.isDirectory()).map((d) => d.name); } catch { return []; } };
+const files = (p) => { try { return fs.readdirSync(p, { withFileTypes: true }).filter((d) => d.isFile()).map((d) => d.name); } catch { return []; } };
+const isLink = (p) => { try { return fs.lstatSync(p).isSymbolicLink(); } catch { return false; } };
+const mb = (b) => `${(b / 2 ** 20).toFixed(0)} MB`;
+
 const approvedFile = path.join(repo, '.storage-approved');
 const approved = new Set(fs.existsSync(approvedFile)
   ? fs.readFileSync(approvedFile, 'utf8').split(/\r?\n/).map((l) => l.replace(/#.*/, '').trim()).filter(Boolean).map((l) => (/[\\/]/.test(l) ? norm(l) : l))
   : []);
 const violations = [];
 const bad = (rule, what) => violations.push(`${rule}: ${what}`);
+const ok = (p) => approved.has(norm(p));
 
 // 1. Worktrees: none besides the canonical checkout.
 const wt = git('worktree', 'list', '--porcelain').split(/\r?\n\r?\n/).map((b) => (b.match(/^worktree (.+)$/m) || [])[1]).filter(Boolean);
-for (const w of wt.slice(1)) if (!approved.has(norm(w))) bad('extra worktree', `${w}  ->  git worktree remove "${w}"`);
+for (const w of wt.slice(1)) if (!ok(w)) bad('extra worktree', `${w}  ->  git worktree remove "${w}"`);
 
-// 2. Branches: main + one active development branch (the checked-out one) + approved ones.
+// 2. Branches: main + one active development branch (the checked-out one).
 const current = git('branch', '--show-current');
 const branches = git('for-each-ref', '--format=%(refname:short)', 'refs/heads').split(/\r?\n/).filter(Boolean);
 for (const b of branches) if (b !== 'main' && b !== current && !approved.has(b)) bad('extra local branch', `${b}  ->  merge or discard, then git branch -d ${b}`);
 
-// 3. Temporary directories inside the repo (.tmp) older than 24 hours.
+// 3. Repeated build output: temporary folders > 24 h, and more than the current + previous installer in dist.
 const tmp = path.join(repo, '.tmp');
-if (fs.existsSync(tmp)) for (const e of fs.readdirSync(tmp, { withFileTypes: true })) {
-  const full = path.join(tmp, e.name);
-  if (Date.now() - fs.statSync(full).mtimeMs > 24 * 3600 * 1000 && !approved.has(norm(full))) bad('stale temporary artifact (>24h)', full);
-}
+for (const n of fs.existsSync(tmp) ? fs.readdirSync(tmp) : []) { const f = path.join(tmp, n); if (age(f) > DAY && !ok(f)) bad('stale temporary artifact (>24h)', f); }
+const dist = path.join(repo, 'dist');
+const installers = files(dist).filter((f) => /\.(exe|msi|vsix)$/i.test(f)).map((f) => ({ f, t: fs.statSync(path.join(dist, f)).mtimeMs })).sort((a, b) => b.t - a.t);
+for (const x of installers.slice(2)) bad('installer beyond current + previous', path.join(dist, x.f));
 
-// 4. Per-task permanent directories next to the repo or at a drive root.
-const REUSABLE = new Set(['pandeshp0dev']); // the one reusable isolated test / acceptance / build environment
-const PROD = /^(pandesh|pandeshservices|pandeshassets)$/i; // installed app and its supporting folders (verified by the owner, not by this script)
-const roots = [...new Set(['C:\\', 'D:\\', 'E:\\'].filter((r) => fs.existsSync(r)))];
+// 4. Per-task permanent directories at drive roots / next to the repo. Production and protected user data are named, with the reason.
+const LEGIT = new Map([
+  ['pandeshp0dev', 'the one reusable isolated test/acceptance/build environment'],
+  ['pandesh', 'installed production app (E:\\Pandesh)'],
+  ['pandeshservices', 'live local services; verify dependencies before touching'],
+  ['pandeshassets', 'shared 3D/asset library'],
+]);
+const PROTECTED = /^pandeshjugaad/i; // user data: never counted as removable, never deleted by policy work
 const seen = [];
-for (const r of roots) {
-  let names = []; try { names = fs.readdirSync(r, { withFileTypes: true }).filter((d) => d.isDirectory()).map((d) => d.name); } catch { /* unreadable root */ }
-  for (const n of names) if (/^pandesh/i.test(n) && !REUSABLE.has(n.toLowerCase()) && !PROD.test(n) && !approved.has(norm(path.join(r, n)))) seen.push(path.join(r, n));
+const protectedSeen = [];
+for (const r of ['C:\\', 'D:\\', 'E:\\'].filter((x) => fs.existsSync(x))) {
+  for (const n of dirs(r)) {
+    if (!/^pandesh/i.test(n) || LEGIT.has(n.toLowerCase()) || ok(path.join(r, n))) continue;
+    if (PROTECTED.test(n)) { protectedSeen.push(path.join(r, n)); continue; }
+    seen.push(path.join(r, n));
+  }
 }
-const projects = 'D:\\Projects';
-if (fs.existsSync(projects)) for (const d of fs.readdirSync(projects, { withFileTypes: true })) {
-  const full = path.join(projects, d.name);
-  if (d.isDirectory() && /^pandesh/i.test(d.name) && norm(full) !== norm(repo) && !approved.has(norm(full))) seen.push(full);
+if (fs.existsSync('D:\\Projects')) for (const n of dirs('D:\\Projects')) {
+  const full = path.join('D:\\Projects', n);
+  if (/^pandesh/i.test(n) && norm(full) !== norm(repo) && !ok(full)) seen.push(full);
 }
 for (const s of seen) bad('extra Pandesh directory', s);
 
-// 5. Rollback/installer copies: only the previous stable one next to the installed app.
+// 5. Rollback copies: the installed app's previous stable build only.
 if (fs.existsSync('E:\\')) {
-  const copies = fs.readdirSync('E:\\', { withFileTypes: true }).filter((d) => d.isDirectory() && /^Pandesh-b\d+/i.test(d.name)).map((d) => d.name).sort();
-  if (copies.length > 1) bad('rollback copies (keep only the previous stable one)', copies.join(', '));
+  const copies = dirs('E:\\').filter((n) => /^Pandesh-b\d+/i.test(n) || /^Pandesh-Backups$/i.test(n)).sort();
+  const rollback = copies.filter((n) => /^Pandesh-b\d+/i.test(n));
+  if (rollback.length > 1) bad('rollback copies (keep only the previous stable one)', rollback.join(', '));
+  if (copies.includes('Pandesh-Backups')) bad('old backup folder', 'E:\\Pandesh-Backups');
 }
 
-// Drive free space, for the record.
-let free = '';
-try { free = roots.map((r) => { const s = fs.statfsSync(r); return `${r[0]}: ${(s.bavail * s.bsize / 2 ** 30).toFixed(0)} GB free`; }).join(', '); } catch { /* optional */ }
+// 6. Duplicate dependency installs: a real (non-junction) node_modules anywhere beyond the canonical repo.
+const nm = [];
+for (const base of ['D:\\Projects', 'D:\\', 'E:\\']) for (const n of dirs(base)) {
+  if (!/pandesh/i.test(n)) continue;
+  const root = path.join(base, n);
+  if (norm(root) === norm(repo) || norm(root) === norm('D:\\PandeshP0Dev')) continue;
+  const m = path.join(root, 'node_modules');
+  if (fs.existsSync(m) && !isLink(m)) nm.push(m);
+}
+for (const m of nm) bad('duplicate node_modules install', m);
+for (const j of (fs.existsSync(path.join(repo, 'node_modules')) ? fs.readdirSync(path.join(repo, 'node_modules')) : []).filter((n) => isLink(path.join(repo, 'node_modules', n)))) {
+  bad('canonical node_modules entry is a junction (breaks if its target is removed)', path.join(repo, 'node_modules', j));
+}
 
-console.log(`storage ${mode}: repo ${repo}, branch ${current}, worktrees ${wt.length - 1} extra, branches ${branches.length}; ${free}`);
+// 7. Runtime data: Kandev copies, golden evidence, logs, test environment entries. (Reads the real profile's folder names only.)
+const local = process.env.LOCALAPPDATA || path.join(os.homedir(), 'AppData', 'Local');
+const profile = path.join(local, 'KarkeDikha', 'desktop');
+const pw = path.join(profile, 'panda-workspaces');
+for (const n of dirs(pw).filter((d) => d !== '_retained')) if (age(path.join(pw, n)) > 2 * DAY) bad('Kandev private task copy older than 2 days (the sweep should have removed it)', path.join(pw, n));
+const kh = process.env.KARKEDIKHA_KANDEV_HOME || path.join(os.homedir(), '.kkd-kandev');
+for (const n of dirs(path.join(kh, 'tasks'))) if (age(path.join(kh, 'tasks', n)) > 7 * DAY) bad('Kandev task worktree older than 7 days', path.join(kh, 'tasks', n));
+const ge = path.join(local, 'KarkeDikha', 'golden-evidence');
+const geDirs = dirs(ge);
+if (geDirs.length > 30) bad('golden-evidence is unbounded', `${geDirs.length} run folders (limit 30); keep the newest, archive or drop the rest after review`);
+for (const b of dirs(path.join(local, 'KarkeDikha')).filter((n) => /^desktop-backup-/.test(n))) bad('profile backup of an old build', path.join(local, 'KarkeDikha', b));
+for (const dir of [path.join(profile, 'logs'), profile]) for (const f of files(dir).filter((x) => /\.(log|jsonl)$/i.test(x))) {
+  const p = path.join(dir, f); const st = fs.statSync(p);
+  if (age(p) > 7 * DAY || st.size > 100 * 2 ** 20) bad('routine log not rotated (>7 days or >100 MB)', `${p} (${mb(st.size)})`);
+}
+const p0 = 'D:\\PandeshP0Dev';
+for (const n of dirs(p0)) if (age(path.join(p0, n)) > 14 * DAY && !ok(path.join(p0, n))) bad('test-environment folder untouched for 14 days', path.join(p0, n));
+
+let free = '';
+try { free = ['C:\\', 'D:\\', 'E:\\'].filter((r) => fs.existsSync(r)).map((r) => { const s = fs.statfsSync(r); return `${r[0]}: ${(s.bavail * s.bsize / 2 ** 30).toFixed(0)} GB free`; }).join(', '); } catch { /* optional */ }
+console.log(`storage ${mode}: repo ${repo}, branch ${current}, ${wt.length - 1} extra worktrees, ${branches.length} branches; ${free}`);
+if (protectedSeen.length) console.log(`protected user data (not counted, never removed by policy work): ${protectedSeen.join(', ')}`);
 if (violations.length) {
   console.error(`storage ${mode} FAILED (${violations.length}):\n- ${violations.join('\n- ')}`);
   console.error('Clean up, or record a justified exception in .storage-approved. A task is not complete until this passes.');

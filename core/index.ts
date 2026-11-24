@@ -33,6 +33,7 @@ import { createHermesSkillCapabilityAdapter } from './runtime/hermesSkillCapabil
 import { createBotCapabilityAdapter } from './runtime/bots/botCapability';
 import { createPortProcessManager } from './runtime/portManager';
 import { acquireSingleton } from './singleton/acquireSingleton';
+import { sweepTaskWorkspaces } from './runtime/kandev/workspaceSweep';
 import { findForeignLiveOwners } from './singleton/foreignOwners';
 import { watchEventLoopStalls } from './runtime/eventLoopWatch';
 import { writeDiscoveryRecord, removeDiscoveryRecord } from './discovery/record';
@@ -423,6 +424,10 @@ async function main(): Promise<void> {
   } catch (err) {
     redactedLog(`research provenance: retention purge failed: ${err instanceof Error ? err.message : String(err)}`);
   }
+  // Bounded retention of the bridge's private task copies: at start and every hour. Unresolved changes are kept as one patch; running tasks are never touched.
+  const sweepWorkspaces = () => { try { const r = sweepTaskWorkspaces(db, dataDir); if (r.removed.length || r.expiredPatches.length) redactedLog(`task copies: removed ${r.removed.length} (${Math.round(r.bytesFreed / 1048576)} MB), kept ${r.retainedPatches.length} patch(es), expired ${r.expiredPatches.length} old patch(es)`); } catch { /* a database from before the bridge */ } };
+  sweepWorkspaces();
+  setInterval(sweepWorkspaces, 3600_000).unref();
   const bootReconciliation = scanOrphanedAttemptsOnBoot(db);
   // A mission that was running when Core stopped has no runner now: mark it interrupted (it can be continued).
   try { const stopped = interruptRunningMissionsOnBoot(db); if (stopped.length) redactedLog(`boot reconciliation: ${stopped.length} mission(s) were running at shutdown and are now marked interrupted`); } catch { /* a database from before missions */ }
