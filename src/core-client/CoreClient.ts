@@ -501,7 +501,8 @@ export class CoreClient {
   }
 
   async approveDevStoryReview(storyId: string): Promise<{ ok: boolean }> {
-    return this.request(`/v1/dev-stories/${encodeURIComponent(storyId)}/approve-review`, { method: 'POST', body: {} });
+    // Host-only route (Core checks the host token): without it every approval, from the window or the phone, was a 403.
+    return this.requestAsHost(`/v1/dev-stories/${encodeURIComponent(storyId)}/approve-review`, { method: 'POST', body: {} });
   }
 
   /** Verify and integrate the work a stopped worker left in its worktree, without starting a worker. */
