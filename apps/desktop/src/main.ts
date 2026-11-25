@@ -23,7 +23,7 @@ import {
   resolveBuildIdentity,
   type DesktopBuildIdentity,
 } from './host/desktopBuildIdentity';
-import { googleConnectRefusal, isTestProfile, ownsLoginItem, realDesktopDataDirFromOs, readHostPreferences, resolveUiVariant, TEST_PROFILE_GOOGLE_ENV, windowTitleForProfile, writeHostPreferences } from './host/desktopHostPreferences';
+import { googleConnectRefusal, isTestProfile, ownsLoginItem, realDesktopDataDirFromOs, readHostPreferences, TEST_PROFILE_GOOGLE_ENV, windowTitleForProfile, writeHostPreferences } from './host/desktopHostPreferences';
 import { DESKTOP_CHANNELS, type DesktopAppMetadata, type DesktopUpdateStartResult, type DesktopUpdateStatus, type MobilePairingView } from './ipc';
 import {
   acknowledgeUpdateResult, inspectPackage, launchUpdater, quiesceCore, readCoreReadiness, readUpdateResult,
@@ -331,8 +331,6 @@ function syncTrayFromSession(): void {
     openAtLogin: prefs.openAtLogin,
     windowHidden,
     mobileServerStatus: mobileStatus,
-    uiVariant: resolveUiVariant(prefs),
-    uiVariantForced: Boolean(process.env.PANDESH_UI_V2?.trim()),
   });
 }
 
@@ -814,11 +812,8 @@ async function ensureMainWindow(): Promise<BrowserWindow> {
   return window;
 }
 
-/** Classic renderer unless the Phase 2 UI is selected (PANDESH_UI_V2 or the saved preference). */
 function rendererEntry(): string {
-  return resolveUiVariant(prefs) === 'v2'
-    ? path.join(__dirname, '..', 'renderer', 'v2', 'index.html')
-    : path.join(__dirname, '..', 'renderer', 'index.html');
+  return path.join(__dirname, '..', 'renderer', 'v2', 'index.html');
 }
 
 async function createWindow(): Promise<void> {
@@ -853,11 +848,6 @@ async function createWindow(): Promise<void> {
         void shell.openExternal(`http://127.0.0.1:${info.port}/`);
       }
     },
-    setUiVariant: (variant) => {
-      prefs = writeHostPreferences(dataDir, { uiVariant: variant });
-      if (window && !window.isDestroyed()) void window.loadFile(rendererEntry());
-      syncTrayFromSession();
-    },
   }, hostLog);
   const trayInstance = tray.ensure();
   if (!trayInstance) {
@@ -877,7 +867,7 @@ async function createWindow(): Promise<void> {
     onQueueConfirmNotificationClick: (id) => showQueueConfirmFromNotification(id),
     deliverNotification: (input) => deliverOutboxNotification(input),
     // Messages typed in this window may ask the assistant to open places in it (navigate_to).
-    uiSurface: () => resolveUiVariant(prefs),
+    uiSurface: () => 'v2',
     notificationChannel: () => ({
       supported: Notification.isSupported(),
       detail: Notification.isSupported() ? 'Windows desktop notifications (toast)' : 'desktop notifications unsupported on this system',
@@ -1937,17 +1927,6 @@ function registerIpc(): void {
   });
   ipcMain.handle(DESKTOP_CHANNELS.quitApp, () => {
     void shutdownAndQuit();
-  });
-  ipcMain.handle(DESKTOP_CHANNELS.getUiVariant, () => ({
-    variant: resolveUiVariant(prefs),
-    forcedByEnv: Boolean(process.env.PANDESH_UI_V2?.trim()),
-  }));
-  ipcMain.handle(DESKTOP_CHANNELS.setUiVariant, (event, variant: unknown) => {
-    prefs = writeHostPreferences(dataDir, { uiVariant: variant === 'v2' ? 'v2' : 'classic' });
-    // Reload only the window that asked, after the reply is delivered.
-    const target = BrowserWindow.fromWebContents(event.sender);
-    if (target && !target.isDestroyed()) setTimeout(() => { void target.loadFile(rendererEntry()); }, 50);
-    return { variant: resolveUiVariant(prefs), forcedByEnv: Boolean(process.env.PANDESH_UI_V2?.trim()) };
   });
   ipcMain.handle(DESKTOP_CHANNELS.getUpdateStatus, (): DesktopUpdateStatus => {
     const identity = currentBuildIdentity();

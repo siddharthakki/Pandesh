@@ -114,12 +114,7 @@ describe('the assistant names only menus that exist', () => {
     expect(app).toMatch(/if \(tab === 'connections'\) go\('connections'\);/);
     const places = fs.readFileSync(path.join(__dirname, '../renderer-v2/src/placesModel.ts'), 'utf8');
     expect(places).toMatch(/\{ id: 'connections', label: 'Connections', hint: 'Providers, Google, phone' \}/);
-    const classic = fs.readFileSync(path.join(__dirname, '../renderer/index.html'), 'utf8');
-    expect(classic).toContain('<h2 class="integrations-main-title">Connections</h2>');
-    expect(classic).toContain('id="integ-card-google"');
-    expect(classic).toContain('<h3 class="int-card-title">Google Services</h3>');
     expect(GOOGLE_SETUP_WHERE).toBe('Settings (left sidebar) → Connections in the v2 interface, or Connections and settings (left sidebar) → Add / Configure → Google Services in the Classic interface');
-    expect(classic).toContain('data-conn-tab="configure"');
     expect(navigationPromptLines('v2')).toMatch(/Never ask the user to paste a client secret, password, API key or token into the chat/);
     const engine = fs.readFileSync(path.join(__dirname, '../../../core/runtime/piAgentEngine.ts'), 'utf8');
     expect(engine).not.toContain('Google Services');

@@ -40,8 +40,6 @@ export function App() {
   const [labels, setLabels] = useState<boolean>(() => { try { return localStorage.getItem('pandesh.v2.labels') !== '0'; } catch { return true; } });
   const [theme, setTheme] = useState<string>(() => document.documentElement.dataset.theme ?? 'system');
   const opener = useRef<HTMLElement | null>(null);
-  const [variantForced, setVariantForced] = useState(false);
-  useEffect(() => { api.getUiVariant().then((v) => setVariantForced(v.forcedByEnv)).catch(() => setVariantForced(false)); }, []);
 
   const needs = needsYouCount(overview.data?.tasks ?? [], snapshot) + (overview.data?.workers?.length ?? 0);
 
@@ -82,7 +80,6 @@ export function App() {
   const [settingsSection, setSettingsSection] = useState<{ id: SettingsSection; n: number } | null>(null);
   const openSettings = (id: SettingsSection = 'models') => { setSettingsSection({ id, n: Date.now() }); go('settings'); };
   const showPlaceholder = (title: string, text: string) => { setPlaceholder({ title, text }); setView('space'); setPop(null); };
-  const useClassic = async () => { try { await api.setUiVariant('classic'); } catch (err) { alert(errorText(err)); } };
 
   const [space, setSpace] = useState<SpaceId>('projects');
   const go = (v: View) => { setView(v); setPop(null); };
@@ -249,8 +246,7 @@ export function App() {
         {view === 'mailhub' && <MailHub narrow={narrow} initial={mailScreen} onAskPandesh={(t) => { setDraft(t); go('chat'); }} onOpenBots={() => go('bots')} onOpenAutomations={() => go('automations')} />}
         {view === 'tools' && <ToolsHub narrow={narrow} initialTab={toolsTab} onOpenView={go} />}
         {view === 'connections' && <Connections snapshot={snapshot} refresh={refresh} />}
-        {view === 'settings' && <Settings snapshot={snapshot} refresh={refresh} narrow={narrow} initialSection={settingsSection?.id} hideNav theme={theme} setTheme={applyTheme} labels={labels} setLabels={setLabelsTo}
-          variantForced={variantForced} onUseClassic={() => void useClassic()} onGo={(v) => go(v)} />}
+        {view === 'settings' && <Settings snapshot={snapshot} refresh={refresh} narrow={narrow} initialSection={settingsSection?.id} hideNav theme={theme} setTheme={applyTheme} labels={labels} setLabels={setLabelsTo} onGo={(v) => go(v)} />}
         {view === 'brain' && <SecondBrain narrow={narrow} />}
         {view === 'processes' && <Processes narrow={narrow} />}
         {view === 'workspace' && <Workspace space={space} narrow={narrow} onAskPandesh={(t) => { setDraft(t); go('chat'); }} />}
@@ -260,7 +256,6 @@ export function App() {
           <div className="placeholder" role="region" aria-label={placeholder.title}>
             <h1>{placeholder.title}</h1>
             <p>{placeholder.text}</p>
-            <button type="button" className="btn" onClick={() => void useClassic()}>Open the Classic UI</button>{' '}
             <button type="button" className="btn" onClick={() => go('chat')}>Back to chat</button>
           </div>
         )}
