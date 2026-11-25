@@ -177,3 +177,16 @@ describe('runGws', () => {
     expect(result.timedOut).toBe(true);
   }, 10_000);
 });
+
+describe('runGws output cap (an attachment must not be cut inside its JSON)', () => {
+  it('keeps the default 200,000-character cap, and honours a larger one per call', async () => {
+    const { runGws } = await import('../runtime/connectors/gwsTransport');
+    const os = await import('node:os'); const fsx = await import('node:fs'); const pathx = await import('node:path');
+    const cfg = fsx.mkdtempSync(pathx.join(os.tmpdir(), 'gws-cap-'));
+    try {
+      const run = (maxOutputChars?: number) => runGws({ binaryPath: process.execPath, args: ['-e', 'process.stdout.write("x".repeat(300000))'], accessToken: 't', configDir: cfg, ...(maxOutputChars ? { maxOutputChars } : {}) });
+      expect((await run()).stdout.length).toBeLessThan(300000);
+      expect((await run(400000)).stdout.length).toBe(300000);
+    } finally { fsx.rmSync(cfg, { recursive: true, force: true }); }
+  });
+});

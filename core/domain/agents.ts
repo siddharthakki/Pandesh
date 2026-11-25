@@ -472,7 +472,7 @@ export function recordScopeRefusal(db: CoreDatabase, attemptId: string, agentId:
 
 // ---------- delegation ----------
 
-const UNTRUSTED_TOOLS = ['web_research', 'governed_research', 'browser_read', 'inspect_page', 'gmail_search', 'gmail_read_thread', 'gmail_read_attachment', 'document_read', 'document_ocr', 'read_file', 'read_file_outside_workspace'];
+const UNTRUSTED_TOOLS = ['web_research', 'governed_research', 'browser_read', 'inspect_page', 'gmail_search', 'gmail_read_thread', 'gmail_read_attachment', 'gmail_collect_documents', 'document_read', 'document_ocr', 'read_file', 'read_file_outside_workspace'];
 
 /** A brief must be the parent's own restatement: refuse one that copies 120+ characters of untrusted tool output from the parent turn. */
 export function briefCopiesUntrustedContent(db: CoreDatabase, parentAttemptId: string, brief: string): boolean {

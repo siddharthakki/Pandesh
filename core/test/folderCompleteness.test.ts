@@ -90,3 +90,31 @@ describe('FolderReadLedger (C1: task-aware evidence completeness)', () => {
     expect(ledger.unread()).toEqual([]);
   });
 });
+
+describe('a request about another source is not a folder request (production failure 2026-11-25)', () => {
+  it('"Search Gmail for all the invoices" does not make Core list and count the selected folder', () => {
+    for (const q of [
+      'Search Gmail for all Acmes invoices (Rechnungen) from January 2026 onwards.',
+      'please check my Gmail for Acmes and then find the invoices. List at least all the invoices from January.',
+      'Summarize all the invoices in my inbox',
+      'Which of the emails from last week is the most important?',
+      'Compare all the reports on the web about this',
+    ]) expect(requiresWholeFolder(q), q).toBe(false);
+  });
+  it('a request that says folder or directory still is one', () => {
+    for (const q of [
+      'Which of the price lists in this folder is cheapest?',
+      'Compare all the invoices in the folder with the ones in my Gmail',
+      'Summarize all the reports in this directory',
+    ]) expect(requiresWholeFolder(q), q).toBe(true);
+  });
+});
+
+describe('a mail request is not a disk observation (production failure 2026-11-25)', () => {
+  it('"read the PDF of the newest invoice email" is not answered with "nothing was read from the disk"', async () => {
+    const { asksForDiskObservation } = await import('../runtime/assistantStatus');
+    const mail = 'Use gmail_search for the newest invoice email, then call gmail_read_attachment for its invoice PDF and tell me the invoice number, the date and the total amount exactly as printed in the PDF.';
+    expect(asksForDiskObservation(mail)).toBe(false);
+    expect(asksForDiskObservation('How many files are in rw/inbox?')).toBe(true); // a real disk question still is one
+  });
+});

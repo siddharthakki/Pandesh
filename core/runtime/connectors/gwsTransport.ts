@@ -42,6 +42,8 @@ export const GWS_PINNED_SHA256_WINDOWS_X64 = '82ad48dd28564be969174aaef3e3f99816
 
 const DEFAULT_TIMEOUT_MS = 20_000;
 const MAX_OUTPUT_CHARS = 200_000;
+/** An attachment comes back base64url-encoded in one JSON document; Gmail allows 25 MB, which is about 34 million characters. */
+export const ATTACHMENT_MAX_OUTPUT_CHARS = 40_000_000;
 
 /** Env var an operator sets to the absolute path of the staged `gws`
  * executable. Deliberately not a PATH lookup and not a set of well-known
@@ -94,6 +96,8 @@ export interface RunGwsInput {
   configDir: string;
   signal?: AbortSignal;
   timeoutMs?: number;
+  /** Overrides the default 200,000-character cap on stdout (for large base64 payloads). Cut output is never valid JSON, so the cap must fit the payload. */
+  maxOutputChars?: number;
 }
 
 export interface RunGwsResult {
@@ -119,8 +123,8 @@ function buildConstructedEnv(input: { accessToken: string; configDir: string }):
   };
 }
 
-function bound(text: string): string {
-  return text.length > MAX_OUTPUT_CHARS ? `${text.slice(0, MAX_OUTPUT_CHARS)}\n…[truncated]` : text;
+function bound(text: string, limit: number = MAX_OUTPUT_CHARS): string {
+  return text.length > limit ? `${text.slice(0, limit)}\n…[truncated]` : text;
 }
 
 /** Spawns the pinned `gws` binary by absolute path only (never through a
@@ -178,7 +182,7 @@ export function runGws(input: RunGwsInput): Promise<RunGwsResult> {
       settled = true;
       clearTimeout(timer);
       input.signal?.removeEventListener('abort', onAbort);
-      resolve({ ...result, stdout: bound(stdout), stderr: bound(stderr) });
+      resolve({ ...result, stdout: bound(stdout, input.maxOutputChars), stderr: bound(stderr) });
     };
 
     const timer = setTimeout(() => {

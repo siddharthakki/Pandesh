@@ -32,11 +32,13 @@ import { createTask, nextBatch, settleTaskBatch, taskStatus, type GmailTaskStore
 import type { ToolExecutionResult } from '../toolRunner';
 import {
   GWS_PINNED_SHA256_WINDOWS_X64,
+  ATTACHMENT_MAX_OUTPUT_CHARS,
   parseGwsJson,
   resolveGwsBinaryPath,
   runGws,
   verifyPinnedBinary,
 } from './gwsTransport';
+import { documentFacts, documentsTable, keyLines, type DocumentFacts } from './gmailDocumentFacts';
 import { summarizeGmailMessage, summarizeGmailThread, type GmailApiMessage, type GmailApiThread } from './gmailMime';
 import { extractPdfFromBytes } from '../../attachments/documentExtraction';
 import {
@@ -52,7 +54,7 @@ const DEFAULT_LIST_RESULTS = 20;
  * metadata lookups it will perform to build useful (subject/from/snippet)
  * results — Gmail's `messages.list` response carries only IDs, so a search
  * that "shows results" costs one `list` plus up to this many `get` calls. */
-const MAX_METADATA_LOOKUPS = 20;
+const MAX_METADATA_LOOKUPS = MAX_LIST_RESULTS;
 /** Bounded fan-out for Gmail search's per-message metadata lookups: a search
  *  costs one `list` plus up to MAX_METADATA_LOOKUPS independent `get` calls, so
  *  fetch at most this many in parallel instead of strictly one at a time. Kept
@@ -166,7 +168,7 @@ function defaultSleep(ms: number, signal?: AbortSignal): Promise<void> {
 }
 
 /** Retries a call that Google rate-limited, honouring Retry-After, with backoff when none is given. */
-export async function callGws(deps: CallDeps, args: string[], resultCategoryOnFailure: string, options: { allowEmptyOutput?: boolean } = {}): Promise<GwsCallOutcome> {
+export async function callGws(deps: CallDeps, args: string[], resultCategoryOnFailure: string, options: { allowEmptyOutput?: boolean; maxOutputChars?: number; timeoutMs?: number } = {}): Promise<GwsCallOutcome> {
   let outcome = await callGwsOnce(deps, args, resultCategoryOnFailure, options);
   for (let attempt = 1; attempt < RATE_LIMIT_ATTEMPTS && !outcome.ok && RATE_LIMIT_SIGNAL.test(outcome.result.output); attempt += 1) {
     const requested = parseRetryAfterMs(outcome.result.output, Date.now());
@@ -183,14 +185,15 @@ export async function callGws(deps: CallDeps, args: string[], resultCategoryOnFa
   return outcome;
 }
 
-async function callGwsOnce(deps: CallDeps, args: string[], resultCategoryOnFailure: string, options: { allowEmptyOutput?: boolean }): Promise<GwsCallOutcome> {
+async function callGwsOnce(deps: CallDeps, args: string[], resultCategoryOnFailure: string, options: { allowEmptyOutput?: boolean; maxOutputChars?: number; timeoutMs?: number }): Promise<GwsCallOutcome> {
   const result = await deps.runGwsFn({
     binaryPath: deps.binaryPath,
     args,
     accessToken: deps.accessToken,
     configDir: deps.configDir,
     signal: deps.signal,
-    timeoutMs: deps.timeoutMs,
+    timeoutMs: options.timeoutMs ?? deps.timeoutMs,
+    ...(options.maxOutputChars ? { maxOutputChars: options.maxOutputChars } : {}),
   });
   if (result.aborted) {
     return { ok: false, result: { status: 'failed', exitCode: null, output: 'cancelled', resultCategory: 'gws_cancelled' } };
@@ -300,6 +303,22 @@ function splitAddressList(headerValue: string): string[] {
     .filter((s) => s.length > 0);
 }
 
+/**
+ * Gmail matches whole words, so "Acme" never finds "Acmes" and the reverse. When a search finds nothing, these are the queries that
+ * differ from it by the singular or plural form of ONE plain word (a word with no operator, quote, digit or other punctuation).
+ * Nothing about a particular name is known here; the original query always runs first and its result is reported as given.
+ */
+export function wordFormVariants(query: string): string[] {
+  const parts = query.split(/(\s+)/);
+  const variants: string[] = [];
+  parts.forEach((part, i) => {
+    if (!/^[\p{L}]{4,}$/u.test(part) || /^(?:and|or|not|from|to|cc|bcc|subject|after|before|label|is|has|in)$/i.test(part)) return;
+    const alt = /s$/i.test(part) ? (/ss$/i.test(part) ? null : part.slice(0, -1)) : `${part}s`;
+    if (alt) variants.push(parts.map((p, j) => (j === i ? alt : p)).join(''));
+  });
+  return variants.slice(0, 4);
+}
+
 async function runGmailSearch(args: Record<string, unknown>, deps: CallDeps): Promise<ToolExecutionResult> {
   const requested = Number(args.maxResults);
   const maxResults = Number.isFinite(requested) && requested > 0
@@ -308,19 +327,33 @@ async function runGmailSearch(args: Record<string, unknown>, deps: CallDeps): Pr
   const params: Record<string, unknown> = { userId: 'me', maxResults };
   const query = trimmedNonEmptyString(args.query);
   if (query) params.q = query;
+  const pageToken = trimmedNonEmptyString(args.pageToken);
+  const includeAttachments = args.includeAttachments === true;
+  if (pageToken) params.pageToken = pageToken;
 
+  type ListData = { messages?: Array<{ id?: string; threadId?: string }>; resultSizeEstimate?: number; nextPageToken?: string } | null;
   const listOutcome = await callGws(deps, ['gmail', 'users', 'messages', 'list', '--params', JSON.stringify(params)], 'gmail_search_failed');
   if (!listOutcome.ok) return listOutcome.result;
-  const listData = listOutcome.data as { messages?: Array<{ id?: string; threadId?: string }>; resultSizeEstimate?: number; nextPageToken?: string } | null;
-  const stubs = (listData?.messages ?? []).filter((m) => typeof m.id === 'string');
+  let listData = listOutcome.data as ListData;
+  let stubs = (listData?.messages ?? []).filter((m) => typeof m.id === 'string');
+  // Nothing found for the words as written: try the other singular/plural form of one word at a time, and say so.
+  let retriedWith: string | null = null;
+  if (!stubs.length && query && !pageToken) {
+    for (const variant of wordFormVariants(query)) {
+      const retry = await callGws(deps, ['gmail', 'users', 'messages', 'list', '--params', JSON.stringify({ ...params, q: variant })], 'gmail_search_failed');
+      if (!retry.ok) continue;
+      const retryData = retry.data as ListData;
+      const retryStubs = (retryData?.messages ?? []).filter((m) => typeof m.id === 'string');
+      if (retryStubs.length) { listData = retryData; stubs = retryStubs; retriedWith = variant; break; }
+    }
+  }
 
   const lookups = stubs.slice(0, MAX_METADATA_LOOKUPS);
   const resolved = await mapWithConcurrency(lookups, MAX_METADATA_CONCURRENCY, async (stub) => {
     const getParams = {
       userId: 'me',
       id: stub.id,
-      format: 'metadata',
-      metadataHeaders: ['Subject', 'From', 'Date'],
+      ...(includeAttachments ? { format: 'full' } : { format: 'metadata', metadataHeaders: ['Subject', 'From', 'Date'] }),
     };
     const outcome = await callGws(deps, ['gmail', 'users', 'messages', 'get', '--params', JSON.stringify(getParams)], 'gmail_search_metadata_failed');
     if (!outcome.ok) return null; // a failed lookup leaves no slot; it is counted and reported below
@@ -336,6 +369,8 @@ async function runGmailSearch(args: Record<string, unknown>, deps: CallDeps): Pr
       snippet: summary.snippet,
       // Gmail's own labels (INBOX, UNREAD, STARRED, CATEGORY_PROMOTIONS…) let a briefing triage without guessing.
       labels: Array.isArray((outcome.data as GmailApiMessage).labelIds) ? (outcome.data as GmailApiMessage).labelIds! : [],
+      // Only when asked for: each attachment's id, name, type and size, ready for gmail_read_attachment with this message's id.
+      ...(includeAttachments ? { attachments: summary.attachments.map((a) => ({ id: a.id, filename: a.filename, mimeType: a.mimeType, size: a.size })) } : {}),
     };
   });
   // Keep the user-facing list in the same order as the `list` returned; drop the
@@ -361,10 +396,12 @@ async function runGmailSearch(args: Record<string, unknown>, deps: CallDeps): Pr
     }
   }
   const counts = { matched, matchedIsExact, listed, shown: results.length, failedLookups, timeZone: deps.timeZone };
-  const note = results.length === matched
+  const nextPageToken = typeof listData?.nextPageToken === 'string' ? listData.nextPageToken : undefined;
+  const retryNote = retriedWith ? `No message matched "${query}"; these match "${retriedWith}" (the other singular/plural form). Tell the user which spelling matched. ` : '';
+  const note = retryNote + (results.length === matched && !pageToken
     ? `All ${matched} matching message(s) are shown.`
-    : `Showing ${results.length} of ${matchedIsExact ? matched : `about ${matched}`} matching message(s)${failedLookups ? `; ${failedLookups} could not be loaded` : ''}${moreAvailable ? '; more exist beyond this page' : ''}. State both numbers; do not present the shown count as the total.`;
-  return succeeded('gmail_search_succeeded', { results, truncated: moreAvailable || listed > lookups.length, counts, note });
+    : `Showing ${results.length} of ${matchedIsExact ? matched : `about ${matched}`} matching message(s)${failedLookups ? `; ${failedLookups} could not be loaded` : ''}${moreAvailable ? '; more exist: call gmail_search again with the same query and pageToken set to nextPageToken until nextPageToken is absent' : ''}. State both numbers; do not present the shown count as the total.`);
+  return succeeded('gmail_search_succeeded', { results, truncated: moreAvailable || listed > lookups.length, counts, ...(nextPageToken ? { nextPageToken } : {}), ...(retriedWith ? { retriedWith } : {}), note });
 }
 
 async function runGmailReadThread(args: Record<string, unknown>, deps: CallDeps): Promise<ToolExecutionResult> {
@@ -381,7 +418,7 @@ async function runGmailReadAttachment(args: Record<string, unknown>, deps: CallD
   const messageId = trimmedNonEmptyString(args.messageId);
   const attachmentId = trimmedNonEmptyString(args.attachmentId);
   if (!messageId || !attachmentId) {
-    return invalidArgs('gmail_read_attachment: "messageId" and "attachmentId" are required');
+    return invalidArgs('gmail_read_attachment: "messageId" (the id of the message, from gmail_read_thread messages[].id, not the threadId) and "attachmentId" (messages[].attachments[].id) are both required');
   }
   const filename = trimmedNonEmptyString(args.filename) || 'attachment';
   let mimeType = trimmedNonEmptyString(args.mimeType) || '';
@@ -390,7 +427,7 @@ async function runGmailReadAttachment(args: Record<string, unknown>, deps: CallD
   }
 
   const params = { userId: 'me', messageId, id: attachmentId };
-  const outcome = await callGws(deps, ['gmail', 'users', 'messages', 'attachments', 'get', '--params', JSON.stringify(params)], 'gmail_read_attachment_failed');
+  const outcome = await callGws(deps, ['gmail', 'users', 'messages', 'attachments', 'get', '--params', JSON.stringify(params)], 'gmail_read_attachment_failed', { maxOutputChars: ATTACHMENT_MAX_OUTPUT_CHARS, timeoutMs: 60_000 });
   if (!outcome.ok) return outcome.result;
 
   const data = outcome.data as { size?: number; data?: string } | null;
@@ -472,6 +509,17 @@ async function runGmailReadAttachment(args: Record<string, unknown>, deps: CallD
     });
   }
 
+  const printedLines = extractedText ? keyLines(extractedText) : []; // from the whole text, before the middle is cut for the model
+  const requestedChars = Number(args.maxChars);
+  const limit = Number.isFinite(requestedChars) && requestedChars >= 1_000 ? Math.min(Math.floor(requestedChars), 50_000) : 12_000;
+  const textChars = extractedText?.length ?? 0;
+  if (extractedText && textChars > limit) {
+    const head = Math.floor(limit * 0.65);
+    extractedText = `${extractedText.slice(0, head)}
+…[${textChars - limit} characters omitted from the middle; call again with a larger maxChars to read more]…
+${extractedText.slice(textChars - (limit - head))}`;
+    truncated = true;
+  }
   return succeeded('gmail_read_attachment_succeeded', {
     messageId,
     attachmentId,
@@ -479,9 +527,81 @@ async function runGmailReadAttachment(args: Record<string, unknown>, deps: CallD
     mimeType,
     size: buffer.length,
     pageCount,
+    textChars,
+    // The printed lines that carry labels, dates and amounts: what to quote for an invoice, without the whole document.
+    keyLines: printedLines,
     extractedText,
     truncated,
     status: 'extracted',
+  });
+}
+
+/** Most messages one collect call pages through, and most documents it reads: bounded, and the coverage line says when either bound was hit. */
+const COLLECT_MAX_MESSAGES = 200;
+const COLLECT_MAX_DOCUMENTS = 100;
+const COLLECT_READ_CONCURRENCY = 3;
+
+/**
+ * Every document attached to the mail a query finds, read locally: pages through the search until it ends, reads each PDF or text
+ * attachment, and returns for each one the printed number, date and total with the lines they came from, plus a coverage line.
+ * It is the same two read-only calls the model could make one by one (gmail_search, gmail_read_attachment), run to completion
+ * so that "all my invoices" does not depend on the model remembering to turn every page and open every file.
+ */
+async function runGmailCollectDocuments(args: Record<string, unknown>, deps: CallDeps): Promise<ToolExecutionResult> {
+  const query = trimmedNonEmptyString(args.query);
+  if (!query) return invalidArgs('gmail_collect_documents: "query" is required, e.g. "Rechnung after:2026/01/01 has:attachment"');
+  const requestedMax = Number(args.maxDocuments);
+  const maxDocuments = Number.isFinite(requestedMax) && requestedMax > 0 ? Math.min(Math.floor(requestedMax), COLLECT_MAX_DOCUMENTS) : COLLECT_MAX_DOCUMENTS;
+
+  type Hit = { id: string; threadId: string; subject: string; from: string; receivedAt: string | null; receivedLocal: string | null; attachments?: Array<{ id: string; filename: string; mimeType: string; size: number }> };
+  const hits: Hit[] = [];
+  let pageToken: string | undefined;
+  let pages = 0;
+  let retriedWith: string | null = null;
+  let effectiveQuery = query;
+  let moreExists = false;
+  do {
+    const page = await runGmailSearch({ query: effectiveQuery, maxResults: 50, includeAttachments: true, ...(pageToken ? { pageToken } : {}) }, deps);
+    if (page.status !== 'succeeded') return page;
+    const data = JSON.parse(page.output) as { results: Hit[]; nextPageToken?: string; retriedWith?: string };
+    pages += 1;
+    hits.push(...data.results);
+    // The search found nothing as written but matched in its other spelling: every later page is asked with that one.
+    if (data.retriedWith && !retriedWith) { retriedWith = data.retriedWith; effectiveQuery = data.retriedWith; }
+    pageToken = data.nextPageToken;
+    moreExists = Boolean(pageToken) && hits.length >= COLLECT_MAX_MESSAGES;
+  } while (pageToken && hits.length < COLLECT_MAX_MESSAGES);
+
+  const readable = (a: { mimeType: string; filename: string }) => /pdf|text\//i.test(a.mimeType) || /\.(?:pdf|txt|csv)$/i.test(a.filename);
+  const jobs = hits.flatMap((h) => (h.attachments ?? []).filter(readable).map((a) => ({ hit: h, attachment: a })));
+  const withAttachments = new Set(jobs.map((j) => j.hit.id)).size;
+  const selected = jobs.slice(0, maxDocuments);
+  const documents = await mapWithConcurrency(selected, COLLECT_READ_CONCURRENCY, async ({ hit, attachment }) => {
+    const read = await runGmailReadAttachment({ messageId: hit.id, attachmentId: attachment.id, filename: attachment.filename, mimeType: attachment.mimeType, maxChars: 50_000 }, deps);
+    const base = { messageId: hit.id, attachmentId: attachment.id, subject: hit.subject, from: hit.from, receivedAt: hit.receivedAt, receivedLocal: hit.receivedLocal, filename: attachment.filename };
+    if (read.status !== 'succeeded') return { ...base, status: 'read_failed', error: read.output.slice(0, 200), facts: null as DocumentFacts | null, keyLines: [] as string[] };
+    const body = JSON.parse(read.output) as { extractedText: string | null; status: string };
+    if (!body.extractedText) return { ...base, status: body.status, facts: null as DocumentFacts | null, keyLines: [] as string[] };
+    return { ...base, status: 'read', facts: documentFacts(body.extractedText), keyLines: keyLines(body.extractedText, 12) };
+  });
+  documents.sort((a, b) => String(a.receivedAt ?? '').localeCompare(String(b.receivedAt ?? '')));
+  const readCount = documents.filter((d) => d.status === 'read').length;
+  const coverage = {
+    pagesFetched: pages,
+    messagesFound: hits.length,
+    messagesWithReadableAttachments: withAttachments,
+    documentsRead: readCount,
+    documentsNotRead: documents.length - readCount,
+    documentsSkippedByLimit: jobs.length - selected.length,
+    complete: !moreExists && jobs.length === selected.length && documents.length === readCount,
+  };
+  const note = coverage.complete
+    ? `All ${hits.length} message(s) matching the query were listed and all ${readCount} attachment(s) were read.`
+    : `Not complete: ${[moreExists ? `the query has more than ${COLLECT_MAX_MESSAGES} messages (narrow it, for example with a date range)` : '', coverage.documentsSkippedByLimit ? `${coverage.documentsSkippedByLimit} attachment(s) were not opened because of the ${maxDocuments}-document limit` : '', coverage.documentsNotRead ? `${coverage.documentsNotRead} attachment(s) could not be read (see status)` : ''].filter(Boolean).join('; ')}. Say so.`;
+  return succeeded('gmail_collect_documents_succeeded', {
+    query, ...(retriedWith ? { retriedWith } : {}), coverage, note,
+    table: documentsTable(documents.map((d) => ({ receivedLocal: d.receivedLocal, subject: d.subject, filename: d.filename, facts: d.facts, status: d.status, messageId: d.messageId }))),
+    documents,
   });
 }
 
@@ -637,7 +757,7 @@ export function createGwsGmailProbe(config: GwsGmailAdapterConfig): ConnectorPro
   };
 }
 
-const GMAIL_TOOL_NAMES = new Set(['gmail_search', 'gmail_read_thread', 'gmail_read_attachment', 'gmail_create_draft', 'gmail_send_draft', 'gmail_analyze_inbox', 'gmail_plan_changes', 'gmail_apply_plan', 'gmail_undo_plan', 'gmail_create_task', 'gmail_task_next_batch', 'gmail_task_status']);
+const GMAIL_TOOL_NAMES = new Set(['gmail_search', 'gmail_read_thread', 'gmail_read_attachment', 'gmail_collect_documents', 'gmail_create_draft', 'gmail_send_draft', 'gmail_analyze_inbox', 'gmail_plan_changes', 'gmail_apply_plan', 'gmail_undo_plan', 'gmail_create_task', 'gmail_task_next_batch', 'gmail_task_status']);
 
 function organizeEnv(config: GwsGmailAdapterConfig, deps: CallDeps, accountEmail: string): OrganizeEnv {
   return {
@@ -700,6 +820,8 @@ export function createGwsGmailExecutor(config: GwsGmailAdapterConfig): Connector
           return await runGmailReadThread(args, deps);
         case 'gmail_read_attachment':
           return await runGmailReadAttachment(args, deps);
+        case 'gmail_collect_documents':
+          return await runGmailCollectDocuments(args, deps);
         case 'gmail_create_draft':
           return await runGmailCreateDraft(args, deps, accountEmail, config.bindings);
         case 'gmail_send_draft':

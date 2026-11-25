@@ -9,6 +9,7 @@ import type { CoreDatabase } from '../db/connection';
 import { describeNotifications, notificationReport } from '../domain/notificationOutbox';
 import { pathTokens } from './fsMention';
 import { namedDiskTargets } from './diskObservation';
+import { namesAnotherSource } from './folderCompleteness';
 import { progressOf, taskState, type GmailOrganizeTask } from './connectors/gmailTask';
 
 export type StatusTopic = 'notifications' | 'gmail' | 'tasks' | 'reminders';
@@ -50,6 +51,8 @@ export function isAboutFilesystem(text: string): boolean {
 export function asksForDiskObservation(text: string): boolean {
   const t = String(text || '').trim();
   if (!t || t.length > 300 || !isAboutFilesystem(t) || namedDiskTargets(t).length === 0) return false;
+  // "Read the PDF attached to the newest invoice email" is about mail: a Gmail attachment is not read from the disk, so no disk read can be required.
+  if (namesAnotherSource(t)) return false;
   // A question about which models or providers can be used for a folder task is about configuration, not about the disk.
   if (/\b(?:providers?|api[- ]?keys?|models?)\b/i.test(t) && /\b(?:can you use|configured|verified|authori[sz]ed|available to you)\b/i.test(t)) return false;
   if (/\b(?:create|write|save|move|copy|delete|remove|rename|organi[sz]e|sort|clean|install|run|build|fix|edit|change|add|make|zip|upload)\b/i.test(withoutQuoted(t))) return false;

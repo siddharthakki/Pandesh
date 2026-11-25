@@ -15,12 +15,13 @@ import {
   createGwsGmailExecutor,
   createGwsGmailProbe,
   MAX_METADATA_CONCURRENCY,
+  wordFormVariants,
   type GwsGmailAdapterConfig,
   type GwsGmailDraftBindingStore,
   type StoredGmailDraftBinding,
 } from '../runtime/connectors/gwsGmailAdapter';
 import { computeGmailDraftDigest, type GmailDraftContent } from '../runtime/connectors/gmailDraftDigest';
-import type { RunGwsResult } from '../runtime/connectors/gwsTransport';
+import { ATTACHMENT_MAX_OUTPUT_CHARS, type RunGwsResult } from '../runtime/connectors/gwsTransport';
 import type { ToolExecutionContext } from '../runtime/toolRunner';
 
 let dir: string;
@@ -581,5 +582,153 @@ describe('createGwsGmailProbe', () => {
     const result = await probe(new AbortController().signal);
     expect(result.ok).toBe(false);
     expect(result.reason).toMatch(/authError/);
+  });
+});
+
+describe('gmail_search covers everything the user asked for (production failure 2026-11-25)', () => {
+  const metadata = (id: string) => JSON.stringify({ id, threadId: id, snippet: 's', internalDate: '1767225600000', labelIds: ['INBOX'], payload: { headers: [{ name: 'Subject', value: `Rechnung ${id}` }, { name: 'From', value: 'billing@example.com' }, { name: 'Date', value: 'Thu, 1 Jan 2026 10:00:00 +0100' }] } });
+  const searchRunner = (listQueries: string[], respond: (q: string | undefined, pageToken: string | undefined) => { ids: string[]; next?: string }) => async (input: { args: string[] }): Promise<RunGwsResult> => {
+    const params = JSON.parse(input.args[input.args.indexOf('--params') + 1]);
+    if (input.args.includes('list')) {
+      listQueries.push(`${params.q ?? ''}|${params.pageToken ?? ''}`);
+      const r = respond(params.q, params.pageToken);
+      return { exitCode: 0, stdout: JSON.stringify({ messages: r.ids.map((id) => ({ id, threadId: id })), resultSizeEstimate: 120, ...(r.next ? { nextPageToken: r.next } : {}) }), stderr: '', timedOut: false, aborted: false };
+    }
+    return { exitCode: 0, stdout: metadata(params.id), stderr: '', timedOut: false, aborted: false };
+  };
+  const ready = () => { accessToken = 'token'; accountEmail = 'me@example.com'; };
+
+  it('passes the page token on and returns nextPageToken, with metadata for the whole page', async () => {
+    ready();
+    const queries: string[] = [];
+    const ids = Array.from({ length: 50 }, (_, i) => `m${i}`);
+    const executor = createGwsGmailExecutor(baseConfig({ runGwsFn: searchRunner(queries, (_q, token) => (token ? { ids: ['z1', 'z2'] } : { ids, next: 'PAGE2' })) as never }));
+    const first = JSON.parse((await executor('gmail_search', { query: 'Rechnung after:2026/01/01', maxResults: 50 }, ctx)).output);
+    expect(first.results).toHaveLength(50); // not just the first 20
+    expect(first.nextPageToken).toBe('PAGE2');
+    expect(first.note).toContain('pageToken');
+    const second = JSON.parse((await executor('gmail_search', { query: 'Rechnung after:2026/01/01', maxResults: 50, pageToken: 'PAGE2' }, ctx)).output);
+    expect(second.results.map((r: { id: string }) => r.id)).toEqual(['z1', 'z2']);
+    expect(second.nextPageToken).toBeUndefined();
+    expect(queries).toEqual(['Rechnung after:2026/01/01|', 'Rechnung after:2026/01/01|PAGE2']);
+  });
+
+  it('keeps the words as written, and only when nothing matches tries the other singular/plural form, saying so', async () => {
+    ready();
+    const queries: string[] = [];
+    const executor = createGwsGmailExecutor(baseConfig({ runGwsFn: searchRunner(queries, (q) => (q === 'Acmes Rechnung' ? { ids: ['a1'] } : { ids: [] })) as never }));
+    const out = JSON.parse((await executor('gmail_search', { query: 'Acme Rechnung' }, ctx)).output);
+    expect(queries[0]).toBe('Acme Rechnung|'); // the original query always runs first, unchanged
+    expect(out.retriedWith).toBe('Acmes Rechnung');
+    expect(out.results).toHaveLength(1);
+    expect(out.note).toContain('Tell the user which spelling matched');
+    const exact = JSON.parse((await createGwsGmailExecutor(baseConfig({ runGwsFn: searchRunner([], () => ({ ids: ['x'] })) as never }))('gmail_search', { query: 'Acme' }, ctx)).output);
+    expect(exact.retriedWith).toBeUndefined(); // a query that matched is never rewritten
+  });
+
+  it('wordFormVariants toggles one plain word at a time and leaves operators, dates and short words alone', () => {
+    expect(wordFormVariants('Acme Rechnung')).toEqual(['Acmes Rechnung', 'Acme Rechnungs']);
+    expect(wordFormVariants('Acmes')).toEqual(['Acme']);
+    expect(wordFormVariants('from:bob@example.com after:2026/01/01 "exact phrase" is:unread')).toEqual([]);
+    expect(wordFormVariants('glass')).toEqual([]); // "ss" is not a plural
+  });
+
+  it('reads a large attachment: the output cap is raised so the base64 JSON is not cut in the middle', async () => {
+    ready();
+    let seenCap: number | undefined;
+    const data = Buffer.from('Rechnung Nr. 4711\nGesamtbetrag 119,00 EUR', 'utf8').toString('base64url');
+    const executor = createGwsGmailExecutor(baseConfig({ runGwsFn: (async (input: { maxOutputChars?: number }) => { seenCap = input.maxOutputChars; return { exitCode: 0, stdout: JSON.stringify({ size: 40, data }), stderr: '', timedOut: false, aborted: false }; }) as never }));
+    const out = JSON.parse((await executor('gmail_read_attachment', { messageId: 'm1', attachmentId: 'a1', filename: 'r.txt', mimeType: 'text/plain' }, ctx)).output);
+    expect(seenCap).toBe(ATTACHMENT_MAX_OUTPUT_CHARS);
+    expect(out.extractedText).toContain('Rechnung Nr. 4711');
+  });
+
+  it('says where to get the ids when the message id is missing', async () => {
+    ready();
+    const executor = createGwsGmailExecutor(baseConfig({ runGwsFn: stubRunGws({}) }));
+    const r = await executor('gmail_read_attachment', { attachmentId: 'a1' }, ctx);
+    expect(r.status).toBe('failed');
+    expect(r.output).toContain('messages[].id');
+  });
+});
+
+describe('documents without a thread read per message (invoices, contracts)', () => {
+  it('includeAttachments lists each hit\'s attachments, and a long attachment keeps its start and its end', async () => {
+    accessToken = 'token'; accountEmail = 'me@example.com';
+    const formats: string[] = [];
+    const long = `Rechnung Nr. 4711\n${'Position 1 Beschreibung. '.repeat(1500)}\nGesamtbetrag 119,00 EUR`;
+    const executor = createGwsGmailExecutor(baseConfig({ runGwsFn: (async (input: { args: string[] }) => {
+      const params = JSON.parse(input.args[input.args.indexOf('--params') + 1]);
+      if (input.args.includes('attachments')) return { exitCode: 0, stdout: JSON.stringify({ size: long.length, data: Buffer.from(long).toString('base64url') }), stderr: '', timedOut: false, aborted: false };
+      if (input.args.includes('list')) return { exitCode: 0, stdout: JSON.stringify({ messages: [{ id: 'm1', threadId: 't1' }] }), stderr: '', timedOut: false, aborted: false };
+      formats.push(params.format);
+      return { exitCode: 0, stdout: JSON.stringify({ id: 'm1', threadId: 't1', internalDate: '1767225600000', payload: { headers: [{ name: 'Subject', value: 'Ihre Rechnung' }], mimeType: 'multipart/mixed', parts: [{ mimeType: 'text/plain', body: { data: Buffer.from('Hallo').toString('base64url') } }, { filename: 'rechnung.txt', mimeType: 'text/plain', body: { attachmentId: 'att1', size: long.length } }] } }), stderr: '', timedOut: false, aborted: false };
+    }) as never }));
+    const found = JSON.parse((await executor('gmail_search', { query: 'Rechnung has:attachment', includeAttachments: true }, ctx)).output);
+    expect(formats).toEqual(['full']);
+    expect(found.results[0].attachments).toEqual([{ id: 'att1', filename: 'rechnung.txt', mimeType: 'text/plain', size: long.length }]);
+    const plain = JSON.parse((await executor('gmail_search', { query: 'Rechnung' }, ctx)).output);
+    expect(plain.results[0].attachments).toBeUndefined(); // off unless asked for
+    const read = JSON.parse((await executor('gmail_read_attachment', { messageId: 'm1', attachmentId: 'att1', filename: 'rechnung.txt', mimeType: 'text/plain' }, ctx)).output);
+    expect(read.textChars).toBe(long.length);
+    expect(read.extractedText.length).toBeLessThan(13_000);
+    expect(read.extractedText).toContain('Rechnung Nr. 4711');
+    expect(read.extractedText).toContain('Gesamtbetrag 119,00 EUR'); // the total at the end survives
+    expect(read.truncated).toBe(true);
+  });
+});
+
+describe('gmail_collect_documents lists every document, with sources and an honest coverage line', () => {
+  const invoice = (n: number) => `Rechnungsnummer: RE-${n}\nRechnungsdatum: 0${n}.01.2026\nGesamtbetrag ${n}0,00 €`;
+  const runner = (opts: { failAttachment?: string } = {}) => (async (input: { args: string[] }) => {
+    const params = JSON.parse(input.args[input.args.indexOf('--params') + 1]);
+    const ok = (o: unknown) => ({ exitCode: 0, stdout: JSON.stringify(o), stderr: '', timedOut: false, aborted: false });
+    if (input.args.includes('attachments')) {
+      if (params.id === opts.failAttachment) return { exitCode: 1, stdout: '', stderr: 'boom', timedOut: false, aborted: false };
+      return ok({ size: 50, data: Buffer.from(invoice(Number(String(params.id).replace(/[^0-9]/g, '')))).toString('base64url') });
+    }
+    if (input.args.includes('list')) {
+      if (params.q === 'Acme Rechnung') return ok({ messages: [] });
+      return params.pageToken ? ok({ messages: [{ id: 'm3', threadId: 'm3' }] }) : ok({ messages: [{ id: 'm1', threadId: 'm1' }, { id: 'm2', threadId: 'm2' }], nextPageToken: 'P2' });
+    }
+    return ok({ id: params.id, threadId: params.id, internalDate: String(1767225600000 + Number(String(params.id).slice(1)) * 86400000), payload: { headers: [{ name: 'Subject', value: `Ihre Rechnung ${params.id}` }], mimeType: 'multipart/mixed', parts: [{ filename: `${params.id}.txt`, mimeType: 'text/plain', body: { attachmentId: `a-${params.id}`, size: 50 } }] } });
+  }) as never;
+  const ready = () => { accessToken = 'token'; accountEmail = 'me@example.com'; };
+
+  it('follows every page, reads every attachment, and returns number, date, total, source ids and complete coverage', async () => {
+    ready();
+    const executor = createGwsGmailExecutor(baseConfig({ runGwsFn: runner() }));
+    const out = JSON.parse((await executor('gmail_collect_documents', { query: 'Rechnung after:2026/01/01 has:attachment' }, ctx)).output);
+    expect(out.coverage).toMatchObject({ pagesFetched: 2, messagesFound: 3, documentsRead: 3, documentsNotRead: 0, complete: true });
+    expect(out.documents.map((d: { facts: { number: string } }) => d.facts.number).sort()).toEqual(['RE-1', 'RE-2', 'RE-3']);
+    expect(out.documents[0]).toMatchObject({ messageId: expect.any(String), attachmentId: expect.stringMatching(/^a-m/), status: 'read' });
+    expect(out.table).toContain('RE-2');
+    expect(out.table).toContain('20,00 €');
+    expect(out.note).toContain('All 3 message(s)');
+  });
+
+  it('says it is not complete when an attachment cannot be read, and keeps the others', async () => {
+    ready();
+    const executor = createGwsGmailExecutor(baseConfig({ runGwsFn: runner({ failAttachment: 'a-m2' }) }));
+    const out = JSON.parse((await executor('gmail_collect_documents', { query: 'Rechnung' }, ctx)).output);
+    expect(out.coverage).toMatchObject({ documentsRead: 2, documentsNotRead: 1, complete: false });
+    expect(out.documents.find((d: { messageId: string }) => d.messageId === 'm2').status).toBe('read_failed');
+    expect(out.note).toContain('Not complete');
+  });
+
+  it('asks every later page with the spelling that matched', async () => {
+    ready();
+    const queries: string[] = [];
+    const base = runner();
+    const executor = createGwsGmailExecutor(baseConfig({ runGwsFn: (async (input: { args: string[] }) => { const p = JSON.parse(input.args[input.args.indexOf('--params') + 1]); if (input.args.includes('list')) queries.push(`${p.q}|${p.pageToken ?? ''}`); return (base as (i: unknown) => Promise<unknown>)(input); }) as never }));
+    const out = JSON.parse((await executor('gmail_collect_documents', { query: 'Acme Rechnung' }, ctx)).output);
+    expect(out.retriedWith).toBe('Acmes Rechnung');
+    expect(queries).toEqual(['Acme Rechnung|', 'Acmes Rechnung|', 'Acmes Rechnung|P2']);
+  });
+
+  it('requires a query', async () => {
+    ready();
+    const r = await createGwsGmailExecutor(baseConfig({ runGwsFn: runner() }))('gmail_collect_documents', {}, ctx);
+    expect(r.status).toBe('failed');
   });
 });
