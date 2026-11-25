@@ -36,6 +36,24 @@ export function missionRoster(db: CoreDatabase, knownToolNames?: readonly string
     });
 }
 
+/**
+ * Found live (2026-11-25): a request to sort the Gmail inbox became a mission whose two steps both went to the Reviewer,
+ * which has read-only tools and no Gmail tools; the steps could not run and nothing changed. Sorting the mailbox
+ * (gmail_plan_changes, then gmail_apply_plan with its approval card) belongs to the lead's own chat turn, so a step whose
+ * brief needs those tools is refused for any specialist that does not hold them. Null = fine.
+ */
+const MAILBOX_SORT_TOOLS = ['gmail_plan_changes', 'gmail_apply_plan'];
+const MAILBOX_SORT_INTENT = /\b(?:gmail|inbox|mailbox)\b[^.\n]{0,80}\b(?:sort|organi[sz]e|clean(?:\s?up)?|archive|label|declutter|filter)\w*|\b(?:sort|organi[sz]e|clean(?:\s?up)?|archive|label|declutter)\w*\b[^.\n]{0,80}\b(?:gmail|inbox|mailbox)\b/i;
+
+export function mailboxSortStepRefusal(brief: string, agentTools: readonly string[]): string | null {
+  const names = MAILBOX_SORT_TOOLS.filter((t) => new RegExp(`\\b${t}\\b`).test(brief));
+  const needs = names.length > 0 || MAILBOX_SORT_INTENT.test(brief);
+  if (!needs) return null;
+  const holds = (tool: string) => agentTools.some((p) => (p.endsWith('*') ? tool.startsWith(p.slice(0, -1)) : p === tool));
+  if (MAILBOX_SORT_TOOLS.some(holds)) return null;
+  return 'sorting the mailbox needs the Gmail preview and apply tools (gmail_plan_changes, gmail_apply_plan), which no specialist has; the lead does it in this chat instead, with the plan shown to the user for approval before anything changes';
+}
+
 function rosterText(roster: RosterEntry[]): string {
   return roster.filter((r) => r.ready).map((r) => `${r.id}: ${r.role}${r.online ? ' [may go online, with the user\'s OK]' : ' [local only]'}`).join('; ');
 }
@@ -242,7 +260,7 @@ export function buildMissionTools(deps: MissionToolDeps): Array<{ name: string; 
         const agent = usable.get(agentId);
         if (!agent) return text(`NOT DONE: step ${i + 1} names the agent "${agentId}", which does not exist or is turned off. Available: ${[...usable.keys()].join(', ')}. Call mission_start again with a valid plan.`, true);
         const brief = String(s.brief ?? '').trim();
-        const refusal = deps.checkStep(agentId, brief);
+        const refusal = mailboxSortStepRefusal(`${brief} ${String(s.title ?? '')}`, agent.tools) ?? deps.checkStep(agentId, brief);
         if (refusal) return text(`NOT DONE (refused by Pandesh Core before anything started): step ${i + 1} for the ${agent.name} agent: ${refusal}. Nothing was started. Tell the user exactly that; fix the plan only if the refusal says how.`, true);
         steps.push({ agentId, title: String(s.title ?? '').trim() || `${agent.name} step`, brief, kind: agentId === 'reviewer' ? 'review' : 'work', parallel: s.parallel === true });
       }
