@@ -14,8 +14,9 @@ and keep the final say over every file, command and web request.
 ![Platform: Windows 10 | 11](https://img.shields.io/badge/platform-Windows%2010%20%7C%2011-0078d4.svg)
 ![Models: local via Ollama](https://img.shields.io/badge/models-local%20via%20Ollama-1f2937.svg)
 ![Status: supervised alpha](https://img.shields.io/badge/status-supervised%20alpha-c27b1a.svg)
+[![Release: Build 188](https://img.shields.io/badge/release-Build%20188-2f8f7c.svg)](https://github.com/siddharthakki/Pandesh/releases/tag/v0.1.8-build188)
 
-**[Quick start](#-quick-start)** · **[How it works](#-how-it-works)** · **[Features](#-what-it-does-today)** · **[Safety](#-safety-you-can-check)** · **[Roadmap](docs/ROADMAP.md)** · **[Discussions](https://github.com/siddharthakki/Pandesh/discussions)**
+**[Download](#%EF%B8%8F-download)** · **[What's new](#-whats-new-in-build-188)** · **[Quick start](#-quick-start)** · **[How it works](#-how-it-works)** · **[Features](#-what-it-does-today)** · **[Safety](#-safety-you-can-check)** · **[Roadmap](docs/ROADMAP.md)** · **[Discussions](https://github.com/siddharthakki/Pandesh/discussions)**
 
 <img src="docs/media/pandesh-demo.gif" width="860" alt="Pandesh v2: the Coding specialist runs failing tests, asks before running them, fixes the bug and re-runs them until they pass">
 
@@ -28,6 +29,41 @@ and keep the final say over every file, command and web request.
 Pandesh doesn't just chat about work. It does it on your PC: it writes and tests code, researches with sources,
 remembers what you tell it and keeps your tasks moving. Every step goes through **Pandesh Core**, a local service that
 asks you before anything consequential and keeps a record of what really happened.
+
+## ⬇️ Download
+
+| | |
+|---|---|
+| **Windows installer** | [**Pandesh-Setup.exe**](https://github.com/siddharthakki/Pandesh/releases/tag/v0.1.8-build188) · Build 188 · 340 MB · Windows 10/11 x64 |
+| **Checksum (SHA-256)** | `58C781777CD9E1493C4B318DB3C290E7D4CFCFEE977C4C9317718720E7F1EEDF` |
+| **You also need** | [Ollama](https://ollama.com/download) with at least one model (`gemma4:12b` is a good start). A GPU with about 10 GB of VRAM runs it comfortably. |
+
+Your conversations, memory and settings live in `%LOCALAPPDATA%\KarkeDikha\desktop` and are kept when you upgrade or uninstall.
+The installer is not code-signed yet, so Windows SmartScreen may ask you to confirm. Compare the checksum before you run it.
+Prefer source? See the [quick start](#-quick-start).
+
+## 🆕 What's new in Build 188
+
+Build 188 is a stabilization release: fewer surprises, more honesty about what was and wasn't done, and an interface organised around what you actually do.
+
+<table>
+<tr>
+<td width="50%" valign="top"><img src="docs/media/screenshots/16-home.png" alt="Home: the chat, the strip showing what needs you, and the activity panel"><br><sub><b>Three places, not twelve screens.</b> <b>Home</b> to ask and see what needs you, <b>Work</b> for everything Pandesh is doing, <b>Settings</b> for what it may access. ▶️ <a href="docs/media/videos/demo-three-places.mp4">20 s tour</a></sub></td>
+<td width="50%" valign="top"><img src="docs/media/screenshots/20-free-space-direct.png" alt="A free-space question answered with real numbers for C: and D: in about four seconds"><br><sub><b>Simple questions skip the model.</b> "How much free space is left on C: and D:?" is answered straight from the read-only disk tool in about 4 seconds, with no model loaded. ▶️ <a href="docs/media/videos/demo-free-space.mp4">18 s, real time</a></sub></td>
+</tr>
+<tr>
+<td width="50%" valign="top"><img src="docs/media/screenshots/18-work-completed.png" alt="Work, Completed tab: finished Claude Code and OpenCode tasks as cards with the execution log folded away"><br><sub><b>Work keeps the details, chat stays clean.</b> Finished worker tasks (Claude Code, OpenCode) live under <b>Work → Completed</b> with their execution log folded. The chat shows only its own live workers, in one plain sentence.</sub></td>
+<td width="50%" valign="top"><img src="docs/media/screenshots/22-rename-approval.png" alt="An approval card for renaming a file: the action, the tool, what it affects and why it asks"><br><sub><b>Everyday chores, still under your control.</b> Renaming or moving a file shows the exact action and waits for you; opening an app is recorded. ▶️ <a href="docs/media/videos/demo-rename-with-approval.mp4">30 s</a></sub></td>
+</tr>
+<tr>
+<td width="50%" valign="top"><img src="docs/media/screenshots/21-gmail-honest.png" alt="After a failed Gmail tool call, the reply says no mailbox read was performed and shows what the tool returned"><br><sub><b>No made-up inbox.</b> When the Gmail tool is refused, Pandesh says "no mailbox read was performed" instead of inventing "you have unread emails", and the activity panel shows what the tool returned.</sub></td>
+<td width="50%" valign="top"><img src="docs/media/screenshots/24-3d-scene.png" alt="A 3D bakery scene built from one sentence, shown in the Workshop viewer"><br><sub><b>Describe a 3D scene, get one.</b> A bakery at dawn from one sentence, built and checked on your PC and opened in the Workshop viewer.</sub></td>
+</tr>
+</table>
+
+Also in this build: a storage lifecycle (private task copies are swept automatically; `npm run storage:preflight` and `storage:postflight` keep the disk honest), workers that survive a crash mid-task, expiring approval cards, and a connector for ChatGPT through the Panda Bridge. The full list is in [docs/release](docs/release/B188_DESKTOP_RELEASE_REVIEW.md).
+
+<sub>Recorded on 2026-11-25 from the packaged Build 188 on an isolated scratch profile with local <code>gemma4</code> models. Not shown: a live Gmail read (that profile has no Google connection) and a real phone pairing. A reminder or a rename is the only thing these demos change, and only inside a sandbox folder.</sub>
 
 ## ✨ Why Pandesh
 
@@ -167,8 +203,8 @@ the same records. More in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 ## 🧰 What it does today
 
-Everything below runs in the current source build. Most of it is shown in the recorded runs and screenshots in
-[`docs/media`](docs/media/README.md).
+Everything below runs in Build 188. Most of it is shown in the recorded runs and screenshots in
+[`docs/media`](docs/media/README.md); the same list with what each capability asks for is in [docs/CAPABILITIES.md](docs/CAPABILITIES.md).
 
 | Feature | What it does |
 |---|---|
@@ -177,6 +213,10 @@ Everything below runs in the current source build. Most of it is shown in the re
 | 🧠 **Second Brain** | Remember, recall in another chat, correct, and forget a single detail. Every fact keeps its source and history, and you can search it all in one place. |
 | 🎯 **Background missions** | Ask for work "in the background" and Pandesh starts a durable mission: Core runs the specialists step by step (up to three in parallel), you keep chatting, and you can stop or continue it. An independent Reviewer step checks the result, and Core writes the final report from the tool calls it recorded. A restart marks a running mission *interrupted* so it can be continued. |
 | 🎬 **Studio: narrated video** | The Studio specialist makes a short narrated video entirely on your PC: script, local Piper voice, ComfyUI pictures, FFmpeg render, subtitles, thumbnail and a draft upload sheet. It never publishes anything. |
+| 🧭 **Home, Work, Settings** | Three places: ask and see what needs you; see everything running, finished or scheduled (worker tasks keep their details here); and control what Pandesh may access. |
+| ⚡ **Direct answers** | Plain read-only questions such as free disk space are answered from the system tool itself, without loading a model. |
+| 🧱 **3D scenes** | Describe a scene and Pandesh builds a three.js scene on your PC, checks it, and opens it in the Workshop viewer. Library assets come from your own folder. |
+| 🗂️ **Everyday chores** | Rename or move a file and open an app as governed tools: exact action on the card, your decision recorded. |
 | 📋 **Board and live activity** | Task status from Core's records (needs you, running, completed, failed), plus a live panel with commands, exit codes and test output. |
 | 👥 **Team and permissions** | Each agent's tools, folders, network access and always-ask actions, read from the same rules Core enforces. |
 | 🧰 **Tools & Skills** | 169 tools and 25 governed capabilities, each with its risk level, the agents allowed to use it, and a capability self-test. |
@@ -214,7 +254,7 @@ Pandesh is not an operating-system sandbox: review what you approve, and keep ba
 
 **Tested in the open**
 
-- **Nearly 2,700 Core tests and 630+ desktop tests** run on every pull request on GitHub's Windows runners.
+- **More than 8,200 tests** (Core, desktop and extension) run before every release; the Build 188 candidate passed 8,209 of 8,210 on the final run (one load-sensitive test passes alone) and 14 of 14 checks of the installer on a clean directory.
 - **Audits are published.** The [Build 161 audit](docs/audits/POST_V2_MAX_AUDIT.md) examined the production build,
   including an upgrade rehearsal on a disposable copy of a real profile. It found 32 issues, 6 of them critical, and
   fixed 25. The rest are written up with their risk and the decision they need. Every critical fix comes with a test
@@ -226,7 +266,7 @@ Pandesh is not an operating-system sandbox: review what you approve, and keep ba
 
 ## 🚀 Quick start
 
-Runs from source on Windows 10/11. Checked from a fresh clone with Node.js 24 on 2026-11-09.
+Most people should use the [installer](#%EF%B8%8F-download). To run from source on Windows 10/11 you need Node.js 24.
 
 **You need:** [Node.js 24](https://nodejs.org) · [Git](https://git-scm.com) · [Ollama](https://ollama.com/download) · Python 3 (optional, for the coding demos)
 
@@ -259,8 +299,7 @@ node apps\desktop\launch.mjs
 <br>
 
 ```powershell
-npx vitest run core/test          # Core: nearly 2,700 tests
-npx vitest run apps/desktop/test  # Desktop: about 630 tests
+npm test                          # everything, with a heap-sized wrapper around vitest
 ```
 
 GitHub CI runs the same checks on `windows-latest`. Two Core test files that depend on the runner itself (a live
@@ -276,16 +315,18 @@ Real-speech and local-TTS tests are skipped unless their models are staged (`nod
 
 | Use | Status |
 |---|---|
-| **Supervised daily use** (you approve each consequential action) | ✅ Ready for alpha users who run from source |
+| **Supervised daily use** (you approve each consequential action) | ✅ Ready for alpha users (installer or source) |
 | **Unattended low-risk work** (read-only checks, scheduled reports) | ✅ In source builds: the watchdog, AI Radar and briefing run on schedule and only report |
 | **Unattended consequential work** (writing, running, sending, spending) | ⛔ Not safe yet |
 
-**Next:** a packaged v2 installer on Electron 45, with an upgrade and rollback test against a copy of a real profile,
-and the first results of the revenue pilot. **Later:** an MCP server registry and embedded terminals. See the
-[roadmap](docs/ROADMAP.md).
+**Next:** architectural simplification: an evidence-based audit of duplicated code, redundant engines and oversized modules,
+with the goal of much less custom code and the same capabilities, reliability and privacy. **Later:** an MCP server
+registry and embedded terminals. See the [roadmap](docs/ROADMAP.md).
 
 **Known limits:**
 
+- **Not yet shown in a recording:** a live Gmail read, a real phone pairing and a 3D scene made by a larger model. They work in tests and in the running app, but the demo profile has no Google account or phone.
+- **Auto model choice can fail while Ollama is swapping models.** The first message after a big model change may answer "Ollama is not reachable"; send it again.
 - **Customer Support** is still a placeholder agent. The revenue agents research and draft only; they can't send,
   publish or spend.
 - **Missions are new.** Plan quality depends on the model: `gemma4:12b` and the 9B model sometimes add a needless step, and Core can mark a Reviewer's reply <i>partly done</i> when its tool calls do not back its claims (the mission then stops as failed, honestly). Parallel steps are tested but were not exercised in the recorded runs.
@@ -320,8 +361,9 @@ A Windows 10/11 PC with a GPU that fits your model. The demos ran on an RTX 3090
 <summary><b>Is there an installer?</b></summary>
 <br>
 
-Not for v2 yet, so run it from source as shown above. The last published installers (Build 144 and earlier) predate
-v2. A packaged v2 installer is the next release milestone.
+Yes. [Pandesh-Setup.exe](https://github.com/siddharthakki/Pandesh/releases/tag/v0.1.8-build188) (Build 188) installs
+the v2 app, keeps your data when you upgrade, and uninstalls from Windows Settings. It is not code-signed yet, so
+check the SHA-256 shown in the [download section](#%EF%B8%8F-download).
 
 </details>
 

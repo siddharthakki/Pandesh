@@ -122,7 +122,7 @@ function ModelsSection({ snapshot, refresh, modelControl, cloudConfirm, chooseMo
       <section className="card" aria-label="Where answers come from">
         <span className="title" style={{ fontSize: 16 }}>Where answers come from</span>
         <dl className="settings-kv">
-          <dt>Provider</dt><dd>{cloud ? 'Free cloud' : 'This PC Â· Ollama'}</dd>
+          <dt>Provider</dt><dd>{cloud ? 'Free cloud' : 'This PC · Ollama'}</dd>
           <dt>Model</dt><dd>{cloud ? cloudSelectionLabel(snapshot) : modelLabel(snapshot)}</dd>
           <dt>Model server</dt><dd>{cloud ? 'Not used while a cloud model is chosen' : snapshot?.modelServerReachable === false ? 'Not answering' : snapshot?.modelServerReachable ? 'Answering' : 'Unknown'}</dd>
           <dt>Context</dt><dd>{snapshot?.contextEnvelope ? `${Math.round(snapshot.contextEnvelope / 1024)}K tokens` : 'Not reported'}</dd>
@@ -158,7 +158,7 @@ function ModelsSection({ snapshot, refresh, modelControl, cloudConfirm, chooseMo
             {choices.map((c) => (
               <label key={c.value} className="settings-choice">
                 <input type="radio" name="v2-cloud-model" checked={(pendingCloud ?? snapshot?.cloud?.selectedModel) === c.value} onChange={() => chooseModel(c.value)} />
-                <span><strong>{c.label}</strong> Â· {c.providerName}<br /><span className="settings-sub">{capabilityWords('Vision', c.vision)} Â· {capabilityWords('Tools', c.tools)}</span></span>
+                <span><strong>{c.label}</strong> · {c.providerName}<br /><span className="settings-sub">{capabilityWords('Vision', c.vision)} · {capabilityWords('Tools', c.tools)}</span></span>
               </label>
             ))}
           </fieldset>
@@ -195,7 +195,7 @@ function DiagnosticsSection({ snapshot, refresh, setNotice, onGo }: { snapshot: 
         <dl className="settings-kv">
           <dt>Core</dt><dd style={{ color: coreOk ? 'var(--verified)' : 'var(--danger)' }}>{coreOk ? 'Connected' : core}{snapshot?.coreDetail ? ` â€” ${snapshot.coreDetail}` : ''}</dd>
           <dt>Model server</dt><dd>{snapshot?.modelServerReachable === false ? 'Not answering' : snapshot?.modelServerReachable ? 'Answering' : 'Unknown'}</dd>
-          <dt>Build</dt><dd>{meta ? `${meta.productName} ${meta.version}${meta.buildNumber ? ` Â· build b${meta.buildNumber}` : ''} Â· ${meta.buildKind}${meta.commit ? ` Â· ${meta.commit.slice(0, 8)}` : ''}` : 'Not reported'}</dd>
+          <dt>Build</dt><dd>{meta ? `${meta.productName} ${meta.version}${meta.buildNumber ? ` · build b${meta.buildNumber}` : ''} · ${meta.buildKind}${meta.commit ? ` · ${meta.commit.slice(0, 8)}` : ''}` : 'Not reported'}</dd>
           <dt>Core version</dt><dd>{meta?.coreVersion ?? 'Not reported'}{meta?.coreVersionMismatch ? ' â€” differs from this window' : ''}</dd>
         </dl>
         {!coreOk && <div><button type="button" className="btn small" onClick={() => void api.retryCoreConnection().then(refresh).catch((err) => setNotice({ text: errorText(err), error: true }))}>Reconnect to Core</button></div>}

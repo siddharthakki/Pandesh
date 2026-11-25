@@ -73,3 +73,28 @@ voice, which still needs a human microphone test.
    emulation: it resizes the visible window and makes it flicker.
 3. Assemble the frames with FFmpeg's concat demuxer, using the real frame durations divided by the speed-up you print in
    the caption.
+
+## Added 2026-11-25 (Build 188)
+
+Recorded from the **packaged Build 188** (the same files as the installer) on an isolated scratch profile, with local
+`gemma4` models on an RTX 3090. Frames were taken over the Chrome DevTools Protocol at real capture times and assembled
+with FFmpeg; nothing is mocked. These ran in a sandbox folder; no real mailbox or phone was involved.
+
+| Demo | Length | What happens |
+|---|---|---|
+| [Three places](videos/demo-three-places.mp4) | 19 s (real time) | Home, then Work (Active and Completed, with finished Claude Code and OpenCode tasks and their log folded), then Settings, then back. |
+| [Free space without a model](videos/demo-free-space.mp4) | 18 s (real time) | "How much free space is left on my C: and D: drives?" answered with real numbers in about 4 s; the tool call is recorded, no model is loaded. |
+| [Rename with approval](videos/demo-rename-with-approval.mp4) | 31 s (real time) | "Rename draft.txt to final.txt." An approval card shows the action, tool, what it affects and why it asks; after Allow, Core runs it and the answer is checked against the record. |
+
+| | |
+|---|---|
+| ![](screenshots/16-home.png) | ![](screenshots/18-work-completed.png) |
+| ![](screenshots/20-free-space-direct.png) | ![](screenshots/22-rename-approval.png) |
+| ![](screenshots/21-gmail-honest.png) | ![](screenshots/24-3d-scene.png) |
+
+Notes: the Gmail screenshot shows the **refusal** path (the scratch profile has no Google grant): `gmail_analyze_inbox` and
+`gmail_search` failed with "does not have the 'read' permission", and the reply says no mailbox read was performed. The 3D
+scene (a bakery at dawn) took about four minutes with a local model; the screenshot is the finished scene in the Workshop
+viewer, and a video of the run was not kept. The footer under the free-space answer shows the selected model's name even though
+no model ran for it. Two attempts at the rename recording failed with "Ollama is not reachable" while Ollama was swapping models;
+the third succeeded, and that is the one published.
