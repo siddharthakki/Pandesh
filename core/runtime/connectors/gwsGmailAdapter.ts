@@ -32,6 +32,7 @@ import { createTask, nextBatch, settleTaskBatch, taskStatus, type GmailTaskStore
 import type { ToolExecutionResult } from '../toolRunner';
 import {
   GWS_PINNED_SHA256_WINDOWS_X64,
+  ATTACHMENT_MAX_OUTPUT_CHARS,
   parseGwsJson,
   resolveGwsBinaryPath,
   runGws,
@@ -52,7 +53,7 @@ const DEFAULT_LIST_RESULTS = 20;
  * metadata lookups it will perform to build useful (subject/from/snippet)
  * results — Gmail's `messages.list` response carries only IDs, so a search
  * that "shows results" costs one `list` plus up to this many `get` calls. */
-const MAX_METADATA_LOOKUPS = 20;
+const MAX_METADATA_LOOKUPS = MAX_LIST_RESULTS;
 /** Bounded fan-out for Gmail search's per-message metadata lookups: a search
  *  costs one `list` plus up to MAX_METADATA_LOOKUPS independent `get` calls, so
  *  fetch at most this many in parallel instead of strictly one at a time. Kept
@@ -166,7 +167,7 @@ function defaultSleep(ms: number, signal?: AbortSignal): Promise<void> {
 }
 
 /** Retries a call that Google rate-limited, honouring Retry-After, with backoff when none is given. */
-export async function callGws(deps: CallDeps, args: string[], resultCategoryOnFailure: string, options: { allowEmptyOutput?: boolean } = {}): Promise<GwsCallOutcome> {
+export async function callGws(deps: CallDeps, args: string[], resultCategoryOnFailure: string, options: { allowEmptyOutput?: boolean; maxOutputChars?: number; timeoutMs?: number } = {}): Promise<GwsCallOutcome> {
   let outcome = await callGwsOnce(deps, args, resultCategoryOnFailure, options);
   for (let attempt = 1; attempt < RATE_LIMIT_ATTEMPTS && !outcome.ok && RATE_LIMIT_SIGNAL.test(outcome.result.output); attempt += 1) {
     const requested = parseRetryAfterMs(outcome.result.output, Date.now());
@@ -183,14 +184,15 @@ export async function callGws(deps: CallDeps, args: string[], resultCategoryOnFa
   return outcome;
 }
 
-async function callGwsOnce(deps: CallDeps, args: string[], resultCategoryOnFailure: string, options: { allowEmptyOutput?: boolean }): Promise<GwsCallOutcome> {
+async function callGwsOnce(deps: CallDeps, args: string[], resultCategoryOnFailure: string, options: { allowEmptyOutput?: boolean; maxOutputChars?: number; timeoutMs?: number }): Promise<GwsCallOutcome> {
   const result = await deps.runGwsFn({
     binaryPath: deps.binaryPath,
     args,
     accessToken: deps.accessToken,
     configDir: deps.configDir,
     signal: deps.signal,
-    timeoutMs: deps.timeoutMs,
+    timeoutMs: options.timeoutMs ?? deps.timeoutMs,
+    ...(options.maxOutputChars ? { maxOutputChars: options.maxOutputChars } : {}),
   });
   if (result.aborted) {
     return { ok: false, result: { status: 'failed', exitCode: null, output: 'cancelled', resultCategory: 'gws_cancelled' } };
@@ -300,6 +302,22 @@ function splitAddressList(headerValue: string): string[] {
     .filter((s) => s.length > 0);
 }
 
+/**
+ * Gmail matches whole words, so "Acme" never finds "Acmes" and the reverse. When a search finds nothing, these are the queries that
+ * differ from it by the singular or plural form of ONE plain word (a word with no operator, quote, digit or other punctuation).
+ * Nothing about a particular name is known here; the original query always runs first and its result is reported as given.
+ */
+export function wordFormVariants(query: string): string[] {
+  const parts = query.split(/(\s+)/);
+  const variants: string[] = [];
+  parts.forEach((part, i) => {
+    if (!/^[\p{L}]{4,}$/u.test(part) || /^(?:and|or|not|from|to|cc|bcc|subject|after|before|label|is|has|in)$/i.test(part)) return;
+    const alt = /s$/i.test(part) ? (/ss$/i.test(part) ? null : part.slice(0, -1)) : `${part}s`;
+    if (alt) variants.push(parts.map((p, j) => (j === i ? alt : p)).join(''));
+  });
+  return variants.slice(0, 4);
+}
+
 async function runGmailSearch(args: Record<string, unknown>, deps: CallDeps): Promise<ToolExecutionResult> {
   const requested = Number(args.maxResults);
   const maxResults = Number.isFinite(requested) && requested > 0
@@ -308,11 +326,25 @@ async function runGmailSearch(args: Record<string, unknown>, deps: CallDeps): Pr
   const params: Record<string, unknown> = { userId: 'me', maxResults };
   const query = trimmedNonEmptyString(args.query);
   if (query) params.q = query;
+  const pageToken = trimmedNonEmptyString(args.pageToken);
+  if (pageToken) params.pageToken = pageToken;
 
+  type ListData = { messages?: Array<{ id?: string; threadId?: string }>; resultSizeEstimate?: number; nextPageToken?: string } | null;
   const listOutcome = await callGws(deps, ['gmail', 'users', 'messages', 'list', '--params', JSON.stringify(params)], 'gmail_search_failed');
   if (!listOutcome.ok) return listOutcome.result;
-  const listData = listOutcome.data as { messages?: Array<{ id?: string; threadId?: string }>; resultSizeEstimate?: number; nextPageToken?: string } | null;
-  const stubs = (listData?.messages ?? []).filter((m) => typeof m.id === 'string');
+  let listData = listOutcome.data as ListData;
+  let stubs = (listData?.messages ?? []).filter((m) => typeof m.id === 'string');
+  // Nothing found for the words as written: try the other singular/plural form of one word at a time, and say so.
+  let retriedWith: string | null = null;
+  if (!stubs.length && query && !pageToken) {
+    for (const variant of wordFormVariants(query)) {
+      const retry = await callGws(deps, ['gmail', 'users', 'messages', 'list', '--params', JSON.stringify({ ...params, q: variant })], 'gmail_search_failed');
+      if (!retry.ok) continue;
+      const retryData = retry.data as ListData;
+      const retryStubs = (retryData?.messages ?? []).filter((m) => typeof m.id === 'string');
+      if (retryStubs.length) { listData = retryData; stubs = retryStubs; retriedWith = variant; break; }
+    }
+  }
 
   const lookups = stubs.slice(0, MAX_METADATA_LOOKUPS);
   const resolved = await mapWithConcurrency(lookups, MAX_METADATA_CONCURRENCY, async (stub) => {
@@ -361,10 +393,12 @@ async function runGmailSearch(args: Record<string, unknown>, deps: CallDeps): Pr
     }
   }
   const counts = { matched, matchedIsExact, listed, shown: results.length, failedLookups, timeZone: deps.timeZone };
-  const note = results.length === matched
+  const nextPageToken = typeof listData?.nextPageToken === 'string' ? listData.nextPageToken : undefined;
+  const retryNote = retriedWith ? `No message matched "${query}"; these match "${retriedWith}" (the other singular/plural form). Tell the user which spelling matched. ` : '';
+  const note = retryNote + (results.length === matched && !pageToken
     ? `All ${matched} matching message(s) are shown.`
-    : `Showing ${results.length} of ${matchedIsExact ? matched : `about ${matched}`} matching message(s)${failedLookups ? `; ${failedLookups} could not be loaded` : ''}${moreAvailable ? '; more exist beyond this page' : ''}. State both numbers; do not present the shown count as the total.`;
-  return succeeded('gmail_search_succeeded', { results, truncated: moreAvailable || listed > lookups.length, counts, note });
+    : `Showing ${results.length} of ${matchedIsExact ? matched : `about ${matched}`} matching message(s)${failedLookups ? `; ${failedLookups} could not be loaded` : ''}${moreAvailable ? '; more exist: call gmail_search again with the same query and pageToken set to nextPageToken until nextPageToken is absent' : ''}. State both numbers; do not present the shown count as the total.`);
+  return succeeded('gmail_search_succeeded', { results, truncated: moreAvailable || listed > lookups.length, counts, ...(nextPageToken ? { nextPageToken } : {}), ...(retriedWith ? { retriedWith } : {}), note });
 }
 
 async function runGmailReadThread(args: Record<string, unknown>, deps: CallDeps): Promise<ToolExecutionResult> {
@@ -381,7 +415,7 @@ async function runGmailReadAttachment(args: Record<string, unknown>, deps: CallD
   const messageId = trimmedNonEmptyString(args.messageId);
   const attachmentId = trimmedNonEmptyString(args.attachmentId);
   if (!messageId || !attachmentId) {
-    return invalidArgs('gmail_read_attachment: "messageId" and "attachmentId" are required');
+    return invalidArgs('gmail_read_attachment: "messageId" (the id of the message, from gmail_read_thread messages[].id, not the threadId) and "attachmentId" (messages[].attachments[].id) are both required');
   }
   const filename = trimmedNonEmptyString(args.filename) || 'attachment';
   let mimeType = trimmedNonEmptyString(args.mimeType) || '';
@@ -390,7 +424,7 @@ async function runGmailReadAttachment(args: Record<string, unknown>, deps: CallD
   }
 
   const params = { userId: 'me', messageId, id: attachmentId };
-  const outcome = await callGws(deps, ['gmail', 'users', 'messages', 'attachments', 'get', '--params', JSON.stringify(params)], 'gmail_read_attachment_failed');
+  const outcome = await callGws(deps, ['gmail', 'users', 'messages', 'attachments', 'get', '--params', JSON.stringify(params)], 'gmail_read_attachment_failed', { maxOutputChars: ATTACHMENT_MAX_OUTPUT_CHARS, timeoutMs: 60_000 });
   if (!outcome.ok) return outcome.result;
 
   const data = outcome.data as { size?: number; data?: string } | null;

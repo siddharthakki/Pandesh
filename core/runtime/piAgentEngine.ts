@@ -6965,7 +6965,7 @@ When the user asks to continue, resume, or check progress/updates, resume this w
         evidenceLimits.push(`${path.basename(folder.directory) || folder.directory} holds ${folder.documents} documents, more than Pandesh examines automatically, so the answer may not cover all of them`);
       }
     }
-    if (evidenceLimits.length) {
+    if (evidenceLimits.length && finalReply.trim()) {
       finalReply = `${finalReply.trimEnd()}\n\n**Not fully compared:** ${evidenceLimits.join('; ')}.`;
     }
     // A file the request names as its output ("a note called rice_order.txt") must really exist at the end of the turn.

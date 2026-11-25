@@ -15,12 +15,13 @@ import {
   createGwsGmailExecutor,
   createGwsGmailProbe,
   MAX_METADATA_CONCURRENCY,
+  wordFormVariants,
   type GwsGmailAdapterConfig,
   type GwsGmailDraftBindingStore,
   type StoredGmailDraftBinding,
 } from '../runtime/connectors/gwsGmailAdapter';
 import { computeGmailDraftDigest, type GmailDraftContent } from '../runtime/connectors/gmailDraftDigest';
-import type { RunGwsResult } from '../runtime/connectors/gwsTransport';
+import { ATTACHMENT_MAX_OUTPUT_CHARS, type RunGwsResult } from '../runtime/connectors/gwsTransport';
 import type { ToolExecutionContext } from '../runtime/toolRunner';
 
 let dir: string;
@@ -581,5 +582,72 @@ describe('createGwsGmailProbe', () => {
     const result = await probe(new AbortController().signal);
     expect(result.ok).toBe(false);
     expect(result.reason).toMatch(/authError/);
+  });
+});
+
+describe('gmail_search covers everything the user asked for (production failure 2026-11-25)', () => {
+  const metadata = (id: string) => JSON.stringify({ id, threadId: id, snippet: 's', internalDate: '1767225600000', labelIds: ['INBOX'], payload: { headers: [{ name: 'Subject', value: `Rechnung ${id}` }, { name: 'From', value: 'billing@example.com' }, { name: 'Date', value: 'Thu, 1 Jan 2026 10:00:00 +0100' }] } });
+  const searchRunner = (listQueries: string[], respond: (q: string | undefined, pageToken: string | undefined) => { ids: string[]; next?: string }) => async (input: { args: string[] }): Promise<RunGwsResult> => {
+    const params = JSON.parse(input.args[input.args.indexOf('--params') + 1]);
+    if (input.args.includes('list')) {
+      listQueries.push(`${params.q ?? ''}|${params.pageToken ?? ''}`);
+      const r = respond(params.q, params.pageToken);
+      return { exitCode: 0, stdout: JSON.stringify({ messages: r.ids.map((id) => ({ id, threadId: id })), resultSizeEstimate: 120, ...(r.next ? { nextPageToken: r.next } : {}) }), stderr: '', timedOut: false, aborted: false };
+    }
+    return { exitCode: 0, stdout: metadata(params.id), stderr: '', timedOut: false, aborted: false };
+  };
+  const ready = () => { accessToken = 'token'; accountEmail = 'me@example.com'; };
+
+  it('passes the page token on and returns nextPageToken, with metadata for the whole page', async () => {
+    ready();
+    const queries: string[] = [];
+    const ids = Array.from({ length: 50 }, (_, i) => `m${i}`);
+    const executor = createGwsGmailExecutor(baseConfig({ runGwsFn: searchRunner(queries, (_q, token) => (token ? { ids: ['z1', 'z2'] } : { ids, next: 'PAGE2' })) as never }));
+    const first = JSON.parse((await executor('gmail_search', { query: 'Rechnung after:2026/01/01', maxResults: 50 }, ctx)).output);
+    expect(first.results).toHaveLength(50); // not just the first 20
+    expect(first.nextPageToken).toBe('PAGE2');
+    expect(first.note).toContain('pageToken');
+    const second = JSON.parse((await executor('gmail_search', { query: 'Rechnung after:2026/01/01', maxResults: 50, pageToken: 'PAGE2' }, ctx)).output);
+    expect(second.results.map((r: { id: string }) => r.id)).toEqual(['z1', 'z2']);
+    expect(second.nextPageToken).toBeUndefined();
+    expect(queries).toEqual(['Rechnung after:2026/01/01|', 'Rechnung after:2026/01/01|PAGE2']);
+  });
+
+  it('keeps the words as written, and only when nothing matches tries the other singular/plural form, saying so', async () => {
+    ready();
+    const queries: string[] = [];
+    const executor = createGwsGmailExecutor(baseConfig({ runGwsFn: searchRunner(queries, (q) => (q === 'Acmes Rechnung' ? { ids: ['a1'] } : { ids: [] })) as never }));
+    const out = JSON.parse((await executor('gmail_search', { query: 'Acme Rechnung' }, ctx)).output);
+    expect(queries[0]).toBe('Acme Rechnung|'); // the original query always runs first, unchanged
+    expect(out.retriedWith).toBe('Acmes Rechnung');
+    expect(out.results).toHaveLength(1);
+    expect(out.note).toContain('Tell the user which spelling matched');
+    const exact = JSON.parse((await createGwsGmailExecutor(baseConfig({ runGwsFn: searchRunner([], () => ({ ids: ['x'] })) as never }))('gmail_search', { query: 'Acme' }, ctx)).output);
+    expect(exact.retriedWith).toBeUndefined(); // a query that matched is never rewritten
+  });
+
+  it('wordFormVariants toggles one plain word at a time and leaves operators, dates and short words alone', () => {
+    expect(wordFormVariants('Acme Rechnung')).toEqual(['Acmes Rechnung', 'Acme Rechnungs']);
+    expect(wordFormVariants('Acmes')).toEqual(['Acme']);
+    expect(wordFormVariants('from:bob@example.com after:2026/01/01 "exact phrase" is:unread')).toEqual([]);
+    expect(wordFormVariants('glass')).toEqual([]); // "ss" is not a plural
+  });
+
+  it('reads a large attachment: the output cap is raised so the base64 JSON is not cut in the middle', async () => {
+    ready();
+    let seenCap: number | undefined;
+    const data = Buffer.from('Rechnung Nr. 4711\nGesamtbetrag 119,00 EUR', 'utf8').toString('base64url');
+    const executor = createGwsGmailExecutor(baseConfig({ runGwsFn: (async (input: { maxOutputChars?: number }) => { seenCap = input.maxOutputChars; return { exitCode: 0, stdout: JSON.stringify({ size: 40, data }), stderr: '', timedOut: false, aborted: false }; }) as never }));
+    const out = JSON.parse((await executor('gmail_read_attachment', { messageId: 'm1', attachmentId: 'a1', filename: 'r.txt', mimeType: 'text/plain' }, ctx)).output);
+    expect(seenCap).toBe(ATTACHMENT_MAX_OUTPUT_CHARS);
+    expect(out.extractedText).toContain('Rechnung Nr. 4711');
+  });
+
+  it('says where to get the ids when the message id is missing', async () => {
+    ready();
+    const executor = createGwsGmailExecutor(baseConfig({ runGwsFn: stubRunGws({}) }));
+    const r = await executor('gmail_read_attachment', { attachmentId: 'a1' }, ctx);
+    expect(r.status).toBe('failed');
+    expect(r.output).toContain('messages[].id');
   });
 });
