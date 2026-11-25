@@ -38,7 +38,7 @@ import {
   runGws,
   verifyPinnedBinary,
 } from './gwsTransport';
-import { documentFacts, documentsTable, keyLines, type DocumentFacts } from './gmailDocumentFacts';
+import { documentFacts, documentsTable, keyLines, sumTotals, type DocumentFacts } from './gmailDocumentFacts';
 import { summarizeGmailMessage, summarizeGmailThread, type GmailApiMessage, type GmailApiThread } from './gmailMime';
 import { extractPdfFromBytes } from '../../attachments/documentExtraction';
 import {
@@ -308,15 +308,27 @@ function splitAddressList(headerValue: string): string[] {
  * differ from it by the singular or plural form of ONE plain word (a word with no operator, quote, digit or other punctuation).
  * Nothing about a particular name is known here; the original query always runs first and its result is reported as given.
  */
+/** The other singular/plural form of a plain word: with or without a final -s, and German -en (Rechnungen -> Rechnung). Null when unsure. */
+function otherForm(word: string): string | null {
+  if (/ss$/i.test(word)) return null;
+  if (/s$/i.test(word)) return word.slice(0, -1);
+  if (/[a-zäöüß]{5,}en$/i.test(word)) return word.slice(0, -2);
+  return `${word}s`;
+}
+
 export function wordFormVariants(query: string): string[] {
   const parts = query.split(/(\s+)/);
   const variants: string[] = [];
   parts.forEach((part, i) => {
     if (!/^[\p{L}]{4,}$/u.test(part) || /^(?:and|or|not|from|to|cc|bcc|subject|after|before|label|is|has|in)$/i.test(part)) return;
-    const alt = /s$/i.test(part) ? (/ss$/i.test(part) ? null : part.slice(0, -1)) : `${part}s`;
+    const alt = otherForm(part);
     if (alt) variants.push(parts.map((p, j) => (j === i ? alt : p)).join(''));
   });
-  return variants.slice(0, 4);
+  const singles = variants.slice(0, 3);
+  // Both words in the other form at once ("Conficar Rechnungen" -> "Conficars Rechnung"): one change at a time can never match that.
+  const everyWord = parts.map((p) => (!/^[\p{L}]{4,}$/u.test(p) || /^(?:and|or|not|from|to|cc|bcc|subject|after|before|label|is|has|in)$/i.test(p) ? p : otherForm(p) ?? p)).join('');
+  if (variants.length > 1 && everyWord !== query && !singles.includes(everyWord)) singles.push(everyWord);
+  return singles;
 }
 
 async function runGmailSearch(args: Record<string, unknown>, deps: CallDeps): Promise<ToolExecutionResult> {
@@ -600,6 +612,7 @@ async function runGmailCollectDocuments(args: Record<string, unknown>, deps: Cal
     : `Not complete: ${[moreExists ? `the query has more than ${COLLECT_MAX_MESSAGES} messages (narrow it, for example with a date range)` : '', coverage.documentsSkippedByLimit ? `${coverage.documentsSkippedByLimit} attachment(s) were not opened because of the ${maxDocuments}-document limit` : '', coverage.documentsNotRead ? `${coverage.documentsNotRead} attachment(s) could not be read (see status)` : ''].filter(Boolean).join('; ')}. Say so.`;
   return succeeded('gmail_collect_documents_succeeded', {
     query, ...(retriedWith ? { retriedWith } : {}), coverage, note,
+    totals: { ...sumTotals(documents.map((d) => d.facts?.total)), note: 'Computed by Pandesh from the totals that were found; report this figure, do not add the amounts up yourself. Documents whose total was not found are not in it.' },
     table: documentsTable(documents.map((d) => ({ receivedLocal: d.receivedLocal, subject: d.subject, filename: d.filename, facts: d.facts, status: d.status, messageId: d.messageId }))),
     documents,
   });
