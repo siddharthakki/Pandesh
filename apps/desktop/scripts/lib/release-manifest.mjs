@@ -29,6 +29,10 @@ export const MANDATORY_BUNDLE_FILES = {
   piAi: 'runtime/node_modules/@earendil-works/pi-ai/package.json',
   whisperConfig: 'models/whisper-base-en/Xenova/whisper-base.en/config.json',
   asrTransformers: 'runtime-assets/node_modules/@xenova/transformers/package.json',
+  // Default speech engine: the largest model file (proves the bundled model is whole) and its native runtime.
+  parakeetEncoder: 'models/parakeet-tdt-v3-int8/encoder.int8.onnx',
+  parakeetTokens: 'models/parakeet-tdt-v3-int8/tokens.txt',
+  sherpaNative: 'runtime-assets/node_modules/sherpa-onnx-win-x64/sherpa-onnx.node',
   // The embedded version/build identity. It is hashed like every other
   // shipped file, so a build that shows one version in the UI and ships
   // another cannot pass the manifest check.

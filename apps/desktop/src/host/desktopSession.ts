@@ -111,7 +111,8 @@ import { EverydayReminderScheduler } from './everydayReminderScheduler';
 import { EverydayTimerManager } from './everydayTimerManager';
 import { everydayToolCatalog } from './everydayToolCatalog';
 import { listWorkerOptions, findWorkerOption, resolveWorkerProfile } from '../../../../core/runtime/localCoreQuestion';
-import { probeDesktopLocalSpeech, transcribeDesktopUtterance } from './desktopLocalSpeech';
+import { probeDesktopLocalSpeech, transcribeDesktopUtterance, VOICE_VOCABULARY_FILE_NAME } from './desktopLocalSpeech';
+import { ensureVoiceVocabularyFile } from '../../../../core/attachments/parakeetEngine';
 import { readHostPreferences } from './desktopHostPreferences';
 import { PocketTtsCancelled, PocketTtsEngine, probePocketTts } from './pocketTts';
 import {
@@ -436,7 +437,8 @@ export class DesktopSession {
     // The last verified free-model lists survive a restart, so the model menus have something to offer at once.
     this.cloudListings = loadCloudListings(this.dataDir);
     this.selectedConversationId = readSelectedConversation(this.dataDir);
-    this.localSpeech = probeDesktopLocalSpeech(this.options.productRoot);
+    ensureVoiceVocabularyFile(path.join(this.dataDir, VOICE_VOCABULARY_FILE_NAME));
+    this.localSpeech = probeDesktopLocalSpeech(this.options.productRoot, this.dataDir);
     this.localSpeechResponse = probeDesktopLocalSpeechResponse(this.options.productRoot, process.env, this.ttsPreference());
     this.wakeWord = probeDesktopWakeWord(this.options.productRoot, { enabled: false, muted: false });
     this.gmailTokenManager = new GmailTokenManager({
@@ -817,7 +819,7 @@ export class DesktopSession {
     const turnTag = voiceTurnId ? ` turn=${voiceTurnId}` : '';
     const startedNs = process.hrtime.bigint();
     this.options.log?.(`[voice]${turnTag} stage=asr_started`);
-    const { transcript, engine, review } = await transcribeDesktopUtterance(this.options.productRoot, wavBytes);
+    const { transcript, engine, review } = await transcribeDesktopUtterance(this.options.productRoot, wavBytes, this.dataDir);
     const asrMs = Number(process.hrtime.bigint() - startedNs) / 1e6;
     this.options.log?.(
       `[voice]${turnTag} stage=asr_completed asrMs=${Math.round(asrMs)} engine=${engine} chars=${transcript?.length ?? 0} review=${review.required}`,

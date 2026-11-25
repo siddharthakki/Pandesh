@@ -42,6 +42,10 @@ const COPY_SPEC = [
   { pkg: 'onnxruntime-web', include: ['package.json', 'dist'] },
   { pkg: 'onnxruntime-common', include: ['package.json', 'dist'] },
   { pkg: '@huggingface/jinja', include: ['package.json', 'dist'] },
+  // Default engine: Parakeet through sherpa-onnx-node (core/attachments/parakeetEngine.ts). The platform package holds
+  // the native addon plus its onnxruntime DLLs (about 23 MB); the JS package resolves it by name from the same tree.
+  { pkg: 'sherpa-onnx-node', include: ['.'] },
+  { pkg: 'sherpa-onnx-win-x64', include: ['.'] },
 ];
 
 function copyRecursive(src, dest) {

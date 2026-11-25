@@ -83,3 +83,36 @@ node scripts/voice/measure-asr.mjs --recordings <folder> --label "<speaker>" --m
 ```
 
 The audio and `results.json` stay on the PC that runs it.
+
+## Engine change: Parakeet TDT 0.6B v3 (2026-11-25)
+
+This is the "measure candidates on real recordings" step above. The owner read 14 sentences into the USB microphone
+(English, English with Indian names, company and technical terms, German, and mixed English/German; script in
+`.tmp/asrbench/sentences.json` at the time, audio kept local and not committed). Same files, CPU only, 4 threads, 190
+words:
+
+| engine | word error | German | mixed | seconds per 12 s clip | RAM |
+|---|---|---|---|---|---|
+| whisper-base.en (before) | 42.1% | 91% | 72% | 1.1 | 1.8 GB |
+| Whisper large-v3-turbo | 15.8% | 4% | 21% | 3.7 | 1.8 GB |
+| Parakeet TDT v3 int8, greedy | 17.4% | 17% | 26% | 0.6 | 1.0 GB |
+
+Parakeet was chosen: it is within 3 words of turbo overall, 6x faster, uses half the memory, and needs no VRAM. Turbo is
+clearly better on pure German (only two clips), so keep testing German speech. Neither model gets "Rechnung" right
+inside an English sentence on its own ("rationale"/"rationum").
+
+Through the shipped code path (`runLocalTranscription`, beam search, 2.5 s first call then about 0.9 s per clip):
+
+| setting | word error |
+|---|---|
+| no vocabulary | 15.3% |
+| `voice-vocabulary.json` (hotwords, score 2) | 13.2% |
+| same, while gemma4:12b is generating (GPU 93% busy) | 13.2%, 0.86 s per clip, no VRAM change |
+
+The vocabulary is the owner's own file (`voice-vocabulary.json` in the desktop data folder), passed to the decoder as
+hotwords. It fixed "Conficars" and "Pandesh" but not "Rechnung" in an English sentence, and at score 4 it started
+dropping real words ("euros"), so the default is 2. These terms were also in the measurement set, so the gain on them
+is in-sample. Hotwords are matched to the exact word pieces the model emits, so the engine tries every plausible split.
+
+Failure mode worth knowing: a damaged `tokens.txt` makes the native runtime exit the whole process instead of raising an
+error, so the engine checks the exact size of every model file before loading and falls back to whisper-base.en.

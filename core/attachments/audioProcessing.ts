@@ -1,7 +1,11 @@
 /**
  * M36 pass 2 — local audio transcription.
  *
- * Primary engine: a quantized `whisper-base.en` ONNX model run locally via
+ * Default engine: Parakeet TDT 0.6B v3 (int8) through the `sherpa-onnx-node` native runtime — see
+ * `parakeetEngine.ts`. It is used whenever its model files and runtime are staged, and Whisper below is the
+ * fallback (also forced with KARKEDIKHA_ASR_ENGINE=whisper-base, and used if Parakeet fails to load).
+ *
+ * Fallback engine: a quantized `whisper-base.en` ONNX model run locally via
  * `@xenova/transformers` (WASM backend — no native binary, no compiled
  * dependency; the same "pure JS/WASM, esbuild-external, no native deps"
  * shape already used for document extraction's pdfjs-dist/mammoth). The
@@ -34,6 +38,7 @@ import * as fs from 'node:fs';
 import * as fsPromises from 'node:fs/promises';
 import * as path from 'node:path';
 import type { AudioTranscriptionResult, AudioTranscriptionSegment, LocalProcessingCapability } from '../shared/wireTypes';
+import { PARAKEET_ENGINE_NAME, parakeetAvailable, transcribeWithParakeet } from './parakeetEngine';
 
 export interface AudioCapabilityProbe {
   capability: LocalProcessingCapability;
@@ -88,6 +93,9 @@ export function probeLocalAudioTranscriptionCapability(env: NodeJS.ProcessEnv = 
   const command = env.KARKEDIKHA_LOCAL_ASR_COMMAND?.trim();
   if (command) {
     return { capability: 'available', engine: command };
+  }
+  if (parakeetAvailable(env)) {
+    return { capability: 'available', engine: PARAKEET_ENGINE_NAME };
   }
   if (builtinModelFilesPresent(env)) {
     return { capability: 'available', engine: BUILTIN_ENGINE_NAME };
@@ -147,7 +155,9 @@ function decodeWav(buffer: Buffer): DecodedPcm {
   if (isFloat && fmt.bitsPerSample !== 32) throw new Error(`unsupported float bit depth ${fmt.bitsPerSample} (only 32-bit float is supported)`);
 
   const bytesPerSample = fmt.bitsPerSample / 8;
-  const frameCount = Math.floor(dataSize / (bytesPerSample * fmt.numChannels));
+  // A recording cut off mid-write declares more data than the file holds: decode what is actually there.
+  const availableBytes = Math.max(0, Math.min(dataSize, buffer.length - dataOffset));
+  const frameCount = Math.floor(availableBytes / (bytesPerSample * fmt.numChannels));
   const mono = new Float32Array(frameCount);
   for (let i = 0; i < frameCount; i += 1) {
     let sum = 0;
@@ -310,6 +320,13 @@ async function transcribeWithBuiltinEngine(filePath: string, processingEnv: Node
   return { engine: BUILTIN_ENGINE_NAME, segments, transcribedAt: new Date().toISOString() };
 }
 
+async function transcribeWithParakeetEngine(filePath: string, processingEnv: NodeJS.ProcessEnv): Promise<AudioTranscriptionResult> {
+  const decoded = decodeWav(await fsPromises.readFile(filePath));
+  const samples = resampleLinear(decoded.samples, decoded.sampleRate, WHISPER_SAMPLE_RATE);
+  const segments = await transcribeWithParakeet(samples, processingEnv);
+  return { engine: PARAKEET_ENGINE_NAME, segments, transcribedAt: new Date().toISOString() };
+}
+
 const EXTERNAL_TRANSCRIBE_TIMEOUT_MS = 120_000;
 const EXTERNAL_SEGMENT_LINE = /^(\d+(?:\.\d+)?)\t(\d+(?:\.\d+)?)\t(.*)$/;
 
@@ -360,6 +377,15 @@ export async function runLocalTranscription(
   filePath: string,
   processingEnv: NodeJS.ProcessEnv = process.env,
 ): Promise<AudioTranscriptionResult> {
+  if (engine === PARAKEET_ENGINE_NAME) {
+    try {
+      return await transcribeWithParakeetEngine(filePath, processingEnv);
+    } catch (error) {
+      // Native runtime or model failed to load/decode: use the Whisper fallback when it is staged, else say so.
+      if (!builtinModelFilesPresent(processingEnv)) throw error;
+      return transcribeWithBuiltinEngine(filePath, processingEnv);
+    }
+  }
   if (engine === BUILTIN_ENGINE_NAME) return transcribeWithBuiltinEngine(filePath, processingEnv);
   return runExternalTranscription(engine, filePath);
 }
