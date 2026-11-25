@@ -17,7 +17,7 @@ import {
   similarFinishedMissions, updateMission, updateMissionStep, MAX_MISSION_STEPS,
 } from '../domain/missions';
 import { MissionRunner, existingPathsIn, missionProcedure, openCaveats, renderMissionReport, resultsForStep, reviewFoundProblems, stepBatches, toolCaveats } from '../runtime/missionRunner';
-import { buildMissionTools, describeMission, missionRoster, missionTurnFact } from '../runtime/missionTools';
+import { buildMissionTools, describeMission, mailboxSortStepRefusal, missionRoster, missionTurnFact } from '../runtime/missionTools';
 import { missionView, approvalLine } from '../api/missionRoutes';
 import { hasActiveWorker } from '../runtime/assistantStatus';
 
@@ -501,6 +501,23 @@ describe('the lead\'s mission tools', () => {
     expect(started).toHaveLength(0);
     const unknown = await start.execute('t2', { objective: 'Do something with a ghost', steps: [{ agent: 'ghost', title: 'x', brief: 'Do the thing and report back.' }] });
     expect(text(unknown)).toMatch(/does not exist or is turned off/);
+  });
+
+  it('refuses an inbox-sorting step for a specialist without the Gmail sort tools, and starts nothing', async () => {
+    const { start, started } = tools();
+    const out = await start.execute('t1', { objective: 'Move noise out of the Gmail inbox', steps: [{ agent: 'reviewer', title: 'Build the inbox-sorting plan', brief: 'Use gmail_plan_changes to preview which senders to archive from the Gmail inbox.' }, { agent: 'reviewer', title: 'Apply the plan', brief: 'Apply the approved plan with gmail_apply_plan.' }] });
+    expect(out.isError).toBe(true);
+    expect(text(out)).toMatch(/refused by Pandesh Core before anything started/);
+    expect(text(out)).toMatch(/in this chat instead/);
+    expect(started).toHaveLength(0);
+    const plain = await start.execute('t2', { objective: 'Sort my mailbox', steps: [{ agent: 'personal', title: 'Organize', brief: 'Organize and archive the promotional mail in my Gmail inbox.' }] });
+    expect(plain.isError).toBe(true);
+    expect(started).toHaveLength(0);
+  });
+
+  it('does not touch an ordinary step', () => {
+    expect(mailboxSortStepRefusal('Measure free space on every drive.', ['read_file'])).toBeNull();
+    expect(mailboxSortStepRefusal('Sort the inbox with gmail_plan_changes', ['gmail_plan_changes'])).toBeNull();
   });
 
   it('reports status from the record, cancels and continues', async () => {
