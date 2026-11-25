@@ -627,7 +627,8 @@ describe('gmail_search covers everything the user asked for (production failure 
   });
 
   it('wordFormVariants toggles one plain word at a time and leaves operators, dates and short words alone', () => {
-    expect(wordFormVariants('Acme Rechnung')).toEqual(['Acmes Rechnung', 'Acme Rechnungs']);
+    expect(wordFormVariants('Acme Rechnung')).toEqual(['Acmes Rechnung', 'Acme Rechnungs', 'Acmes Rechnungs']);
+    expect(wordFormVariants('Conficar Rechnungen')).toEqual(['Conficars Rechnungen', 'Conficar Rechnung', 'Conficars Rechnung']);
     expect(wordFormVariants('Acmes')).toEqual(['Acme']);
     expect(wordFormVariants('from:bob@example.com after:2026/01/01 "exact phrase" is:unread')).toEqual([]);
     expect(wordFormVariants('glass')).toEqual([]); // "ss" is not a plural
@@ -705,6 +706,7 @@ describe('gmail_collect_documents lists every document, with sources and an hone
     expect(out.table).toContain('RE-2');
     expect(out.table).toContain('20,00 €');
     expect(out.note).toContain('All 3 message(s)');
+    expect(out.totals).toMatchObject({ found: 3, of: 3, sum: '60,00 €' }); // 10 + 20 + 30, added by code
   });
 
   it('says it is not complete when an attachment cannot be read, and keeps the others', async () => {

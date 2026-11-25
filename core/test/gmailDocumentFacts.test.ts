@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { documentFacts, documentsTable, keyLines } from '../runtime/connectors/gmailDocumentFacts';
+import { documentFacts, documentsTable, keyLines, sumTotals } from '../runtime/connectors/gmailDocumentFacts';
 
 describe('what a billing document itself prints', () => {
   it('reads number, date and total from a German invoice and keeps the lines it read them from', () => {
@@ -25,5 +25,13 @@ describe('what a billing document itself prints', () => {
     const lines = keyLines(['Hello', 'Rechnungsnummer: 1', 'Rechnungsnummer: 1', 'Summe 5,00 €', ...Array.from({ length: 50 }, (_, i) => `Betrag ${i},00`)].join('\n'), 5);
     expect(lines).toHaveLength(5);
     expect(lines[0]).toBe('Rechnungsnummer: 1');
+  });
+});
+
+describe('sumTotals adds the found totals by code', () => {
+  it('adds German and English amounts exactly, and counts what was not found', () => {
+    expect(sumTotals(['19,00 €', '8,00 €', '162,29 €', '217,05 €', '194,23 €', null])).toEqual({ found: 5, of: 6, sum: '600,57 €' });
+    expect(sumTotals(['1.234,56 €', '50.00 €'])).toMatchObject({ sum: '1.284,56 €' });
+    expect(sumTotals([null, undefined])).toEqual({ found: 0, of: 2, sum: null });
   });
 });

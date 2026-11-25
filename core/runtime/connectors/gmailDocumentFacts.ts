@@ -63,3 +63,24 @@ export function documentsTable(rows: Array<{ receivedLocal: string | null; subje
   const body = rows.map((r) => `| ${cell(r.receivedLocal)} | ${r.facts ? cell(r.facts.number) : r.status} | ${r.facts ? cell(r.facts.date) : r.status} | ${r.facts ? cell(r.facts.total) : r.status} | ${cell(r.filename)} | ${r.messageId} |`);
   return [head, ...body].join('\n');
 }
+
+/** One printed amount as cents: "1.234,56 €", "50.00 EUR" and "19,00" are all read; anything else is null. */
+function cents(total: string): number | null {
+  const m = /(-?\d{1,3}(?:[.,\s]\d{3})*[.,]\d{2}|-?\d+[.,]\d{2})/.exec(total);
+  if (!m) return null;
+  const raw = m[1].replace(/\s/g, '');
+  const dec = Math.max(raw.lastIndexOf(','), raw.lastIndexOf('.'));
+  const whole = raw.slice(0, dec).replace(/[.,]/g, '');
+  return Math.round(Number(whole + '.' + raw.slice(dec + 1)) * 100);
+}
+
+/** The sum of the totals that were found, computed here so that nobody has to add them up by hand. Null when none was found. */
+export function sumTotals(totals: Array<string | null | undefined>): { found: number; of: number; sum: string | null } {
+  const values = totals.map((t) => (t ? cents(t) : null));
+  const found = values.filter((v): v is number => v !== null);
+  if (!found.length) return { found: 0, of: totals.length, sum: null };
+  const total = found.reduce((a, b) => a + b, 0);
+  const euro = totals.some((t) => t && /€|eur/i.test(t));
+  const text = (Math.abs(total) / 100).toFixed(2).replace('.', ',').replace(/\B(?=(\d{3})+(?!\d))/g, '.');
+  return { found: found.length, of: totals.length, sum: `${total < 0 ? '-' : ''}${text}${euro ? ' €' : ''}` };
+}
