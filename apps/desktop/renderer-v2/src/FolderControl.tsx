@@ -113,7 +113,7 @@ export function useFolderControl(opts: {
     if (!mention) return false;
     setError('');
     setMenuOpen(false);
-    setProposal(proposalFor(mention.check, 'chat', mention.rememberedAccess, { message: text, voiceTurnId }));
+    setProposal(proposalFor(mention.check, 'chat', mention.rememberedAccess, { message: text, voiceTurnId, needsWrite: mention.needsWrite }));
     return true;
   };
 
@@ -220,6 +220,7 @@ export function useFolderControl(opts: {
           {proposal.message && <><dt>Your message</dt><dd style={{ whiteSpace: 'pre-wrap' }}>{proposal.message.length > 300 ? `${proposal.message.slice(0, 300)}…` : proposal.message}</dd></>}
           {!usable && <><dt>Why</dt><dd>{proposal.check.reason}</dd></>}
           {usable && proposal.check.warning && <><dt>Note</dt><dd>{proposal.check.warning}</dd></>}
+          {usable && proposal.needsWrite && <><dt>Why</dt><dd>Your message asks to create or change files here, which needs Write. It is ticked below; untick it to keep this folder read-only.</dd></>}
         </dl>
         {usable && (
           <fieldset className="folder-access">

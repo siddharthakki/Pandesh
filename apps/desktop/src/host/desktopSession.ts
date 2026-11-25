@@ -75,7 +75,7 @@ import {
   checkWorkspaceFolder, clearWorkspaceRecord, folderInside, isWorkspaceAccess, readRecentWorkspaces, readWorkspaceRecord,
   rememberWorkspace, writeWorkspaceRecord, type FolderCheck, type RecentWorkspace, type WorkspaceAccess, type WorkspaceSource,
 } from './workspaceAccess';
-import { findFolderMentionWithin } from './folderMention';
+import { asksToChangeFiles, findFolderMentionWithin, findFolderOfNamedFile } from './folderMention';
 import { emptyMissionCockpit, projectMissionCockpit } from './missionCockpit';
 import { WorkspaceActivityLog, activityTitle } from './workspaceActivity';
 import { BROWSER_SCREENSHOT_SOURCE, sanitizeToolActivity } from '../../../../core/shared/toolActivity';
@@ -1624,12 +1624,22 @@ export class DesktopSession {
    * sent. Null when there is nothing to ask. The disk search is bounded, so a slow drive never holds a message long.
    */
   async inspectFolderMention(text: string): Promise<DesktopFolderMention | null> {
-    const mention = await findFolderMentionWithin(String(text ?? ''), FOLDER_MENTION_TIMEOUT_MS);
+    const needsWrite = asksToChangeFiles(String(text ?? ''));
+    // A request to create or change one file names the file, not its folder: its folder is then the one to ask about.
+    const mention = await findFolderMentionWithin(String(text ?? ''), FOLDER_MENTION_TIMEOUT_MS)
+      ?? (needsWrite ? await Promise.race([findFolderOfNamedFile(String(text ?? '')), new Promise<null>((resolve) => setTimeout(() => resolve(null), FOLDER_MENTION_TIMEOUT_MS))]).catch(() => null) : null);
     if (!mention) return null;
-    if (this.folder && folderInside(mention.folder, this.folder)) return null;
+    if (this.folder && folderInside(mention.folder, this.folder)) {
+      // Already the workspace. Nothing to ask, unless it is read-only and the message asks to change files there: then the
+      // same card comes back for this workspace with Write offered, instead of a refusal in words that sends the person
+      // to find a menu.
+      if (!(needsWrite && this.workspaceAccess === 'read')) return null;
+      const here = checkWorkspaceFolder(this.folder, { dataDir: this.dataDir });
+      return { folder: here.folder, spelled: mention.spelled, check: here, rememberedAccess: 'read', needsWrite: true };
+    }
     const check = checkWorkspaceFolder(mention.folder, { dataDir: this.dataDir });
     const remembered = this.recentWorkspaces.find((r) => folderInside(r.folder, check.folder) && folderInside(check.folder, r.folder));
-    return { folder: check.folder, spelled: mention.spelled, check, rememberedAccess: remembered?.access ?? null };
+    return { folder: check.folder, spelled: mention.spelled, check, rememberedAccess: remembered?.access ?? null, ...(needsWrite ? { needsWrite: true } : {}) };
   }
 
   /** The workspace as the window shows it: the folder, what Pandesh may do there, and since when. */
@@ -3039,7 +3049,29 @@ export class DesktopSession {
       agents: { path: '/v1/agents' },
       // Missions: background objectives with specialist steps (core/api/missionRoutes.ts).
       missions: { path: '/v1/missions?limit=12' },
+      bridgeActivity: { path: '/v1/bridge/activity' },
+      // External-agent approval: the card in the Missions dock. Only these three fixed routes; the window names a task and a decision, never a path.
+      bridgeApprovals: { path: '/v1/bridge/approvals' },
+      bridgeApprove: { path: `/v1/bridge/tasks/${id}/approval`, method: 'POST', body: { requestId: String(args.requestId ?? ''), decision: args.decision === 'approve' ? 'approve' : 'refuse', confidentialOverride: args.confidentialOverride === true } },
+      bridgeAudit: { path: `/v1/bridge/tasks/${id}/audit` },
+      // One relayed task with the worker's full event log (Core keeps it; it never goes to a paired client).
+      bridgeTask: { path: `/v1/bridge/tasks/${id}` },
+      // Agent controls on a worker panel: the same Core lifecycle a paired client uses (pause/resume only for Kandev workers).
+      bridgeCancel: { path: `/v1/bridge/tasks/${id}/cancel`, method: 'POST', body: {} },
+      bridgePause: { path: `/v1/bridge/tasks/${id}/pause`, method: 'POST', body: {} },
+      bridgeResume: { path: `/v1/bridge/tasks/${id}/resume`, method: 'POST', body: {} },
+      // A5: the owner approves a reviewed change, then (separately) brings it into the checkout as a new branch.
+      bridgeApproveChange: { path: `/v1/bridge/tasks/${id}/approve-change`, method: 'POST', body: {} },
+      bridgeRejectChange: { path: `/v1/bridge/tasks/${id}/reject-change`, method: 'POST', body: {} },
+      bridgeDeliver: { path: `/v1/bridge/tasks/${id}/deliver`, method: 'POST', body: {} },
+      bridgeDiff: { path: `/v1/bridge/tasks/${id}/diff` },
+      // A worker action held for a person (Kandev permission). Core accepts this only over the host transport.
+      // Worker tasks that failed or wait for review, for the task screen's "Needs you" column, and the retry Core already offers.
+      workerAttention: { path: '/v1/dev-stories/needs-attention' },
+      devStoryRetry: { path: `/v1/dev-stories/${encodeURIComponent(String(args.storyId ?? ''))}/retry`, method: 'POST', body: {} },
+      devStoryPermission: { path: `/v1/dev-stories/${encodeURIComponent(String(args.storyId ?? ''))}/permissions/${encodeURIComponent(String(args.pendingId ?? ''))}`, method: 'POST', body: { allow: args.allow === true, via: 'window' } },
       mission: { path: `/v1/missions/${id}` },
+      missionReceipt: { path: `/v1/missions/${id}/receipt` },
       missionCancel: { path: `/v1/missions/${id}/cancel`, method: 'POST', body: {} },
       missionContinue: { path: `/v1/missions/${id}/continue`, method: 'POST', body: {} },
       agent: { path: `/v1/agents/${id}` },
@@ -4084,6 +4116,24 @@ export class DesktopSession {
     } finally {
       try { fs.rmSync(file, { force: true }); } catch { /* best effort */ }
     }
+  }
+
+  /**
+   * The picture a 3D scene page rendered of itself inside the sandboxed preview, saved so Core can have it looked at by a
+   * vision model on this PC. It is a check, not a result: it is not registered as an artifact and is replaced per view.
+   */
+  async saveSceneShot(artifactId: string, dataUrl: string, view: string | null): Promise<{ path: string; bytes: number }> {
+    if (!/^[A-Za-z0-9_-]{1,80}$/.test(artifactId)) throw new Error('not an artifact id');
+    const match = /^data:image\/(jpeg|png);base64,([A-Za-z0-9+/=]+)$/.exec(dataUrl);
+    if (!match) throw new Error('the picture must be a JPEG or PNG data URL');
+    const bytes = Buffer.from(match[2], 'base64');
+    if (bytes.byteLength < 200 || bytes.byteLength > 8 * 1024 * 1024) throw new Error('the picture is empty or larger than 8 MB');
+    const dir = path.join(this.dataDir, 'workshop-shots');
+    fs.mkdirSync(dir, { recursive: true });
+    const name = `${artifactId}-${(view ?? 'view').replace(/[^a-z0-9]/gi, '').slice(0, 12) || 'view'}.${match[1] === 'png' ? 'png' : 'jpg'}`;
+    const file = path.join(dir, name);
+    fs.writeFileSync(file, bytes);
+    return { path: file, bytes: bytes.byteLength };
   }
 
   async listArtifacts(conversationId?: string): Promise<DesktopArtifactView[]> {

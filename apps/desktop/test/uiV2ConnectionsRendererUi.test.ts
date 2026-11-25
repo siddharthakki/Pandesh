@@ -2,7 +2,7 @@
 /**
  * v2 had no place to enter Google credentials ("I can't enter google credentials anywhere", owner, 2026-11-10), and
  * the assistant sent the owner to a "Connections → Google Services" menu that v2 did not have. v2 now has Connections
- * (Connections, in the left sidebar) with the Classic Google card's states and actions, through the same host calls. The prompt
+ * (Settings in the left sidebar, Connections tab) with the Classic Google card's states and actions, through the same host calls. The prompt
  * names only menus that exist.
  */
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
@@ -107,14 +107,18 @@ describe('v2 Connections view', () => {
 });
 
 describe('the assistant names only menus that exist', () => {
-  it('v2 Connections (left sidebar) and Classic Connections → Google are real', () => {
+  it('v2 Settings → Connections and Classic Connections → Google are real', () => {
     const app = fs.readFileSync(path.join(__dirname, '../renderer-v2/src/App.tsx'), 'utf8');
-    expect(app).toMatch(/\{ id: 'connections', label: 'Connections — providers, Google, phone', text: 'Connections', icon: 'plug', current: view === 'connections', onClick: \(\) => go\('connections'\) \}/);
+    // Settings is in the sidebar, and its Connections tab opens the Connections page.
+    expect(app).toMatch(/\{ id: 'settings', label: 'Settings — connections, models, tools, permissions, diagnostics', text: 'Settings', icon: 'gear', current: place === 'settings'/);
+    expect(app).toMatch(/if \(tab === 'connections'\) go\('connections'\);/);
+    const places = fs.readFileSync(path.join(__dirname, '../renderer-v2/src/placesModel.ts'), 'utf8');
+    expect(places).toMatch(/\{ id: 'connections', label: 'Connections', hint: 'Providers, Google, phone' \}/);
     const classic = fs.readFileSync(path.join(__dirname, '../renderer/index.html'), 'utf8');
     expect(classic).toContain('<h2 class="integrations-main-title">Connections</h2>');
     expect(classic).toContain('id="integ-card-google"');
     expect(classic).toContain('<h3 class="int-card-title">Google Services</h3>');
-    expect(GOOGLE_SETUP_WHERE).toBe('Connections (left sidebar) in the v2 interface, or Connections and settings (left sidebar) → Add / Configure → Google Services in the Classic interface');
+    expect(GOOGLE_SETUP_WHERE).toBe('Settings (left sidebar) → Connections in the v2 interface, or Connections and settings (left sidebar) → Add / Configure → Google Services in the Classic interface');
     expect(classic).toContain('data-conn-tab="configure"');
     expect(navigationPromptLines('v2')).toMatch(/Never ask the user to paste a client secret, password, API key or token into the chat/);
     const engine = fs.readFileSync(path.join(__dirname, '../../../core/runtime/piAgentEngine.ts'), 'utf8');

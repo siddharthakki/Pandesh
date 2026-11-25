@@ -22,6 +22,8 @@ import { appendMessage, createConversation } from './conversations';
 
 export const BRIDGE_MAX_INSTRUCTION_CHARS = 20_000;
 export const BRIDGE_MAX_CONTEXT_CHARS = 60_000;
+import { parseDeclaredIntent, type TaskIntentKind } from './taskIntent';
+
 const PAIRING_CODE_TTL_MS = 5 * 60_000;
 const PAIRING_CODE_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
 const MAX_FAILED_REDEEMS = 5;
@@ -40,6 +42,42 @@ export interface BridgeSourceRef {
   title?: string;
   capturedAt?: string;
   via?: 'send_button' | 'panda_mode';
+  /**
+   * What the requester declared the task to be (MCP `intent`), if anything. It only ever narrows what runs: a declared code change still
+   * needs a read-write project and the owner's approval. Kept in this JSON column so no schema change is needed (older builds ignore it).
+   */
+  declaredIntent?: TaskIntentKind;
+  /**
+   * A multi-step mission: ordered steps with dependencies, run as dependent stories in one private copy. The steps are ALSO written
+   * into the instruction text (so the approval card shows them and the instruction digest binds them); this is the structured form.
+   */
+  plan?: MissionStep[];
+}
+
+export interface MissionStep { key: string; instruction: string; dependsOn: string[] }
+export const MISSION_MAX_STEPS = 6;
+
+/** Validates steps: 2..MISSION_MAX_STEPS, unique short keys, dependencies only on EARLIER steps (so there is never a cycle). */
+export function cleanMissionSteps(raw: unknown): MissionStep[] | null {
+  if (raw === undefined || raw === null) return null;
+  if (!Array.isArray(raw) || raw.length < 2 || raw.length > MISSION_MAX_STEPS) throw new CoreError('invalid_request', `a mission has 2 to ${MISSION_MAX_STEPS} steps`);
+  const seen = new Set<string>();
+  return raw.map((s, i) => {
+    const o = (s ?? {}) as Record<string, unknown>;
+    const key = typeof o.key === 'string' && /^[a-z0-9][a-z0-9-]{0,23}$/i.test(o.key) ? o.key.toLowerCase() : `step-${i + 1}`;
+    if (seen.has(key)) throw new CoreError('invalid_request', `step key '${key}' is used twice`);
+    const instruction = typeof o.instruction === 'string' ? o.instruction.replace(/\s+/g, ' ').trim() : '';
+    if (!instruction || instruction.length > 1_500) throw new CoreError('invalid_request', `step '${key}' needs an instruction of at most 1500 characters`);
+    const dependsOn = Array.isArray(o.dependsOn) ? o.dependsOn.map(d => String(d).toLowerCase()) : [];
+    for (const d of dependsOn) if (!seen.has(d)) throw new CoreError('invalid_request', `step '${key}' depends on '${d}', which is not an earlier step`);
+    seen.add(key);
+    return { key, instruction, dependsOn: [...new Set(dependsOn)] };
+  });
+}
+
+/** The steps as text appended to the instruction: what the owner reads on the card and what the digest covers. */
+export function missionStepsText(steps: MissionStep[]): string {
+  return ['', 'Steps (each runs after the steps it depends on; one private copy, one branch):', ...steps.map((s, i) => `${i + 1}. [${s.key}] ${s.instruction}${s.dependsOn.length ? ` (after: ${s.dependsOn.join(', ')})` : ''}`)].join('\n');
 }
 
 export interface BridgeTransferConsent {
@@ -93,9 +131,49 @@ export interface BridgeTaskResult {
   changedFiles: string[];
   commit: string | null;
   pendingApprovals: Array<{ pendingId: string; what: string }>;
-  activity: Array<{ at: string; kind: string; text: string }>;
+  /**
+   * The worker's observed events (Kandev messages), oldest first, bounded (BRIDGE_ACTIVITY_LIMIT). Appended by message id on every
+   * refresh and kept after the task ends, so the log survives completion and restarts. `id` is Kandev's message id (dedupe key).
+   */
+  activity: Array<{ id?: string; at: string; kind: string; text: string; status?: string }>;
   timeline: Array<{ at: string; event: string; text: string }>;
+  /** The worker's branch in its private worktree, when known. */
+  branch?: string | null;
+  /** A5 code change: which project, and the branch the owner had it delivered to in their checkout (null until asked). */
+  codeChange?: { project: string; baseRef: string; delivered: { branch: string; commit: string; at: string } | null };
+  /**
+   * What actually happened to the REQUESTED outcome, separate from the task's lifecycle status. A worker finishing is not the requested
+   * change being made: `outcome_completed` only follows the owner's approval of a change that passed Pandesh's own checks.
+   */
+  outcome?: BridgeTaskOutcome;
+  /** A mission's steps, in plan order, each with its own outcome (see BridgeTaskOutcome). */
+  steps?: Array<{
+    key: string; title: string; storyId: string; storyStatus: string;
+    state: BridgeOutcomeState; summary: string; tests: BridgeTaskOutcome['tests'];
+    pendingApprovals: Array<{ pendingId: string; what: string }>;
+  }>;
 }
+
+export type BridgeOutcomeState =
+  | 'waiting' | 'worker_running' | 'worker_finished' | 'worker_failed' | 'verification_failed'
+  | 'awaiting_owner_review' | 'review_denied' | 'outcome_completed' | 'delivered';
+
+export interface BridgeTaskOutcome {
+  intent: TaskIntentKind;
+  state: BridgeOutcomeState;
+  /** One or two sentences, in the owner's words. Also what the requester (ChatGPT) is told. */
+  summary: string;
+  /** Pandesh's own test run on a code change (base vs change). Null when no test run happened. */
+  tests: {
+    command: string; perTest: boolean; passedAfter: number; failedAfter: number;
+    newPassing: string[]; newFailing: string[]; regressions: string[]; preExistingFailing: string[]; fixed: string[];
+  } | null;
+  /** The worker's own words when it could not proceed (kept, never replaced by a generic line). */
+  workerExplanation: string | null;
+}
+
+/** Most events kept per task. Older ones drop off the front. */
+export const BRIDGE_ACTIVITY_LIMIT = 200;
 
 const sha256 = (text: string) => crypto.createHash('sha256').update(text, 'utf8').digest('hex');
 
@@ -274,9 +352,13 @@ export interface SubmitBridgeTaskInput {
   /** Optional page conversation text. Accepted only when the user confirmed sharing it. */
   context?: { text: string; userConfirmed: boolean };
   markedConfidential?: boolean;
+  /** Declared kind of work (see core/domain/taskIntent.ts). Unknown names are refused, never guessed. */
+  intent?: string | null;
+  /** A multi-step mission (see cleanMissionSteps). Only for code changes. */
+  steps?: unknown;
 }
 
-function cleanSourceRef(ref: Partial<BridgeSourceRef> | undefined): BridgeSourceRef {
+function cleanSourceRef(ref: Partial<BridgeSourceRef> | undefined, declaredIntent: TaskIntentKind | null = null, plan: MissionStep[] | null = null): BridgeSourceRef {
   let url: string | undefined;
   if (typeof ref?.url === 'string') {
     try {
@@ -291,6 +373,8 @@ function cleanSourceRef(ref: Partial<BridgeSourceRef> | undefined): BridgeSource
     ...(typeof ref?.title === 'string' ? { title: ref.title.slice(0, 120) } : {}),
     capturedAt: typeof ref?.capturedAt === 'string' && !Number.isNaN(Date.parse(ref.capturedAt)) ? new Date(ref.capturedAt).toISOString() : nowIso(),
     via: ref?.via === 'panda_mode' ? 'panda_mode' : 'send_button',
+    ...(declaredIntent ? { declaredIntent } : {}),
+    ...(plan ? { plan } : {}),
   };
 }
 
@@ -303,6 +387,12 @@ export function submitBridgeTask(db: CoreDatabase, pairing: BridgePairing, input
   if (!/^[\w.:-]{8,100}$/.test(clientRequestId)) throw new CoreError('invalid_request', "'clientRequestId' is required (8-100 characters of letters, digits, '.', ':', '_' or '-')");
   if (typeof input.instruction !== 'string' || input.instruction.trim().length === 0) throw new CoreError('invalid_request', 'the instruction is empty');
   if (input.instruction.length > BRIDGE_MAX_INSTRUCTION_CHARS) throw new CoreError('invalid_request', `the instruction is longer than ${BRIDGE_MAX_INSTRUCTION_CHARS} characters`);
+  const declaredIntent = input.intent === undefined || input.intent === null || input.intent === '' ? null : parseDeclaredIntent(input.intent);
+  if (input.intent && !declaredIntent) throw new CoreError('invalid_request', `unknown intent '${String(input.intent).slice(0, 40)}'; use one of: answer, inspect, code_change, research, operation`);
+  const plan = cleanMissionSteps(input.steps);
+  if (plan && declaredIntent !== 'code') throw new CoreError('invalid_request', 'steps are for a code-change mission: send them with intent code_change');
+  // The steps are part of what the owner approves: they are in the instruction text, so its digest covers them.
+  if (plan) input = { ...input, instruction: `${input.instruction.trim()}\n${missionStepsText(plan)}` };
   if (input.context !== undefined && input.context !== null) {
     if (input.context.userConfirmed !== true) throw new CoreError('invalid_request', 'conversation context is only accepted after the user confirmed sharing it');
     if (typeof input.context.text !== 'string' || input.context.text.length > BRIDGE_MAX_CONTEXT_CHARS) throw new CoreError('invalid_request', `shared context must be text of at most ${BRIDGE_MAX_CONTEXT_CHARS} characters`);
@@ -315,7 +405,7 @@ export function submitBridgeTask(db: CoreDatabase, pairing: BridgePairing, input
     const digest = sha256(input.instruction);
 
     const { sensitivity, reasons } = classifySensitivity(input.instruction + (input.context?.text ? `\n${input.context.text}` : ''), input.markedConfidential === true);
-    const sourceRef = cleanSourceRef(input.sourceRef);
+    const sourceRef = cleanSourceRef(input.sourceRef, declaredIntent, plan);
     const id = newId('ptask');
     const now = nowIso();
     const title = input.instruction.replace(/\s+/g, ' ').trim().slice(0, 80);
@@ -378,7 +468,7 @@ export function setBridgeControl(db: CoreDatabase, taskId: string, control: Brid
  * Claims the right to dispatch. Exactly one caller wins; a retry, a double click or a second browser sees `false`
  * and must not start another execution.
  */
-export function claimBridgeDispatch(db: CoreDatabase, taskId: string, routing: { executor: string; model: string | null; routing: 'explicit' | 'auto'; consent: BridgeTransferConsent | null; grantedBy: string }): boolean {
+export function claimBridgeDispatch(db: CoreDatabase, taskId: string, routing: { executor: string; model: string | null; routing: 'explicit' | 'auto'; consent: BridgeTransferConsent | null; grantedBy: string; taskClass?: string }): boolean {
   const now = nowIso();
   const res = db.run(
     `UPDATE bridge_tasks SET status = 'dispatching', statusDetail = ?, executor = ?, model = ?, routing = ?, externalConsent = ?, updatedAt = ?
@@ -386,7 +476,7 @@ export function claimBridgeDispatch(db: CoreDatabase, taskId: string, routing: {
     [`Starting ${routing.executor}.`, routing.executor, routing.model, routing.routing, routing.consent ? JSON.stringify({ ...routing.consent, grantedBy: routing.grantedBy, grantedAt: now }) : null, now, taskId],
   );
   const won = Number(res.changes) === 1;
-  if (won) addCheckpoint(db, taskId, 'dispatching', `Starting ${routing.executor}${routing.model ? ` (${routing.model})` : ''}.`);
+  if (won) addCheckpoint(db, taskId, 'dispatching', `Starting ${routing.executor}${routing.model ? ` (${routing.model})` : ''}.`, routing.taskClass ? { taskClass: routing.taskClass } : undefined);
   return won;
 }
 

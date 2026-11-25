@@ -31,10 +31,16 @@ import type { RuntimeEventRecord } from '../../shared/wireTypes';
 import { KandevClient, kandevHome, type KandevPermission, type KandevSession } from './kandevClient';
 import { prepareWorkerProfile } from './workerProfile';
 import { gpuLaneLimit } from '../hardwareCapacity';
+import { readChangeDiff, unavailableDiff, type ChangeDiff } from './changeDiff';
 import { automatedChecks, deviceChecks, examineDiff, runAcceptance, validateAcceptanceChecks, type AcceptanceCheck, type VerificationLevel } from './storyAcceptance';
+import { compareTestRuns, judgeTests, runProjectTests, type ProjectTestRun } from './projectTests';
 
 export const DEV_ACTOR = 'kkd:dev-coordinator';
 const MAX_VERIFY_RETRIES = 2;
+/** A worker process that died mid-turn is resumed in the same session this many times before the story needs a person. */
+const MAX_CRASH_RESUMES = 2;
+export const CRASH_TAG = '[kkd-dev:worker-crashed]';
+const RESUME_TEXT = 'Your previous run was interrupted: the worker process stopped before you finished. Your working directory is as you left it. Continue the task from where you were and finish it.';
 const MAX_WORKERS = Number(process.env.KARKEDIKHA_KANDEV_MAX_WORKERS || 2);
 const DEFAULT_CLAUDE_MODEL = process.env.KARKEDIKHA_KANDEV_CLAUDE_MODEL || 'sonnet';
 
@@ -57,6 +63,47 @@ export interface DevStorySpec {
   paths?: string[];
   /** KKD-owned acceptance checks. They live on the story in KKD's database, never in a worktree, and the worker never sees them. */
   acceptance?: AcceptanceCheck[];
+  /**
+   * `inspect`: a read-only look at an authorized project. The repoPath is a private clone of it; the worker may read and run
+   * the tests but not change files. KKD verifies nothing changed (in the clone and in the source checkout) and the worker's
+   * final report is the result, labelled worker-only. There is no diff, no integration and no merge.
+   */
+  mode?: 'inspect';
+  inspect?: { projectName: string; sourcePath: string; ref: string; sourceHead: string; sourceStatusSha: string };
+  /**
+   * With `mode: 'inspect'`: a task that names no project and only asks for an answer (a reply, a status). The worktree is an empty
+   * folder; the same read-only rules and checks apply, and the worker's final message, however short, is the result.
+   */
+  answerOnly?: true;
+  /** Most changed files accepted at verification; more fails it with the list (A5 code changes). */
+  maxFiles?: number;
+  /**
+   * A5: a change requested through the bridge and approved by the owner. repoPath is a private copy (no remote) of this project; the
+   * owner's checkout at sourcePath is never written by KKD or the worker. The result is a branch in the copy.
+   */
+  codeCopy?: {
+    projectName: string; sourcePath: string; ref: string; sourceHead: string; sourceStatusSha: string;
+    /** The task asked for tests: at least one new (or newly passing) test is required, as Pandesh's own test run sees it. */
+    testsRequested?: boolean;
+    /** A mission step's 1-based position in the mission's plan (stories of one plan share a creation time, so it is kept here). */
+    step?: number;
+    /**
+     * The owner's development grant for a multi-step mission (given once, on the mission's approval card): a step whose change passes
+     * Pandesh's own test run (tests ran, no regression, no failing new test) and whose diff raises no review flag is committed onto the
+     * integration branch IN THE PRIVATE COPY without a further click, so the next step can start. Bounded by expiry and revocable
+     * ([kkd-dev:grant-revoked]); anything else still waits for the owner's review. Delivery into the owner's checkout, push and merge are
+     * never covered.
+     */
+    grant?: { id: string; expiresAt: string; steps: number };
+  };
+}
+
+/** Fingerprint of a checkout's HEAD and working-tree state (read-only git), used to prove an inspection did not touch it. */
+export function checkoutFingerprint(dir: string): { head: string; statusSha: string } | null {
+  const head = runHardenedGit(['rev-parse', 'HEAD'], { cwd: dir, encoding: 'utf8', windowsHide: true });
+  const status = runHardenedGit(['status', '--porcelain', '--untracked-files=all'], { cwd: dir, encoding: 'utf8', windowsHide: true });
+  if (head.status !== 0 || status.status !== 0) return null;
+  return { head: String(head.stdout).trim(), statusSha: createHash('sha256').update(String(status.stdout)).digest('hex') };
 }
 
 export function devSpec(story: StoryRecord): DevStorySpec | null {
@@ -84,6 +131,13 @@ export interface PlanInput {
     dependsOn?: string[];
     /** Independently prepared checks KKD runs against the worker's result (see storyAcceptance.ts). */
     acceptanceChecks?: unknown[];
+    /** Read-only inspection of an authorized project (see DevStorySpec.mode). */
+    mode?: 'inspect';
+    inspect?: DevStorySpec['inspect'];
+    /** With mode 'inspect': an answer-only task with no project (see DevStorySpec.answerOnly). */
+    answerOnly?: boolean;
+    maxFiles?: number;
+    codeCopy?: DevStorySpec['codeCopy'];
   }>;
 }
 
@@ -108,6 +162,9 @@ export function planDevStories(db: CoreDatabase, input: PlanInput): { projectId:
         kind: 'kkd-dev-story', repoPath, baseBranch, integrationBranch, verify: s.verify?.length ? s.verify : input.verify,
         agent: s.agent, model: s.model, paths: s.paths,
         ...(acceptance[s.key].length ? { acceptance: acceptance[s.key] } : {}),
+        ...(s.mode === 'inspect' ? { mode: 'inspect' as const, ...(s.inspect ? { inspect: s.inspect } : {}), ...(s.answerOnly ? { answerOnly: true as const } : {}) } : {}),
+        ...(s.mode !== 'inspect' && s.codeCopy ? { codeCopy: s.codeCopy } : {}),
+        ...(Number.isInteger(s.maxFiles) && s.maxFiles! > 0 ? { maxFiles: s.maxFiles } : {}),
       };
       const story = createStory(db, {
         projectId: project.id, title: s.title, description: s.description ?? '', acceptanceCriteria: s.acceptanceCriteria ?? [],
@@ -151,7 +208,36 @@ function overlaps(a: string[] = [], b: string[] = []): string[] {
   return a.filter(x => b.some(y => { const nx = norm(x), ny = norm(y); return nx === ny || nx.startsWith(ny + '/') || ny.startsWith(nx + '/'); }));
 }
 
-function workerPrompt(story: StoryRecord, spec: DevStorySpec): string {
+export function workerPrompt(story: StoryRecord, spec: DevStorySpec): string {
+  if (spec.mode === 'inspect' && spec.answerOnly) {
+    return [
+      `Task: ${story.title}`,
+      story.description ? `\n${story.description}` : '',
+      '\nThis task needs no project. Your working directory is an empty folder that holds nothing of the owner\'s.',
+      'It is ANSWER-ONLY: do NOT create, edit or delete any file, do NOT commit, push or change any Kandev task state, and do not look outside the working directory.',
+      'Do what the task asks, then write your answer as your last message and stop. If you cannot do it without changing files, say so plainly in that message.',
+    ].join('\n');
+  }
+  if (spec.codeCopy) {
+    return [
+      `Task: ${story.title}`,
+      story.description ? `\n${story.description}` : '',
+      `\nYour CURRENT WORKING DIRECTORY is your own worktree of a private copy of ${spec.codeCopy.projectName} at branch ${spec.codeCopy.ref}. Make the change here. If the task names a path on this PC, that is the owner's checkout: never read or write it; use the same relative path in your working directory.`,
+      'Name files by paths RELATIVE to your working directory (src/index.js, test/index.test.js), or absolute paths that start with your working directory (run `pwd` once if unsure). The folder named in your memory or settings instructions is NOT this project: never build file paths from it. Any read or write outside your working directory is refused automatically.',
+      `\nRules: change at most ${spec.maxFiles ?? 'a few'} files and only what the task needs. Run the existing tests for the code you touch with single plain commands (no \`&&\`, no \`cd\`). Do NOT commit, push, merge, switch branches, add remotes, install packages or change any Kandev task state: KarkeDikha verifies the change, the owner reviews it, and only then is it committed to a branch in this copy.`,
+      'This is a CODE CHANGE task: the owner approved changing files in this copy. Make the requested change and add or update tests for it when the task asks for tests. Pandesh runs the project\'s tests itself before and after your change: do not weaken, skip or delete existing tests, and do not fix unrelated failing tests unless the task asks (report them instead).',
+      'If the change cannot be made here, change nothing and say plainly why in your last message. When done, stop and summarise exactly what you changed and which tests you ran with their results.',
+    ].join('\n');
+  }
+  if (spec.mode === 'inspect') {
+    return [
+      `Task: ${story.title}`,
+      story.description ? `\n${story.description}` : '',
+      `\nThe repository to inspect is your CURRENT WORKING DIRECTORY: a private copy of ${spec.inspect?.projectName ?? 'the project'} at branch ${spec.inspect?.ref ?? 'the requested branch'}. If the task names a path on this PC, that is the owner's own checkout: do not read it, use relative paths in your working directory instead.`,
+      '\nThis is a READ-ONLY inspection. Rules: read and search files freely; run the existing tests with single plain commands (for example `npx vitest run <test files>`); do NOT create, edit or delete any file, do NOT commit, push, switch branches, install packages or change any Kandev task state.',
+      'Run commands one at a time (no `&&` chains, no `cd`). When you are done, stop and write the final report as your last message: what you inspected, which tests you ran with their exact results, and each defect you found with file and line, or state plainly that you found none.',
+    ].join('\n');
+  }
   return [
     `Story: ${story.title}`,
     story.description ? `\n${story.description}` : '',
@@ -165,6 +251,9 @@ function workerPrompt(story: StoryRecord, spec: DevStorySpec): string {
   ].join('\n');
 }
 
+/** A worker held on a person's decision for this long, with no live session, stops holding a worker slot. */
+export const STALE_DECISION_MS = 30 * 60_000;
+
 interface KandevContext { workspaceId: string; workflowId: string; executorProfileId: string; backlogStepId?: string; runningStepId?: string }
 
 /**
@@ -173,14 +262,19 @@ interface KandevContext { workspaceId: string; workflowId: string; executorProfi
  * workers ran one at a time. Task REVIEW also means "worker is waiting on a permission", so a task is only moved when it
  * provably holds no worker: no live session and nothing pending. Returns the ids moved.
  */
-export async function reclaimIdleWipSlots(kandev: KandevClient, workflowId: string, runningStepId: string, reviewStepId: string): Promise<string[]> {
-  const { tasks } = await kandev.tool<{ tasks: Array<{ id: string; state: string; workflow_step_id?: string }> }>('list_tasks_kandev', { workflow_id: workflowId });
+export async function reclaimIdleWipSlots(kandev: KandevClient, workflowId: string, runningStepId: string, reviewStepId: string, now = Date.now()): Promise<string[]> {
+  const { tasks } = await kandev.tool<{ tasks: Array<{ id: string; state: string; workflow_step_id?: string; updated_at?: string }> }>('list_tasks_kandev', { workflow_id: workflowId });
   const moved: string[] = [];
   for (const t of tasks.filter(t => t.workflow_step_id === runningStepId && (t.state === 'REVIEW' || t.state === 'COMPLETED'))) {
     const sessions = await kandev.sessions(t.id).catch(() => null);
     if (!sessions || sessions[0]?.state === 'RUNNING' || sessions[0]?.state === 'STARTING') continue; // unknown or live
     const pending = await kandev.pendingPermissions(t.id).catch(() => null);
-    if (!pending || pending.length) continue; // unknown or waiting on a decision: the worker may still be alive
+    if (!pending) continue; // unknown: the worker may still be alive
+    // A recent wait on a decision keeps its slot. One nobody has answered for STALE_DECISION_MS (an abandoned test, a Core that
+    // is gone) is moved out of In Progress: its session and its pending request are left exactly as they are, so a late
+    // decision still reaches the worker, but it no longer takes a slot from new work (seen 2026-11-21: one such task, two days
+    // old, left a two-worker limit running one worker at a time).
+    if (pending.length && !(Date.parse(t.updated_at ?? '') < now - STALE_DECISION_MS)) continue;
     await kandev.tool('move_task_kandev', { task_id: t.id, workflow_id: workflowId, workflow_step_id: reviewStepId });
     moved.push(t.id);
   }
@@ -206,6 +300,10 @@ async function profileFor(kandev: KandevClient, agent: DevAgent, model: string |
   const { agents } = await kandev.tool<{ agents: Array<{ id: string; name: string; capability_status?: string; capability_error?: string; profiles?: Array<{ id: string; name: string; model: string; auto_approve: boolean }> }> }>('list_agents_kandev', {});
   const entry = agents.find(a => a.name === AGENT_IDS[agent]);
   if (!entry) throw new Error(`${agent} is not installed for Kandev (${AGENT_IDS[agent]} missing)`);
+  if (entry.capability_status === 'failed') {
+    const fresh = await kandev.reprobeAgent(entry.name);
+    if (fresh) { entry.capability_status = fresh.status; entry.capability_error = fresh.error ?? ''; }
+  }
   if (entry.capability_status && entry.capability_status !== 'ok') throw new Error(`${agent} is not usable in Kandev: ${entry.capability_status} ${entry.capability_error ?? ''}`.trim());
   const want = agent === 'claude' ? (model || DEFAULT_CLAUDE_MODEL) : model;
   const safe = (entry.profiles ?? []).filter(p => !p.auto_approve);
@@ -396,6 +494,19 @@ function logPermission(storyId: string, p: KandevPermission, d: { allow: boolean
   } catch { /* logging must never affect a decision */ }
 }
 
+function isInsideWorktree(p: string, worktree: string): boolean {
+  const target = path.resolve(worktree, p.replace(/^\/([a-z])\//i, '$1:/')).toLowerCase();
+  const root = path.resolve(worktree).toLowerCase();
+  return target === root || target.startsWith(root + path.sep);
+}
+
+/** Directions for a worker that reached outside its worktree: where it is, how to name files, and what the wrong path was. */
+export function outsideWorktreeFeedback(p: string, worktree: string, exists: boolean): string {
+  return `Refused: ${p} is outside your working directory${exists ? '' : ' and does not exist'}. Your working directory is ${worktree}; `
+    + 'the project files are there. Use paths relative to it (for example src/index.js), or absolute paths that start with it. '
+    + 'The folder named in your memory or settings instructions is not the project.';
+}
+
 export function permissionDecision(p: KandevPermission, worktree: string | undefined, spec: DevStorySpec): { allow: boolean; reject?: boolean; reason: string } {
   const a = p.action ?? {};
   // Workers must not drive Kandev (task state, dependencies, permissions, new tasks) or reach personal memory tools.
@@ -411,6 +522,23 @@ export function permissionDecision(p: KandevPermission, worktree: string | undef
   }
   if (a.type === 'other' && !a.command && !a.path && /^execute$/i.test(String(a.description ?? p.title ?? '').trim())) {
     return { allow: false, reject: true, reason: 'opaque code-mode "execute" action rejected; use the edit/shell tools so KKD can review each action' };
+  }
+  if (spec.mode === 'inspect' && (a.type === 'file_write' || a.type === 'file_edit' || a.type === 'file_delete')) {
+    return { allow: false, reject: true, reason: 'this is a read-only inspection: files may not be created, edited or deleted' };
+  }
+  if (spec.mode === 'inspect' && a.type === 'file_read' && a.path && worktree) {
+    // The task text names the owner's checkout by path; the agent must read its private copy (its working directory) instead.
+    const target = path.resolve(a.path).toLowerCase();
+    const root = path.resolve(worktree).toLowerCase();
+    if (target === root || target.startsWith(root + path.sep)) return { allow: true, reason: `read ${path.relative(worktree, a.path)}` };
+    return { allow: false, reject: true, reason: `read outside your working directory refused: ${a.path}. The repository to inspect is your current working directory (a private copy); use relative paths there.` };
+  }
+  if ((a.type === 'file_read' || a.type === 'file_write' || a.type === 'file_edit' || a.type === 'file_delete') && a.path && worktree && !isInsideWorktree(a.path, worktree)) {
+    // A path outside the worker's own worktree is refused at once with directions, never put to the owner: in a private copy (A5,
+    // missions) nothing outside is part of the task, and a path that does not exist is a mistake whatever the task. Live b188g
+    // 2026-11-23: Claude built five Read paths from its memory folder's name and the owner was interrupted five times.
+    const exists = fs.existsSync(a.path);
+    if (spec.codeCopy || !exists) return { allow: false, reject: true, reason: outsideWorktreeFeedback(a.path, worktree, exists) };
   }
   if ((a.type === 'file_write' || a.type === 'file_edit') && a.path && worktree) {
     const target = path.resolve(a.path).toLowerCase();
@@ -463,6 +591,63 @@ function git(cwd: string, args: string[]): { ok: boolean; out: string } {
   const r = runHardenedGit(args, { cwd, encoding: 'utf8', windowsHide: true });
   return { ok: r.status === 0, out: `${r.stdout ?? ''}${r.stderr ?? ''}`.trim() };
 }
+
+/** Comment tags for Pandesh's own test runs on an A5 change (base run cached; comparison per verification). */
+const BASELINE_TAG = '[kkd-dev:baseline-tests]';
+export const TESTS_TAG = '[kkd-dev:tests]';
+
+/**
+ * The project's tests as they were BEFORE the change, run once per story in a temporary detached worktree of the private copy at the
+ * commit the worker started from, and cached on the story. The worker's worktree and the owner's checkout are not involved.
+ */
+function baselineTests(db: CoreDatabase, storyId: string, spec: DevStorySpec, worktree?: string): ProjectTestRun {
+  const cached = [...listComments(db, storyId)].reverse().find(c => c.body.startsWith(BASELINE_TAG));
+  if (cached) { try { return JSON.parse(cached.body.slice(BASELINE_TAG.length)) as ProjectTestRun; } catch { /* recompute */ } }
+  // The base is the commit this worker started from (merge-base of its worktree and the integration branch): for a mission's later
+  // step that already holds the earlier steps (live b188f: step 2 was measured against main and claimed step 1's test as new).
+  const started = worktree ? git(worktree, ['merge-base', 'HEAD', spec.integrationBranch]) : null;
+  const at = (started?.ok && started.out.trim()) || spec.codeCopy?.sourceHead || spec.baseBranch;
+  const dir = `${spec.repoPath}-baseline`;
+  let run: ProjectTestRun;
+  fs.rmSync(dir, { recursive: true, force: true });
+  git(spec.repoPath, ['worktree', 'prune']);
+  const add = git(spec.repoPath, ['worktree', 'add', '--detach', dir, at]);
+  if (!add.ok) run = { command: 'none', ran: false, ok: false, tests: null, passed: 0, failed: 0, output: add.out.slice(-500), note: 'the base could not be checked out for a test run' };
+  else {
+    run = runProjectTests(dir);
+    git(spec.repoPath, ['worktree', 'remove', '--force', dir]);
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+  addComment(db, storyId, { author: DEV_ACTOR, body: `${BASELINE_TAG}${JSON.stringify({ ...run, output: run.output.slice(-600) })}` });
+  return run;
+}
+
+/**
+ * An account problem in what the worker (or Kandev) reported: a usage limit or a sign-in that no longer works. Retrying cannot fix
+ * either, so the step is parked with the agent's own words (Pandesh never guesses how much quota is left or when it resets).
+ */
+export function accountProblem(text: string | null | undefined): { kind: 'usage_limit' | 'signin'; tag: string; reason: string } | null {
+  const t = String(text ?? '');
+  // Only phrasings Claude Code / the API actually print; a task ABOUT rate limiting must not trip this.
+  if (/usage limit (?:reached|hit|exceeded)|hit your (?:usage |session |weekly )?limit|(?:5|five)-hour limit reached|weekly limit reached|limit reached\s*[∙·|]\s*resets|rate_limit_error|API Error:\s*(?:429|529)|overloaded_error|out of extra usage/i.test(t)) {
+    return { kind: 'usage_limit', tag: '[kkd-dev:account-limit]', reason: `the agent reported a usage limit: "${t.replace(/\s+/g, ' ').trim().slice(0, 240)}"` };
+  }
+  if (/not logged in|please run \/login|invalid api key|authentication_error|oauth token (?:has )?expired|API Error:\s*401/i.test(t)) {
+    return { kind: 'signin', tag: '[kkd-dev:signin-expired]', reason: `the agent cannot sign in: "${t.replace(/\s+/g, ' ').trim().slice(0, 240)}"` };
+  }
+  return null;
+}
+
+/**
+ * The development grant still applies to this story: not expired and not revoked. Revocation is a `[kkd-dev:grant-revoked]` comment on
+ * the story (written by the owner's revoke action or by cancelling the mission); after it every step waits for the owner's review again.
+ */
+export function grantInForce(db: CoreDatabase, storyId: string, grant: NonNullable<NonNullable<DevStorySpec['codeCopy']>['grant']>, now = Date.now()): typeof grant | null {
+  if (!(Date.parse(grant.expiresAt) > now)) return null;
+  if (listComments(db, storyId).some(c => c.body.startsWith(GRANT_REVOKED_TAG))) return null;
+  return grant;
+}
+export const GRANT_REVOKED_TAG = '[kkd-dev:grant-revoked]';
 
 function changedFiles(worktree: string, base: string): string[] {
   const committed = git(worktree, ['diff', '--name-only', `${base}...HEAD`]).out.split('\n');
@@ -527,6 +712,63 @@ async function sendFeedback(db: CoreDatabase, kandev: KandevClient, storyId: str
   }
 }
 
+/** The worker's last substantial prose message (after `since`, when given): what it says about the turn that just ended. */
+async function workerExplanation(kandev: KandevClient, sessionId: string, since?: string): Promise<string | null> {
+  const messages = await kandev.agentMessages(sessionId, 40).catch(() => []);
+  const prose = messages.filter(m => m.kind === 'message' && m.text.trim().length > 40 && (!since || m.at > since));
+  return prose.length ? prose[prose.length - 1].text.trim() : null;
+}
+
+/** Files an agent keeps for itself (its own history/cache); never the user's work. */
+const AGENT_OWN_FILES = /(^|\/)\.(?:claude|aider|codex|cline)[^/]*(\/|$)|(^|\/)node_modules(\/|$)/i;
+
+/**
+ * Completes a read-only inspection. KKD checks what it can check itself: the private clone has no change, and the source
+ * checkout's HEAD and working tree are exactly what they were when the task started. The worker's own report (its last message)
+ * is the finding and is labelled worker-only: test results in it are what the worker says it ran, not an independent re-run.
+ */
+async function finishInspection(db: CoreDatabase, kandev: KandevClient, story: StoryRecord, spec: DevStorySpec, taskId: string, worktree: string, sessionId: string): Promise<void> {
+  const changed = changedFiles(worktree, spec.integrationBranch).filter(f => !AGENT_OWN_FILES.test(f.replace(/\\/g, '/')));
+  const src = spec.inspect ? checkoutFingerprint(spec.inspect.sourcePath) : null;
+  // The owner may legitimately edit or commit in their checkout while an inspection runs, so a different source state is reported,
+  // not treated as the agent's doing. What can block is the one thing KKD can attribute: a change inside the private copy. The agent
+  // cannot write outside the copy (the permission policy rejects every write and every absolute path outside it).
+  const sourceMoved = spec.inspect ? !(src && src.head === spec.inspect.sourceHead && src.statusSha === spec.inspect.sourceStatusSha) : false;
+  if (changed.length) {
+    walk(db, getStory(db, story.id), ['blocked'], 'the read-only inspection changed files');
+    addComment(db, story.id, { author: DEV_ACTOR, body: `[kkd-dev:needs-human] A read-only inspection changed files in its private copy: ${changed.slice(0, 10).join(', ')}. Nothing was accepted.` });
+    return;
+  }
+  const messages = await kandev.agentMessages(sessionId, 60).catch(() => []);
+  // An answer may be one short sentence ("Hello from …"); an inspection report is expected to say more than that.
+  const minReport = spec.answerOnly ? 0 : 40;
+  const prose = messages.filter(m => m.kind === 'message' && m.text.trim().length > minReport);
+  const report = (prose[prose.length - 1]?.text ?? '').trim();
+  if (!report) {
+    walk(db, getStory(db, story.id), ['blocked'], 'the worker finished without writing a report');
+    addComment(db, story.id, { author: DEV_ACTOR, body: '[kkd-dev:needs-human] The worker finished without a final report. Retry to ask again.' });
+    return;
+  }
+  const tools = messages.filter(m => m.kind === 'tool_execute').map(m => m.text.replace(/\s+/g, ' ').slice(0, 140));
+  const header = spec.answerOnly
+    ? '[kkd-dev:inspected] level=worker-only; answer-only task: no project was shared, and KKD checked that no file changed in the worker\'s empty folder; every write and every path outside it was refused by policy.'
+    : `[kkd-dev:inspected] level=worker-only; read-only checked by KKD: no file changed in the agent's private copy of ${spec.inspect?.projectName ?? 'the project'} (branch ${spec.inspect?.ref ?? '?'} @ ${spec.inspect?.sourceHead.slice(0, 8) ?? '?'}); every write and every path outside the copy was refused by policy.${sourceMoved ? ' Note: your own checkout changed while this ran (you edited or committed there); the agent never had access to it.' : spec.inspect ? ' Your checkout is exactly as it was.' : ''}`;
+  addComment(db, story.id, {
+    author: DEV_ACTOR,
+    body: [
+      header,
+      `--- worker ${spec.answerOnly ? 'answer' : 'report'} (its own words; test results are as the worker reported them) ---`,
+      report.slice(0, 6_000),
+      `--- commands the worker ran (${tools.length}) ---`,
+      tools.slice(-8).join(' | ') || 'none recorded',
+    ].join('\n'),
+  });
+  walk(db, getStory(db, story.id), ['validation', 'delivery_approval', 'merge_queue'], 'inspection verified read-only');
+  walk(db, getStory(db, story.id), ['done'], 'read-only inspection completed');
+  await kandev.stopTask(taskId, 'KKD completed the inspection').catch(() => { /* already idle */ });
+  await kandev.setTaskState(taskId, 'COMPLETED');
+}
+
 let integrating = false;
 
 /**
@@ -545,6 +787,7 @@ export interface VerifyOptions {
 
 export async function verifyAndIntegrate(db: CoreDatabase, kandev: KandevClient, story: StoryRecord, spec: DevStorySpec, taskId: string, worktree: string, sessionId: string, reviewApproved = false, opts: VerifyOptions = {}): Promise<void> {
   if (!reviewApproved) story = walk(db, story, ['review'], 'worker turn finished; KKD review started');
+  if (spec.mode === 'inspect') return finishInspection(db, kandev, story, spec, taskId, worktree, sessionId);
   const files = changedFiles(worktree, spec.integrationBranch);
   const unsafe = findUnsafeDeliveryPaths(files);
   // Failures since dispatch or since a human last pressed retry.
@@ -561,7 +804,9 @@ export async function verifyAndIntegrate(db: CoreDatabase, kandev: KandevClient,
     }
     if (retries + 1 > MAX_VERIFY_RETRIES) {
       walk(db, getStory(db, story.id), ['blocked'], `verification failed ${retries + 1} times: ${what}`);
-      addComment(db, story.id, { author: DEV_ACTOR, body: `[kkd-dev:needs-human] Verification failed ${retries + 1} times. Kandev task ${taskId}, worktree ${worktree}.` });
+      // Whatever the worker said last goes with it, so the owner sees its side and not only "failed 3 times".
+      const said = await workerExplanation(kandev, sessionId).catch(() => null);
+      addComment(db, story.id, { author: DEV_ACTOR, body: `[kkd-dev:needs-human] Verification failed ${retries + 1} times (${what}). Kandev task ${taskId}, worktree ${worktree}.${said ? ` The worker's last words: ${said.replace(/\s+/g, ' ').slice(0, 600)}` : ''}` });
       return;
     }
     const now = getStory(db, story.id);
@@ -569,8 +814,23 @@ export async function verifyAndIntegrate(db: CoreDatabase, kandev: KandevClient,
     const delivered = await sendFeedback(db, kandev, story.id, taskId, sessionId, `KarkeDikha verification failed: ${what}\n\n${detail.slice(-2_000)}\n\nFix it, re-run ${spec.verify.join(' ')}, and stop. Do not commit.`);
     if (!delivered) await repairOrPark(db, kandev, story.id, 'the correction was not accepted by the worker session');
   };
-  if (!files.length) return fail('the worker made no changes', 'git reports no changed files in the worktree');
+  if (!files.length) {
+    // A worker that changed nothing but explained itself (the task cannot be done here, it is not allowed, it needs a decision) is
+    // not sent back with "make changes": that pressures it into a diff it already said it should not make, three times in a minute
+    // (seen 2026-11-21). Its explanation is kept and the story goes to the owner. Only a silent worker gets the usual correction.
+    const explanation = opts.recovery ? null : await workerExplanation(kandev, sessionId, handOffEpoch(history, true));
+    if (explanation) {
+      addComment(db, story.id, { author: DEV_ACTOR, body: `[kkd-dev:verify-failed] the worker made no changes and explained why\n--- worker explanation (its own words) ---\n${explanation.slice(0, 2_000)}` });
+      walk(db, getStory(db, story.id), ['blocked'], 'the worker made no changes and explained why; not sent back for repair');
+      addComment(db, story.id, { author: DEV_ACTOR, body: `[kkd-dev:needs-human] The worker made no changes and explained why (not sent back for repair): ${explanation.replace(/\s+/g, ' ').slice(0, 600)}` });
+      return;
+    }
+    return fail('the worker made no changes', 'git reports no changed files in the worktree');
+  }
   if (unsafe.length) return fail('protected or credential-adjacent files changed', unsafe.map(u => `${u.path}: ${u.reason}`).join('\n'));
+  if (spec.maxFiles && files.length > spec.maxFiles) {
+    return fail(`${files.length} files changed; this change was approved for at most ${spec.maxFiles}`, `Changed: ${files.join(', ')}\nRevert (git checkout -- <file>) what the task does not need and keep only the requested change.`);
+  }
   const outOfScope = spec.paths?.length ? files.filter(f => !overlaps([f], spec.paths).length) : [];
   if (outOfScope.length) {
     return fail('files outside the story scope changed', `Allowed: ${spec.paths!.join(', ')}\nRevert (git checkout -- <file>) these out-of-scope changes: ${outOfScope.join(', ')}`);
@@ -588,18 +848,36 @@ export async function verifyAndIntegrate(db: CoreDatabase, kandev: KandevClient,
         `${accepted.evidence}\n\nThe criteria in the story are authoritative; your own tests did not cover these inputs. Fix the implementation (do not weaken tests) and make it correct in general.`);
     }
   }
+  // A5: Pandesh runs the project's own tests on the base and on the change and compares them per test. A regression, a failing new test
+  // or (when the task asked for tests) no new test sends the work back; tests that were already failing are reported, never hidden.
+  let testReport = '';
+  let testsProven = false;
+  if (spec.codeCopy) {
+    const base = baselineTests(db, story.id, spec, worktree);
+    const after = runProjectTests(worktree);
+    const cmp = compareTestRuns(base, after);
+    addComment(db, story.id, { author: DEV_ACTOR, body: `${TESTS_TAG} ${JSON.stringify(cmp)}` });
+    const verdict = judgeTests(cmp, spec.codeCopy.testsRequested === true);
+    if (!verdict.ok) return fail(`Pandesh's own test run: ${verdict.what}`, `${after.output}\n\nFix it (do not weaken or delete tests), and stop. Tests that were already failing before your change are not yours to fix unless the task asks.`);
+    testReport = verdict.report;
+    // Only a per-test comparison (or a passing suite) is evidence enough to commit without a person looking.
+    testsProven = after.ran && (cmp.perTest || after.ok);
+  }
+  const grant = spec.codeCopy?.grant && testsProven && !diff.reviewReasons.length ? grantInForce(db, story.id, spec.codeCopy.grant) : null;
   const level: VerificationLevel = accepted ? 'independent' : 'worker-only';
   addComment(db, story.id, {
     author: DEV_ACTOR,
-    body: `[kkd-dev:verified] level=${level}; \`${spec.verify.join(' ')}\` passed in the worktree${accepted ? `; independent acceptance ${accepted.passed}/${accepted.total} (${accepted.names.join(', ')})` : ''}.\nChanged: ${files.join(', ')}\n${check.out.slice(-600)}`,
+    body: `[kkd-dev:verified] level=${level}; \`${spec.verify.join(' ')}\` passed in the worktree${accepted ? `; independent acceptance ${accepted.passed}/${accepted.total} (${accepted.names.join(', ')})` : ''}.${testReport ? ` ${testReport}` : ''}\nChanged: ${files.join(', ')}\n${check.out.slice(-600)}`,
   });
-  if (!reviewApproved && (level === 'worker-only' || diff.reviewReasons.length)) {
+  // An A5 change always waits for the owner's review, whatever was verified: only the owner decides what reaches their project.
+  const needsReview = spec.codeCopy ? !grant : (level === 'worker-only' || diff.reviewReasons.length > 0);
+  if (!reviewApproved && needsReview) {
     // Nothing independent verifies this result (or the diff looks like it weakened tests): "the worker finished" is not
     // "it is correct". Hold it for a person and keep dependents locked.
     walk(db, story, ['validation', 'delivery_approval'], 'worker finished and its own tests pass; waiting for a human review');
     addComment(db, story.id, {
       author: DEV_ACTOR,
-      body: `[kkd-dev:awaiting-review] ${level === 'worker-only' ? 'Worker completed and its own tests pass, but KKD has no independent acceptance check for this story.' : 'Independent acceptance passed, but the diff needs a human look.'}${diff.reviewReasons.length ? ` ${diff.reviewReasons.join('; ')}.` : ''}\nChanged: ${files.join(', ')}\nWorktree: ${worktree}\nApprove to integrate it, or retry with a note.`,
+      body: `[kkd-dev:awaiting-review] ${spec.codeCopy ? `Change ready for the owner's review. ${testReport}` : level === 'worker-only' ? 'Worker completed and its own tests pass, but KKD has no independent acceptance check for this story.' : 'Independent acceptance passed, but the diff needs a human look.'}${diff.reviewReasons.length ? ` ${diff.reviewReasons.join('; ')}.` : ''}\nChanged: ${files.join(', ')}\nWorktree: ${worktree}\nApprove to integrate it, or retry with a note.`,
     });
     return;
   }
@@ -629,6 +907,14 @@ export async function verifyAndIntegrate(db: CoreDatabase, kandev: KandevClient,
     git(integ.dir, ['reset', '--hard', before]);
     return fail(`\`${spec.verify.join(' ')}\` failed after integration (merge rolled back)`, post.out);
   }
+  if (spec.codeCopy) {
+    // The committed result must show the same test picture: no test that passed before the change may fail on the integration branch.
+    const again = judgeTests(compareTestRuns(baselineTests(db, story.id, spec, worktree), runProjectTests(integ.dir)), false);
+    if (!again.ok) {
+      git(integ.dir, ['reset', '--hard', before]);
+      return fail(`Pandesh's own test run failed after integration (merge rolled back): ${again.what}`, '');
+    }
+  }
   if (checks.length) {
     // The integrated result must also satisfy the independent checks (the merge may interact with earlier stories).
     const again = runAcceptance(story.id, checks, integ.dir);
@@ -639,7 +925,7 @@ export async function verifyAndIntegrate(db: CoreDatabase, kandev: KandevClient,
   }
   const sha = git(integ.dir, ['rev-parse', '--short', 'HEAD']).out;
   walk(db, getStory(db, story.id), ['done'], `integrated as ${sha} on ${spec.integrationBranch}`);
-  addComment(db, story.id, { author: DEV_ACTOR, body: `[kkd-dev:integrated] ${sha} on ${spec.integrationBranch} (branch ${branch}); level=${level}${reviewApproved ? ' (human-reviewed)' : ''}${opts.recovery ? ' (verified from preserved worker output; worker not restarted)' : ''}; \`${spec.verify.join(' ')}\`${checks.length ? ' and independent acceptance' : ''} passed after merge.` });
+  addComment(db, story.id, { author: DEV_ACTOR, body: `[kkd-dev:integrated] ${sha} on ${spec.integrationBranch} (branch ${branch}); level=${level}${reviewApproved ? ' (human-reviewed)' : grant ? ` (committed under the owner's development grant ${grant.id} after Pandesh's own test run passed)` : ''}${opts.recovery ? ' (verified from preserved worker output; worker not restarted)' : ''}; \`${spec.verify.join(' ')}\`${checks.length ? ' and independent acceptance' : ''} passed after merge.` });
   // Stop first: Kandev's stop handler moves the task back to REVIEW, which would undo COMPLETED.
   await kandev.stopTask(taskId, 'KKD integrated the story').catch(() => { /* already idle */ });
   await kandev.setTaskState(taskId, 'COMPLETED'); // releases Kandev dependents
@@ -660,6 +946,24 @@ async function waitsOnOverlap(db: CoreDatabase, kandev: KandevClient, workspaceI
   return false;
 }
 
+/**
+ * A local-GPU story must stay in Backlog while the GPU lanes are taken. Its Kandev blocked_by keeps it from starting, but released
+ * to "In Progress" it would hold a worker slot the whole time it waits (seen live 2026-11-21: a queued OpenCode task kept a Claude
+ * story that needs no GPU from starting). The GPU is one per machine, so peers are counted across every project.
+ */
+export async function waitsOnGpuLane(db: CoreDatabase, kandev: KandevClient, workspaceId: string, story: StoryRecord, spec: DevStorySpec, lanes = gpuLaneLimit()): Promise<boolean> {
+  if (!usesLocalGpu(spec)) return false;
+  let busy = 0;
+  for (const other of listStories(db, { limit: 200 })) {
+    const ospec = devSpec(other);
+    if (!ospec || other.id === story.id || !ACTIVE.includes(other.status) || !usesLocalGpu(ospec)) continue;
+    const t = await kandev.taskByExternalId(workspaceId, other.id).catch(() => null);
+    const s = t ? (await kandev.sessions(t.id).catch(() => []))[0] : undefined;
+    if (s && (s.state === 'RUNNING' || s.state === 'STARTING')) busy++;
+  }
+  return busy >= lanes;
+}
+
 /** One reconciliation pass over dispatched stories. Safe to call repeatedly and after any restart. */
 export async function reconcileDevStories(db: CoreDatabase, kandev: KandevClient): Promise<void> {
   const stories = listStories(db, { limit: 200 }).filter(s => devSpec(s) && ACTIVE.includes(s.status));
@@ -672,7 +976,7 @@ export async function reconcileDevStories(db: CoreDatabase, kandev: KandevClient
     const spec = devSpec(story)!;
     const task = await kandev.taskByExternalId(workspaceId, story.id);
     if (!task) continue;
-    const isIntegrated = listComments(db, story.id).some(c => c.body.startsWith('[kkd-dev:integrated]'));
+    const isIntegrated = listComments(db, story.id).some(c => c.body.startsWith('[kkd-dev:integrated]') || c.body.startsWith('[kkd-dev:inspected]'));
     if (task.state === 'COMPLETED' && !isIntegrated) {
       // Something other than KKD (e.g. the worker via Kandev's task MCP) completed it: undo, so dependents stay gated.
       await kandev.setTaskState(task.id, 'REVIEW');
@@ -682,8 +986,11 @@ export async function reconcileDevStories(db: CoreDatabase, kandev: KandevClient
     const session = (await kandev.sessions(task.id))[0];
     if (session?.state === 'FAILED' && story.status !== 'blocked') {
       // Kandev could not start (or lost) the worker. Without this the story would read "starting" forever.
-      walk(db, story, ['blocked'], 'the worker session failed');
-      addComment(db, story.id, { author: DEV_ACTOR, body: `[kkd-dev:needs-human] [kkd-dev:launch-failed] Kandev worker session failed: ${(session.error_message ?? 'no error reported').slice(0, 300)}. Fix the cause, then retry.` });
+      const account = accountProblem(session.error_message);
+      walk(db, story, ['blocked'], account ? account.reason.slice(0, 200) : 'the worker session failed');
+      addComment(db, story.id, { author: DEV_ACTOR, body: account
+        ? `[kkd-dev:needs-human] ${account.tag} ${account.kind === 'usage_limit' ? 'Claude could not continue: ' : 'Claude is not signed in: '}${account.reason}. Not retried automatically (a retry cannot fix it). The worktree is kept; Retry once ${account.kind === 'usage_limit' ? 'the limit has reset' : 'Claude Code is signed in again (open it once)'}.`
+        : `[kkd-dev:needs-human] [kkd-dev:launch-failed] Kandev worker session failed: ${(session.error_message ?? 'no error reported').slice(0, 300)}. Fix the cause, then retry.` });
       continue;
     }
     if (story.status === 'blocked') {
@@ -699,7 +1006,7 @@ export async function reconcileDevStories(db: CoreDatabase, kandev: KandevClient
       // A dependent waits in Kandev's Backlog (which never auto-starts, so it holds no worker slot). KKD releases it
       // once KKD itself has verified and integrated every predecessor: moving it to "In Progress" starts the worker.
       const openPreds = predecessors(db, story.id).filter(d => getStory(db, d).status !== 'done');
-      if (story.status === 'implementing' && !openPreds.length && !(await waitsOnOverlap(db, kandev, workspaceId, story, spec))) {
+      if (story.status === 'implementing' && !openPreds.length && !(await waitsOnOverlap(db, kandev, workspaceId, story, spec)) && !(await waitsOnGpuLane(db, kandev, workspaceId, story, spec))) {
         // Kandev must agree the predecessors are complete, or it refuses to start the dependent.
         for (const d of predecessors(db, story.id)) {
           const dt = await kandev.taskByExternalId(workspaceId, d);
@@ -710,6 +1017,13 @@ export async function reconcileDevStories(db: CoreDatabase, kandev: KandevClient
         if (ctx.backlogStepId && ctx.runningStepId && task.workflow_step_id === ctx.backlogStepId) {
           await kandev.tool('move_task_kandev', { task_id: task.id, workflow_id: ctx.workflowId, workflow_step_id: ctx.runningStepId });
           addComment(db, story.id, { author: DEV_ACTOR, body: '[kkd-dev:released] All predecessors are verified and integrated; handed to a worker.' });
+        }
+      } else if (usesLocalGpu(spec) && (await waitsOnGpuLane(db, kandev, workspaceId, story, spec))) {
+        // Released earlier (or by an older build) while the GPU is busy: back to Backlog so it stops holding a worker slot.
+        ctx ??= await kandevContext(kandev);
+        if (ctx.backlogStepId && ctx.runningStepId && task.workflow_step_id === ctx.runningStepId) {
+          await kandev.tool('move_task_kandev', { task_id: task.id, workflow_id: ctx.workflowId, workflow_step_id: ctx.backlogStepId });
+          addComment(db, story.id, { author: DEV_ACTOR, body: '[kkd-dev:requeued] Waiting for the local GPU lane in Backlog, so it does not hold a worker slot.' });
         }
       }
       continue; // blocked in Kandev or waiting for a worker slot
@@ -729,6 +1043,16 @@ export async function reconcileDevStories(db: CoreDatabase, kandev: KandevClient
     }
     if (session.worktree_path) { try { linkDependencies(spec.repoPath, session.worktree_path); } catch { /* verify will report it */ } }
     if (story.status === 'implementing') {
+      // A worker that hit a usage limit or lost its sign-in often stays "running" with that error as its last message: park it with
+      // the agent's own words instead of nudging it (a nudge would only spend another turn on the same error).
+      const lastSaid = (await Promise.resolve().then(() => kandev.agentMessages(session.id, 5)).catch(() => [])).filter(m => m.kind === 'message' || m.kind === 'error').pop();
+      const account = lastSaid ? accountProblem(lastSaid.text) : null;
+      if (account && lastSaid!.text.length < 600) {
+        await kandev.stopTask(task.id, `KKD: ${account.kind === 'usage_limit' ? 'usage limit' : 'sign-in'} reported by the agent`).catch(() => { /* already idle */ });
+        walk(db, story, ['blocked'], account.reason.slice(0, 200));
+        addComment(db, story.id, { author: DEV_ACTOR, body: `[kkd-dev:needs-human] ${account.tag} ${account.reason}. The worker was stopped and not retried; the worktree is kept. Retry once ${account.kind === 'usage_limit' ? 'the limit has reset' : 'Claude Code is signed in again'}.` });
+        continue;
+      }
       await relayWorkerNarrative(db, kandev, story, session.id).catch(() => { /* cosmetic: never block reconciliation */ });
       if (await nudgeIfSilent(db, kandev, story, task.id, session.id).catch(() => false)) continue;
     }
@@ -777,6 +1101,28 @@ export async function reconcileDevStories(db: CoreDatabase, kandev: KandevClient
     }
     if (!turnOver || !session.worktree_path) continue;
     if ((await kandev.pendingPermissions(task.id)).length) continue; // waiting on a human decision
+    // A turn that ended because the worker PROCESS died (killed, crashed) is not finished work, whatever it left in the worktree.
+    // Kandev closes it with a completion time like a normal turn but marks it error_terminated; without this it was verified, read as
+    // "the worker made no changes" and cost a verification attempt (live b188i 2026-11-23, claude.exe killed mid-step). Resume the
+    // same session (its context is restored), bounded. Usage limits and lost sign-ins were already parked above and never get here.
+    if (turnOver && turn?.metadata?.error_terminated === true) {
+      const marks = listComments(db, story.id).filter(c => c.body.startsWith(CRASH_TAG));
+      const thisTurn = `${CRASH_TAG} @${turn!.started_at}`;
+      // The same crashed turn is counted once (a resume message that could not be delivered is simply tried again next tick).
+      const crashes = marks.filter(c => !c.body.startsWith(thisTurn)).length;
+      if (marks.some(c => c.body.startsWith(thisTurn))) {
+        await sendFeedback(db, kandev, story.id, task.id, session.id, RESUME_TEXT);
+        continue;
+      }
+      if (crashes >= MAX_CRASH_RESUMES) {
+        walk(db, story, ['blocked'], 'the worker process stopped repeatedly');
+        addComment(db, story.id, { author: DEV_ACTOR, body: `[kkd-dev:needs-human] The worker process stopped ${crashes + 1} times before finishing; Pandesh resumed it ${crashes} time(s) and stops trying. The worktree is kept; Retry to start it again.` });
+        continue;
+      }
+      addComment(db, story.id, { author: DEV_ACTOR, body: `${thisTurn} The worker process stopped before it finished (Kandev: turn error-terminated); resuming the same session (${crashes + 1} of ${MAX_CRASH_RESUMES}).` });
+      await sendFeedback(db, kandev, story.id, task.id, session.id, RESUME_TEXT);
+      continue;
+    }
     integrating = true;
     try {
       await verifyAndIntegrate(db, kandev, getStory(db, story.id), spec, task.id, session.worktree_path, session.id);
@@ -806,8 +1152,11 @@ export async function relayWorkerNarrative(db: CoreDatabase, kandev: KandevClien
   const fresh = (await kandev.agentMessages(sessionId)).filter(m => m.kind === 'message' && m.at > since && m.text.trim().length > 20);
   if (!fresh.length) return false;
   const text = fresh.map(m => m.text.trim()).join('\n\n').slice(0, 700);
-  try { appendMessage(db, conversationId, { role: 'assistant', content: `💬 **${story.title}** (${devSpec(story)?.agent ?? 'worker'}): ${text}`, actor: DEV_ACTOR }); } catch { /* conversation deleted */ }
-  addComment(db, story.id, { author: DEV_ACTOR, body: `[kkd-dev:said-until] ${fresh[fresh.length - 1].at}` });
+  // The "relayed until" marker and the message are written together: a failure between the two must not relay it again.
+  db.transaction(() => {
+    addComment(db, story.id, { author: DEV_ACTOR, body: `[kkd-dev:said-until] ${fresh[fresh.length - 1].at}` });
+    try { appendMessage(db, conversationId, { role: 'assistant', content: `💬 **${story.title}** (${devSpec(story)?.agent ?? 'worker'}): ${text}`, actor: DEV_ACTOR }); } catch { /* conversation deleted */ }
+  });
   return true;
 }
 
@@ -1036,6 +1385,38 @@ export async function retryDevStory(db: CoreDatabase, kandev: KandevClient, stor
   ].join('\n'));
 }
 
+export interface RetryReport {
+  /** True when the retry is on record (the task left "needs you"), whether or not the worker is running yet. */
+  ok: boolean;
+  recorded: boolean;
+  /** started = the worker was handed the task; pending = recorded, the worker has not started yet; not_started = nothing changed. */
+  state: 'started' | 'pending' | 'not_started';
+  /** What to tell the person, in plain words. */
+  detail: string;
+}
+
+/**
+ * A retry asked for by a person, reported as what really happened. `retryDevStory` records the retry first and then
+ * starts the worker; when only that second half failed, the old route answered "an internal error occurred" and the
+ * task screen said "Retry did not start" although the retry was on record and the task was already moving (live,
+ * 2026-11-24: it then failed again normally and came back with its reason). Three different outcomes, three messages.
+ */
+export async function retryDevStoryReported(db: CoreDatabase, kandev: KandevClient, storyId: string, note?: string): Promise<RetryReport> {
+  try {
+    await retryDevStory(db, kandev, storyId, note);
+    return { ok: true, recorded: true, state: 'started', detail: 'Retry started. If it fails again, the task comes back to "Needs you" with the new reason.' };
+  } catch (err) {
+    if (err instanceof CoreError) throw err; // e.g. the task is not waiting for a retry: the caller shows that reason as it is
+    const why = (err instanceof Error ? err.message : String(err)).replace(/\s+/g, ' ').slice(0, 200);
+    let status: string | null = null;
+    try { status = getStory(db, storyId).status; } catch { /* the story is gone */ }
+    if (status === 'implementing') {
+      return { ok: true, recorded: true, state: 'pending', detail: `Retry recorded. The worker has not started yet (${why}); Pandesh keeps trying, and if it cannot start the task comes back to "Needs you" with the reason.` };
+    }
+    return { ok: false, recorded: false, state: 'not_started', detail: `Retry not started, nothing was changed: the worker service did not answer (${why}). The task is still waiting here.` };
+  }
+}
+
 // ---------------------------------------------------------------- recovery: verify work that already exists
 
 /** Content fingerprint of the files KKD is about to commit, so a worktree that changes mid-verification is caught. */
@@ -1147,6 +1528,20 @@ export async function verifyExistingDevStory(db: CoreDatabase, kandev: KandevCli
     if (!task || task.external_id !== storyId) return stay('this story has no Kandev task bound to it');
     // Every worker this story ever had (a reassign or retry may have replaced the task that holds the work): all must be gone.
     const taskIds = [...new Set([task.id, ...listComments(db, storyId).flatMap(c => [...c.body.matchAll(/Kandev task ([0-9a-f-]{36})/g)].map(m => m[1]))])];
+    if (spec.mode === 'inspect') {
+      // An inspection leaves no changes by design: what is preserved is the worker's report. Accept it under the same read-only checks.
+      for (const id of taskIds) {
+        const session = (await kandev.sessions(id).catch(() => []))[0];
+        if (!session?.worktree_path) continue;
+        if (!['CANCELLED', 'COMPLETED', 'FAILED'].includes(session.state)) {
+          const s = await confirmWorkerStopped(kandev, id, session.id);
+          if (!s.stopped) return stay(`a worker could not be confirmed stopped (${s.detail})`);
+        }
+        await verifyAndIntegrate(db, kandev, getStory(db, storyId), spec, task.id, session.worktree_path, session.id, false, { recovery: true });
+        return outcomeOf();
+      }
+      return stay('the inspection has no preserved worker session');
+    }
     const found: Array<{ taskId: string; session: KandevSession; facts: ReconciledWorktree }> = [];
     let stopped = { stopped: true, detail: 'no live agent' };
     let lastError = 'the story never started a worker, so there is no work to verify';
@@ -1360,20 +1755,24 @@ export function confirmDeviceVerification(db: CoreDatabase, storyId: string, ok:
   addComment(db, storyId, { author: 'user', body: ok ? `[kkd-dev:device-verified] ${note ?? 'Verified on the device.'}` : `[kkd-dev:device-failed] ${note ?? 'Failed on the device.'}` });
 }
 
-function verificationOf(evidence: string | null, done: boolean): DevStoryView['verification'] {
+export function verificationOf(evidence: string | null, done: boolean): DevStoryView['verification'] {
   if (!evidence) return null;
-  if (/level=independent/.test(evidence)) return 'independent';
-  if (/human-reviewed/.test(evidence)) return 'human-reviewed';
-  return done || /level=worker-only/.test(evidence) ? 'worker-only' : null;
+  // Only KKD's own header line says what was verified. The rest is the worker's report, which may quote these very words
+  // (seen live 2026-11-21: an inspection of this file was labelled "reviewed by a person").
+  const header = evidence.split('\n', 1)[0];
+  if (/level=independent/.test(header)) return 'independent';
+  if (/human-reviewed/.test(header)) return 'human-reviewed';
+  return done || /level=worker-only/.test(header) ? 'worker-only' : null;
 }
 
-export async function devStoryStatus(db: CoreDatabase, kandev: KandevClient, projectId?: string): Promise<{ available: boolean; counts: Record<string, number>; stories: DevStoryView[] }> {
+export async function devStoryStatus(db: CoreDatabase, kandev: KandevClient, projectId?: string, onlyStoryId?: string): Promise<{ available: boolean; counts: Record<string, number>; stories: DevStoryView[] }> {
   const stories = listStories(db, { projectId, limit: 200 }).filter(s => devSpec(s) && !s.archivedAt);
   const available = await kandev.healthy();
   const workspaceId = available ? await kandev.defaultWorkspaceId().catch(() => null) : null;
   const titles = new Map(stories.map(s => [s.id, s.title]));
   const views: DevStoryView[] = [];
-  for (const s of stories) {
+  // One story's detail (a relayed task refreshed every few seconds) must not query Kandev for every other story too.
+  for (const s of onlyStoryId ? stories.filter(x => x.id === onlyStoryId) : stories) {
     const comments = listComments(db, s.id);
     const last = (tag: string) => [...comments].reverse().find(c => c.body.startsWith(`[kkd-dev:${tag}]`))?.body ?? null;
     const task = workspaceId ? await kandev.taskByExternalId(workspaceId, s.id).catch(() => null) : null;
@@ -1405,12 +1804,12 @@ export async function devStoryStatus(db: CoreDatabase, kandev: KandevClient, pro
       id: s.id, title: s.title, agent: devSpec(s)!.agent, status: s.status, phase, waitingReason: waiting,
       dependsOn: deps.map(d => titles.get(d) ?? d), createdAt: s.createdAt, updatedAt: s.updatedAt, kandevTaskId: task?.id ?? null,
       branch: session?.worktree_branch ?? null, commit: last('integrated')?.match(/\] (\w+)/)?.[1] ?? null,
-      evidence: last('integrated') ?? last('awaiting-review') ?? last('verified') ?? last('verify-failed'),
-      verification: verificationOf(last('integrated') ?? last('verified'), s.status === 'done'),
+      evidence: last('integrated') ?? last('inspected') ?? last('awaiting-review') ?? last('verified') ?? last('verify-failed'),
+      verification: verificationOf(last('integrated') ?? last('inspected') ?? last('verified'), s.status === 'done'),
       acceptanceChecks: automatedChecks(devSpec(s)!.acceptance ?? []).length,
       deviceVerification: deviceVerificationOf(s, devSpec(s)!, comments),
       attempts: { failedVerifications: comments.filter(c => c.body.startsWith('[kkd-dev:verify-failed]')).length, maxCorrections: MAX_VERIFY_RETRIES },
-      pendingApprovals: pending.map(p => ({ pendingId: p.pending_id, what: p.action?.command ?? p.action?.path ?? p.title ?? 'action' })),
+      pendingApprovals: pending.map(p => { const what = p.action?.command ?? p.action?.path ?? p.title ?? 'action'; rememberOwnerView(p.pending_id, what); return { pendingId: p.pending_id, what }; }),
       activity,
     });
   }
@@ -1428,7 +1827,19 @@ export async function devStoryStatus(db: CoreDatabase, kandev: KandevClient, pro
   return { available, counts, stories: views };
 }
 
-const TIMELINE_EVENTS = new Set(['dispatched', 'verify-failed', 'verified', 'integrated', 'awaiting-review', 'needs-human', 'stopped', 'retry', 'reassigned', 'decided', 'device-verified', 'device-failed']);
+const TIMELINE_EVENTS = new Set(['dispatched', 'verify-failed', 'verified', 'integrated', 'inspected', 'awaiting-review', 'needs-human', 'stopped', 'retry', 'reassigned', 'decided', 'device-verified', 'device-failed']);
+
+/**
+ * What a pending worker permission really asks, paths included, for the OWNER's own approval card only. Task details and anything a
+ * paired client (ChatGPT) reads carry the redacted text; the owner must see the real path to decide (live b188h 2026-11-23: five cards
+ * read "<path>"). Memory only, refilled from Kandev on every status read, bounded.
+ */
+const ownerView = new Map<string, string>();
+function rememberOwnerView(pendingId: string, what: string): void {
+  ownerView.delete(pendingId); ownerView.set(pendingId, what);
+  while (ownerView.size > 500) ownerView.delete(ownerView.keys().next().value!);
+}
+export function ownerViewOfPending(pendingId: string): string | null { return ownerView.get(pendingId) ?? null; }
 
 /** Worktrees and home folders are private to this PC: absolute paths never leave Core in a task detail. */
 function redactPrivatePaths(text: string): string {
@@ -1436,8 +1847,69 @@ function redactPrivatePaths(text: string): string {
 }
 
 /** One story for the phone: the status view plus a chronological timeline and the files the last verification saw changed. */
+/** Kandev message kinds that are observable worker events (its prose, tool calls, permission requests, session status). */
+const WORKER_EVENT = /^(message|tool_[a-z_]+|permission_request|status)$/;
+
+/**
+ * The worker's recent observable events for one story, newest last, straight from Kandev: what it said, the tools it called, the
+ * permissions it asked for. Nothing is invented or summarised; text is whitespace-collapsed, capped and stripped of private paths.
+ * Returns null when there is no Kandev task or session yet (or Kandev is unreachable).
+ */
+export async function devStoryWorkerEvents(kandev: KandevClient, storyId: string, limit = 50): Promise<{ branch: string | null; events: Array<{ id: string; at: string; kind: string; text: string; status?: string }> } | null> {
+  try {
+    const workspaceId = await kandev.defaultWorkspaceId();
+    const task = await kandev.taskByExternalId(workspaceId, storyId);
+    if (!task) return null;
+    const session = (await kandev.sessions(task.id))[0];
+    if (!session) return null;
+    const messages = await kandev.agentMessages(session.id, limit);
+    return {
+      branch: session.worktree_branch ?? null,
+      events: messages.filter(m => m.id && WORKER_EVENT.test(m.kind)).map(m => ({
+        id: m.id, at: m.at, kind: m.kind, text: redactPrivatePaths(m.text.replace(/\s+/g, ' ').trim()).slice(0, 400), ...(m.status ? { status: m.status } : {}),
+      })),
+    };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The story's change as a read-only diff (the review's "View diff"). Before approval it is read from the worker's worktree, after
+ * reconcileWorktree has proven that worktree is Kandev's and belongs to this story's repository. After integration it is read from
+ * the integration branch in the story's own repository. Nothing is written and nothing is approved here.
+ */
+export async function devStoryChangeDiff(db: CoreDatabase, kandev: KandevClient, storyId: string): Promise<ChangeDiff & { ignored: string[] }> {
+  const story = getStory(db, storyId);
+  const spec = devSpec(story);
+  if (!spec) throw new CoreError('invalid_request', 'not a development story');
+  const none = (reason: string, source: ChangeDiff['source'] = null) => ({ ...unavailableDiff(reason, source), ignored: [] });
+  if (story.status === 'done' || story.status === 'merge_queue') {
+    const repo = spec.repoPath;
+    if (!fs.existsSync(path.join(repo, '.git'))) return none('The repository that holds the approved change is gone.', 'private copy');
+    const top = git(repo, ['rev-parse', '--show-toplevel']).out;
+    // Compare real paths: git prints the long name, the stored path may be a Windows 8.3 short spelling (CI 2026-11-23, RUNNER~1).
+    const real = (p: string) => { try { return fs.realpathSync.native(path.resolve(p)).toLowerCase(); } catch { return path.resolve(p).toLowerCase(); } };
+    if (!top || real(top) !== real(repo)) return none('The repository that holds the approved change could not be confirmed.', 'private copy');
+    const tip = `refs/heads/${spec.integrationBranch}`;
+    if (!git(repo, ['rev-parse', '--verify', '--quiet', tip]).ok) return none('The approved change is no longer in its branch.', 'private copy');
+    const base = spec.codeCopy?.sourceHead && git(repo, ['cat-file', '-e', `${spec.codeCopy.sourceHead}^{commit}`]).ok ? spec.codeCopy.sourceHead : git(repo, ['merge-base', spec.baseBranch, tip]).out;
+    if (!base) return none('The change could not be compared with its base.', 'private copy');
+    return readChangeDiff(repo, base, tip, { source: 'private copy', ignore: AGENT_OWN_FILES });
+  }
+  const workspaceId = await kandev.defaultWorkspaceId();
+  const task = await kandev.taskByExternalId(workspaceId, storyId);
+  const session = task ? (await kandev.sessions(task.id).catch(() => []))[0] : undefined;
+  if (!session) return none('The worker has not started, so there is no change yet.', 'worker worktree');
+  const facts = reconcileWorktree(spec, session);
+  if ('error' in facts) return none(`The diff is not shown: ${facts.error}.`, 'worker worktree');
+  const base = git(session.worktree_path!, ['merge-base', spec.integrationBranch, 'HEAD']).out;
+  if (!base) return none('The change could not be compared with its base.', 'worker worktree');
+  return readChangeDiff(session.worktree_path!, base, null, { source: 'worker worktree', ignore: AGENT_OWN_FILES });
+}
+
 export async function devStoryDetail(db: CoreDatabase, kandev: KandevClient, storyId: string): Promise<{ story: DevStoryView; timeline: Array<{ at: string; event: string; text: string }>; changedFiles: string[] }> {
-  const found = (await devStoryStatus(db, kandev)).stories.find(v => v.id === storyId);
+  const found = (await devStoryStatus(db, kandev, undefined, storyId)).stories.find(v => v.id === storyId);
   if (!found) throw new CoreError('not_found', 'task not found');
   // No Kandev identifiers, worker configuration or private filesystem locations in the detail.
   const story: DevStoryView = {
@@ -1459,6 +1931,60 @@ export async function devStoryDetail(db: CoreDatabase, kandev: KandevClient, sto
   return { story, timeline, changedFiles };
 }
 
+// ---------------------------------------------------------------- worker tasks that need the person
+
+export interface WorkerAttentionItem {
+  storyId: string; title: string; agent: string;
+  /** failed = the worker could not start or its result was rejected for good; awaiting_review = finished, waits for the person's review. */
+  state: 'failed' | 'awaiting_review';
+  /** The recorded reason, as KKD wrote it when it happened (private paths removed). */
+  reason: string;
+  /** When that failure or review request was recorded. */
+  since: string;
+  /** The chat the task was started from, when it still exists. */
+  conversationId: string | null;
+  /** The task's own recorded events, oldest first (the last ones). */
+  timeline: Array<{ at: string; event: string; text: string }>;
+  canRetry: boolean;
+}
+
+/**
+ * Worker tasks that wait for the person, read from Core's own records only (no call to Kandev, so the task screen can
+ * ask every few seconds and still sees them while Kandev is down). A failed task stays here, with its real reason and
+ * recorded events, until it is retried, reassigned or stopped: the chat is told once, the task screen keeps showing it.
+ */
+export function devStoriesNeedingAttention(db: CoreDatabase): WorkerAttentionItem[] {
+  const out: WorkerAttentionItem[] = [];
+  for (const s of listStories(db, { limit: 200 })) {
+    if (s.archivedAt || (s.status !== 'blocked' && s.status !== 'delivery_approval')) continue;
+    const spec = devSpec(s);
+    if (!spec) continue;
+    // Report markers are bookkeeping, not events (and one flooded story had 30,000 of them): never loaded here.
+    const comments = db.all<{ body: string; createdAt: string }>("SELECT body, createdAt FROM story_comments WHERE storyId = ? AND body NOT LIKE '[kkd-dev:reported]%' ORDER BY createdAt ASC", [s.id]);
+    const lastTag = comments.map(c => /^\[kkd-dev:(stopped|retry|verify-existing)\]/.test(c.body)).lastIndexOf(true);
+    if (s.status === 'blocked' && lastTag >= 0 && comments[lastTag].body.startsWith('[kkd-dev:stopped]')) continue; // stopped by the person: nothing to decide
+    const sinceRetry = comments.slice(comments.map(c => c.body.startsWith('[kkd-dev:retry]')).lastIndexOf(true) + 1).reverse();
+    const hit = s.status === 'delivery_approval'
+      ? [...comments].reverse().find(c => c.body.startsWith('[kkd-dev:awaiting-review]'))
+      : sinceRetry.find(c => c.body.startsWith('[kkd-dev:needs-human]')) ?? sinceRetry.find(c => c.body.startsWith('[kkd-dev:verify-failed]'));
+    const reason = hit ? hit.body.replace(/^(\[kkd-dev:[\w-]+\]\s*)+/, '').split('\n')[0].slice(0, 400) : (s.status === 'blocked' ? 'Blocked; no reason was recorded.' : 'The worker finished; nothing independent verified it. Review the change, then approve.');
+    const reportTo = comments.find(c => c.body.startsWith('[kkd-dev:report-to] '))?.body.split(' ')[1] ?? null;
+    const conversationId = reportTo && db.get('SELECT 1 AS x FROM conversations WHERE id = ?', [reportTo]) ? reportTo : null;
+    const timeline: WorkerAttentionItem['timeline'] = [];
+    for (const c of comments) {
+      const m = /^\[kkd-dev:([a-z-]+)\]\s*([\s\S]*)$/.exec(c.body);
+      if (m && TIMELINE_EVENTS.has(m[1])) timeline.push({ at: c.createdAt, event: m[1], text: redactPrivatePaths(m[2].replace(/^(\[kkd-dev:[\w-]+\]\s*)+/, '').trim()).slice(0, 400) });
+    }
+    out.push({
+      storyId: s.id, title: s.title, agent: spec.agent,
+      state: s.status === 'blocked' ? 'failed' : 'awaiting_review',
+      reason: redactPrivatePaths(reason), since: hit?.createdAt ?? s.updatedAt, conversationId,
+      timeline: timeline.slice(-8), canRetry: true,
+    });
+  }
+  return out.sort((a, b) => Date.parse(b.since) - Date.parse(a.since));
+}
+
 // ---------------------------------------------------------------- reporting back to the chat
 
 /**
@@ -1467,6 +1993,34 @@ export async function devStoryDetail(db: CoreDatabase, kandev: KandevClient, sto
  * is derived from KKD's own evidence comments and posted once (tracked by `[kkd-dev:reported]` markers), so restarts
  * neither lose nor repeat reports.
  */
+/**
+ * A report key in the form it is stored and compared. `addComment` trims the comment body, so a key cut from a longer
+ * text that happened to end in a space was stored without it and never matched again: one failed worker story posted
+ * its "needs you" message on every 5-second poll, 30,163 times in three days (found 2026-11-24). Every key goes through
+ * this before it is written or looked up, so what is compared is always what is stored.
+ */
+export function reportKey(raw: string): string {
+  return raw.replace(/\s+/g, ' ').trim();
+}
+
+/**
+ * Posts one report into a conversation at most once per (story, key), whoever calls it and however often: the marker
+ * is looked up in the database in its stored form, and the marker and the message are written in ONE transaction, so
+ * neither a repeated poll, a restart, a replayed event nor a failure between the two writes can post it a second time.
+ * Returns true when a message was written now. A deleted conversation still records the marker (nothing to retry).
+ */
+export function postStoryReportOnce(db: CoreDatabase, input: { storyId: string; conversationId: string; key: string; content: string }): boolean {
+  const marker = `[kkd-dev:reported] ${reportKey(input.key)}`;
+  return db.transaction(() => {
+    if (db.get('SELECT 1 AS x FROM story_comments WHERE storyId = ? AND body = ? LIMIT 1', [input.storyId, marker])) return false;
+    addComment(db, input.storyId, { author: DEV_ACTOR, body: marker });
+    try {
+      appendMessage(db, input.conversationId, { role: 'assistant', content: input.content, actor: DEV_ACTOR });
+    } catch { /* conversation deleted: the marker stays, so this is not retried forever */ }
+    return true;
+  });
+}
+
 export function reportDevStoryProgress(db: CoreDatabase): number {
   const rows = db.all<{ storyId: string; body: string }>(
     "SELECT storyId, body FROM story_comments WHERE body LIKE '[kkd-dev:report-to]%'",
@@ -1482,13 +2036,9 @@ export function reportDevStoryProgress(db: CoreDatabase): number {
   let posted = 0;
   for (const [batchId, batch] of batches) {
     const stories = batch.storyIds.map(id => { try { return getStory(db, id); } catch { return null; } }).filter((s): s is StoryRecord => Boolean(s));
-    const reported = (id: string) => new Set(listComments(db, id).filter(c => c.body.startsWith('[kkd-dev:reported]')).map(c => c.body.slice('[kkd-dev:reported] '.length)));
-    const post = (storyId: string, key: string, content: string) => {
-      try {
-        appendMessage(db, batch.conversationId, { role: 'assistant', content, actor: DEV_ACTOR });
-      } catch { /* conversation deleted: keep the marker so we do not retry forever */ }
-      addComment(db, storyId, { author: DEV_ACTOR, body: `[kkd-dev:reported] ${key}` });
-      posted++;
+    const reported = (id: string) => new Set(listComments(db, id).filter(c => c.body.startsWith('[kkd-dev:reported]')).map(c => reportKey(c.body.slice('[kkd-dev:reported]'.length))));
+    const post = (storyId: string, rawKey: string, content: string) => {
+      if (postStoryReportOnce(db, { storyId, conversationId: batch.conversationId, key: rawKey, content })) posted++;
     };
     const tag = (s: StoryRecord, t: string) => [...listComments(db, s.id)].reverse().find(c => c.body.startsWith(`[kkd-dev:${t}]`))?.body ?? null;
     for (const s of stories) {
@@ -1496,7 +2046,7 @@ export function reportDevStoryProgress(db: CoreDatabase): number {
       const integrated = tag(s, 'integrated');
       if (s.status === 'done' && integrated) {
         const key = `integrated ${integrated.slice(0, 60)}`;
-        if (!done.has(key)) post(s.id, key, `✅ **${s.title}** is done — ${devSpec(s)!.agent} finished; ${verificationPhrase(integrated, devSpec(s)!)}: ${integrated.replace('[kkd-dev:integrated] ', '')}${deviceVerificationOf(s, devSpec(s)!, listComments(db, s.id))?.state === 'awaiting' ? '\n⏳ Awaiting device verification: automated checks passed, but this has not been verified on a physical phone.' : ''}`);
+        if (!done.has(reportKey(key))) post(s.id, key, `✅ **${s.title}** is done — ${devSpec(s)!.agent} finished; ${verificationPhrase(integrated, devSpec(s)!)}: ${integrated.replace('[kkd-dev:integrated] ', '')}${deviceVerificationOf(s, devSpec(s)!, listComments(db, s.id))?.state === 'awaiting' ? '\n⏳ Awaiting device verification: automated checks passed, but this has not been verified on a physical phone.' : ''}`);
       } else if (s.status === 'implementing') {
         // A worker action KKD's policy cannot allow on its own is waiting for a person. Without a chat message the run
         // just looks hung (and every story queued behind it with it).
@@ -1508,21 +2058,21 @@ export function reportDevStoryProgress(db: CoreDatabase): number {
           const lines = lastApproval.body.split(/\r?\n/);
           const pendingId = lines[0].slice('[kkd-dev:approval] '.length);
           const key = `approval ${pendingId}`;
-          if (!done.has(key)) post(s.id, key, `⏸ **${s.title}** is paused and needs your decision: ${lines.slice(1).join(' ').slice(0, 400)}\nAllow or deny it in Panda → Tasks. The run does not continue until you decide.`);
+          if (!done.has(reportKey(key))) post(s.id, key, `⏸ **${s.title}** is paused and needs your decision: ${lines.slice(1).join(' ').slice(0, 400)}\nAllow or deny it in Panda → Tasks. The run does not continue until you decide.`);
         }
         // KKD rejected the worker's result and sent it back: say so (otherwise the repair loop is invisible).
         const sinceRetry = comments.slice(comments.map(c => c.body.startsWith('[kkd-dev:retry]')).lastIndexOf(true) + 1);
         const failures = sinceRetry.filter(c => c.body.startsWith('[kkd-dev:verify-failed]'));
         failures.forEach((f, i) => {
           const key = `verify-failed ${f.createdAt}`;
-          if (done.has(key)) return;
+          if (done.has(reportKey(key))) return;
           const text = f.body.replace(/^\[kkd-dev:verify-failed\]\s*/, '').split(/\r?\n/).filter(Boolean).slice(0, 2).join(' — ').slice(0, 420);
           post(s.id, key, `🔁 **${s.title}** — KKD rejected the worker's result (attempt ${i + 1} of ${MAX_VERIFY_RETRIES + 1}) and sent it back for repair: ${text}`);
         });
       } else if (s.status === 'delivery_approval') {
         const hit = tag(s, 'awaiting-review');
         const key = `awaiting-review ${hit?.slice(0, 80)}`;
-        if (hit && !done.has(key)) post(s.id, key, `🔎 **${s.title}** is waiting for your review — ${hit.replace(/^\[kkd-dev:[\w-]+\]\s*/, '').split('\n')[0].slice(0, 300)}\nSay "approve ${s.title}" after you looked at it, or open Tasks.`);
+        if (hit && !done.has(reportKey(key))) post(s.id, key, `🔎 **${s.title}** is waiting for your review — ${hit.replace(/^\[kkd-dev:[\w-]+\]\s*/, '').split('\n')[0].slice(0, 300)}\nSay "approve ${s.title}" after you looked at it, or open Tasks.`);
       } else if (s.status === 'blocked' && !isStopped(db, s.id)) {
         // The block that happened since the latest retry (an earlier, already-retried one must not hide or repeat it).
         const comments = listComments(db, s.id);
@@ -1530,8 +2080,12 @@ export function reportDevStoryProgress(db: CoreDatabase): number {
         const hit = sinceRetry.find(c => c.body.startsWith('[kkd-dev:needs-human]')) ?? sinceRetry.find(c => c.body.startsWith('[kkd-dev:verify-failed]'));
         const why = hit?.body ?? null;
         if (why) {
-          const key = `needs-human ${hit!.createdAt} ${why.slice(0, 60)}`;
-          if (!done.has(key)) post(s.id, key, `⚠️ **${s.title}** needs you: ${why.replace(/^\[kkd-dev:[\w-]+\]\s*/g, '').replace(/^\[kkd-dev:[\w-]+\]\s*/, '').split('\n')[0].slice(0, 300)}\nSay "retry" or "reassign to claude/opencode", or open Tasks.`);
+          // One notification per failure EVENT: the key is the id of the comment that recorded it. A new failure after a
+          // retry is a new comment and so a new notification; the same failure seen by another poll is not. Markers
+          // written before 2026-11-24 used the comment's time and text, and still count.
+          const key = `needs-human ${hit!.id}`;
+          const legacyKey = `needs-human ${hit!.createdAt} ${why.slice(0, 60)}`;
+          if (!done.has(reportKey(key)) && !done.has(reportKey(legacyKey))) post(s.id, key, `⚠️ **${s.title}** needs you: ${why.replace(/^\[kkd-dev:[\w-]+\]\s*/g, '').replace(/^\[kkd-dev:[\w-]+\]\s*/, '').split('\n')[0].slice(0, 300)}\nSay "retry" or "reassign to claude/opencode", or open Tasks.`);
         }
       }
     }
@@ -1539,7 +2093,7 @@ export function reportDevStoryProgress(db: CoreDatabase): number {
     const head = stories[0];
     const settledDone = stories.filter(s => s.status === 'done').length;
     // Keyed by the completed count: a batch that settled with a story needing you reports again once it is fixed.
-    if (allSettled && head && !reported(head.id).has(`final ${batchId} ${settledDone}/${stories.length}`)) {
+    if (allSettled && head && !reported(head.id).has(reportKey(`final ${batchId} ${settledDone}/${stories.length}`))) {
       const doneCount = settledDone;
       const spec = devSpec(head)!;
       const lines = stories.map(s => {

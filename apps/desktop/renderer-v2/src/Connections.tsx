@@ -2,6 +2,7 @@ import React, { useRef, useState } from 'react';
 import { api, errorText, type Snapshot } from './bridge';
 import { NOT_CONNECTED, SETUP_STEPS, STATE_LABEL, googleActions, googleState, serviceRows, type Busy, type Tone } from './googleModel';
 import { PhoneCard } from './Phone';
+import { ChatgptConnectorCard } from './ChatgptConnector';
 import { FreeModelsCard } from './FreeModels';
 import { ProviderCards } from './ProviderCards';
 
@@ -75,6 +76,7 @@ export function Connections({ snapshot, refresh }: { snapshot: Snapshot | null; 
       <div className="board" style={{ display: 'flex', flexDirection: 'column', gap: 12, maxWidth: 760 }}>
         <ProviderCards snapshot={snapshot} refresh={refresh} />
         <PhoneCard />
+        <ChatgptConnectorCard />
         <section className="card" aria-label="Google">
           <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
             <span className="title" style={{ fontSize: 16 }}>Google</span>

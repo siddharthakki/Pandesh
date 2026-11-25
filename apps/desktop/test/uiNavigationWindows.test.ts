@@ -79,7 +79,7 @@ describe('the v2 window', () => {
 
     await act(async () => { listener(navEvent('menu:system', 'v2', 'uinav_c')); });
     await act(async () => { await vi.advanceTimersByTimeAsync(1200); });
-    expect(document.querySelector('[role="dialog"][aria-label="More"]')).not.toBeNull();
+    expect(document.querySelector('[role="dialog"][aria-label="Command palette"]')).not.toBeNull();
     expect(confirmNavigation).toHaveBeenLastCalledWith('uinav_c', true, undefined, 'v2');
 
     await act(async () => { listener(navEvent('view:nowhere', 'v2', 'uinav_d')); });

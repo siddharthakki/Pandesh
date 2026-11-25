@@ -21,7 +21,7 @@ export interface FolderCheck {
   readable: boolean;
   writable: boolean;
 }
-export interface FolderMention { folder: string; spelled: string; check: FolderCheck; rememberedAccess: WorkspaceAccess | null }
+export interface FolderMention { folder: string; spelled: string; check: FolderCheck; rememberedAccess: WorkspaceAccess | null; needsWrite?: boolean }
 
 /** A folder waiting for the person's answer: from the menu (no message) or named in a message that is held until then. */
 export interface FolderProposal {
@@ -33,6 +33,8 @@ export interface FolderProposal {
   voiceTurnId?: string;
   read: boolean;
   write: boolean;
+  /** The held message asks to create or change files: Write starts ticked and the card says why. */
+  needsWrite?: boolean;
 }
 
 /** The last part of a path ("site-builder"), or the drive for a drive root ("D:"). */
@@ -78,14 +80,18 @@ export function recentChoices(recent: RecentWorkspace[] | null | undefined, curr
  * The card for a folder: Read is on (a workspace needs it), Write starts as the person last chose for this folder,
  * otherwise off: Pandesh asks for the least it needs and the person adds Write.
  */
-export function proposalFor(check: FolderCheck, source: FolderProposal['source'], remembered: WorkspaceAccess | null, held?: { message: string; voiceTurnId?: string }): FolderProposal {
+export function proposalFor(check: FolderCheck, source: FolderProposal['source'], remembered: WorkspaceAccess | null, held?: { message: string; voiceTurnId?: string; needsWrite?: boolean }): FolderProposal {
+  // A message that asks to create or change files cannot be carried out read-only: Write starts ticked (when the folder
+  // can be written at all) and the card says so. The person can untick it; every change is still shown for approval.
+  const needsWrite = Boolean(held?.needsWrite) && check.writable;
   return {
     folder: check.folder,
     check,
     source,
     ...(held ? { message: held.message, ...(held.voiceTurnId ? { voiceTurnId: held.voiceTurnId } : {}) } : {}),
     read: true,
-    write: remembered === 'read_write',
+    write: remembered === 'read_write' || needsWrite,
+    ...(needsWrite ? { needsWrite: true } : {}),
   };
 }
 

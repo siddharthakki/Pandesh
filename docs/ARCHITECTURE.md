@@ -1,6 +1,6 @@
 # Pandesh architecture
 
-![Architecture](media/architecture.svg)
+![Architecture](media/architecture.png)
 
 Pandesh has two processes that you run locally: the **desktop app** (Electron) and **Pandesh Core** (a Node.js service).
 Core is the authority. The model proposes tool calls, and Core decides whether each one may run, asks you when it has
@@ -18,7 +18,12 @@ to, executes it, records the result and decides what the turn actually achieved.
 | Delegation | `core/domain/delegation.ts`, `core/runtime/agentRouting.ts` | The Chief Agent hands work to Coding, Research, Personal or Operations. A child attempt can only narrow what its parent may do. Child approvals appear in the parent chat. |
 | Governed capabilities | `core/domain/capabilityDispatch.ts` | Memory, research, files, coding engines and other capabilities that need consent run through one dispatch path with durable approvals, exactly-once execution and redacted evidence. |
 | Truth checks | `core/runtime/outputChecks.ts`, `taskCompletion.ts`, `actionClaims.ts` | Written files are parsed and their values grounded. Unfinished requested steps are pushed back to the model once. Suggested commands are checked against the files. Claims are matched to the tool ledger. |
-| Storage | `core/db` | SQLite (`node:sqlite`) with 50 versioned migrations: conversations, attempts, tool invocations, approvals, memory facts with evidence and contradictions, projects, routines. |
+| Direct answers | `core/runtime/directSystemAnswers.ts`, start of `executeAssistantTurn` | A plain one-line read-only question (today: free disk space) is answered from the read-only system tool itself. The turn is recorded like any other (message, outcome, tool invocation) but no model is loaded. Anything that asks for more goes to the model as before. |
+| Places | `apps/desktop/renderer-v2/src/placesModel.ts` | Home, Work and Settings. Pure model that decides which place and tab a view belongs to; the existing views are unchanged underneath. Work lists worker tasks under Running, Completed and Failed with their execution log folded; a chat shows only its own live workers (`workerModel.ts`). |
+| Workers and Panda Bridge | `core/runtime/kandev`, [docs/PANDA_BRIDGE.md](PANDA_BRIDGE.md) | Claude Code, OpenCode and other workers run in isolated private copies through Kandev. A sweep (`workspaceSweep.ts`, at Core start and hourly) removes copies of finished, cancelled, expired and orphaned tasks and keeps unresolved changes as one bounded patch. |
+| Workshop scenes | `core/runtime/workshopSceneWriter.ts`, [docs/WORKSHOP.md](WORKSHOP.md) | Builds a three.js scene from a description, checks it and opens it in the Workshop viewer. |
+| Storage policy | `scripts/storage-check.mjs`, `scripts/lib/storage-policy.mjs` | `npm run storage:preflight` / `storage:postflight`: one repository, one active branch, bounded evidence (size limit, no generated builds or junctions), and exact, expiring, owner-signed exceptions. It reports and never deletes. |
+| Storage | `core/db` | SQLite (`node:sqlite`) with 55 versioned migrations: conversations, attempts, tool invocations, approvals, memory facts with evidence and contradictions, projects, routines. |
 
 ## A turn, step by step
 
@@ -33,6 +38,13 @@ to, executes it, records the result and decides what the turn actually achieved.
 5. After the model stops, Core runs its checks: output checks on written files, the finish-what-was-asked pass, the
    suggested-command check and claim guards. Core then records a verdict (`verified`, `unverified`, `failed`,
    `conversational`) from the ledger, not from the model's own sentence.
+
+## What changed in Build 188
+
+- **Fewer model calls.** The disk-space question that used to load a 12B model (about 28 s) is now answered from the system tool in about 4 s. The path is deliberately narrow and falls through to the model whenever the request is not a bare read-only question.
+- **Honest claims.** The action-claim guard also withholds "you have unread emails" (and similar counts) unless a mailbox read tool actually succeeded in the turn.
+- **Scoped activity.** The chat shows only its own conversation's live workers and anything waiting for a decision; finished workers live in Work.
+- **Bounded disk use.** Private task copies and golden evidence have size and age limits enforced by code, not by habit.
 
 ## Privacy and safety model
 

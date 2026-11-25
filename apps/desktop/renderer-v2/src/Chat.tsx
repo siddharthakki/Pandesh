@@ -1,5 +1,11 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { MissionDock } from './Missions';
+import { MissionControlPane } from './MissionControlPane';
+import { OutcomeReceipt } from './OutcomeReceipt';
+import { RehearsalPane } from './RehearsalPane';
+import { type RehearsalPlan, type RehearsalMove } from './rehearsalModel';
+import { type Receipt } from './receiptModel';
+import { type MissionView } from './missionModel';
 import { api, errorText, onDesktopEvent, type ApprovalCard, type BriefAction, type BriefItem, type Snapshot, type TranscriptMessage } from './bridge';
 import { Icon, Mark, elapsed, timeOf } from './ui';
 import { ActivityAside } from './Activity';
@@ -24,6 +30,13 @@ interface Props {
   openConversationId: string | null;
   onOpenPalette: () => void;
   onOpenBoard: () => void;
+  /** Shows or hides the conversation list beside the chat. Absent (narrow window): the button opens the palette's chat list. */
+  onToggleHistory?: () => void;
+  historyOpen?: boolean;
+  /** The shell shows what needs the person above the chat, so the welcome screen does not list it a second time. */
+  briefInShell?: boolean;
+  /** The person started a new chat here: the shell stops pointing at the conversation it opened earlier. */
+  onNewChat?: () => void;
   /** Opens Settings (models, permissions, diagnostics). */
   onOpenSettings?: () => void;
   /** Text to place in the composer (from a workspace's "Ask Pandesh"). */
@@ -69,6 +82,7 @@ const TOOL_WORDS: Record<string, { title: string; allow: string; why?: string }>
   governed_research: { title: 'Search the web', allow: 'Allow this web search', why: 'It goes online (public web only)' },
   create_simulation: { title: 'Run a simulation in the Workshop', allow: 'Allow the simulation', why: 'It saves a new simulation on this PC; nothing goes online' },
   build_3d_model: { title: 'Build a 3D model in the Workshop', allow: 'Allow building it', why: 'It saves a new Workshop file on this PC; nothing goes online' },
+  build_scene: { title: 'Build a 3D scene in the Workshop', allow: 'Allow building it', why: 'It saves a new scene on this PC and draws it offline in a sandbox; nothing goes online' },
   create_design: { title: 'Design a page in the Workshop', allow: 'Allow designing it', why: 'It saves a new page on this PC; its preview runs offline in a sandbox' },
   create_video: { title: 'Make a video in the Workshop', allow: 'Allow rendering it', why: 'It renders a new video on this PC from the pictures listed; nothing goes online' },
   workshop_edit: { title: 'Change it in the Workshop', allow: 'Allow this change', why: 'It saves a new version on this PC; the earlier version is kept' },
@@ -100,7 +114,7 @@ function pendingDecision(s: Snapshot | null): null | { kind: 'tool' | 'image' | 
   return null;
 }
 
-export function Chat({ snapshot, snapshotError, refresh, narrow, openConversationId, onOpenPalette, onOpenBoard, onOpenSettings, draft, onDraftUsed, wake, wakeTurn, onWakeTurnTaken, onVoiceBusy }: Props) {
+export function Chat({ snapshot, snapshotError, refresh, narrow, openConversationId, onOpenPalette, onOpenBoard, onToggleHistory, historyOpen, briefInShell, onNewChat, onOpenSettings, draft, onDraftUsed, wake, wakeTurn, onWakeTurnTaken, onVoiceBusy }: Props) {
   const [messages, setMessages] = useState<TranscriptMessage[]>([]);
   const [loadedFor, setLoadedFor] = useState<string | null | undefined>(undefined);
   const [live, setLive] = useState<{ attemptId: string | null; text: string }>({ attemptId: null, text: '' });
@@ -112,6 +126,43 @@ export function Chat({ snapshot, snapshotError, refresh, narrow, openConversatio
   const [busy, setBusy] = useState(false);
   const [deciding, setDeciding] = useState(false);
   const [closedFor, setClosedFor] = useState<string | null>(null);
+  const [receipt, setReceipt] = useState<Receipt | null>(null);
+  const [receiptMissionId, setReceiptMissionId] = useState<string | null>(null);
+  const [activeMission, setActiveMission] = useState<MissionView | null>(null);
+  const [rehearsalPlan, setRehearsalPlan] = useState<RehearsalPlan | null>(null);
+
+  const fetchReceipt = async (missionId: string) => {
+    try {
+      const r = await api.household('missionReceipt', { id: missionId }) as { receipt: Receipt };
+      if (r?.receipt) { setReceipt(r.receipt); setReceiptMissionId(missionId); }
+    } catch { /* not ready */ }
+  };
+
+  const fetchRehearsal = async (roots: string[]) => {
+    try {
+      const r = await api.household('propose', { roots, inspectContents: true }) as { plan: any; preview: string };
+      if (r?.plan) {
+        const p = r.plan;
+        const moves = (p.moves ?? p.proposedMoves ?? []).map((m: any) => ({
+          source: m.source ?? m.from ?? '',
+          destination: m.destination ?? m.to ?? '',
+          bytes: m.bytes ?? m.size ?? 0,
+          conflict: Boolean(m.conflict || m.destinationExists),
+        }));
+        const plan: RehearsalPlan = {
+          planId: p.id ?? p.planId,
+          totalMoves: p.totalMoves ?? moves.length,
+          moves,
+          duplicates: (p.duplicateSets ?? []).map((d: any, i: number) => ({ set: i + 1, files: d.files ?? d.count ?? 0, bytes: d.bytes ?? d.redundantBytes ?? 0 })),
+          conflicts: moves.filter((m: RehearsalMove) => m.conflict).length,
+          spaceFreedBytes: p.spaceFreedBytes ?? p.redundantBytes ?? 0,
+          spaceMovedBytes: p.spaceMovedBytes ?? 0,
+          digest: p.digest ?? '',
+        };
+        setRehearsalPlan(plan);
+      }
+    } catch { /* ignore */ }
+  };
   const [forcedOpen, setForcedOpen] = useState(false);
   const [declined, setDeclined] = useState(false);
   const [routeOpen, setRouteOpen] = useState(false);
@@ -126,6 +177,23 @@ export function Chat({ snapshot, snapshotError, refresh, narrow, openConversatio
   useEffect(() => { if (draft) { setText(draft); onDraftUsed?.(); setTimeout(() => textarea.current?.focus(), 0); } }, [draft]);
   const convId = openConversationId ?? snapshot?.selectedConversationId ?? null;
   const runningHere = Boolean(snapshot?.running) && (snapshot?.activeConversationId ?? null) === convId;
+
+  // Poll missions for the contextual Mission Control pane.
+  useEffect(() => {
+    if (!convId) { setActiveMission(null); return; }
+    let cancelled = false;
+    const load = async () => {
+      try {
+        const r = await api.household('missions', { conversationId: convId }) as { missions: MissionView[] };
+        if (cancelled) return;
+        const running = (r.missions ?? []).find((m) => m.status === 'running');
+        setActiveMission(running ?? null);
+      } catch { /* ignore */ }
+    };
+    void load();
+    const t = setInterval(load, 2000);
+    return () => { cancelled = true; clearInterval(t); };
+  }, [convId]);
 
   // Open the conversation the user picked so the next send goes there.
   useEffect(() => {
@@ -456,7 +524,9 @@ export function Chat({ snapshot, snapshotError, refresh, narrow, openConversatio
     <div style={{ flex: '1 1 auto', minHeight: 0, display: 'flex', position: 'relative' }}>
     <div style={{ flex: '1 1 auto', minWidth: 0, display: 'flex', flexDirection: 'column' }}>
       <div className="topbar">
-        <button type="button" className="ghost-icon" title="Chats (Ctrl K)" aria-label="Open chats" onClick={onOpenPalette}><Icon name="chats" size={18} /></button>
+        {onToggleHistory
+          ? (!historyOpen && <button type="button" className="ghost-icon" title="Show conversations" aria-label="Show conversations" aria-expanded={false} onClick={onToggleHistory}><Icon name="chats" size={18} /></button>)
+          : <button type="button" className="ghost-icon" title="Chats (Ctrl K)" aria-label="Open chats" onClick={onOpenPalette}><Icon name="chats" size={18} /></button>}
         <span className="title">{idle ? 'New chat' : 'Chat'}</span>
         {snapshot?.selectedAgentId && (
           <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8, padding: '2px 4px 2px 10px', border: '1px solid var(--pulse)', borderRadius: 999, fontSize: 13 }}>
@@ -472,7 +542,7 @@ export function Chat({ snapshot, snapshotError, refresh, narrow, openConversatio
           </button>
         )}
         {(activities.length > 0 || shownRun != null) && !asideOpen && <button type="button" className="btn small" title="Show what Pandesh did in this chat" onClick={() => { setClosedFor(null); setForcedOpen(true); }}>Activity{activities.length ? ` · ${activities.length}` : ''}</button>}
-        <button type="button" className="ghost-icon" title="New chat" aria-label="New chat" onClick={() => { void api.newConversation().then(() => { setMessages([]); setLoadedFor(null); refresh(); }); }}><Icon name="plus" size={18} /></button>
+        <button type="button" className="ghost-icon" title="New chat" aria-label="New chat" onClick={() => { void api.newConversation().then(() => { onNewChat?.(); setMessages([]); setLoadedFor(null); refresh(); }); }}><Icon name="plus" size={18} /></button>
         <button type="button" className="search-btn" title="Search everything (Ctrl K)" onClick={onOpenPalette}><Icon name="search" size={16} /><span>Search</span>{!narrow && <kbd>Ctrl K</kbd>}</button>
       </div>
 
@@ -492,14 +562,14 @@ export function Chat({ snapshot, snapshotError, refresh, narrow, openConversatio
             <div className="hero">
               <div className="dateline"><Mark size={28} /><span>{new Date().toLocaleDateString([], { weekday: 'long', day: 'numeric', month: 'long' })}</span></div>
               <h1>{greeting()}</h1>
-              {brief === null && <p>Ask me anything. I use local models by default; you decide what else is allowed.</p>}
-              {brief && needs === 0 && <p>Nothing needs you right now.</p>}
-              {brief && needs > 0 && (
+              {(briefInShell || brief === null) && <p>Ask me anything. I use local models by default; you decide what else is allowed.</p>}
+              {!briefInShell && brief && needs === 0 && <p>Nothing needs you right now.</p>}
+              {!briefInShell && brief && needs > 0 && (
                 <button type="button" className="btn" style={{ alignSelf: 'flex-start', borderRadius: 19, display: 'flex', alignItems: 'center', gap: 10 }} aria-expanded={briefOpen} onClick={() => setBriefOpen(!briefOpen)}>
                   <span className="dot attention" aria-hidden="true" />{needs === 1 ? '1 thing needs you' : `${needs} things need you`}<span style={{ color: 'var(--muted)', fontSize: 14 }}>{briefOpen ? 'Hide' : 'Show'}</span>
                 </button>
               )}
-              {brief && briefOpen && needs > 0 && (
+              {!briefInShell && brief && briefOpen && needs > 0 && (
                 <ul style={{ listStyle: 'none', margin: 0, padding: 0, border: '1px solid var(--line)', borderRadius: 12, background: 'var(--surface)' }}>
                   {brief.map((item, i) => (
                     <li key={item.id} style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '10px 12px', padding: '12px 14px', borderBottom: i < brief.length - 1 ? '1px solid var(--line)' : 0 }}>
@@ -534,6 +604,19 @@ export function Chat({ snapshot, snapshotError, refresh, narrow, openConversatio
                   </div>
                 ))}
               {pendingUser && <div className="msg-user" aria-label="Sending">{pendingUser}{pendingFiles.length ? <AttachmentChips items={pendingFiles} /> : null}</div>}
+              {receipt && (
+                <div style={{ margin: '16px 0' }}>
+                  <OutcomeReceipt receipt={receipt} onReviewDiff={() => {}} onUndo={() => {}} onShare={() => {}} onNext={() => setReceipt(null)} />
+                  <div style={{ textAlign: 'center', marginTop: '8px' }}>
+                    <button type="button" className="btn link" onClick={() => setReceipt(null)}>Dismiss receipt</button>
+                  </div>
+                </div>
+              )}
+              {rehearsalPlan && (
+                <div style={{ margin: '16px 0' }}>
+                  <RehearsalPane plan={rehearsalPlan} onAuthorize={() => { void (async () => { try { await api.household('apply', { id: rehearsalPlan.planId, digest: rehearsalPlan.digest }); setRehearsalPlan(null); } catch { /* ignore */ } })(); }} onCancel={() => setRehearsalPlan(null)} />
+                </div>
+              )}
               {runningHere && (
                 <div className="msg-assistant" aria-live="polite">
                   <Mark />
@@ -575,7 +658,16 @@ export function Chat({ snapshot, snapshotError, refresh, narrow, openConversatio
 
         <div className="footer">
           <div className="footer-inner">
-            <MissionDock conversationId={convId} narrow={narrow} onReport={() => { void loadTranscript(convId); }} />
+            <MissionDock conversationId={convId} narrow={narrow} onReport={(missionId) => { void loadTranscript(convId); if (missionId) void fetchReceipt(missionId); else void (async () => {
+              try {
+                const r = await api.household('missions', { conversationId: convId ?? undefined }) as { missions: Array<{ id: string; status: string }> };
+                const done = (r.missions ?? []).find((m) => m.status === 'completed' || m.status === 'completed_with_issues' || m.status === 'failed');
+                if (done) void fetchReceipt(done.id);
+              } catch { /* ignore */ }
+            })(); }} />
+            {activeMission && !narrow && (
+              <MissionControlPane mission={activeMission} onStop={() => void (async () => { try { await api.household('missionCancel', { id: activeMission.id }); } catch { /* ignore */ } })()} onAllow={(id) => void (async () => { try { await api.resolveAssistantApproval(id, 'approved'); } catch { /* ignore */ } })()} onDeny={(id) => void (async () => { try { await api.resolveAssistantApproval(id, 'rejected'); } catch { /* ignore */ } })()} />
+            )}
             {!showDecisionBar && controls.panel}
             {!showDecisionBar && folder.card}
             {/* On the home screen there is no transcript to hold a send error, so it shows here. */}

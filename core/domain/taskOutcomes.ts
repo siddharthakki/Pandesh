@@ -339,7 +339,9 @@ export function finalizeTaskOutcome(
       attemptId,
       status: existing.status === 'blocked' ? 'blocked' : 'partial',
       evidence: existing.evidence,
-      blocker: getUnfinishedTurn(db, attemptId) === 'no_reply' ? 'the model produced no reply' : 'nothing was built — no file was written or changed',
+      blocker: getUnfinishedTurn(db, attemptId) === 'no_reply' ? 'the model produced no reply'
+        : getUnfinishedTurn(db, attemptId) === 'reply_cut_off' ? 'the model stopped before finishing its reply; the step it announced was not carried out'
+          : 'nothing was built — no file was written or changed',
       nextAction: existing.nextAction ?? 'Ask again, split the request into smaller steps, or resume with a stronger model.',
       summary: existing.summary ?? outcome.reason,
     });

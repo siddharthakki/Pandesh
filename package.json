@@ -805,6 +805,8 @@
     "test": "node scripts/run-vitest-with-heap.mjs",
     "secrets:scan": "node scripts/secret-scan.mjs --history",
     "secrets:scan:staged": "node scripts/secret-scan.mjs --staged",
+    "storage:preflight": "node scripts/storage-check.mjs preflight",
+    "storage:postflight": "node scripts/storage-check.mjs postflight",
     "hooks:install": "git config core.hooksPath .githooks",
     "test:unit": "node scripts/test-tiers.mjs unit",
     "test:regression": "node scripts/test-tiers.mjs regression",
@@ -925,6 +927,7 @@
     "react-dom": "^19.3.0",
     "shiki": "^4.4.3",
     "streamdown": "^2.6.0",
+    "three": "^0.170.0",
     "typescript": "^5.9.3",
     "undici": "7.30.2"
   }

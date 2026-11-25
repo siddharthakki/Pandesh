@@ -65,6 +65,10 @@ export const AUTHORITATIVE_PROCESS_SPAWN_ALLOWLIST: ReadonlySet<string> = new Se
   'core/runtime/kandev/devStories.ts',
   'core/runtime/kandev/kandevClient.ts',
   'core/runtime/kandev/storyAcceptance.ts',
+  // A5: runs a registered project's OWN declared test command (package.json scripts.test) in Pandesh's private copy before and after a
+  // change: `node --test --test-reporter=tap <script's own file args>` (fixed argv, no shell) or `npm test` (fixed argv; shell only for
+  // npm.cmd on Windows), minimal environment, bounded timeout. No model-supplied input reaches the argv.
+  'core/runtime/kandev/projectTests.ts',
   // Runs `node --test` (fixed argv, minimal environment) in a fresh checkout of a delivered deliverable to verify it independently of the worker.
   'core/runtime/operatorTestRun.ts',
   // Runs the reliability watchdog: `node <operator-configured checkout>/scripts/watchdog/run-watchdog.mjs` with a fixed
@@ -73,12 +77,20 @@ export const AUTHORITATIVE_PROCESS_SPAWN_ALLOWLIST: ReadonlySet<string> = new Se
   'core/runtime/watchdogRoutine.ts',
   // Reads the local GPU's name and VRAM with one fixed-argument `nvidia-smi` query (no caller-supplied input); bounds concurrent GPU workloads.
   'core/runtime/hardwareCapacity.ts',
+  // Opens one named everyday app (Notepad, Calculator, a registered app) from a fixed target table, never with
+  // arguments, never a shell, script host or installer (deny-list), and probes the result with a fixed `tasklist` argv.
+  'core/runtime/appLaunch.ts',
   // Local OCR and PDF text extraction: runs Poppler's `pdftoppm`/`pdftotext`
   // and Tesseract with a fixed argv (no shell, no model-supplied flags), a
   // sanitized child environment, a bounded timeout and a verified
   // process-tree kill. Every argument is either a resolved binary path or a
   // document path the caller already had to be authorized for.
   'core/runtime/documentOcr.ts',
+
+  // Tailscale status, read-only: starts the installed tailscale.exe directly (no shell) with the single fixed argv
+  // `status --json` (nothing from a task, user or model), an 8 s timeout and a field allow-list on the output (no keys,
+  // auth URLs or user profiles leave the module). No other Tailscale command is expressible in this file.
+  'core/runtime/tailscaleStatus.ts',
 
   // Runs the Agent Reach command-line tool the person installed (<data dir>/tools/agent-reach.json) for read-only public
   // lookups: the program starts directly with a fixed argv (no shell), only (channel, action) pairs on a login-free

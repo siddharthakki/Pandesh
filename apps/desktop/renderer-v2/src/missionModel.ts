@@ -28,6 +28,20 @@ export function missionProgress(m: MissionView): { done: number; total: number; 
   return { done, total: m.steps.length, percent: Math.min(100, Math.round(((done + running) / total) * 100)) };
 }
 
+/**
+ * How long the mission has actually been working: from the earliest start among the steps running now. A mission that was
+ * interrupted and resumed is not charged for the time it sat idle (its `createdAt` can be days ago). Null while no step runs.
+ */
+export function missionActiveMs(m: MissionView, now: number): number | null {
+  const starts = m.steps.filter((s) => s.status === 'running' && s.startedAt).map((s) => Date.parse(s.startedAt as string)).filter(Number.isFinite);
+  return starts.length ? Math.max(0, now - Math.min(...starts)) : null;
+}
+
+/** Milliseconds since Core last recorded anything for this mission (its heartbeat). */
+export function missionHeartbeatMs(m: MissionView, now: number): number {
+  return Math.max(0, now - Date.parse(m.updatedAt));
+}
+
 /** The card's first words: the phase the mission is in, never a guess about its content. */
 export function missionHeadline(m: MissionView): string {
   if (m.status === 'running') {
@@ -98,7 +112,8 @@ export function describeStep(step: StepView, mission: MissionView, now: number):
 export function visibleMissions(all: MissionView[], conversationId: string | null, now: number): MissionView[] {
   const keepMs = 30 * 60_000;
   return all
-    .filter((m) => m.status === 'running' || (m.conversationId === conversationId && now - Date.parse(m.completedAt ?? m.updatedAt) < keepMs))
+    // This chat's own missions (running, or finished within the last half hour) and any mission anywhere that waits for a decision.
+    .filter((m) => (m.conversationId === conversationId && (m.status === 'running' || now - Date.parse(m.completedAt ?? m.updatedAt) < keepMs)) || (m.status === 'running' && m.pendingApprovals.length > 0))
     .sort((a, b) => (a.status === 'running' ? 0 : 1) - (b.status === 'running' ? 0 : 1) || b.createdAt.localeCompare(a.createdAt))
     .slice(0, 3);
 }

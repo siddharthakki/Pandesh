@@ -68,11 +68,11 @@ describe('outlook_mail Bot source', () => {
 });
 
 describe('navigation', () => {
-  it('opens Mail Hub and a named screen from chat, and Mail Hub is one More entry, not a new primary place', () => {
+  it('opens Mail Hub and a named screen from chat, and Mail Hub is opened from Search, not a new primary place', () => {
     expect(parseV2Target('view:mailhub')).toEqual({ kind: 'view', view: 'mailhub', screen: undefined });
     expect(parseV2Target('view:mailhub#finance')).toEqual({ kind: 'view', view: 'mailhub', screen: 'finance' });
     const d = UI_DESTINATIONS.find((x) => x.id === 'mail_hub')!;
-    expect(d.targets.v2).toBe('view:mailhub'); expect(d.where.v2).toMatch(/^More/); expect(d.targets.classic).toBeUndefined();
+    expect(d.targets.v2).toBe('view:mailhub'); expect(d.where.v2).toMatch(/^Mail Hub, opened from the Search box/); expect(d.targets.classic).toBeUndefined();
   });
 });
 

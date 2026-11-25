@@ -115,6 +115,9 @@ export interface BriefAction { kind: string; label: string; approvalId?: string;
 export interface BriefItem { id: string; kind: string; stance: string; title: string; detail: string; state: string; at: string; source: { kind: string; label: string; checkedAt: string }; actions: BriefAction[] }
 export interface Brief { generatedAt: string; home: BriefItem[] }
 
+/** ChatGPT connector as the host reports it (ipc.ts ChatgptConnectorView). Never the tunnel key. */
+export interface ChatgptConnectorView { state: 'off' | 'needs-setup' | 'needs-key' | 'starting' | 'running' | 'degraded' | 'failed'; detail: string; enabled: boolean; keyConfigured: boolean; keyHint: string | null; tunnelId: string; clientPath: string; gatewayPath: string; tunnelReachable: boolean; activePairings: number; lastError: string | null; lastFailure: { at: string; message: string } | null; core: { reachable: boolean; port: number | null; profile: string; production: boolean; build: string | null }; recentLog: string[]; gatewaySource: 'packaged-verified' | 'development-path' | 'tampered' | 'missing' }
+
 /** Who can reach Pandesh Mobile (ipc.ts MobileAccessMode). */
 export type MobileAccess = 'off' | 'lan' | 'tailscale';
 export interface MobileDevice { id: string; name: string; pairedAt: string; lastSeenAt: string | null; connected: boolean }
@@ -176,6 +179,13 @@ export interface DesktopApi {
   forgetMobileDevice(id: string): Promise<MobilePairing>;
   setMobileAccess(mode: MobileAccess): Promise<MobilePairing>;
   resumeMobilePairing(): Promise<MobilePairing>;
+  getChatgptConnector(): Promise<ChatgptConnectorView>;
+  setChatgptConnectorKey(key: string): Promise<ChatgptConnectorView>;
+  clearChatgptConnectorKey(): Promise<ChatgptConnectorView>;
+  setChatgptConnectorSetup(setup: { tunnelId?: string; clientPath?: string; gatewayPath?: string }): Promise<ChatgptConnectorView>;
+  setChatgptConnectorEnabled(enabled: boolean): Promise<ChatgptConnectorView>;
+  chatgptConnectorPairingCode(): Promise<{ code: string; expiresAt: string }>;
+  disconnectChatgptConnector(): Promise<{ revoked: number; errors: number; view: ChatgptConnectorView }>;
   /** `voiceTurnId` marks a message that was spoken (the transcript of a voice turn). */
   submitTask(goal: string, worker?: string, voiceTurnId?: string): Promise<{ attemptId: string; requestId: string; model: string; routed?: string }>;
   /** Composer attachments: the host opens the file dialog, stages dropped or pasted bytes, and removes a staged file. */
@@ -243,6 +253,8 @@ export interface DesktopApi {
   saveWorkshopFile(artifactId: string): Promise<{ saved: boolean; path: string | null }>;
   /** A short-lived pandesh-preview: URL for a Design page (served from memory, sandboxed, no network). */
   designPreview(artifactId: string): Promise<{ url: string; nonce: string; expiresAt: string; warnings: string[] }>;
+  /** Saves the picture a 3D scene page rendered of itself, for the check of that scene. */
+  saveSceneShot(artifactId: string, dataUrl: string, view: string | null): Promise<{ path: string; bytes: number }>;
   /** Settings → Diagnostics and Updates: the host's own reports (no credentials in either). */
   getAppMetadata(): Promise<AppMetadata>;
   getDiagnosticsReport(): Promise<string>;

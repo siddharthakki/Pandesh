@@ -16,6 +16,7 @@ import {
 } from 'electron';
 import { DesktopSession } from './host/desktopSession';
 import { DESIGN_PREVIEW_SCHEME, DesignPreviewStore, isDesignPreviewUrl } from './host/designPreview';
+import { isScenePage } from '../../../core/shared/workshop/scenePage';
 import { checkDesignHtml } from '../../../core/shared/workshop/design';
 import {
   formatDiagnosticsReport,
@@ -33,6 +34,9 @@ import { createAppIcon } from './host/appIcon';
 import { normalizeSafeExternalUrl, normalizeSafeBrowserUrl } from './host/desktopSafeOpen';
 import { MobileServer, defaultMobileHost, parseMobileAccess } from './host/mobileServer';
 import { watchEventLoopStalls } from './host/startupResilience';
+import { ChatgptConnector, CONNECTOR_KEY_PROVIDER, readConnectorConfig, writeConnectorConfig } from './host/chatgptConnector';
+import { CredentialVault, defaultCredentialBackend } from './host/credentialVault';
+import { tryElectronSecretBox } from './host/openRouterCredential';
 
 /**
  * Dev: repo root. Portable / installed: directory that contains `app/` + `runtime/core.js`
@@ -197,6 +201,12 @@ app.setPath('userData', desktopUserData);
 // requires. Not bypassCSP, no fetch, no service workers: a preview page gets nothing a web page would not.
 protocol.registerSchemesAsPrivileged([{ scheme: DESIGN_PREVIEW_SCHEME, privileges: { standard: true, secure: true } }]);
 const designPreviews = new DesignPreviewStore();
+/** The three.js scene runtime as text, read once: the preview inlines it into a 3D scene page (host/designPreview.ts). */
+let sceneRuntimeText: string | null = null;
+function sceneRuntimeScript(): string {
+  if (sceneRuntimeText === null) sceneRuntimeText = fs.readFileSync(path.join(__dirname, '..', 'renderer', 'v2', 'sceneRuntime.js'), 'utf8');
+  return sceneRuntimeText;
+}
 
 function resolveBundledCoreVersion(root: string): string {
   try {
@@ -229,6 +239,35 @@ if (isShutdownRequested) {
 
 let session: DesktopSession | undefined;
 let mobileServer: MobileServer | undefined;
+let chatgptConnector: ChatgptConnector | undefined;
+let connectorVault: CredentialVault | undefined;
+
+function ensureChatgptConnector(): ChatgptConnector {
+  if (chatgptConnector) return chatgptConnector;
+  connectorVault = new CredentialVault(dataDir, defaultCredentialBackend(), () => tryElectronSecretBox());
+  const vault = connectorVault;
+  // First use: point the setup at the gateway script that ships next to the app, when it is there.
+  const shipped = path.join(productRoot, 'apps', 'panda-bridge', 'mcp-gateway', 'server.mjs');
+  if (!readConnectorConfig(dataDir).gatewayPath && fs.existsSync(shipped)) writeConnectorConfig(dataDir, { gatewayPath: shipped });
+  chatgptConnector = new ChatgptConnector({
+    dataDir,
+    getKey: () => vault.get(CONNECTOR_KEY_PROVIDER),
+    nodePath: process.execPath,
+    nodeIsElectron: Boolean(process.versions.electron),
+    log: (message) => hostLog(message),
+    productRoot,
+    isProductionProfile: !isTestProfile(dataDir, realDesktopDataDirFromOs()),
+    buildLabel: (() => { const b = resolveBuildIdentity(productRoot, String(app.getVersion?.() || '').trim()); return `${b.buildNumber ? `Build ${b.buildNumber}` : `v${b.version}`}${b.commit ? ` (${b.commit.slice(0, 7)})` : ''}`; })(),
+  });
+  return chatgptConnector;
+}
+
+async function chatgptConnectorView(): Promise<import('./ipc').ChatgptConnectorView> {
+  const connector = ensureChatgptConnector();
+  const status = await connector.status();
+  const cfg = connector.config();
+  return { state: status.state, detail: status.detail, enabled: status.enabled, keyConfigured: status.keyConfigured, keyHint: status.keyHint, tunnelId: cfg.tunnelId, clientPath: cfg.clientPath, gatewayPath: cfg.gatewayPath, tunnelReachable: status.tunnelReachable, activePairings: status.activePairings, lastError: status.lastError, lastFailure: status.lastFailure, core: status.core, recentLog: status.recentLog, gatewaySource: status.gatewaySource };
+}
 let window: BrowserWindow | undefined;
 let popoutWindow: BrowserWindow | undefined;
 let tray: JarvisTrayController | undefined;
@@ -493,6 +532,8 @@ async function shutdownAndQuit(): Promise<void> {
   } catch (err) {
     hostLog(`Error stopping mobile server: ${(err as Error).message}`);
   }
+
+  try { await chatgptConnector?.stop('Pandesh is quitting'); } catch (err) { hostLog(`Error stopping ChatGPT connector: ${(err as Error).message}`); }
 
   // 2. Dispose tray
   try {
@@ -873,6 +914,9 @@ async function createWindow(): Promise<void> {
   await session.start();
 
   await startMobileServer();
+
+  // ChatGPT connector: starts only when the person switched it on and stored a key; otherwise nothing runs.
+  void ensureChatgptConnector().applyConfig().catch((err) => hostLog(`ChatGPT connector start failed: ${(err as Error).message}`));
 
   // Restore wake preference from last session (tray background continuity).
   if (prefs.wakeEnabled) {
@@ -1664,7 +1708,11 @@ function registerIpc(): void {
     if (content.type !== 'design') throw new Error('This file is not a Design workshop page');
     const check = checkDesignHtml(content.html);
     if (!check.ok) throw new Error(`The page cannot be shown: ${check.errors.join('; ')}`);
-    return { ...designPreviews.mint({ artifactId: content.artifactId, html: content.html }), warnings: check.warnings };
+    return { ...designPreviews.mint({ artifactId: content.artifactId, html: content.html, sceneRuntime: isScenePage(content.html) ? sceneRuntimeScript() : null }), warnings: check.warnings };
+  });
+  ipcMain.handle(DESKTOP_CHANNELS.saveSceneShot, async (_event, artifactId: unknown, dataUrl: unknown, view: unknown) => {
+    if (!session) throw new Error('desktop session is not started');
+    return session.saveSceneShot(String(artifactId ?? ''), String(dataUrl ?? ''), typeof view === 'string' ? view : null);
   });
   ipcMain.handle(DESKTOP_CHANNELS.saveWorkshopFile, async (_event, artifactId: unknown) => {
     if (!session || !window) throw new Error('desktop session is not started');
@@ -1791,6 +1839,42 @@ function registerIpc(): void {
   ipcMain.handle(DESKTOP_CHANNELS.resumeMobilePairing, async () => {
     mobileServer?.resumePairing();
     return mobilePairingView();
+  });
+  ipcMain.handle(DESKTOP_CHANNELS.getChatgptConnector, () => chatgptConnectorView());
+  ipcMain.handle(DESKTOP_CHANNELS.setChatgptConnectorKey, async (_event, key: string) => {
+    const value = String(key ?? '').trim();
+    if (value.length < 20 || value.length > 400 || /\s/.test(value)) throw new Error('That does not look like an OpenAI key.');
+    ensureChatgptConnector();
+    await connectorVault!.set(CONNECTOR_KEY_PROVIDER, value);
+    hostLog('ChatGPT connector: tunnel key stored in Windows Credential Manager');
+    return chatgptConnectorView();
+  });
+  ipcMain.handle(DESKTOP_CHANNELS.clearChatgptConnectorKey, async () => {
+    const connector = ensureChatgptConnector();
+    await connector.disable();
+    await connectorVault!.delete(CONNECTOR_KEY_PROVIDER);
+    hostLog('ChatGPT connector: tunnel key removed; connector off');
+    return chatgptConnectorView();
+  });
+  ipcMain.handle(DESKTOP_CHANNELS.setChatgptConnectorSetup, async (_event, setup: { tunnelId?: string; clientPath?: string; gatewayPath?: string }) => {
+    const input = (setup ?? {}) as Record<string, unknown>;
+    writeConnectorConfig(dataDir, {
+      ...(typeof input.tunnelId === 'string' ? { tunnelId: input.tunnelId.trim() } : {}),
+      // A new tunnel-client path is a new file to approve: its SHA-256 is recorded at the next start.
+      ...(typeof input.clientPath === 'string' ? { clientPath: input.clientPath.trim(), clientSha256: '' } : {}),
+      ...(typeof input.gatewayPath === 'string' ? { gatewayPath: input.gatewayPath.trim() } : {}),
+    });
+    return chatgptConnectorView();
+  });
+  ipcMain.handle(DESKTOP_CHANNELS.setChatgptConnectorEnabled, async (_event, enabled: boolean) => {
+    const connector = ensureChatgptConnector();
+    if (enabled) await connector.enable(); else await connector.disable();
+    return chatgptConnectorView();
+  });
+  ipcMain.handle(DESKTOP_CHANNELS.chatgptConnectorPairingCode, () => ensureChatgptConnector().newPairingCode());
+  ipcMain.handle(DESKTOP_CHANNELS.disconnectChatgptConnector, async () => {
+    const result = await ensureChatgptConnector().disconnect();
+    return { ...result, view: await chatgptConnectorView() };
   });
   ipcMain.handle(DESKTOP_CHANNELS.minimizeWindow, () => {
     if (window && !window.isDestroyed()) window.minimize();

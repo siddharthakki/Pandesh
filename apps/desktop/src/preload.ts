@@ -29,6 +29,7 @@ import {
   type DesktopImageStudioStatus,
   type DesktopWeatherResult,
   type MobilePairingView,
+  type ChatgptConnectorView,
   type MobileAccessMode,
   type DesktopAssistantBrief,
   type DesktopDailyBriefRoutine,
@@ -285,6 +286,8 @@ const desktopApi = {
     ipcRenderer.invoke(DESKTOP_CHANNELS.saveWorkshopFile, artifactId),
   designPreview: (artifactId: string): Promise<{ url: string; nonce: string; expiresAt: string; warnings: string[] }> =>
     ipcRenderer.invoke(DESKTOP_CHANNELS.designPreview, artifactId),
+  saveSceneShot: (artifactId: string, dataUrl: string, view: string | null): Promise<{ path: string; bytes: number }> =>
+    ipcRenderer.invoke(DESKTOP_CHANNELS.saveSceneShot, artifactId, dataUrl, view),
   openArtifactInStudio: (artifactId: string): Promise<{ opened: boolean }> =>
     ipcRenderer.invoke(DESKTOP_CHANNELS.openArtifactInStudio, artifactId),
   useArtifactAsReference: (artifactId: string): Promise<{ opened: boolean }> =>
@@ -294,6 +297,13 @@ const desktopApi = {
   forgetMobileDevice: (id: string): Promise<MobilePairingView> => ipcRenderer.invoke(DESKTOP_CHANNELS.forgetMobileDevice, id),
   setMobileAccess: (mode: MobileAccessMode): Promise<MobilePairingView> => ipcRenderer.invoke(DESKTOP_CHANNELS.setMobileAccess, mode),
   resumeMobilePairing: (): Promise<MobilePairingView> => ipcRenderer.invoke(DESKTOP_CHANNELS.resumeMobilePairing),
+  getChatgptConnector: (): Promise<ChatgptConnectorView> => ipcRenderer.invoke(DESKTOP_CHANNELS.getChatgptConnector),
+  setChatgptConnectorKey: (key: string): Promise<ChatgptConnectorView> => ipcRenderer.invoke(DESKTOP_CHANNELS.setChatgptConnectorKey, key),
+  clearChatgptConnectorKey: (): Promise<ChatgptConnectorView> => ipcRenderer.invoke(DESKTOP_CHANNELS.clearChatgptConnectorKey),
+  setChatgptConnectorSetup: (setup: { tunnelId?: string; clientPath?: string; gatewayPath?: string }): Promise<ChatgptConnectorView> => ipcRenderer.invoke(DESKTOP_CHANNELS.setChatgptConnectorSetup, setup),
+  setChatgptConnectorEnabled: (enabled: boolean): Promise<ChatgptConnectorView> => ipcRenderer.invoke(DESKTOP_CHANNELS.setChatgptConnectorEnabled, enabled),
+  chatgptConnectorPairingCode: (): Promise<{ code: string; expiresAt: string }> => ipcRenderer.invoke(DESKTOP_CHANNELS.chatgptConnectorPairingCode),
+  disconnectChatgptConnector: (): Promise<{ revoked: number; errors: number; view: ChatgptConnectorView }> => ipcRenderer.invoke(DESKTOP_CHANNELS.disconnectChatgptConnector),
   probeImageStudio: (): Promise<DesktopImageStudioStatus> => ipcRenderer.invoke(DESKTOP_CHANNELS.probeImageStudio),
   generateImage: (input: Record<string, unknown>): Promise<DesktopImageGenerationResult> => ipcRenderer.invoke(DESKTOP_CHANNELS.generateImage, input),
   resolveImageApproval: (approvalId: string, resolution: DesktopApprovalResolution): Promise<DesktopImageGenerationResult> => ipcRenderer.invoke(DESKTOP_CHANNELS.resolveImageApproval, approvalId, resolution),

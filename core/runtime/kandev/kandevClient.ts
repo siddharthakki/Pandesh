@@ -88,6 +88,13 @@ function kandevScriptsDir(): string | null {
   return candidates.find(p => fs.existsSync(path.join(p, 'start-kandev.ps1'))) ?? null;
 }
 
+/** Is the executable on PATH? A plain directory scan (honouring PATHEXT on Windows): nothing is spawned to find out. */
+export function binaryOnPath(binary: string, env: NodeJS.ProcessEnv = process.env): boolean {
+  const dirs = (env.PATH ?? env.Path ?? '').split(path.delimiter).filter(Boolean);
+  const exts = process.platform === 'win32' ? ['', ...(env.PATHEXT ?? '.EXE;.CMD;.BAT;.COM').split(';').filter(Boolean)] : [''];
+  return dirs.some(dir => exts.some(ext => { try { return fs.statSync(path.join(dir, binary + ext)).isFile(); } catch { return false; } }));
+}
+
 export class KandevClient {
   private mcpSession: string | null = null;
 
@@ -124,6 +131,18 @@ export class KandevClient {
     });
     if (out.code !== 0 || !(await this.healthy())) throw new KandevUnavailableError(`Could not start Kandev: ${out.text.trim().slice(-400)}`);
   }
+
+  /**
+   * Kandev probes each agent once at startup and keeps the result. A probe that raced the machine's own start-up leaves a
+   * healthy agent marked failed for the whole session, so a failed status is re-checked on demand (the probe is an ACP
+   * initialize in a throwaway process; it runs nothing for the user). Returns null when Kandev cannot say.
+   */
+  async reprobeAgent(agentType: string): Promise<{ status: string; error?: string } | null> {
+    try { return await this.rest<{ status: string; error?: string }>('POST', `/agent-capabilities/${encodeURIComponent(agentType)}/probe`); } catch { return null; }
+  }
+
+  /** Is this agent's CLI installed where Kandev launches it? A PATH scan: nothing is spawned. Test doubles answer it themselves. */
+  agentBinaryInstalled(binary: string): boolean { return binaryOnPath(binary); }
 
   async healthy(): Promise<boolean> {
     try {
@@ -245,8 +264,9 @@ export class KandevClient {
   }
 
   /** The session's most recent agent turn; `completed_at` is absent while the turn is still running. */
-  async latestTurn(sessionId: string): Promise<{ started_at: string; completed_at?: string } | null> {
-    const res = await this.rest<{ turns?: Array<{ started_at: string; completed_at?: string }> }>('GET', `/task-sessions/${sessionId}/turns`);
+  /** The session's latest turn. `metadata.error_terminated` is Kandev's mark for a turn that ended because the agent process died. */
+  async latestTurn(sessionId: string): Promise<{ started_at: string; completed_at?: string; metadata?: { error_terminated?: boolean } } | null> {
+    const res = await this.rest<{ turns?: Array<{ started_at: string; completed_at?: string; metadata?: { error_terminated?: boolean } }> }>('GET', `/task-sessions/${sessionId}/turns`);
     const turns = [...(res?.turns ?? [])].sort((a, b) => a.started_at.localeCompare(b.started_at));
     return turns.at(-1) ?? null;
   }

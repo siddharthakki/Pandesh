@@ -223,7 +223,7 @@ function CommandFacts({ p }: { p: ToolPreview }) {
   );
 }
 
-function DiffView({ diff }: { diff: string }) {
+export function DiffView({ diff }: { diff: string }) {
   return (
     <pre className="tl-pre" aria-label="Changes to the file">
       {diff.split('\n').map((l, i) => (

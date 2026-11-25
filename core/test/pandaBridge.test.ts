@@ -1,4 +1,5 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { KandevClient } from '../runtime/kandev/kandevClient';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
@@ -202,6 +203,9 @@ describe('HTTP surface', () => {
   let base: string;
 
   beforeEach(async () => {
+    // The routes use their own Kandev client; this file's tests are about consent and pairing, not about whether Claude Code is
+    // installed on the machine running them (GitHub's runner has none). Scoped to this file, restored after each test.
+    vi.spyOn(KandevClient.prototype, 'agentBinaryInstalled').mockReturnValue(true);
     api = await startApiServer({
       db, token: TOKEN, hostToken: HOST, operatorToken: generateToken(), broadcaster: new EventBroadcaster(), dataDir: dir,
       coreInfo: () => ({ coreVersion: '0', apiVersion: 1, instanceId: 't', startedAt: new Date().toISOString(), nodeVersion: process.version, electronVersion: null, dataDir: dir }),
@@ -209,7 +213,7 @@ describe('HTTP surface', () => {
     });
     base = `http://127.0.0.1:${api.port}`;
   });
-  afterEach(async () => { await api.close(); });
+  afterEach(async () => { vi.restoreAllMocks(); await api.close(); });
 
   const call = async (method: string, p: string, opts: { host?: boolean; pairing?: string; body?: unknown } = {}) => {
     const headers: Record<string, string> = { Authorization: `Bearer ${TOKEN}`, 'Content-Type': 'application/json', 'X-Client-Id': 'native-host' };
@@ -222,6 +226,62 @@ describe('HTTP surface', () => {
     const code = (await call('POST', '/v1/bridge/pairing-codes', { host: true })).json.code as string;
     return (await call('POST', '/v1/bridge/pair', { body: { code, label } })).json as { pairingId: string; token: string };
   };
+
+  it('a coding task that names no registered project is refused before any approval card; nothing runs, no empty workspace is made', async () => {
+    const { token } = await pairOver();
+    // The 2026-11-21 coding task, word for word in its opening: it asked for the Pandesh source, which this Core has not registered.
+    const instruction = "CODING / BUG-FIX TASK — explicit implementation work is authorized only in the registered Pandesh source project's isolated development worktree. Investigate and fix the task-verification defect and add regression tests.";
+    const t = await call('POST', '/v1/bridge/tasks', { pairing: token, body: { clientRequestId: 'click-000000077', instruction } });
+    const id = t.json.taskId as string;
+    const asked = await call('POST', `/v1/bridge/tasks/${id}/dispatch`, { pairing: token, body: { executor: 'claude' } });
+    expect(asked.status).toBe(400);
+    expect(asked.json.error.details.reason).toBe('needs_clarification');
+    expect((await call('GET', '/v1/bridge/approvals', { host: true })).json.approvals).toEqual([]);
+    const byOwner = await call('POST', `/v1/bridge/tasks/${id}/dispatch`, { host: true, body: { executor: 'claude', consent: { externalTransfer: true } } });
+    expect(byOwner.status).toBe(400);
+    expect(getBridgeTask(db, id)).toMatchObject({ status: 'awaiting_executor', executor: null, storyId: null });
+    expect(getBridgeTask(db, id).statusDetail).toMatch(/names no registered project, so nothing ran/);
+    expect(fs.existsSync(path.join(dir, 'panda-workspaces', id))).toBe(false);
+    expect(listStories(db, { limit: 50 })).toHaveLength(0);
+  });
+
+  it('a paired client gets only the last few worker events; the full log stays with Pandesh', async () => {
+    const { token } = await pairOver();
+    const t = await call('POST', '/v1/bridge/tasks', { pairing: token, body: { clientRequestId: 'click-000000078', instruction: 'Say hello. Do not change any files.' } });
+    const id = t.json.taskId as string;
+    const activity = Array.from({ length: 12 }, (_, i) => ({ id: `m${i}`, at: `2026-11-21T10:00:${String(i).padStart(2, '0')}Z`, kind: 'tool_read', text: `Read file ${i}` }));
+    recordBridgeStatus(db, id, 'completed', 'Finished and verified.', { verification: 'worker-only', evidence: 'ok', changedFiles: [], commit: null, pendingApprovals: [], activity, timeline: [] });
+    const asClient = await call('GET', `/v1/bridge/tasks/${id}`, { pairing: token });
+    expect(asClient.json.result.activity.map((a: { id: string }) => a.id)).toEqual(['m9', 'm10', 'm11']);
+    const asOwner = await call('GET', `/v1/bridge/tasks/${id}`, { host: true });
+    expect(asOwner.json.result.activity).toHaveLength(12);
+    expect(asOwner.json.activity).toMatchObject({ eventCount: 12, lastEventAt: '2026-11-21T10:00:11Z', latest: { kind: 'tool_read', text: 'Read file 11' } });
+  });
+
+  it('A5: only the Pandesh window can approve a change or bring it into the checkout; a paired client never can', async () => {
+    const { token } = await pairOver();
+    const t = await call('POST', '/v1/bridge/tasks', { pairing: token, body: { clientRequestId: 'click-000000090', instruction: 'Fix the bug in the code.' } });
+    const id = t.json.taskId as string;
+    expect((await call('POST', `/v1/bridge/tasks/${id}/approve-change`, { pairing: token })).status).toBe(403);
+    expect((await call('POST', `/v1/bridge/tasks/${id}/deliver`, { pairing: token })).status).toBe(403);
+    // The host may call them; this task is not a code change, so Core says so instead of doing anything.
+    expect((await call('POST', `/v1/bridge/tasks/${id}/deliver`, { host: true })).json.error.message).toMatch(/not a code change/);
+    // View diff holds project source: neither a paired client nor a bare Core token may read it.
+    expect((await call('GET', `/v1/bridge/tasks/${id}/diff`, { pairing: token })).status).toBe(403);
+    expect((await call('GET', `/v1/bridge/tasks/${id}/diff`, {})).status).toBe(403);
+    expect((await call('GET', `/v1/bridge/tasks/${id}/diff`, { host: true })).json.error.message).toMatch(/not a code change/);
+  });
+
+  it('approving a dev story\'s review needs an identified interactive client (it had no caller check)', async () => {
+    const { token } = await pairOver();
+    expect((await call('POST', '/v1/dev-stories/story_x/approve-review', { pairing: token, body: {} })).status).toBe(403);
+  });
+
+  it('worker actions can only be decided from the Pandesh window, never by a paired client or a bare Core token', async () => {
+    const { token } = await pairOver();
+    expect((await call('POST', '/v1/dev-stories/story_x/permissions/p-1', { pairing: token, body: { allow: true } })).status).toBe(403);
+    expect((await call('POST', '/v1/dev-stories/story_x/permissions/p-1', { body: { allow: true } })).status).toBe(403);
+  });
 
   it('only Pandesh can issue pairing codes; a paired browser cannot', async () => {
     expect((await call('POST', '/v1/bridge/pairing-codes')).status).toBe(403);
@@ -263,15 +323,39 @@ describe('HTTP surface', () => {
 
   it('refuses an external executor without consent, and an extension can never grant it; nothing starts', async () => {
     const { token } = await pairOver();
-    const t = await call('POST', '/v1/bridge/tasks', { pairing: token, body: { clientRequestId: 'click-000000001', instruction: 'Build a simple calculator app' } });
+    const t = await call('POST', '/v1/bridge/tasks', { pairing: token, body: { clientRequestId: 'click-000000001', instruction: 'Explain how a calculator app works. Do not change any files.' } });
     const id = t.json.taskId as string;
     const noConsent = await call('POST', `/v1/bridge/tasks/${id}/dispatch`, { host: true, body: { executor: 'claude' } });
     expect(noConsent.status).toBe(403);
     expect(noConsent.json.error.details.reason).toBe('external_consent_required');
     // the extension claims consent in its own request body: ignored
     const forged = await call('POST', `/v1/bridge/tasks/${id}/dispatch`, { pairing: token, body: { executor: 'claude', consent: { externalTransfer: true, confidentialOverride: true } } });
-    expect(forged.status).toBe(403);
-    expect(getBridgeTask(db, id)).toMatchObject({ status: 'awaiting_executor', executor: null, storyId: null });
+    // A browser may ASK for a cloud agent (the owner decides in Pandesh); its own consent claim is ignored and nothing starts.
+    expect(forged.status).toBe(200);
+    expect(forged.json.started).toBe(false);
+    expect(forged.json.approval).toMatchObject({ executor: 'claude', agentLabel: 'Claude Code' });
+    expect(getBridgeTask(db, id)).toMatchObject({ status: 'awaiting_executor', executor: null, storyId: null, externalConsent: null });
+    expect(listStories(db, { limit: 50 })).toHaveLength(0);
+  });
+
+  it('only the Pandesh app can see approvals and decide them; a paired browser cannot, and cannot approve its own request', async () => {
+    const { token } = await pairOver();
+    const t = await call('POST', '/v1/bridge/tasks', { pairing: token, body: { clientRequestId: 'click-000000002', instruction: 'Explain how a calculator app works. Do not change any files.' } });
+    const id = t.json.taskId as string;
+    const asked = await call('POST', `/v1/bridge/tasks/${id}/dispatch`, { pairing: token, body: { executor: 'claude' } });
+    const requestId = asked.json.approval.requestId as string;
+    expect(asked.json.approval).not.toHaveProperty('project'); // the browser learns only that an approval is pending, not what it contains
+    expect((await call('GET', '/v1/bridge/approvals', { pairing: token })).status).toBe(403);
+    expect((await call('POST', `/v1/bridge/tasks/${id}/approval`, { pairing: token, body: { requestId, decision: 'approve' } })).status).toBe(403);
+    expect((await call('GET', `/v1/bridge/tasks/${id}/audit`, { pairing: token })).status).toBe(403);
+    const list = await call('GET', '/v1/bridge/approvals', { host: true });
+    expect(list.json.approvals.map((a: { taskId: string }) => a.taskId)).toEqual([id]);
+    expect(list.json.approvals[0]).toMatchObject({ agentLabel: 'Claude Code', instruction: 'Explain how a calculator app works. Do not change any files.', accessLevel: expect.stringMatching(/Answer only/) });
+    // the owner refuses: the task ends, nothing else starts
+    const refused = await call('POST', `/v1/bridge/tasks/${id}/approval`, { host: true, body: { requestId, decision: 'refuse' } });
+    expect(refused.status).toBe(200);
+    expect(getBridgeTask(db, id)).toMatchObject({ status: 'cancelled', executor: null, storyId: null });
+    expect((await call('GET', `/v1/bridge/tasks/${id}/audit`, { host: true })).json.approvalEvents.map((e: { event: string }) => e.event)).toEqual(['requested', 'refused']);
     expect(listStories(db, { limit: 50 })).toHaveLength(0);
   });
 

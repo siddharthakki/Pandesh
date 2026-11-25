@@ -19,6 +19,7 @@ import { startCancellationRecoveryLoop } from '../runtime/cancellationRecovery';
 import { startDevStoryLoop } from '../runtime/kandev/devStories';
 import { KandevClient } from '../runtime/kandev/kandevClient';
 import { startPandaBridgeLoop } from '../runtime/kandev/pandaBridge';
+import { bridgeServices } from '../runtime/kandev/bridgeServices';
 import { startFollowUpCheckLoop } from '../runtime/followUpRoutine';
 import { startBackgroundTaskLoop } from '../runtime/backgroundWorker';
 import { matchAttachmentUploadRoute, handleAttachmentUpload } from './attachmentUpload';
@@ -238,7 +239,7 @@ export function startApiServer(options: StartApiServerOptions): Promise<RunningA
       ...(options.scout ? { scout: options.scout } : {}),
     });
     startDevStoryLoop(options.db, options.broadcaster);
-    startPandaBridgeLoop({ db: options.db, kandev: new KandevClient(), dataDir: options.dataDir, executor });
+    startPandaBridgeLoop({ db: options.db, kandev: new KandevClient(), dataDir: options.dataDir, executor, services: bridgeServices(options.dataDir) });
     // The promise keeper: open commitments whose due moment has arrived are
     // checked against live mail. It runs in Core, so it keeps working while
     // the desktop window is closed, and it only ever reads.

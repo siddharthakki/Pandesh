@@ -18,6 +18,9 @@ export type AttemptLane = 'interactive' | 'background';
 
 export function classifyAttemptLane(input: { kind: string; clientId?: string }): AttemptLane {
   if (input.clientId === 'core:scheduler') return 'background';
+  // A task the person sent from the browser (Panda bridge) is waiting on an answer: it is not background work, so a long mission
+  // yields to it at the next model/tool boundary (bounded waits, so the mission is never starved either).
+  if (input.clientId === 'panda-bridge') return 'interactive';
   return input.kind === 'baat_kar' ? 'interactive' : 'background';
 }
 

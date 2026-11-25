@@ -22,6 +22,8 @@ interface Props {
   variantForced: boolean;
   onUseClassic: () => void;
   onGo: (view: GoTarget) => void;
+  /** The shell's Settings tabs choose the section (through initialSection), so the section list is not drawn a second time. */
+  hideNav?: boolean;
 }
 
 /**
@@ -30,7 +32,7 @@ interface Props {
  * reports afterwards. Secrets are not handled here: provider keys and Google sign-in stay in Connections, which keeps
  * them in write-only password fields backed by encrypted storage.
  */
-export function Settings({ snapshot, refresh, narrow, initialSection, theme, setTheme, labels, setLabels, variantForced, onUseClassic, onGo }: Props) {
+export function Settings({ snapshot, refresh, narrow, initialSection, theme, setTheme, labels, setLabels, variantForced, onUseClassic, onGo, hideNav }: Props) {
   const [section, setSection] = useState<SettingsSection>(initialSection ?? 'models');
   useEffect(() => { if (initialSection) setSection(initialSection); }, [initialSection]);
   const [notice, setNotice] = useState<Notice>(null);
@@ -48,9 +50,9 @@ export function Settings({ snapshot, refresh, narrow, initialSection, theme, set
 
   return (
     <>
-      <div className="topbar"><span className="title" style={{ color: 'var(--ink)', fontWeight: 600 }}>Settings</span></div>
+      {!hideNav && <div className="topbar"><span className="title" style={{ color: 'var(--ink)', fontWeight: 600 }}>Settings</span></div>}
       <div className={`settings${narrow ? ' narrow' : ''}`} data-section={section}>
-        {nav}
+        {!hideNav && nav}
         <div className="settings-body">
           {notice && <div className={`notice${notice.error ? ' error' : ''}`} role={notice.error ? 'alert' : 'status'}>{notice.text}</div>}
           {section === 'models' && <ModelsSection snapshot={snapshot} refresh={refresh} modelControl={controls.modelControl} cloudConfirm={controls.cloudConfirm} chooseModel={controls.chooseModel} pendingCloud={controls.pendingCloud} setNotice={setNotice} onGo={onGo} />}
@@ -120,7 +122,7 @@ function ModelsSection({ snapshot, refresh, modelControl, cloudConfirm, chooseMo
       <section className="card" aria-label="Where answers come from">
         <span className="title" style={{ fontSize: 16 }}>Where answers come from</span>
         <dl className="settings-kv">
-          <dt>Provider</dt><dd>{cloud ? 'Free cloud' : 'This PC Â· Ollama'}</dd>
+          <dt>Provider</dt><dd>{cloud ? 'Free cloud' : 'This PC · Ollama'}</dd>
           <dt>Model</dt><dd>{cloud ? cloudSelectionLabel(snapshot) : modelLabel(snapshot)}</dd>
           <dt>Model server</dt><dd>{cloud ? 'Not used while a cloud model is chosen' : snapshot?.modelServerReachable === false ? 'Not answering' : snapshot?.modelServerReachable ? 'Answering' : 'Unknown'}</dd>
           <dt>Context</dt><dd>{snapshot?.contextEnvelope ? `${Math.round(snapshot.contextEnvelope / 1024)}K tokens` : 'Not reported'}</dd>
@@ -156,7 +158,7 @@ function ModelsSection({ snapshot, refresh, modelControl, cloudConfirm, chooseMo
             {choices.map((c) => (
               <label key={c.value} className="settings-choice">
                 <input type="radio" name="v2-cloud-model" checked={(pendingCloud ?? snapshot?.cloud?.selectedModel) === c.value} onChange={() => chooseModel(c.value)} />
-                <span><strong>{c.label}</strong> Â· {c.providerName}<br /><span className="settings-sub">{capabilityWords('Vision', c.vision)} Â· {capabilityWords('Tools', c.tools)}</span></span>
+                <span><strong>{c.label}</strong> · {c.providerName}<br /><span className="settings-sub">{capabilityWords('Vision', c.vision)} · {capabilityWords('Tools', c.tools)}</span></span>
               </label>
             ))}
           </fieldset>
@@ -193,7 +195,7 @@ function DiagnosticsSection({ snapshot, refresh, setNotice, onGo }: { snapshot: 
         <dl className="settings-kv">
           <dt>Core</dt><dd style={{ color: coreOk ? 'var(--verified)' : 'var(--danger)' }}>{coreOk ? 'Connected' : core}{snapshot?.coreDetail ? ` â€” ${snapshot.coreDetail}` : ''}</dd>
           <dt>Model server</dt><dd>{snapshot?.modelServerReachable === false ? 'Not answering' : snapshot?.modelServerReachable ? 'Answering' : 'Unknown'}</dd>
-          <dt>Build</dt><dd>{meta ? `${meta.productName} ${meta.version}${meta.buildNumber ? ` Â· build b${meta.buildNumber}` : ''} Â· ${meta.buildKind}${meta.commit ? ` Â· ${meta.commit.slice(0, 8)}` : ''}` : 'Not reported'}</dd>
+          <dt>Build</dt><dd>{meta ? `${meta.productName} ${meta.version}${meta.buildNumber ? ` · build b${meta.buildNumber}` : ''} · ${meta.buildKind}${meta.commit ? ` · ${meta.commit.slice(0, 8)}` : ''}` : 'Not reported'}</dd>
           <dt>Core version</dt><dd>{meta?.coreVersion ?? 'Not reported'}{meta?.coreVersionMismatch ? ' â€” differs from this window' : ''}</dd>
         </dl>
         {!coreOk && <div><button type="button" className="btn small" onClick={() => void api.retryCoreConnection().then(refresh).catch((err) => setNotice({ text: errorText(err), error: true }))}>Reconnect to Core</button></div>}

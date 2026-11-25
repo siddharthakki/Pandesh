@@ -113,6 +113,14 @@ export const DESKTOP_CHANNELS = {
   forgetMobileDevice: 'desktop:forgetMobileDevice',
   setMobileAccess: 'desktop:setMobileAccess',
   resumeMobilePairing: 'desktop:resumeMobilePairing',
+  /** ChatGPT connector (Connections): status, key (write-only), setup, on/off, pairing code, disconnect. */
+  getChatgptConnector: 'desktop:getChatgptConnector',
+  setChatgptConnectorKey: 'desktop:setChatgptConnectorKey',
+  clearChatgptConnectorKey: 'desktop:clearChatgptConnectorKey',
+  setChatgptConnectorSetup: 'desktop:setChatgptConnectorSetup',
+  setChatgptConnectorEnabled: 'desktop:setChatgptConnectorEnabled',
+  chatgptConnectorPairingCode: 'desktop:chatgptConnectorPairingCode',
+  disconnectChatgptConnector: 'desktop:disconnectChatgptConnector',
   /** Jarvis Conversations rail (Checkpoint 1) — Core-owned, no Desktop database. */
   listConversations: 'desktop:listConversations',
   openConversation: 'desktop:openConversation',
@@ -182,6 +190,8 @@ export const DESKTOP_CHANNELS = {
   saveWorkshopFile: 'desktop:saveWorkshopFile',
   /** A short-lived pandesh-preview: URL for one Design page (host/designPreview.ts). */
   designPreview: 'desktop:designPreview',
+  /** A picture a 3D scene page rendered of itself, saved for the check of that scene (never shown as a result). */
+  saveSceneShot: 'desktop:saveSceneShot',
   /** Bounded local deep-links into the standalone Image Generation Studio
    * app (:8989) for one already-verified Core artifact — never an
    * arbitrary/user-supplied URL. */
@@ -642,6 +652,8 @@ export interface DesktopFolderMention {
   check: DesktopFolderCheck;
   /** The access the person last chose for this folder, if it is a recent one. */
   rememberedAccess: DesktopWorkspaceAccess | null;
+  /** The message asks to create or change files there, which a read-only workspace cannot do: the card offers Write. */
+  needsWrite?: boolean;
 }
 
 export interface DesktopSnapshot {
@@ -1303,3 +1315,22 @@ export const RENDERER_VISIBLE_KEYS: readonly (keyof DesktopSnapshot)[] = [
   'workspaceActivities',
   'contextEnvelope',
 ];
+
+/** ChatGPT connector state for the Connections card. Never contains the tunnel key (only a masked hint). */
+export interface ChatgptConnectorView {
+  state: 'off' | 'needs-setup' | 'needs-key' | 'starting' | 'running' | 'degraded' | 'failed';
+  detail: string;
+  enabled: boolean;
+  keyConfigured: boolean;
+  keyHint: string | null;
+  tunnelId: string;
+  clientPath: string;
+  gatewayPath: string;
+  tunnelReachable: boolean;
+  activePairings: number;
+  lastError: string | null;
+  lastFailure: { at: string; message: string } | null;
+  core: { reachable: boolean; port: number | null; profile: string; production: boolean; build: string | null };
+  recentLog: string[];
+  gatewaySource: 'packaged-verified' | 'development-path' | 'tampered' | 'missing';
+}

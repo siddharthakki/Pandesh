@@ -208,6 +208,35 @@ describe('view commands are reported only when the window confirms them', () => 
     expect((await call('workshop_view', { action: 'dance' })).output).toMatch(/unknown action/);
   });
 
+  // Live run 2026-11-23 (scratch instance, 19:42:04Z): after building a house the model called
+  // workshop_view(action: "inspect") and got 'NOT DONE: unknown action "inspect"'.
+  it('workshop_view inspect reports only what the window\'s renderer measured, and nothing when it did not answer', async () => {
+    await call('build_3d_model', scene);
+    seen.length = 0;
+    windowAnswer = (action) => (action === 'inspect'
+      ? { ok: true, detail: 'live renderer state', state: { renderer: 'Babylon.js', meshCount: 4, meshes: [{ id: 'base', name: 'Base plate', visible: true, position: [0, -3, 0], triangles: 12 }] } }
+      : { ok: true });
+    const inspected = await call('workshop_view', { action: 'inspect' });
+    expect(inspected.status).toBe('succeeded');
+    expect(seen).toEqual(['inspect']);
+    expect(inspected.output).toMatch(/^INSPECTED "Gear assembly" — measured by the window's renderer just now/);
+    expect(inspected.output).toContain('"meshCount":4');
+    expect(inspected.output).toContain('it cannot judge how it looks');
+
+    // No window: nothing is measured and nothing is described.
+    adapter = createWorkshopCapabilityAdapter({ db, dataDir: dir, publish, commandTimeoutMs: 300 });
+    windowAnswer = undefined;
+    const silent = await call('workshop_view', { action: 'inspect' });
+    expect(silent.status).toBe('failed');
+    expect(silent.output).toMatch(/^NOT INSPECTED: the Pandesh window did not answer/);
+    expect(silent.output).not.toContain('meshCount');
+    // The window answered "done" without a measurement: still not an inspection.
+    windowAnswer = () => ({ ok: true });
+    expect((await call('workshop_view', { action: 'inspect' })).output).toMatch(/^NOT INSPECTED/);
+    // An invented action names the real ones.
+    expect((await call('workshop_view', { action: 'dance' })).output).toMatch(/unknown action "dance"\. The actions are: open, close, .*inspect\./);
+  });
+
   it('export: EXPORTED only after Core finds a verified GLB of the current version', async () => {
     await call('build_3d_model', scene);
     const w = listWorkshops(db, { conversationId })[0];
