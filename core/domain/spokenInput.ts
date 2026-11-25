@@ -1,8 +1,9 @@
 /**
  * Messages the user spoke rather than typed.
  *
- * Voice input is transcribed on this PC by a small local recognizer (whisper-base.en, no vocabulary biasing), and it
- * mishears names. A measured round trip (Piper speech into the product's own recognizer, 2026-11-10) never
+ * Voice input is transcribed on this PC by a local recognizer (Parakeet since 2026-11-25, with the owner's vocabulary
+ * list; whisper-base.en before that), and any recognizer can mishear names. The measurements below are from
+ * whisper-base.en. A measured round trip (Piper speech into the product's own recognizer, 2026-11-10) never
  * recognised a short place name — it came out as common words such as "on" or "all", and "weather in <city>" once
  * came out as "whether or not" — and turned "Ollama" into "Alama", "Ollaya" into "all air" and "Pandesh" into
  * "Pandish". In the owner's own voice test "Pandesh" very likely became "punishment", and the model refused a request

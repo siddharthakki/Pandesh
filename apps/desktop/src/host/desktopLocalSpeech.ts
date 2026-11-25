@@ -8,6 +8,7 @@ import {
 } from '../../../../core/attachments/audioProcessing';
 import type { LocalProcessingCapability } from '../../../../core/shared/wireTypes';
 import { voiceTranscriptReview, type VoiceTranscriptReview } from './voiceTranscript';
+import { PARAKEET_ENGINE_NAME } from '../../../../core/attachments/parakeetEngine';
 
 export interface DesktopLocalSpeechStatus {
   capability: LocalProcessingCapability;
@@ -16,11 +17,17 @@ export interface DesktopLocalSpeechStatus {
   blocker: string;
 }
 
-export function buildDesktopAsrEnv(productRoot: string): NodeJS.ProcessEnv {
+export const VOICE_VOCABULARY_FILE_NAME = 'voice-vocabulary.json';
+
+export function buildDesktopAsrEnv(productRoot: string, dataDir?: string): NodeJS.ProcessEnv {
   const modelDir = path.join(productRoot, 'models', 'whisper-base-en');
   return {
     ...process.env,
     KARKEDIKHA_ASR_MODEL_DIR: modelDir,
+    KARKEDIKHA_PARAKEET_MODEL_DIR: path.join(productRoot, 'models', 'parakeet-tdt-v3-int8'),
+    KARKEDIKHA_ASR_RUNTIME_DIR: path.join(productRoot, 'runtime-assets', 'node_modules'),
+    // The owner's editable list of names to favour; local only. Absent when the host has no data directory.
+    ...(dataDir ? { KARKEDIKHA_VOICE_VOCABULARY_FILE: path.join(dataDir, VOICE_VOCABULARY_FILE_NAME) } : {}),
   };
 }
 
@@ -79,10 +86,11 @@ function describeSpeechBlocker(
 }
 
 /** Host probe only — microphone permission is decided in the renderer on explicit press. */
-export function probeDesktopLocalSpeech(productRoot: string): DesktopLocalSpeechStatus {
-  const env = buildDesktopAsrEnv(productRoot);
+export function probeDesktopLocalSpeech(productRoot: string, dataDir?: string): DesktopLocalSpeechStatus {
+  const env = buildDesktopAsrEnv(productRoot, dataDir);
   const probe = probeLocalAudioTranscriptionCapability(env);
-  const runtimePresent = asrRuntimeResolvable(productRoot) || externalAsrCommandConfigured(env);
+  // The Parakeet probe already requires its own native runtime; the Whisper fallback needs the transformers runtime.
+  const runtimePresent = probe.engine === PARAKEET_ENGINE_NAME || asrRuntimeResolvable(productRoot) || externalAsrCommandConfigured(env);
   let capability = probe.capability;
   if (capability === 'available' && !runtimePresent) {
     capability = 'unavailable_no_local_engine';
@@ -98,10 +106,11 @@ export function probeDesktopLocalSpeech(productRoot: string): DesktopLocalSpeech
 export async function transcribeDesktopUtterance(
   productRoot: string,
   wavBytes: Buffer,
+  dataDir?: string,
 ): Promise<{ transcript: string; engine: string; review: VoiceTranscriptReview }> {
-  const env = buildDesktopAsrEnv(productRoot);
+  const env = buildDesktopAsrEnv(productRoot, dataDir);
   const probe = probeLocalAudioTranscriptionCapability(env);
-  const runtimePresent = asrRuntimeResolvable(productRoot) || externalAsrCommandConfigured(env);
+  const runtimePresent = probe.engine === PARAKEET_ENGINE_NAME || asrRuntimeResolvable(productRoot) || externalAsrCommandConfigured(env);
   if (probe.capability !== 'available' || !probe.engine || !runtimePresent) {
     throw new Error(describeSpeechBlocker(probe, productRoot, runtimePresent) || 'local speech recognition unavailable');
   }

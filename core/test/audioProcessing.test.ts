@@ -1,12 +1,17 @@
 import { describe, it, expect } from 'vitest';
 import * as fs from 'node:fs';
+import * as os from 'node:os';
 import * as path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { probeLocalAudioTranscriptionCapability, runLocalTranscription } from '../attachments/audioProcessing';
+import { parakeetAvailable } from '../attachments/parakeetEngine';
 
 // The bundled Whisper model lives under the git-ignored models/ folder (scripts/fetch-whisper-model.mjs);
 // a fresh checkout does not have it, so real-transcription tests run only where it is staged.
-const WHISPER_STAGED = probeLocalAudioTranscriptionCapability({ ...process.env, KARKEDIKHA_LOCAL_ASR_COMMAND: '' }).capability === 'available';
+// Parakeet (the default engine) is picked first when staged, so the Whisper fallback tests pin it with KARKEDIKHA_ASR_ENGINE.
+const WHISPER_ENV = { ...process.env, KARKEDIKHA_LOCAL_ASR_COMMAND: '', KARKEDIKHA_ASR_ENGINE: 'whisper-base' };
+const PARAKEET_AVAILABLE = parakeetAvailable({ ...process.env });
+const WHISPER_STAGED = probeLocalAudioTranscriptionCapability(WHISPER_ENV).capability === 'available';
 
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -16,7 +21,7 @@ describe('local audio transcription capability probe', () => {
   it.runIf(WHISPER_STAGED)('reports the bundled whisper-base.en engine as available when its model files are present', () => {
     // Uses the real, actually-fetched model directory (no override) — this
     // is the same check the packaged runtime performs.
-    const probe = probeLocalAudioTranscriptionCapability({ ...process.env });
+    const probe = probeLocalAudioTranscriptionCapability(WHISPER_ENV);
     expect(probe.capability).toBe('available');
     expect(probe.engine).toContain('whisper-base.en');
   });
@@ -24,6 +29,7 @@ describe('local audio transcription capability probe', () => {
   it('honestly reports unavailable_no_local_engine when the model directory is absent and no external command is configured', () => {
     const probe = probeLocalAudioTranscriptionCapability({
       KARKEDIKHA_ASR_MODEL_DIR: path.join(__dirname, 'fixtures', 'nonexistent-model-dir'),
+      KARKEDIKHA_PARAKEET_MODEL_DIR: path.join(__dirname, 'fixtures', 'nonexistent-model-dir'),
     });
     expect(probe.capability).toBe('unavailable_no_local_engine');
     expect(probe.engine).toBeNull();
@@ -48,17 +54,35 @@ describe('local audio transcription capability probe', () => {
   });
 });
 
+describe('truncated recordings', () => {
+  // ffmpeg or a recorder stopped mid-write leaves a header that declares more samples than the file contains.
+  it.runIf(WHISPER_STAGED || PARAKEET_AVAILABLE)('still transcribes what was recorded instead of throwing', async () => {
+    if (!fs.existsSync(REAL_SPEECH_FIXTURE)) return;
+    const whole = fs.readFileSync(REAL_SPEECH_FIXTURE);
+    const cut = Buffer.from(whole.subarray(0, Math.floor(whole.length * 0.8)));
+    const file = path.join(os.tmpdir(), `truncated-${process.pid}.wav`);
+    fs.writeFileSync(file, cut);
+    try {
+      const probe = probeLocalAudioTranscriptionCapability({ ...process.env, KARKEDIKHA_LOCAL_ASR_COMMAND: '' });
+      const result = await runLocalTranscription(probe.engine!, file, { ...process.env });
+      expect(result.segments.map((segment) => segment.text).join(' ').length).toBeGreaterThan(10);
+    } finally {
+      try { fs.unlinkSync(file); } catch { /* ignore */ }
+    }
+  }, 120_000);
+});
+
 describe('real local transcription (whisper-base.en via @xenova/transformers)', () => {
   it.runIf(WHISPER_STAGED)('transcribes a real speech WAV fixture with plausible word-accurate text and timestamped segments', async () => {
     if (!fs.existsSync(REAL_SPEECH_FIXTURE)) {
       // Audio binary fixtures are omitted in public repository checkouts
       return;
     }
-    const probe = probeLocalAudioTranscriptionCapability({ ...process.env });
+    const probe = probeLocalAudioTranscriptionCapability(WHISPER_ENV);
     expect(probe.capability).toBe('available');
     expect(probe.engine).not.toBeNull();
 
-    const result = await runLocalTranscription(probe.engine!, REAL_SPEECH_FIXTURE);
+    const result = await runLocalTranscription(probe.engine!, REAL_SPEECH_FIXTURE, WHISPER_ENV);
     expect(result.engine).toContain('whisper-base.en');
     expect(result.segments.length).toBeGreaterThan(0);
 
@@ -76,7 +100,7 @@ describe('real local transcription (whisper-base.en via @xenova/transformers)', 
   }, 60_000);
 
   it('fails closed (never fabricates a transcript) for a WAV file it cannot decode', async () => {
-    const probe = probeLocalAudioTranscriptionCapability({ ...process.env });
+    const probe = probeLocalAudioTranscriptionCapability(WHISPER_ENV);
     const badWav = path.join(__dirname, 'fixtures', 'audio', 'not-really-a-wav.wav');
     fs.mkdirSync(path.dirname(badWav), { recursive: true });
     fs.writeFileSync(badWav, Buffer.from('this is not a wav file'));

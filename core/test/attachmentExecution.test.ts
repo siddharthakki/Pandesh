@@ -114,6 +114,7 @@ async function startTestApi(localProcessingEnv?: NodeJS.ProcessEnv): Promise<Run
   const processingEnv = localProcessingEnv ?? {
     ...process.env,
     KARKEDIKHA_ASR_MODEL_DIR: path.join(__dirname, '..', '..', 'models', 'whisper-base-en'),
+    KARKEDIKHA_ASR_ENGINE: 'whisper-base', // these tests exercise the Whisper fallback by name; Parakeet has its own tests
   };
   return startApiServer({
     db,
@@ -317,7 +318,11 @@ describe('M36 pass 2: document extraction and audio transcription reach the mode
 
   it('appends an honest unavailable-transcription note for audio instead of silently dropping the attachment or fabricating a transcript', async () => {
     await api.close();
-    const unavailableEnv: NodeJS.ProcessEnv = { ...process.env, KARKEDIKHA_ASR_MODEL_DIR: path.join(os.tmpdir(), 'karkedikha-no-such-asr-model-dir') };
+    const unavailableEnv: NodeJS.ProcessEnv = {
+      ...process.env,
+      KARKEDIKHA_ASR_MODEL_DIR: path.join(os.tmpdir(), 'karkedikha-no-such-asr-model-dir'),
+      KARKEDIKHA_PARAKEET_MODEL_DIR: path.join(os.tmpdir(), 'karkedikha-no-such-asr-model-dir'),
+    };
     delete unavailableEnv.KARKEDIKHA_LOCAL_ASR_COMMAND;
     api = await startTestApi(unavailableEnv);
     baseUrl = `http://127.0.0.1:${api.port}`;

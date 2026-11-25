@@ -37,7 +37,7 @@ describe('desktop local speech host probe', () => {
   it('reports availability when whisper model and runtime exist in the dev tree', () => {
     const status = probeDesktopLocalSpeech(repoRoot);
     if (status.capability === 'available') {
-      expect(status.engine).toMatch(/whisper/i);
+      expect(status.engine).toMatch(/parakeet|whisper/i);
       expect(status.blocker).toBe('');
     } else {
       expect(status.blocker.length).toBeGreaterThan(20);
@@ -69,7 +69,7 @@ describe('desktop local speech host probe', () => {
     const fixture = path.join(repoRoot, 'core', 'test', 'fixtures', 'audio', 'quarterly-report-speech.wav');
     const bytes = await fs.readFile(fixture);
     const { transcript, engine } = await transcribeDesktopUtterance(repoRoot, bytes);
-    expect(engine).toMatch(/whisper/i);
+    expect(engine).toMatch(/parakeet|whisper/i);
     expect(transcript.toLowerCase()).toMatch(/quarterly/);
   }, 180_000);
 });

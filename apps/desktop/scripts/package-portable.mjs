@@ -72,7 +72,8 @@ run(process.execPath, [path.join(repoRoot, 'esbuild.core.js'), '--production']);
 run(process.execPath, [path.join(desktopRoot, 'esbuild.mjs')]);
 
 const stagedAsr = path.join(repoRoot, 'runtime-assets', 'node_modules', '@xenova', 'transformers', 'package.json');
-if (!fs.existsSync(stagedAsr)) {
+const stagedSherpa = path.join(repoRoot, 'runtime-assets', 'node_modules', 'sherpa-onnx-win-x64', 'sherpa-onnx.node');
+if (!fs.existsSync(stagedAsr) || !fs.existsSync(stagedSherpa)) {
   console.log('Staging local ASR runtime assets (first time)…');
   run(process.execPath, [path.join(repoRoot, 'scripts', 'stage-asr-runtime-assets.mjs')]);
 }
@@ -81,6 +82,8 @@ if (!fs.existsSync(whisperConfig)) {
   console.log('Fetching whisper-base.en model (first time)…');
   run(process.execPath, [path.join(repoRoot, 'scripts', 'fetch-whisper-model.mjs')]);
 }
+// Default speech engine (Parakeet); the whisper-base.en fetched above stays as the fallback.
+run(process.execPath, [path.join(repoRoot, 'scripts', 'fetch-parakeet-model.mjs')]);
 const owwJarvis = path.join(repoRoot, 'models', 'openwakeword', 'hey_jarvis_v0.1.onnx');
 if (!fs.existsSync(owwJarvis)) {
   console.log('Fetching openWakeWord hey_jarvis models…');
@@ -165,6 +168,7 @@ copyRecursive(path.join(desktopRoot, 'renderer'), path.join(appDir, 'renderer'))
 // ChatGPT connector gateway: a managed, hash-verified component (node built-ins only, no dependencies). Never run from a workspace path.
 copyRecursive(path.join(repoRoot, 'apps', 'panda-bridge', 'mcp-gateway'), path.join(outDir, 'components', 'mcp-gateway'));
 copyRecursive(path.join(repoRoot, 'models', 'whisper-base-en'), path.join(outDir, 'models', 'whisper-base-en'));
+copyRecursive(path.join(repoRoot, 'models', 'parakeet-tdt-v3-int8'), path.join(outDir, 'models', 'parakeet-tdt-v3-int8'));
 if (fs.existsSync(path.join(repoRoot, 'models', 'openwakeword'))) {
   copyRecursive(path.join(repoRoot, 'models', 'openwakeword'), path.join(outDir, 'models', 'openwakeword'));
 }
