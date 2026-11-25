@@ -677,3 +677,58 @@ describe('documents without a thread read per message (invoices, contracts)', ()
     expect(read.truncated).toBe(true);
   });
 });
+
+describe('gmail_collect_documents lists every document, with sources and an honest coverage line', () => {
+  const invoice = (n: number) => `Rechnungsnummer: RE-${n}\nRechnungsdatum: 0${n}.01.2026\nGesamtbetrag ${n}0,00 €`;
+  const runner = (opts: { failAttachment?: string } = {}) => (async (input: { args: string[] }) => {
+    const params = JSON.parse(input.args[input.args.indexOf('--params') + 1]);
+    const ok = (o: unknown) => ({ exitCode: 0, stdout: JSON.stringify(o), stderr: '', timedOut: false, aborted: false });
+    if (input.args.includes('attachments')) {
+      if (params.id === opts.failAttachment) return { exitCode: 1, stdout: '', stderr: 'boom', timedOut: false, aborted: false };
+      return ok({ size: 50, data: Buffer.from(invoice(Number(String(params.id).replace(/[^0-9]/g, '')))).toString('base64url') });
+    }
+    if (input.args.includes('list')) {
+      if (params.q === 'Acme Rechnung') return ok({ messages: [] });
+      return params.pageToken ? ok({ messages: [{ id: 'm3', threadId: 'm3' }] }) : ok({ messages: [{ id: 'm1', threadId: 'm1' }, { id: 'm2', threadId: 'm2' }], nextPageToken: 'P2' });
+    }
+    return ok({ id: params.id, threadId: params.id, internalDate: String(1767225600000 + Number(String(params.id).slice(1)) * 86400000), payload: { headers: [{ name: 'Subject', value: `Ihre Rechnung ${params.id}` }], mimeType: 'multipart/mixed', parts: [{ filename: `${params.id}.txt`, mimeType: 'text/plain', body: { attachmentId: `a-${params.id}`, size: 50 } }] } });
+  }) as never;
+  const ready = () => { accessToken = 'token'; accountEmail = 'me@example.com'; };
+
+  it('follows every page, reads every attachment, and returns number, date, total, source ids and complete coverage', async () => {
+    ready();
+    const executor = createGwsGmailExecutor(baseConfig({ runGwsFn: runner() }));
+    const out = JSON.parse((await executor('gmail_collect_documents', { query: 'Rechnung after:2026/01/01 has:attachment' }, ctx)).output);
+    expect(out.coverage).toMatchObject({ pagesFetched: 2, messagesFound: 3, documentsRead: 3, documentsNotRead: 0, complete: true });
+    expect(out.documents.map((d: { facts: { number: string } }) => d.facts.number).sort()).toEqual(['RE-1', 'RE-2', 'RE-3']);
+    expect(out.documents[0]).toMatchObject({ messageId: expect.any(String), attachmentId: expect.stringMatching(/^a-m/), status: 'read' });
+    expect(out.table).toContain('RE-2');
+    expect(out.table).toContain('20,00 €');
+    expect(out.note).toContain('All 3 message(s)');
+  });
+
+  it('says it is not complete when an attachment cannot be read, and keeps the others', async () => {
+    ready();
+    const executor = createGwsGmailExecutor(baseConfig({ runGwsFn: runner({ failAttachment: 'a-m2' }) }));
+    const out = JSON.parse((await executor('gmail_collect_documents', { query: 'Rechnung' }, ctx)).output);
+    expect(out.coverage).toMatchObject({ documentsRead: 2, documentsNotRead: 1, complete: false });
+    expect(out.documents.find((d: { messageId: string }) => d.messageId === 'm2').status).toBe('read_failed');
+    expect(out.note).toContain('Not complete');
+  });
+
+  it('asks every later page with the spelling that matched', async () => {
+    ready();
+    const queries: string[] = [];
+    const base = runner();
+    const executor = createGwsGmailExecutor(baseConfig({ runGwsFn: (async (input: { args: string[] }) => { const p = JSON.parse(input.args[input.args.indexOf('--params') + 1]); if (input.args.includes('list')) queries.push(`${p.q}|${p.pageToken ?? ''}`); return (base as (i: unknown) => Promise<unknown>)(input); }) as never }));
+    const out = JSON.parse((await executor('gmail_collect_documents', { query: 'Acme Rechnung' }, ctx)).output);
+    expect(out.retriedWith).toBe('Acmes Rechnung');
+    expect(queries).toEqual(['Acme Rechnung|', 'Acmes Rechnung|', 'Acmes Rechnung|P2']);
+  });
+
+  it('requires a query', async () => {
+    ready();
+    const r = await createGwsGmailExecutor(baseConfig({ runGwsFn: runner() }))('gmail_collect_documents', {}, ctx);
+    expect(r.status).toBe('failed');
+  });
+});

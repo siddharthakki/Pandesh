@@ -64,6 +64,15 @@ function connectorConfigs(overrides: ConnectorAdapterOverrides = {}): ConnectorA
           }, ['messageId', 'attachmentId']),
         },
         {
+          name: 'gmail_collect_documents',
+          tier: 'read',
+          description: 'Collect the documents (invoices, bills, receipts, contracts) attached to ALL the mail a Gmail search finds: pages through every result, opens every PDF or text attachment locally and returns, for each, the printed document number, date and total with the lines they were read from, plus the Gmail message id and attachment id as source references and a coverage line saying whether the list is complete. Read-only. Use it for "all the invoices from X since Y" instead of reading messages one by one; put the exact spelling the user wrote in the query (keep after:/before: dates). Report the table as given and say what coverage says.',
+          parameters: objectParams({
+            query: { type: 'string', description: 'Gmail search query, e.g. "Rechnung after:2026/01/01 has:attachment" or "from:billing@example.com after:2026/01/01".' },
+            maxDocuments: { type: 'number', description: 'Most attachments to open (default and maximum 100).' },
+          }, ['query']),
+        },
+        {
           name: 'gmail_create_draft',
           tier: 'draft',
           description: 'Create a draft email in the connected Gmail account. Does not send. Requires the draft permission tier. Optionally attach to an existing thread as a reply.',
