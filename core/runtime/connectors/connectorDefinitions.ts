@@ -43,7 +43,7 @@ function connectorConfigs(overrides: ConnectorAdapterOverrides = {}): ConnectorA
           name: 'gmail_search',
           tier: 'read',
           description: 'Search messages in the connected Gmail account (Gmail search syntax). Read-only. Gmail matches WHOLE WORDS, so keep the exact spelling the user wrote ("Acme" does not find "Acmes"): never shorten, singularize or translate a name; if nothing matches the tool itself retries the other singular/plural form and tells you. Dates: after:2026/01/01 before:2026/12/31. Returns one page (maxResults up to 50); when nextPageToken is present there are more, so call again with the same query and pageToken until it is absent before saying "all" or giving a total.',
-          parameters: objectParams({ query: { type: 'string', description: 'Gmail search query, e.g. "is:unread", "from:alice@example.com" or "Rechnung after:2026/01/01 has:attachment".' }, maxResults: { type: 'number', description: 'Page size, 1 to 50 (default 20).' }, pageToken: { type: 'string', description: 'nextPageToken from the previous page of the same query.' } }, []),
+          parameters: objectParams({ query: { type: 'string', description: 'Gmail search query, e.g. "is:unread", "from:alice@example.com" or "Rechnung after:2026/01/01 has:attachment".' }, maxResults: { type: 'number', description: 'Page size, 1 to 50 (default 20).' }, pageToken: { type: 'string', description: 'nextPageToken from the previous page of the same query.' }, includeAttachments: { type: 'boolean', description: 'Also list each message's attachments (id, filename, mimeType, size) so gmail_read_attachment can be called without reading the thread first. Use it for invoices, contracts and other documents.' } }, []),
         },
         {
           name: 'gmail_read_thread',
@@ -59,6 +59,7 @@ function connectorConfigs(overrides: ConnectorAdapterOverrides = {}): ConnectorA
             messageId: { type: 'string', description: 'ID of the Gmail message containing the attachment.' },
             attachmentId: { type: 'string', description: 'ID of the attachment from the message part.' },
             filename: { type: 'string', description: 'Optional filename of the attachment.' },
+            maxChars: { type: 'number', description: 'Most text to return (default 12000, max 50000); the start and the end are kept, which is where an invoice number and a total usually are.' },
             mimeType: { type: 'string', description: 'Optional MIME type of the attachment, e.g. "application/pdf".' },
           }, ['messageId', 'attachmentId']),
         },

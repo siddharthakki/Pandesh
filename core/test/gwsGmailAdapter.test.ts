@@ -651,3 +651,29 @@ describe('gmail_search covers everything the user asked for (production failure 
     expect(r.output).toContain('messages[].id');
   });
 });
+
+describe('documents without a thread read per message (invoices, contracts)', () => {
+  it('includeAttachments lists each hit\'s attachments, and a long attachment keeps its start and its end', async () => {
+    accessToken = 'token'; accountEmail = 'me@example.com';
+    const formats: string[] = [];
+    const long = `Rechnung Nr. 4711\n${'Position 1 Beschreibung. '.repeat(1500)}\nGesamtbetrag 119,00 EUR`;
+    const executor = createGwsGmailExecutor(baseConfig({ runGwsFn: (async (input: { args: string[] }) => {
+      const params = JSON.parse(input.args[input.args.indexOf('--params') + 1]);
+      if (input.args.includes('attachments')) return { exitCode: 0, stdout: JSON.stringify({ size: long.length, data: Buffer.from(long).toString('base64url') }), stderr: '', timedOut: false, aborted: false };
+      if (input.args.includes('list')) return { exitCode: 0, stdout: JSON.stringify({ messages: [{ id: 'm1', threadId: 't1' }] }), stderr: '', timedOut: false, aborted: false };
+      formats.push(params.format);
+      return { exitCode: 0, stdout: JSON.stringify({ id: 'm1', threadId: 't1', internalDate: '1767225600000', payload: { headers: [{ name: 'Subject', value: 'Ihre Rechnung' }], mimeType: 'multipart/mixed', parts: [{ mimeType: 'text/plain', body: { data: Buffer.from('Hallo').toString('base64url') } }, { filename: 'rechnung.txt', mimeType: 'text/plain', body: { attachmentId: 'att1', size: long.length } }] } }), stderr: '', timedOut: false, aborted: false };
+    }) as never }));
+    const found = JSON.parse((await executor('gmail_search', { query: 'Rechnung has:attachment', includeAttachments: true }, ctx)).output);
+    expect(formats).toEqual(['full']);
+    expect(found.results[0].attachments).toEqual([{ id: 'att1', filename: 'rechnung.txt', mimeType: 'text/plain', size: long.length }]);
+    const plain = JSON.parse((await executor('gmail_search', { query: 'Rechnung' }, ctx)).output);
+    expect(plain.results[0].attachments).toBeUndefined(); // off unless asked for
+    const read = JSON.parse((await executor('gmail_read_attachment', { messageId: 'm1', attachmentId: 'att1', filename: 'rechnung.txt', mimeType: 'text/plain' }, ctx)).output);
+    expect(read.textChars).toBe(long.length);
+    expect(read.extractedText.length).toBeLessThan(13_000);
+    expect(read.extractedText).toContain('Rechnung Nr. 4711');
+    expect(read.extractedText).toContain('Gesamtbetrag 119,00 EUR'); // the total at the end survives
+    expect(read.truncated).toBe(true);
+  });
+});

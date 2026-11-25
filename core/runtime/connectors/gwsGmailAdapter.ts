@@ -327,6 +327,7 @@ async function runGmailSearch(args: Record<string, unknown>, deps: CallDeps): Pr
   const query = trimmedNonEmptyString(args.query);
   if (query) params.q = query;
   const pageToken = trimmedNonEmptyString(args.pageToken);
+  const includeAttachments = args.includeAttachments === true;
   if (pageToken) params.pageToken = pageToken;
 
   type ListData = { messages?: Array<{ id?: string; threadId?: string }>; resultSizeEstimate?: number; nextPageToken?: string } | null;
@@ -351,8 +352,7 @@ async function runGmailSearch(args: Record<string, unknown>, deps: CallDeps): Pr
     const getParams = {
       userId: 'me',
       id: stub.id,
-      format: 'metadata',
-      metadataHeaders: ['Subject', 'From', 'Date'],
+      ...(includeAttachments ? { format: 'full' } : { format: 'metadata', metadataHeaders: ['Subject', 'From', 'Date'] }),
     };
     const outcome = await callGws(deps, ['gmail', 'users', 'messages', 'get', '--params', JSON.stringify(getParams)], 'gmail_search_metadata_failed');
     if (!outcome.ok) return null; // a failed lookup leaves no slot; it is counted and reported below
@@ -368,6 +368,8 @@ async function runGmailSearch(args: Record<string, unknown>, deps: CallDeps): Pr
       snippet: summary.snippet,
       // Gmail's own labels (INBOX, UNREAD, STARRED, CATEGORY_PROMOTIONS…) let a briefing triage without guessing.
       labels: Array.isArray((outcome.data as GmailApiMessage).labelIds) ? (outcome.data as GmailApiMessage).labelIds! : [],
+      // Only when asked for: each attachment's id, name, type and size, ready for gmail_read_attachment with this message's id.
+      ...(includeAttachments ? { attachments: summary.attachments.map((a) => ({ id: a.id, filename: a.filename, mimeType: a.mimeType, size: a.size })) } : {}),
     };
   });
   // Keep the user-facing list in the same order as the `list` returned; drop the
@@ -506,6 +508,16 @@ async function runGmailReadAttachment(args: Record<string, unknown>, deps: CallD
     });
   }
 
+  const requestedChars = Number(args.maxChars);
+  const limit = Number.isFinite(requestedChars) && requestedChars >= 1_000 ? Math.min(Math.floor(requestedChars), 50_000) : 12_000;
+  const textChars = extractedText?.length ?? 0;
+  if (extractedText && textChars > limit) {
+    const head = Math.floor(limit * 0.65);
+    extractedText = `${extractedText.slice(0, head)}
+…[${textChars - limit} characters omitted from the middle; call again with a larger maxChars to read more]…
+${extractedText.slice(textChars - (limit - head))}`;
+    truncated = true;
+  }
   return succeeded('gmail_read_attachment_succeeded', {
     messageId,
     attachmentId,
@@ -513,6 +525,7 @@ async function runGmailReadAttachment(args: Record<string, unknown>, deps: CallD
     mimeType,
     size: buffer.length,
     pageCount,
+    textChars,
     extractedText,
     truncated,
     status: 'extracted',
