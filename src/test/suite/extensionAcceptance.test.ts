@@ -10,7 +10,6 @@ import { ProviderGateway } from '../../providers/ProviderGateway';
 import { InferenceProvider, ModelInfo, ProviderChatOptions } from '../../providers/ProviderTypes';
 import { ChatMessage, ChatResponse, ToolDefinition } from '../../tools/ToolTypes';
 import { CONFIGURE_PROVIDER_MODEL_COMMAND } from '../../activation/ConfigureProviderModelController';
-import { RUN_FORGE_CODING_TASK_COMMAND, RUN_FORGE_READINESS_CHECK_COMMAND } from '../../activation/ForgeCodingTaskController';
 
 class AcceptanceProvider implements InferenceProvider {
   readonly providerType = 'ollama' as const;
@@ -145,11 +144,7 @@ describe('M8.6 automated extension acceptance harness', () => {
     registerCommands(extensionContext(), { stop: () => undefined, clearSession: () => undefined } as never, {} as never, root);
 
     expect(vscodeMock._registeredCommand(CONFIGURE_PROVIDER_MODEL_COMMAND)).toBeTypeOf('function');
-    expect(vscodeMock._registeredCommand(RUN_FORGE_CODING_TASK_COMMAND)).toBeTypeOf('function');
-    expect(vscodeMock._registeredCommand(RUN_FORGE_READINESS_CHECK_COMMAND)).toBeTypeOf('function');
     expect(vscodeMock._registeredCommand('ollama-agent.runDiagnostics')).toBeTypeOf('function');
-    await vscodeMock._registeredCommand(RUN_FORGE_READINESS_CHECK_COMMAND)?.();
-    expect(vscodeMock._outputChannels().some(channel => channel.content().includes('Forge Readiness Check'))).toBe(true);
     await vscodeMock._registeredCommand('ollama-agent.runDiagnostics')?.();
 
     const items = vscodeMock._lastQuickPickItems() as Array<{ detail?: string }> | undefined;
@@ -177,52 +172,6 @@ describe('M8.6 automated extension acceptance harness', () => {
     expect(vscodeMock._lastWarningMessage()).not.toBe('Ollama Agent: provider model configuration is already running.');
   });
 
-  it('runs Forge coding task acceptance with approval', async () => {
-    registerCommands(extensionContext(), { stop: () => undefined, clearSession: () => undefined } as never, {} as never, root);
-    const command = vscodeMock._registeredCommand(RUN_FORGE_CODING_TASK_COMMAND);
-
-    vscodeMock._setQuickPickSelection({ label: 'Summary: Create M9 acceptance file' });
-    vscodeMock._setWarningMessageSelection('Approve Execution');
-    await command?.('create the M9 acceptance file');
-    expect(await fs.readFile(path.join(root, 'src/generated/m9Acceptance.ts'), 'utf8')).toContain('m9Acceptance');
-    expect(vscodeMock._outputChannels().some(channel => channel.content().includes('Status: completed'))).toBe(true);
-    expect(vscodeMock._outputChannels().some(channel => channel.content().includes('npx tsc --noEmit --pretty false'))).toBe(true);
-  });
-
-  it('runs host-bound replace proposals through the command path', async () => {
-    registerCommands(extensionContext(), { stop: () => undefined, clearSession: () => undefined } as never, {} as never, root);
-    const command = vscodeMock._registeredCommand(RUN_FORGE_CODING_TASK_COMMAND);
-
-    await fs.mkdir(path.join(root, 'src/generated'), { recursive: true });
-    await fs.writeFile(path.join(root, 'src/generated/untrackedA.ts'), 'export const untrackedA = "before";\n');
-    await fs.writeFile(path.join(root, 'src/generated/untrackedB.ts'), 'export const untrackedB = "before";\n');
-    vscodeMock._resetWindowState();
-    vscodeMock._setQuickPickSelection({ label: 'Summary: Replace host-bound untracked files' });
-    vscodeMock._setWarningMessageSelection('Approve Execution');
-    await command?.('host-bound replace two existing untracked files');
-    expect(await fs.readFile(path.join(root, 'src/generated/untrackedA.ts'), 'utf8')).toContain('"after"');
-    expect(await fs.readFile(path.join(root, 'src/generated/untrackedB.ts'), 'utf8')).toContain('"after"');
-  });
-
-  it('keeps cancellation and review rejection mutation-free', async () => {
-    registerCommands(extensionContext(), { stop: () => undefined, clearSession: () => undefined } as never, {} as never, root);
-    const command = vscodeMock._registeredCommand(RUN_FORGE_CODING_TASK_COMMAND);
-
-    await fs.rm(path.join(root, 'src'), { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
-    vscodeMock._resetWindowState();
-    vscodeMock._requestProgressCancellation();
-    await command?.('create cancelled file');
-    await expect(fs.stat(path.join(root, 'src/generated/m9Acceptance.ts'))).rejects.toThrow();
-
-    vscodeMock._resetWindowState();
-    vscodeMock._setQuickPickSelection(undefined);
-    await command?.('create rejected file');
-    await expect(fs.stat(path.join(root, 'src/generated/m9Acceptance.ts'))).rejects.toThrow();
-
-    for (const disposable of extensionContext().subscriptions) {
-      disposable.dispose();
-    }
-  });
 });
 
 async function provisionLocalTypeScript(root: string): Promise<void> {

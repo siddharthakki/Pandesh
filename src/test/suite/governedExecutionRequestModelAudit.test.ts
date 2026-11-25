@@ -67,7 +67,7 @@ describe('GovernedCodingExecutionRequest construction sites always set model exp
     return ['runId', 'goal', 'workspaceRoot', 'callbacks'].every(token => new RegExp(`\\b${token}\\b`).test(body));
   }
 
-  const knownProductionCallSites = ['ForgeCodingTaskController.ts', 'M15AutonomousRuntime.ts'];
+  const knownProductionCallSites = ['M15AutonomousRuntime.ts'];
 
   it('every known production call site is still present and sets model and execution profile explicitly', () => {
     const files = listProductionTsFiles(srcRoot);

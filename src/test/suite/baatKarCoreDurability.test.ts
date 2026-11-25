@@ -5,7 +5,7 @@ import * as path from 'path';
 import * as vscode from 'vscode';
 import * as vscodeMock from '../mocks/vscode';
 import { AgentPanel } from '../../ui/AgentPanel';
-import { AgentRuntime } from '../../agent/AgentRuntime';
+import { LegacyTaskControls } from '../../agent/LegacyTaskControls';
 import { RepositoryContextService } from '../../context/RepositoryContextService';
 import { RepoFastPath } from '../../repository/RepoFastPath';
 import type { RuntimeEventRecord, RuntimeTokenFrame } from '../../../core/shared/wireTypes';
@@ -543,10 +543,10 @@ describe('Baat Kar / Saath Kar Core execution cutover (M32 correction)', () => {
     }));
   });
 
-  it('Baat Kar calls Core execution (submit + executeAttempt) and never calls AgentRuntime.run()', async () => {
+  it('Baat Kar calls Core execution (submit + executeAttempt) and never calls a local engine run', async () => {
     const client = fakeCoreClient();
     const manager = fakeCoreManager(client);
-    const runSpy = vi.spyOn(AgentRuntime.prototype, 'run');
+    const runSpy = vi.spyOn(LegacyTaskControls.prototype, 'resumeTask');
     dependencyMocks.getCoreManager.mockReturnValue(manager);
 
     const posted: PostedMessage[] = [];
@@ -646,10 +646,10 @@ describe('Baat Kar / Saath Kar Core execution cutover (M32 correction)', () => {
     }
   });
 
-  it('Saath Kar calls Core execution (submit + executeAttempt with workingDirectory) and never calls AgentRuntime.run()', async () => {
+  it('Saath Kar calls Core execution (submit + executeAttempt with workingDirectory) and never calls a local engine run', async () => {
     const client = fakeCoreClient();
     const manager = fakeCoreManager(client);
-    const runSpy = vi.spyOn(AgentRuntime.prototype, 'run');
+    const runSpy = vi.spyOn(LegacyTaskControls.prototype, 'resumeTask');
     dependencyMocks.getCoreManager.mockReturnValue(manager);
 
     const posted: PostedMessage[] = [];
@@ -862,11 +862,11 @@ describe('Baat Kar / Saath Kar Core execution cutover (M32 correction)', () => {
     expect(posted.some((m) => m.type === 'token' && m.delta === 'late')).toBe(false);
   });
 
-  it('a Core execution failure surfaces as a structured error and never falls back to AgentRuntime.run()', async () => {
+  it('a Core execution failure surfaces as a structured error and never falls back to a local engine run', async () => {
     const client = fakeCoreClient();
     client.setSubmitImpl(() => { throw new Error('Core rejected the submission'); });
     const manager = fakeCoreManager(client);
-    const runSpy = vi.spyOn(AgentRuntime.prototype, 'run');
+    const runSpy = vi.spyOn(LegacyTaskControls.prototype, 'resumeTask');
     dependencyMocks.getCoreManager.mockReturnValue(manager);
 
     const posted: PostedMessage[] = [];
@@ -881,8 +881,8 @@ describe('Baat Kar / Saath Kar Core execution cutover (M32 correction)', () => {
     expect(posted.some((m) => m.type === 'done')).toBe(false);
   });
 
-  it('a Core execution failure when Core is unreachable also never falls back to AgentRuntime.run()', async () => {
-    const runSpy = vi.spyOn(AgentRuntime.prototype, 'run');
+  it('a Core execution failure when Core is unreachable also never falls back to a local engine run', async () => {
+    const runSpy = vi.spyOn(LegacyTaskControls.prototype, 'resumeTask');
     dependencyMocks.getCoreManager.mockReturnValue(undefined);
 
     const posted: PostedMessage[] = [];
@@ -930,7 +930,7 @@ describe('Baat Kar / Saath Kar Core execution cutover (M32 correction)', () => {
   it('routes stopGeneration through Core cancelAttempt, not the legacy runtime stop path', async () => {
     const client = fakeCoreClient();
     const manager = fakeCoreManager(client);
-    const stopSpy = vi.spyOn(AgentRuntime.prototype, 'stop');
+    const stopSpy = vi.spyOn(LegacyTaskControls.prototype, 'stop');
     dependencyMocks.getCoreManager.mockReturnValue(manager);
 
     const posted: PostedMessage[] = [];

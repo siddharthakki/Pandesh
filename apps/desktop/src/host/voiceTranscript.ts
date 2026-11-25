@@ -12,7 +12,12 @@
  *   the composer for the person to read and confirm first.
  */
 
-export const VOICE_VOCABULARY = ['Gmail', 'Calendar', 'Pandesh', 'Promotions', 'Inbox', 'Newsletters', 'Google'] as const;
+export const VOICE_VOCABULARY = [
+  'Gmail', 'Calendar', 'Pandesh', 'Promotions', 'Inbox', 'Newsletters', 'Google',
+  // Names and German business words the owner says in English sentences. whisper-base.en has never seen them:
+  // measured on Piper speech, "Rechnung" came back as "Rich Nunn", "Ummeldung" as "Ummel dung", "Conficars" as "configars".
+  'Conficars', 'Rechnung', 'Rechnungen', 'Ummeldung',
+] as const;
 
 /** Real words one edit away from a vocabulary term; left alone. */
 const PROTECTED_WORDS = new Set(['email', 'emails', 'mail', 'mails', 'promotion', 'newsletter', 'panda', 'calendars', 'inboxes']);
@@ -49,6 +54,11 @@ function editDistance(a: string, b: string): number {
   return prev[b.length];
 }
 
+/** Letters an English-only recognizer swaps when it guesses at a foreign or invented name (k/c, u/o). */
+function soundFold(word: string): string {
+  return word.toLowerCase().replace(/k/g, 'c').replace(/u/g, 'o');
+}
+
 function canonicalFor(word: string): string | null {
   const lower = word.toLowerCase();
   if (lower.length < 4 || PROTECTED_WORDS.has(lower)) return null;
@@ -58,15 +68,46 @@ function canonicalFor(word: string): string | null {
   const allowed = lower.length <= 7 ? 1 : 2;
   let best: { term: string; distance: number } | null = null;
   for (const term of VOICE_VOCABULARY) {
-    const distance = editDistance(lower, term.toLowerCase());
+    const distance = Math.min(editDistance(lower, term.toLowerCase()), editDistance(soundFold(lower), soundFold(term)));
     if (distance <= allowed && (!best || distance < best.distance)) best = { term, distance };
   }
   return best?.term ?? null;
 }
 
+/**
+ * The recognizer also splits an unknown name into two or three words ("Ummel dung", "Rich Nunn"). Try the words
+ * joined; short joins ("a mail" -> "amail") are never tried because they collide with ordinary English.
+ */
+function correctSplitNames(text: string, corrections: string[]): string {
+  // Words separated by single spaces only: a comma or full stop is a real boundary.
+  const parts = text.split(/( +)/);
+  const out: string[] = [];
+  for (let i = 0; i < parts.length; i += 2) {
+    let done = false;
+    for (const size of [3, 2]) {
+      const words = parts.slice(i, i + 2 * size - 1).filter((_, k) => k % 2 === 0);
+      // Every piece must be a real chunk (not "my" in "my calendar") and none may already be a vocabulary term.
+      if (words.length < size || !words.every((w) => /^[A-Za-z]{3,}$/.test(w))) continue;
+      if (words.some((w) => VOICE_VOCABULARY.some((term) => term.toLowerCase() === w.toLowerCase()))) continue;
+      const joinedWords = words.join('');
+      const exact = VOICE_VOCABULARY.find((term) => term.toLowerCase() === joinedWords.toLowerCase());
+      const canonical = joinedWords.length >= 7 ? (exact ?? canonicalFor(joinedWords)) : null;
+      if (!canonical) continue;
+      corrections.push(`${words.join(' ')} -> ${canonical}`);
+      out.push(canonical);
+      i += 2 * (size - 1);
+      done = true;
+      break;
+    }
+    if (!done) out.push(parts[i]);
+    if (i + 1 < parts.length) out.push(parts[i + 1]);
+  }
+  return out.join('');
+}
+
 export function correctVoiceVocabulary(text: string): { text: string; corrections: string[] } {
   const corrections: string[] = [];
-  const corrected = text.replace(/[A-Za-z]+(?:-[A-Za-z]+)*/g, (token) => {
+  const corrected = correctSplitNames(text, corrections).replace(/[A-Za-z]+(?:-[A-Za-z]+)*/g, (token) => {
     // Whisper sometimes splits a name it does not know with a hyphen ("Pan-dish"): try the joined word first.
     const joined = token.includes('-') ? canonicalFor(token.replace(/-/g, '')) : null;
     if (joined) {

@@ -118,6 +118,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
   // Single window-scoped CoreManager instance
   coreManager = new CoreManager(context);
+  statusBar.setCoreStatus(coreManager.getStatus());
+  context.subscriptions.push(coreManager.onStatusChange(status => statusBar.setCoreStatus(status)));
   context.subscriptions.push(coreManager);
 
   // Wire CoreManager to AgentPanel so AgentPanel can rehydrate idempotently
