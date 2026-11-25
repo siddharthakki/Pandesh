@@ -109,3 +109,12 @@ describe('a request about another source is not a folder request (production fai
     ]) expect(requiresWholeFolder(q), q).toBe(true);
   });
 });
+
+describe('a mail request is not a disk observation (production failure 2026-11-25)', () => {
+  it('"read the PDF of the newest invoice email" is not answered with "nothing was read from the disk"', async () => {
+    const { asksForDiskObservation } = await import('../runtime/assistantStatus');
+    const mail = 'Use gmail_search for the newest invoice email, then call gmail_read_attachment for its invoice PDF and tell me the invoice number, the date and the total amount exactly as printed in the PDF.';
+    expect(asksForDiskObservation(mail)).toBe(false);
+    expect(asksForDiskObservation('How many files are in rw/inbox?')).toBe(true); // a real disk question still is one
+  });
+});

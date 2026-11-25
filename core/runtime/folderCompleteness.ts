@@ -21,12 +21,17 @@ const ACROSS_FILES = /\b(?:which(?:\s+one)?|compare|comparison|cheapest|cheaper|
 // A request that names another source ("search Gmail for all the invoices") is about that source, not about the selected folder,
 // unless it also says "folder" or "directory". Found 2026-11-25: such a request made Core list an unrelated folder and answer
 // "holds 22 documents, more than Pandesh examines" instead of the mail answer.
-const OTHER_SOURCE = /\b(?:gmail|g-?mail|e-?mails?|mailbox|inbox|outlook|calendar|google\s+(?:drive|docs|sheets)|whatsapp|slack|the\s+(?:web|internet)|online|website|browser)\b/i;
+const OTHER_SOURCE = /\b(?:gmail|g-?mail|e-?mails?|mailbox|my\s+inbox|outlook|calendar|google\s+(?:drive|docs|sheets)|whatsapp|slack|the\s+(?:web|internet)|online|website|browser)\b/i;
 const FOLDER_WORD = /\b(?:folders?|director(?:y|ies))\b/i;
+
+/** The request is about mail, calendar or the web, not about a folder on this PC (it says so and never says folder or directory). */
+export function namesAnotherSource(requestText: string): boolean {
+  return OTHER_SOURCE.test(requestText) && !FOLDER_WORD.test(requestText);
+}
 
 /** The request is about the folder's documents as a set, so every relevant one has to be examined. */
 export function requiresWholeFolder(requestText: string): boolean {
-  if (OTHER_SOURCE.test(requestText) && !FOLDER_WORD.test(requestText)) return false;
+  if (namesAnotherSource(requestText)) return false;
   return FOLDER_SCOPE.test(requestText) && ACROSS_FILES.test(requestText);
 }
 
