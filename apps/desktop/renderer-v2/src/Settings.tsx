@@ -19,8 +19,6 @@ interface Props {
   setTheme: (t: 'system' | 'light' | 'dark') => void;
   labels: boolean;
   setLabels: (on: boolean) => void;
-  variantForced: boolean;
-  onUseClassic: () => void;
   onGo: (view: GoTarget) => void;
   /** The shell's Settings tabs choose the section (through initialSection), so the section list is not drawn a second time. */
   hideNav?: boolean;
@@ -32,7 +30,7 @@ interface Props {
  * reports afterwards. Secrets are not handled here: provider keys and Google sign-in stay in Connections, which keeps
  * them in write-only password fields backed by encrypted storage.
  */
-export function Settings({ snapshot, refresh, narrow, initialSection, theme, setTheme, labels, setLabels, variantForced, onUseClassic, onGo, hideNav }: Props) {
+export function Settings({ snapshot, refresh, narrow, initialSection, theme, setTheme, labels, setLabels, onGo, hideNav }: Props) {
   const [section, setSection] = useState<SettingsSection>(initialSection ?? 'models');
   useEffect(() => { if (initialSection) setSection(initialSection); }, [initialSection]);
   const [notice, setNotice] = useState<Notice>(null);
@@ -81,12 +79,6 @@ export function Settings({ snapshot, refresh, narrow, initialSection, theme, set
                 ))}
               </fieldset>
               <label className="settings-check"><input type="checkbox" checked={labels} onChange={(e) => setLabels(e.target.checked)} /> Show names next to the navigation icons</label>
-              <div>
-                <span className="settings-sub">Interface</span>
-                {variantForced
-                  ? <p className="settings-note">The Classic interface is locked off for this launch (PANDESH_UI_V2=1). Start without it to switch.</p>
-                  : <p className="settings-note">You are using the v2 interface. <button type="button" className="btn small" onClick={onUseClassic}>Reload in the Classic UI</button></p>}
-              </div>
             </section>
           )}
         </div>

@@ -32,18 +32,6 @@ describe('every registered v2 place is one the v2 window can open', () => {
     expect(parseV2Target('surface:integrations').kind).toBe('unknown');
   });
 
-  it('every Classic target names a page and tab the Classic window has', () => {
-    const html = fs.readFileSync(path.join(__dirname, '../renderer/index.html'), 'utf8');
-    for (const d of UI_DESTINATIONS) {
-      const t = d.targets.classic;
-      if (!t) continue;
-      const [kind, rest] = t.split(':');
-      if (kind === 'focus') { expect(html).toContain(rest === 'permission' ? 'id="permission-mode-select"' : 'id="model-select"'); continue; }
-      const [page, tab] = rest.split('#')[0].split('/');
-      expect(html, d.id).toContain(`data-surface="${page}"`);
-      if (tab) expect(html, d.id).toContain(`data-conn-panel="${tab}"`);
-    }
-  });
 });
 
 describe('the v2 window', () => {
@@ -93,32 +81,6 @@ describe('the v2 window', () => {
   });
 });
 
-describe('the Classic window', () => {
-  it('opens Connections → Add / Configure with the Google setup, and confirms it', async () => {
-    const html = fs.readFileSync(path.join(__dirname, '../renderer/index.html'), 'utf8');
-    document.body.innerHTML = (html.match(/<body>([\s\S]*)<\/body>/i)?.[1] ?? '').replace(/<script[\s\S]*?<\/script>/gi, '');
-    Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', { configurable: true, value: vi.fn() });
-    (window as unknown as { jarvisVoiceCapture: unknown }).jarvisVoiceCapture = { startPushToTalkCapture: () => ({ stop: async () => null, cancel: () => undefined }), bytesToBase64: () => '' };
-    const listeners: Listener[] = [];
-    const confirmNavigation = vi.fn(async () => ({ recorded: true }));
-    (window as unknown as { karkedikhaDesktop: unknown }).karkedikhaDesktop = {
-      getSnapshot: async () => null, pickFolder: async () => null, submitTask: vi.fn(), cancel: vi.fn(), selectWorker: async () => null, selectProvider: async () => null,
-      listModels: async () => [], selectModel: async () => null, transcribeUtterance: async () => ({ transcript: '', engine: 'whisper' }), getHostTelemetry: async () => null,
-      onEvent: (fn: Listener) => { listeners.push(fn); return () => undefined; }, listArtifacts: async () => [], confirmNavigation,
-    };
-    // eslint-disable-next-line @typescript-eslint/no-implied-eval
-    (0, eval)(fs.readFileSync(path.join(__dirname, '../renderer/renderer.js'), 'utf8'));
-    const google = UI_DESTINATIONS.find((d) => d.id === 'google_setup')!.targets.classic!;
-    for (const l of listeners) l(navEvent(google, 'classic', 'uinav_g'));
-    await vi.waitFor(() => expect(confirmNavigation).toHaveBeenCalledWith('uinav_g', true, undefined, 'classic'));
-    expect((document.querySelector('.app') as HTMLElement).dataset.activeSurface).toBe('integrations');
-    expect((document.querySelector('[data-conn-panel="configure"]') as HTMLElement).hidden).toBe(false);
-    expect((document.getElementById('google-setup') as HTMLDetailsElement).open).toBe(true);
-
-    for (const l of listeners) l(navEvent('view:software', 'classic', 'uinav_h'));
-    await vi.waitFor(() => expect(confirmNavigation).toHaveBeenCalledWith('uinav_h', false, 'the Classic interface cannot open "view:software"', 'classic'));
-  });
-});
 
 describe('the desktop host', () => {
   it('passes a navigation request to the window even while another task runs, and tells Core the window', async () => {

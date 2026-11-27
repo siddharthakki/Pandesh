@@ -143,7 +143,7 @@ function makePackage(name, { revision, min, max, privateKeyPem, baseVersion, cor
   fs.cpSync(path.join(installDir, 'app', 'renderer'), path.join(work, 'renderer'), { recursive: true });
   const coreJs = path.join(work, 'core.js');
   fs.writeFileSync(coreJs, coreTransform(fs.readFileSync(path.join(installDir, 'runtime', 'core.js'), 'utf8')));
-  fs.appendFileSync(path.join(work, 'renderer', 'renderer.js'), `\n// pandesh-update-test ${name}\n`);
+  fs.appendFileSync(path.join(work, 'renderer', 'v2', 'app.js'), `\n// pandesh-update-test ${name}\n`);
   const base = installedIdentity();
   const identity = { ...base, buildNumber: revision, builtAt: new Date().toISOString() };
   const outFile = path.join(pkgDir, `${name}.pdupdate`);
@@ -242,7 +242,7 @@ async function main() {
   const dataBefore = await stateOfData();
   check('baseline data readable', dataBefore.conversationPresent, dataBefore);
 
-  const original = { core: coreHash(), renderer: sha256File(path.join(installDir, 'app', 'renderer', 'renderer.js')) };
+  const original = { core: coreHash(), renderer: sha256File(path.join(installDir, 'app', 'renderer', 'v2', 'app.js')) };
 
   // ---- A. rejections ----------------------------------------------------------------------------------------------
   const good = makePackage('b152', { revision: 152, min: 151, max: 151, privateKeyPem, coreTransform: (s) => `${s}\n// pandesh-update-test b152\n` });
@@ -301,7 +301,7 @@ async function main() {
   check('C updater reports success', c.result.status === 'success', c.result);
   check('C installed revision is now b152', installedIdentity().buildNumber === 152 && c.result.revision === 152, installedIdentity().buildNumber);
   check('C Core and UI files replaced', coreHash() === good.coreSha && coreHash() !== original.core
-    && sha256File(path.join(installDir, 'app', 'renderer', 'renderer.js')) !== original.renderer);
+    && sha256File(path.join(installDir, 'app', 'renderer', 'v2', 'app.js')) !== original.renderer);
   const fp = readJson(path.join(installDir, 'build-fingerprint.json'));
   check('C fingerprint regenerated from installed files', fp?.files?.coreBundle?.sha256?.toLowerCase() === coreHash(), fp?.updatedBy);
   // The app the updater relaunched reports on itself: its own window+Core health marker names the build it is.

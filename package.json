@@ -187,21 +187,6 @@
         "category": "KarkeDikha"
       },
       {
-        "command": "ollama-agent.runGovernedForgeDemo",
-        "title": "Run Governed Forge Demo",
-        "category": "KarkeDikha"
-      },
-      {
-        "command": "ollama-agent.runForgeCodingTask",
-        "title": "Run Forge Coding Task",
-        "category": "KarkeDikha"
-      },
-      {
-        "command": "ollama-agent.runForgeReadinessCheck",
-        "title": "Run Forge Readiness Check",
-        "category": "KarkeDikha"
-      },
-      {
         "command": "ollama-agent.startAutonomousTask",
         "title": "Start Autonomous Task",
         "category": "KarkeDikha"

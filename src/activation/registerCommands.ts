@@ -7,18 +7,9 @@ import { TaskStore } from '../agent/TaskStore';
 import { TaskRecovery } from '../agent/TaskRecovery';
 import { createWorkspaceDiagnostics } from '../diagnostics/SelfDiagnostics';
 import {
-  GovernedForgeDemoController,
-  RUN_GOVERNED_FORGE_DEMO_COMMAND,
-} from './GovernedForgeDemoController';
-import {
   CONFIGURE_PROVIDER_MODEL_COMMAND,
   ConfigureProviderModelController,
 } from './ConfigureProviderModelController';
-import {
-  RUN_FORGE_CODING_TASK_COMMAND,
-  RUN_FORGE_READINESS_CHECK_COMMAND,
-  ForgeCodingTaskController,
-} from './ForgeCodingTaskController';
 import { ProviderReadinessProbe } from '../diagnostics/ProviderReadiness';
 import { M14Platform, TrustState } from '../platform/M14Platform';
 import { registerM15AutonomousCommands } from './M15AutonomousCommands';
@@ -33,12 +24,10 @@ export function registerCommands(
   statusBar: StatusBarController,
   workspaceRoot: string,
 ): void {
-  const governedForgeDemo = new GovernedForgeDemoController(context, workspaceRoot);
   const configureProviderModel = new ConfigureProviderModelController(
     ProviderReadinessProbe.forSecrets(context.secrets),
   );
   const governedCodingExecutor = new GovernedCodingExecutor();
-  const forgeCodingTask = new ForgeCodingTaskController(context, workspaceRoot, governedCodingExecutor);
   const platform = new M14Platform({
     workspaceRoot,
     userRoot: context.globalStorageUri?.fsPath ?? context.storageUri?.fsPath ?? path.join(workspaceRoot, '.ollama-agent', 'user-platform'),
@@ -52,9 +41,7 @@ export function registerCommands(
   agentPanel.attachAutonomous?.(autonomousRuntime.getQueue(), autonomousRuntime);
   registerM16EvaluationCommands(context, workspaceRoot);
   context.subscriptions.push(
-    governedForgeDemo,
     configureProviderModel,
-    forgeCodingTask,
     vscode.commands.registerCommand(CONFIGURE_PROVIDER_MODEL_COMMAND, () => configureProviderModel.run()),
     // M42 consent boundary: the cloud fallback credential lives in VS Code
     // SecretStorage under its own key, never in settings, and is entered only
@@ -106,9 +93,6 @@ export function registerCommands(
       await ProviderGateway.deleteApiKey(context.secrets);
       vscode.window.showInformationMessage('Primary provider API key cleared.');
     }),
-    vscode.commands.registerCommand(RUN_GOVERNED_FORGE_DEMO_COMMAND, () => governedForgeDemo.run()),
-    vscode.commands.registerCommand(RUN_FORGE_CODING_TASK_COMMAND, (task?: string) => forgeCodingTask.run(task)),
-    vscode.commands.registerCommand(RUN_FORGE_READINESS_CHECK_COMMAND, () => forgeCodingTask.runReadinessCheck()),
     vscode.commands.registerCommand('ollama-agent.rebuildRepositoryIntelligence', () => agentPanel.rebuildRepositoryIntelligence()),
     vscode.commands.registerCommand('ollama-agent.pauseRepositoryIndexing', () => agentPanel.pauseRepositoryIndexing()),
     vscode.commands.registerCommand('ollama-agent.resumeRepositoryIndexing', () => agentPanel.resumeRepositoryIndexing()),

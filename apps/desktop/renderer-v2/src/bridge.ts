@@ -220,8 +220,6 @@ export interface DesktopApi {
   newConversation(): Promise<void>;
   getTaskOverview(): Promise<{ tasks: TaskRow[]; queued: QueuedCommand[] }>;
   getAssistantBrief(options?: { external?: boolean }): Promise<Brief>;
-  getUiVariant(): Promise<{ variant: 'classic' | 'v2'; forcedByEnv: boolean }>;
-  setUiVariant(variant: 'classic' | 'v2'): Promise<{ variant: 'classic' | 'v2'; forcedByEnv: boolean }>;
   retryCoreConnection(): Promise<Snapshot | null>;
   household(action: string, args?: Record<string, unknown>): Promise<unknown>;
   openExternalUrl(url: string): Promise<{ opened: boolean }>;

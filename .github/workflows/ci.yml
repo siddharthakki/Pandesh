@@ -42,6 +42,18 @@ jobs:
         run: |
           npm ci
           npm ci --prefix apps/desktop
+      - name: Install ripgrep
+        # Repository retrieval shells out to rg; the hosted Windows runner does not ship it, so the repository-grounding tests
+        # fail there whenever a change makes them impacted.
+        # Pinned release zip with a checksum (the Chocolatey feed was unreliable on the runner).
+        shell: pwsh
+        run: |
+          $zip = Join-Path $env:RUNNER_TEMP 'rg.zip'
+          Invoke-WebRequest -Uri 'https://github.com/BurntSushi/ripgrep/releases/download/15.1.0/ripgrep-15.1.0-x86_64-pc-windows-msvc.zip' -OutFile $zip
+          if ((Get-FileHash $zip -Algorithm SHA256).Hash -ne '124510B94B6BAA3380D051FDF4650EAA80A302C876D611E9DBA0B2E18D87493A') { throw 'ripgrep checksum mismatch' }
+          Expand-Archive $zip -DestinationPath (Join-Path $env:RUNNER_TEMP 'rg')
+          Add-Content $env:GITHUB_PATH (Join-Path $env:RUNNER_TEMP 'rg\ripgrep-15.1.0-x86_64-pc-windows-msvc')
+          & (Join-Path $env:RUNNER_TEMP 'rg\ripgrep-15.1.0-x86_64-pc-windows-msvc\rg.exe') --version
       - name: Typecheck
         # bash with -e: on a Windows runner the default shell let an earlier failing tsc pass when the last one succeeded.
         shell: bash

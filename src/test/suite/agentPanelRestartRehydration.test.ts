@@ -3,7 +3,7 @@ import * as fs from 'node:fs/promises';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import * as vscode from 'vscode';
-import { AgentRuntime } from '../../agent/AgentRuntime';
+import { LegacyTaskControls } from '../../agent/LegacyTaskControls';
 import { AutonomousTaskRuntime } from '../../activation/M15AutonomousRuntime';
 import { DurableTaskQueue, IsolatedWorktreeManager, TaskResourceScheduler, createDefaultAutonomousTask } from '../../autonomous/M15AutonomousWork';
 import { AgentPanel } from '../../ui/AgentPanel';
@@ -206,14 +206,14 @@ describe('AgentPanel Core restart rehydration', () => {
     await fs.rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
   });
 
-  it('restores the newest existing Baat/Saath attempt once and never falls back to AgentRuntime.run()', async () => {
+  it('restores the newest existing Baat/Saath attempt once and never falls back to a local engine run', async () => {
     const baat = record(root, 'att_baat_existing', 'baat_kar', 'created', 'safely_retryable_from_scratch');
     const historical = record(root, 'att_baat_historical', 'baat_kar', 'created', 'safely_retryable_from_scratch');
     const olderBaat = { ...historical, attempt: { ...historical.attempt, updatedAt: '2026-07-15T10:00:00.000Z' } };
     const saath = record(root, 'att_saath_existing', 'saath_kar', 'created', 'safely_retryable_from_scratch');
     const client = fakeClient([baat, olderBaat, saath]);
     vi.spyOn(extensionModule, 'getCoreManager').mockReturnValue(manager(client) as never);
-    const runSpy = vi.spyOn(AgentRuntime.prototype, 'run');
+    const runSpy = vi.spyOn(LegacyTaskControls.prototype, 'resumeTask');
     const posted: PostedMessage[] = [];
     const panel = attachPanel(root, posted);
 
@@ -230,7 +230,7 @@ describe('AgentPanel Core restart rehydration', () => {
     const saath = record(root, 'att_saath_existing', 'saath_kar', 'created', 'safely_retryable_from_scratch');
     const client = fakeClient([saath]);
     vi.spyOn(extensionModule, 'getCoreManager').mockReturnValue(manager(client) as never);
-    const runSpy = vi.spyOn(AgentRuntime.prototype, 'run');
+    const runSpy = vi.spyOn(LegacyTaskControls.prototype, 'resumeTask');
     const panel = attachPanel(root, []);
 
     await panel.rehydrateCoreAttempts();

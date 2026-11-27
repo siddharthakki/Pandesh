@@ -31,6 +31,25 @@ describe('voice vocabulary hints', () => {
   });
 });
 
+// Measured 2026-11-25 (Piper speech into the bundled whisper-base.en, greedy decoding): these exact strings came back.
+describe('voice vocabulary: German business words and names split or misspelled by whisper-base.en', () => {
+  it('repairs the names the owner says in English sentences', () => {
+    expect(correctVoiceVocabulary('Please find the Rich Nunn from last month').text).toBe('Please find the Rechnung from last month');
+    expect(correctVoiceVocabulary('status of the Ummel dung for my apartment').text).toBe('status of the Ummeldung for my apartment');
+    expect(correctVoiceVocabulary('the invoice from configars and show me').text).toBe('the invoice from Conficars and show me');
+    expect(correctVoiceVocabulary('the invoice from Kuntikars today').text).toBe('the invoice from Conficars today');
+    expect(correctVoiceVocabulary('Ask Pandish to open it').text).toBe('Ask Pandesh to open it');
+    expect(correctVoiceVocabulary('sort the news letters').text).toBe('sort the Newsletters');
+  });
+
+  it('does not join ordinary English word pairs or cross punctuation', () => {
+    for (const sentence of [
+      'I got a mail from them', 'put it in a box', 'Ring, nung is not a word',
+      'Her leg is in a cast and she can count on us.', 'We will recharge tomorrow.',
+    ]) expect(correctVoiceVocabulary(sentence).corrections, sentence).toEqual([]);
+  });
+});
+
 describe('voice transcript review gate', () => {
   it('lets a read-only question go straight through', () => {
     const review = voiceTranscriptReview('How is my calendar and email looking today?');

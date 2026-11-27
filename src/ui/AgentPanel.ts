@@ -3,7 +3,7 @@ import * as path from 'path';
 import * as crypto from 'crypto';
 import * as os from 'os';
 import * as fs from 'fs';
-import { AgentRuntime } from '../agent/AgentRuntime';
+import { LegacyTaskControls } from '../agent/LegacyTaskControls';
 import { AgentMode } from '../config/ConfigSchema';
 import { Config } from '../config/Config';
 import { QUALIFICATION_EVIDENCE_FILE, loadQualificationEvidence } from '../models/QualificationEvidenceStore';
@@ -515,7 +515,7 @@ export class AgentPanel implements vscode.WebviewViewProvider {
   }
 
   private view?: vscode.WebviewView;
-  private runtime?: AgentRuntime;
+  private runtime?: LegacyTaskControls;
   private readonly repositoryContext: RepositoryContextService;
   private readonly repoFastPath: RepoFastPath;
   /** Kaam ka Dhaaga projections by run id (Core attempts, Baat Kar mode gates, Karke Dikha tasks); bounded. */
@@ -3669,20 +3669,7 @@ export class AgentPanel implements vscode.WebviewViewProvider {
   }
 
   private initRuntime(): void {
-    this.runtime = new AgentRuntime(this.workspaceRoot, this.context.secrets);
-    // M38: without this, governed_research/github_read_issue/github_comment_on_issue
-    // fail closed rather than falling back to local execution (ToolExecutor).
-    this.runtime.setCoreClient(getCoreManager()?.getClient());
-    this.runtime.setApprovalRequestCallback((req) => {
-      this.post({
-        type: 'approvalRequest',
-        id: req.id,
-        toolName: req.toolName,
-        args: req.args,
-        reason: req.reason,
-        riskLevel: req.riskLevel,
-      });
-    });
+    this.runtime = new LegacyTaskControls(this.workspaceRoot);
   }
 
   private async handleWebviewMessage(msg: unknown): Promise<void> {
