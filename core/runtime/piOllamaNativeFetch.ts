@@ -14,6 +14,7 @@
 import { resolveKeepAlive } from './ollamaResidency';
 import { streamOllamaChatNdjson } from './ollamaStreamTransport';
 import { parseInlineToolCalls } from './inlineToolCalls';
+import { contextExhausted, estimatePromptTokens, recordPromptCalibration } from './contextBudget';
 import type { ModelToolDefinition } from './modelBackend';
 
 /** One model call as Ollama measured it, plus what Core sent. Durations are milliseconds. */
@@ -35,6 +36,8 @@ export interface OllamaCallMetrics {
   inlineToolCallsRecovered?: number;
   /** Identical calls (same tool, same arguments) repeated within this one response and dropped. */
   duplicateToolCallsDropped?: number;
+  /** The prompt plus the reply used (nearly) the whole window: the reply was cut by the context, not finished. */
+  contextExhausted?: boolean;
   /** Set when the response hit the per-response tool-call limit: generation was stopped there. */
   toolCallLimitHit?: number;
   /** Raw chat-template control tokens (e.g. <|tool_response>) removed from the reply text. */
@@ -234,7 +237,9 @@ export function createPiOllamaFetch(options: PiOllamaFetchOptions): typeof fetch
       history: messages.filter((m) => m.role !== 'system' && m.role !== 'developer').reduce((n, m) => n + contentChars(m), 0),
       tools: tools.length ? JSON.stringify(tools).length : 0,
     };
-    const numCtx = options.numCtx(Math.ceil((chars.system + chars.history + chars.tools) / 4));
+    // Calibrated per model from Ollama's real prompt_eval_count (chars / 4 under-counted JSON-heavy prompts by ~22%).
+    const sentChars = chars.system + chars.history + chars.tools;
+    const numCtx = options.numCtx(estimatePromptTokens(sentChars, String(params.model)));
     const effort = params.reasoning_effort;
     const think: boolean | string = effort === 'none' ? false : typeof effort === 'string' ? true : options.think;
     const ollamaOptions: Record<string, unknown> = { num_ctx: numCtx };
@@ -404,10 +409,12 @@ export function createPiOllamaFetch(options: PiOllamaFetchOptions): typeof fetch
               }
               sawDone = true;
               metrics.promptTokens = frame.prompt_eval_count ?? 0;
+              recordPromptCalibration(String(params.model), sentChars, metrics.promptTokens);
               metrics.promptMs = Math.round((frame.prompt_eval_duration ?? 0) / 1e6);
               metrics.outputTokens = frame.eval_count ?? 0;
               metrics.generationMs = Math.round((frame.eval_duration ?? 0) / 1e6);
               metrics.loadMs = Math.round((frame.load_duration ?? 0) / 1e6);
+              if (contextExhausted(metrics.promptTokens, metrics.outputTokens, numCtx)) metrics.contextExhausted = true;
               const finish = metrics.toolCalls ? 'tool_calls' : frame.done_reason === 'length' ? 'length' : 'stop';
               push(chunk({}, finish, { prompt_tokens: metrics.promptTokens, completion_tokens: metrics.outputTokens, total_tokens: metrics.promptTokens + metrics.outputTokens }));
             }

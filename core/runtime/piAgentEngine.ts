@@ -133,6 +133,7 @@ import { approveDevStoryReview, devStoryStatus, dispatchDevStories, planDevStori
 import { KandevClient } from './kandev/kandevClient';
 import { ensureModelResident } from './ollamaResidency';
 import { OLLAMA_IMPLICIT_NUM_CTX_BUCKETS, resolveOllamaChatControls } from './ollamaChatControls';
+import { boundToolResultText, charsPerToken, endsMidSentence, fitMessagesToBudget, TOOL_RESULT_MODEL_CAP_CHARS } from './contextBudget';
 import { createPiOllamaFetch, type OllamaCallMetrics } from './piOllamaNativeFetch';
 import { createPiCloudFetch, resolvePiCloudTarget } from './piCloudTarget';
 import { CLOUD_OFFER_DECLINED_REPLY, classifyOfferReply, cloudOfferAcceptedReply, pendingCloudOffer, permissionBlockNotice, permissionBlockOf, PLAN_ONLY_BLOCK, READ_ONLY_FOLDER_BLOCK, withoutWrongRemedy } from './escalation';
@@ -602,7 +603,8 @@ export function isResearchStubReply(
   const trimmed = text.trim();
   if (isTruncation && isTruncation(trimmed)) return true;
   if (!isResearch) {
-    return trimmed.length <= 1 || /^I[.?!]?$/i.test(trimmed);
+    // A cut-off reply ("The", "Based on") is not an answer; a short complete one ("Yes", "€250") is.
+    return trimmed.length <= 1 || /^I[.?!]?$/i.test(trimmed) || endsMidSentence(trimmed);
   }
   // For research tasks, reject generic fragments like "Found", "Two", "Here", "Done", or answers under 80 chars
   if (trimmed.length < 80) return true;
@@ -1227,9 +1229,11 @@ export class PiAgentEngine implements EngineAdapter {
     noteActiveModel(selectedModel, cloudTarget ? cloudTarget.provider : 'ollama');
     const controls = resolveOllamaChatControls({ profile: 'pi', model: selectedModel });
     const baseNumCtx = controls.numCtx ?? PI_CONTEXT_WINDOW;
+    let modelResidentOk = false;
     if (!cloudTarget) {
       safeRecordRuntimeEvent(db, broadcaster, attemptId, 'model_loading_started', { phase: 'loading', model: selectedModel }, actor);
       const residency = await ensureModelResident(selectedModel, { baseUrl: this.defaultUrl, signal, numCtx: baseNumCtx });
+      modelResidentOk = residency.ok;
       safeRecordRuntimeEvent(db, broadcaster, attemptId, 'model_loading_finished', { phase: 'loading', model: selectedModel, ok: residency.ok, durationMs: residency.durationMs }, actor);
       console.log(`[karkedikha-core ${new Date().toISOString()}] attemptId=${attemptId} stage=model_residency model=${selectedModel} ok=${residency.ok} durationMs=${residency.durationMs} numCtx=${baseNumCtx}${residency.error ? ' error=' + residency.error : ''}`);
     }
@@ -1251,6 +1255,9 @@ export class PiAgentEngine implements EngineAdapter {
         return OLLAMA_IMPLICIT_NUM_CTX_BUCKETS.find((size) => size >= needed) ?? OLLAMA_IMPLICIT_NUM_CTX_BUCKETS[OLLAMA_IMPLICIT_NUM_CTX_BUCKETS.length - 1];
       },
       think: controls.think ?? false,
+      // The model is already loaded, so silence this long is a stuck runner, not a slow start: a 30K-token prompt is read in
+      // ~25 s here. The old 300 s left "Waiting for the model" with no answer until the user pressed Stop (2026-11-28).
+      ...(modelResidentOk ? { firstOutputTimeoutMs: (Number(process.env.PANDESH_MODEL_RESIDENT_FIRST_OUTPUT_TIMEOUT_MS) > 0 ? Number(process.env.PANDESH_MODEL_RESIDENT_FIRST_OUTPUT_TIMEOUT_MS) : 120_000) } : {}),
       onMetrics: (m) => {
         modelCalls.push(m);
         console.log(`[karkedikha-core ${new Date().toISOString()}] attemptId=${attemptId} stage=model_call model=${m.model} numCtx=${m.numCtx} think=${m.think} promptTokens=${m.promptTokens} promptMs=${m.promptMs} outputTokens=${m.outputTokens} generationMs=${m.generationMs} loadMs=${m.loadMs} firstTokenMs=${m.firstTokenMs} totalMs=${m.totalMs} toolCalls=${m.toolCalls} tools=${m.toolDefinitions} chars=${JSON.stringify(m.chars)} status=${m.status}`);
@@ -5454,6 +5461,10 @@ Report this to the user, saying the ${name} agent did the work. Do not add facts
     // list cannot enumerate everything a user may ask for, and a tool-less model can only offer to act, not act.
     const simpleInteractive = !needsTools && !ctx.images?.length && prompt === requestText && isSmallTalk(requestText);
 
+    /** Incomplete = the stub rules, or the last model call filled the window and the text stops without closing. */
+    const isIncompleteReply = (text: string, research: boolean): boolean => isResearchStubReply(text, research, isTruncationArtifact)
+      || (Boolean(modelCalls[modelCalls.length - 1]?.contextExhausted) && !/[.!?…)"'\]}`*%€$\d]$/.test((text ?? '').trim()));
+
     function isTruncationArtifact(text: string): boolean {
       if (!text) return true;
       const trimmed = text.trim();
@@ -6111,7 +6122,20 @@ When the user asks to continue, resume, or check progress/updates, resume this w
       transformContext: async (messages: any[], ctxSignal?: AbortSignal) => {
         const yielded = await interactiveLane.yieldToInteractive(attemptId, ctxSignal ?? signal);
         if (yielded.waitedMs > 50) safeRecordRuntimeEvent(db, broadcaster, attemptId, 'lane_yield', { waitedMs: yielded.waitedMs, timedOut: yielded.timedOut, reason: 'interactive request active' }, actor);
-        return attachTurnState(messages, (m) => earlierMessages.has(m), turnState);
+        const withState = attachTurnState(messages, (m) => earlierMessages.has(m), turnState);
+        if (cloudTarget) return withState;
+        // Never start a call that cannot leave room for an answer (production 2026-11-28: a 32,414-token prompt in a
+        // 32,768 window got a one-word reply). Fixed parts first, then shrink the bulkiest old tool results to fit.
+        let offeredToolChars = 0;
+        try { offeredToolChars = simpleInteractive || modelWithoutTools ? 0 : JSON.stringify(tools.filter((t) => activeToolNames.has(t.name))).length; } catch { /* estimate only */ }
+        const answerReserveTokens = 4_096;
+        const windowChars = Math.floor((baseNumCtx - answerReserveTokens) * charsPerToken(selectedModel));
+        const messageBudget = Math.max(6_000, windowChars - systemPrompt.length - offeredToolChars);
+        const fit = fitMessagesToBudget(withState, messageBudget);
+        if (fit.shrunk > 0 || !fit.fits) {
+          safeRecordRuntimeEvent(db, broadcaster, attemptId, 'context_fitted', { shrunkMessages: fit.shrunk, charsBefore: fit.charsBefore, charsAfter: fit.charsAfter, budgetChars: messageBudget, fits: fit.fits }, actor);
+        }
+        return fit.messages;
       },
       toolExecution: 'sequential',
       beforeToolCall: async (hookCtx: any) => {
@@ -6279,6 +6303,14 @@ When the user asks to continue, resume, or check progress/updates, resume this w
           safeRecordRuntimeEvent(db, broadcaster, attemptId, 'failed_call_memory_cleared', { after: toolName }, actor);
         }
         toolCallsRecorded.push({ tool: toolName, args: toolArgs, result: output, status: toolStatus });
+        // One tool result may not flood the model's window (a 50-message Gmail search added ~25K characters). The journal
+        // above and the evidence list keep the complete result; the model gets a bounded view that says it is partial.
+        const modelText = extractToolResultText(output);
+        if (modelText.length > TOOL_RESULT_MODEL_CAP_CHARS) {
+          const bounded = boundToolResultText(modelText);
+          safeRecordRuntimeEvent(db, broadcaster, attemptId, 'tool_result_bounded', { toolName, chars: modelText.length, omitted: bounded.omitted }, actor);
+          return { content: [{ type: 'text', text: bounded.text }] };
+        }
         return undefined;
       },
     });
@@ -7062,7 +7094,7 @@ When the user asks to continue, resume, or check progress/updates, resume this w
     // Live run AG2: after recording the task, the model's next call came back empty (0 tokens in under a second) and the
     // turn went straight to the tool-evidence synthesis, which answered "the tool results only show a status update".
     // An empty answer before any real work is retried once with the full context and tools.
-    if (!isPublicResearch && !signal?.aborted && isResearchStubReply(finalReply, false, isTruncationArtifact)
+    if (!isPublicResearch && !signal?.aborted && isIncompleteReply(finalReply, false)
       && !toolCallsRecorded.some((t) => t.status === 'completed' && !/^(?:update_task_outcome|request_tools|resolve_time|get_system_info)$/.test(t.tool))) {
       safeRecordRuntimeEvent(db, broadcaster, attemptId, 'empty_reply_retried', { modelCalls: modelCalls.length }, actor);
       try {
@@ -7077,7 +7109,7 @@ When the user asks to continue, resume, or check progress/updates, resume this w
     }
     // D15: the model ended a turn that had real tool results with no answer. Answer from those results alone with one
     // tool-free call (a few thousand tokens instead of the ~26K full context) before giving up.
-    if (!isPublicResearch && !signal?.aborted && isResearchStubReply(finalReply, false, isTruncationArtifact)) {
+    if (!isPublicResearch && !signal?.aborted && isIncompleteReply(finalReply, false)) {
       const evidence = toolCallsRecorded
         .filter((t) => t.status === 'completed' && t.result)
         .map((t) => ({ tool: t.tool, text: extractToolResultText(t.result) }))
@@ -7101,7 +7133,7 @@ When the user asks to continue, resume, or check progress/updates, resume this w
           }
           const synthMsg = await synthStream.result();
           const synthText = (synthMsg.content || []).filter((c: any) => c.type === 'text').map((c: any) => c.text).join('\n').trim();
-          if (synthText.length >= 20 && !isTruncationArtifact(synthText)) {
+          if (synthText.trim() && !isTruncationArtifact(synthText) && !isIncompleteReply(synthText, false)) {
             finalReply = synthText;
             safeRecordRuntimeEvent(db, broadcaster, attemptId, 'tool_evidence_synthesis_completed', { replyLength: finalReply.length }, actor);
           }
@@ -7110,7 +7142,7 @@ When the user asks to continue, resume, or check progress/updates, resume this w
         }
       }
     }
-    const isStubReply = isResearchStubReply(finalReply, isPublicResearch, isTruncationArtifact);
+    const isStubReply = isIncompleteReply(finalReply, isPublicResearch);
     if (isStubReply) {
       const successfulTools = toolCallsRecorded.filter((t) => t.status === 'completed' && t.result);
       if (successfulTools.length > 0) {

@@ -49,7 +49,9 @@ import {
 } from './gmailDraftDigest';
 
 const MAX_LIST_RESULTS = 50;
-const DEFAULT_LIST_RESULTS = 20;
+const DEFAULT_LIST_RESULTS = 15;
+/** Most messages one model-initiated `gmail_search` returns; more come through `nextPageToken`. */
+const MODEL_SEARCH_PAGE = 15;
 /** `gmail_search` bounds not just the list page but how many per-message
  * metadata lookups it will perform to build useful (subject/from/snippet)
  * results — Gmail's `messages.list` response carries only IDs, so a search
@@ -827,8 +829,13 @@ export function createGwsGmailExecutor(config: GwsGmailAdapterConfig): Connector
     };
     try {
       switch (toolName) {
-        case 'gmail_search':
-          return await runGmailSearch(args, deps);
+        case 'gmail_search': {
+          // The model reads a page at a time (a 50-message page was ~25K characters, most of a 32K-token window);
+          // the result carries nextPageToken and says the count shown is not the total, so exhaustive asks still page.
+          const asked = Number(args.maxResults);
+          const pageSize = Number.isFinite(asked) && asked > 0 ? Math.min(Math.floor(asked), MODEL_SEARCH_PAGE) : DEFAULT_LIST_RESULTS;
+          return await runGmailSearch({ ...args, maxResults: Math.min(pageSize, MODEL_SEARCH_PAGE) }, deps);
+        }
         case 'gmail_read_thread':
           return await runGmailReadThread(args, deps);
         case 'gmail_read_attachment':
