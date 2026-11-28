@@ -369,9 +369,11 @@ async function runGmailSearch(args: Record<string, unknown>, deps: CallDeps): Pr
       id: stub.id,
       ...(includeAttachments ? { format: 'full' } : { format: 'metadata', metadataHeaders: ['Subject', 'From', 'Date'] }),
     };
-    let outcome = await callGws(deps, ['gmail', 'users', 'messages', 'get', '--params', JSON.stringify(getParams)], 'gmail_search_metadata_failed');
+    // A full-format message (its attachment list) can be a few hundred KB: the 8 s default timed out 3 of ~200 lookups on the installed app.
+    const lookupOptions = includeAttachments ? { timeoutMs: 30_000 } : {};
+    let outcome = await callGws(deps, ['gmail', 'users', 'messages', 'get', '--params', JSON.stringify(getParams)], 'gmail_search_metadata_failed', lookupOptions);
     // One failed lookup (a timeout, a dropped connection) must not silently remove a message from a list the user will total: try once more.
-    if (!outcome.ok && !deps.signal?.aborted) outcome = await callGws(deps, ['gmail', 'users', 'messages', 'get', '--params', JSON.stringify(getParams)], 'gmail_search_metadata_failed');
+    if (!outcome.ok && !deps.signal?.aborted) outcome = await callGws(deps, ['gmail', 'users', 'messages', 'get', '--params', JSON.stringify(getParams)], 'gmail_search_metadata_failed', lookupOptions);
     if (!outcome.ok) return null; // still failed: no slot; it is counted and reported below (and by the collector's coverage)
     const summary = summarizeGmailMessage(outcome.data as GmailApiMessage, deps.timeZone);
     return {
