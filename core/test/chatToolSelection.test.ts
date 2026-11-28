@@ -76,12 +76,35 @@ describe('follow-ups and expansion', () => {
     const o = offered('What is 17 times 23?');
     const groups = hiddenGroups(ALL, o, CAPS);
     expect(groups).toEqual(expect.arrayContaining(['email', 'calendar', 'memory', 'images', 'documents', 'wish', 'models']));
-    expect(toolsInGroups(ALL, ['email', 'images'], CAPS).sort()).toEqual(['gmail_create_draft', 'gmail_search', 'image_generate']);
+    expect(toolsInGroups(ALL, ['email', 'images'], CAPS).sort()).toEqual(['gmail_search', 'image_generate']);
+    expect(toolsInGroups(ALL, ['email_manage'], CAPS)).toEqual(['gmail_create_draft']);
   });
 
   it('"resume" and "profit" do not pull in documents or wishes', () => {
     expect(groupsForText('Resume the task and tell me the profit').has('documents')).toBe(false);
     expect(groupsForText('Resume the task and tell me the profit').has('wish')).toBe(false);
+  });
+});
+
+describe('shortest path: only what the request points at', () => {
+  it('finding an email offers the reading tools, not drafting or bulk organizing', () => {
+    const o = selectChatTools(ALL, { requestText: 'Is there any email from Enterprise about damage?', capabilities: CAPS }).offered;
+    expect(o.has('gmail_search')).toBe(true);
+    expect(o.has('gmail_create_draft')).toBe(false);
+  });
+  it('earlier turns groups carry over only for a follow-up that names nothing itself', () => {
+    const own = selectChatTools(ALL, { requestText: 'Is there any email from Enterprise?', previousUserText: 'schedule a reminder every morning', recentToolNames: ['schedule_task'], capabilities: CAPS });
+    expect(own.offered.has('schedule_task')).toBe(false);
+    const followUp = selectChatTools(ALL, { requestText: 'and the second one?', previousUserText: 'Is there any email from Enterprise?', capabilities: CAPS });
+    expect(followUp.offered.has('gmail_search')).toBe(true);
+  });
+});
+
+describe('invoices from a sender are mail', () => {
+  it('offers the Gmail reading tools, not only the file tools (Build 194: it searched files instead of mail)', () => {
+    const o = selectChatTools(ALL, { requestText: 'Find all invoices from Acme since January and give me the total', capabilities: CAPS }).offered;
+    expect(o.has('gmail_search')).toBe(true);
+    expect(o.has('gmail_create_draft')).toBe(false);
   });
 });
 

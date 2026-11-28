@@ -28,6 +28,16 @@ export interface FetchOllamaCatalogOptions {
 export async function fetchOllamaCatalog(
   options: FetchOllamaCatalogOptions = {},
 ): Promise<InstalledModelsCatalog> {
+  const first = await fetchOllamaCatalogOnce(options);
+  if (first.reachable || options.timeoutMs !== undefined) return first;
+  // Ollama can be busy loading or swapping a model for a few seconds and miss the 1.5 s window (installed app, 2026-11-28:
+  // the first message after a restart was refused with "Ollama is not reachable"): one patient second try before giving up.
+  return fetchOllamaCatalogOnce({ ...options, timeoutMs: 6_000 });
+}
+
+async function fetchOllamaCatalogOnce(
+  options: FetchOllamaCatalogOptions,
+): Promise<InstalledModelsCatalog> {
   const baseUrl = (options.baseUrl ?? process.env.KARKEDIKHA_OLLAMA_URL ?? DEFAULT_OLLAMA_URL).replace(/\/$/, '');
   const fetchFn = options.fetchFn ?? fetch;
   const controller = new AbortController();

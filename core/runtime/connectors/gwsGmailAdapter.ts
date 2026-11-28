@@ -49,7 +49,9 @@ import {
 } from './gmailDraftDigest';
 
 const MAX_LIST_RESULTS = 50;
-const DEFAULT_LIST_RESULTS = 20;
+const DEFAULT_LIST_RESULTS = 15;
+/** Most messages one model-initiated `gmail_search` returns; more come through `nextPageToken`. */
+const MODEL_SEARCH_PAGE = 15;
 /** `gmail_search` bounds not just the list page but how many per-message
  * metadata lookups it will perform to build useful (subject/from/snippet)
  * results — Gmail's `messages.list` response carries only IDs, so a search
@@ -367,8 +369,12 @@ async function runGmailSearch(args: Record<string, unknown>, deps: CallDeps): Pr
       id: stub.id,
       ...(includeAttachments ? { format: 'full' } : { format: 'metadata', metadataHeaders: ['Subject', 'From', 'Date'] }),
     };
-    const outcome = await callGws(deps, ['gmail', 'users', 'messages', 'get', '--params', JSON.stringify(getParams)], 'gmail_search_metadata_failed');
-    if (!outcome.ok) return null; // a failed lookup leaves no slot; it is counted and reported below
+    // A full-format message (its attachment list) can be a few hundred KB: the 8 s default timed out 3 of ~200 lookups on the installed app.
+    const lookupOptions = includeAttachments ? { timeoutMs: 30_000 } : {};
+    let outcome = await callGws(deps, ['gmail', 'users', 'messages', 'get', '--params', JSON.stringify(getParams)], 'gmail_search_metadata_failed', lookupOptions);
+    // One failed lookup (a timeout, a dropped connection) must not silently remove a message from a list the user will total: try once more.
+    if (!outcome.ok && !deps.signal?.aborted) outcome = await callGws(deps, ['gmail', 'users', 'messages', 'get', '--params', JSON.stringify(getParams)], 'gmail_search_metadata_failed', lookupOptions);
+    if (!outcome.ok) return null; // still failed: no slot; it is counted and reported below (and by the collector's coverage)
     const summary = summarizeGmailMessage(outcome.data as GmailApiMessage, deps.timeZone);
     return {
       id: summary.id || String(stub.id),
@@ -572,11 +578,13 @@ async function runGmailCollectDocuments(args: Record<string, unknown>, deps: Cal
   let retriedWith: string | null = null;
   let effectiveQuery = query;
   let moreExists = false;
+  let messagesNotLoaded = 0;
   do {
     const page = await runGmailSearch({ query: effectiveQuery, maxResults: 50, includeAttachments: true, ...(pageToken ? { pageToken } : {}) }, deps);
     if (page.status !== 'succeeded') return page;
-    const data = JSON.parse(page.output) as { results: Hit[]; nextPageToken?: string; retriedWith?: string };
+    const data = JSON.parse(page.output) as { results: Hit[]; nextPageToken?: string; retriedWith?: string; counts?: { failedLookups?: number } };
     pages += 1;
+    messagesNotLoaded += Number(data.counts?.failedLookups) || 0;
     hits.push(...data.results);
     // The search found nothing as written but matched in its other spelling: every later page is asked with that one.
     if (data.retriedWith && !retriedWith) { retriedWith = data.retriedWith; effectiveQuery = data.retriedWith; }
@@ -601,15 +609,16 @@ async function runGmailCollectDocuments(args: Record<string, unknown>, deps: Cal
   const coverage = {
     pagesFetched: pages,
     messagesFound: hits.length,
+    messagesNotLoaded,
     messagesWithReadableAttachments: withAttachments,
     documentsRead: readCount,
     documentsNotRead: documents.length - readCount,
     documentsSkippedByLimit: jobs.length - selected.length,
-    complete: !moreExists && jobs.length === selected.length && documents.length === readCount,
+    complete: !moreExists && messagesNotLoaded === 0 && jobs.length === selected.length && documents.length === readCount,
   };
   const note = coverage.complete
     ? `All ${hits.length} message(s) matching the query were listed and all ${readCount} attachment(s) were read.`
-    : `Not complete: ${[moreExists ? `the query has more than ${COLLECT_MAX_MESSAGES} messages (narrow it, for example with a date range)` : '', coverage.documentsSkippedByLimit ? `${coverage.documentsSkippedByLimit} attachment(s) were not opened because of the ${maxDocuments}-document limit` : '', coverage.documentsNotRead ? `${coverage.documentsNotRead} attachment(s) could not be read (see status)` : ''].filter(Boolean).join('; ')}. Say so.`;
+    : `Not complete: ${[moreExists ? `the query has more than ${COLLECT_MAX_MESSAGES} messages (narrow it, for example with a date range)` : '', coverage.documentsSkippedByLimit ? `${coverage.documentsSkippedByLimit} attachment(s) were not opened because of the ${maxDocuments}-document limit` : '', coverage.documentsNotRead ? `${coverage.documentsNotRead} attachment(s) could not be read (see status)` : '', messagesNotLoaded ? `${messagesNotLoaded} matching message(s) could not be loaded, so their documents are missing from the list and from the total` : ''].filter(Boolean).join('; ')}. Say so.`;
   return succeeded('gmail_collect_documents_succeeded', {
     query, ...(retriedWith ? { retriedWith } : {}), coverage, note,
     totals: { ...sumTotals(documents.map((d) => d.facts?.total)), note: 'Computed by Pandesh from the totals that were found; report this figure, do not add the amounts up yourself. Documents whose total was not found are not in it.' },
@@ -827,8 +836,13 @@ export function createGwsGmailExecutor(config: GwsGmailAdapterConfig): Connector
     };
     try {
       switch (toolName) {
-        case 'gmail_search':
-          return await runGmailSearch(args, deps);
+        case 'gmail_search': {
+          // The model reads a page at a time (a 50-message page was ~25K characters, most of a 32K-token window);
+          // the result carries nextPageToken and says the count shown is not the total, so exhaustive asks still page.
+          const asked = Number(args.maxResults);
+          const pageSize = Number.isFinite(asked) && asked > 0 ? Math.min(Math.floor(asked), MODEL_SEARCH_PAGE) : DEFAULT_LIST_RESULTS;
+          return await runGmailSearch({ ...args, maxResults: Math.min(pageSize, MODEL_SEARCH_PAGE) }, deps);
+        }
         case 'gmail_read_thread':
           return await runGmailReadThread(args, deps);
         case 'gmail_read_attachment':

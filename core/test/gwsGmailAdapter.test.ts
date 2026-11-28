@@ -718,6 +718,31 @@ describe('gmail_collect_documents lists every document, with sources and an hone
     expect(out.note).toContain('Not complete');
   });
 
+  const failingLookup = (failures: number) => {
+    const base = runner();
+    let left = failures;
+    return (async (input: { args: string[] }) => {
+      const params = JSON.parse(input.args[input.args.indexOf('--params') + 1]);
+      const isGet = input.args.includes('get') && !input.args.includes('attachments') && !input.args.includes('labels');
+      if (isGet && params.id === 'm2' && left > 0) { left -= 1; return { exitCode: 1, stdout: '', stderr: 'connection reset', timedOut: false, aborted: false }; }
+      return (base as (i: unknown) => Promise<unknown>)(input);
+    }) as never;
+  };
+
+  it('retries a message lookup that failed once, so a transient error does not drop a document from the total', async () => {
+    ready();
+    const out = JSON.parse((await createGwsGmailExecutor(baseConfig({ runGwsFn: failingLookup(1) }))('gmail_collect_documents', { query: 'Rechnung' }, ctx)).output);
+    expect(out.coverage).toMatchObject({ messagesFound: 3, messagesNotLoaded: 0, documentsRead: 3, complete: true });
+    expect(out.totals).toMatchObject({ found: 3, sum: '60,00 €' });
+  });
+
+  it('says so, and is not complete, when a message cannot be loaded even after the retry', async () => {
+    ready();
+    const out = JSON.parse((await createGwsGmailExecutor(baseConfig({ runGwsFn: failingLookup(9) }))('gmail_collect_documents', { query: 'Rechnung' }, ctx)).output);
+    expect(out.coverage).toMatchObject({ messagesFound: 2, messagesNotLoaded: 1, complete: false });
+    expect(out.note).toContain('1 matching message(s) could not be loaded');
+  });
+
   it('asks every later page with the spelling that matched', async () => {
     ready();
     const queries: string[] = [];

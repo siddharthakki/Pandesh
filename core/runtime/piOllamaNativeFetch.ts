@@ -14,6 +14,7 @@
 import { resolveKeepAlive } from './ollamaResidency';
 import { streamOllamaChatNdjson } from './ollamaStreamTransport';
 import { parseInlineToolCalls } from './inlineToolCalls';
+import { contextExhausted, estimatePromptTokens, recordPromptCalibration } from './contextBudget';
 import type { ModelToolDefinition } from './modelBackend';
 
 /** One model call as Ollama measured it, plus what Core sent. Durations are milliseconds. */
@@ -35,6 +36,12 @@ export interface OllamaCallMetrics {
   inlineToolCallsRecovered?: number;
   /** Identical calls (same tool, same arguments) repeated within this one response and dropped. */
   duplicateToolCallsDropped?: number;
+  /** The prompt plus the reply used (nearly) the whole window: the reply was cut by the context, not finished. */
+  contextExhausted?: boolean;
+  /** The first attempt produced nothing within the allowance and the call was repeated once. */
+  stallRetried?: boolean;
+  /** Ollama's done_reason: 'stop' (finished), 'length' (cut by the token limit or the window). */
+  finishReason?: string;
   /** Set when the response hit the per-response tool-call limit: generation was stopped there. */
   toolCallLimitHit?: number;
   /** Raw chat-template control tokens (e.g. <|tool_response>) removed from the reply text. */
@@ -55,6 +62,8 @@ export interface PiOllamaFetchOptions {
   /** Used when the request carries no reasoning_effort. */
   think: boolean;
   onMetrics?: (metrics: OllamaCallMetrics) => void;
+  /** The model produced nothing within the first-output allowance: whether the call is being retried once or given up. */
+  onStall?: (info: { waitedMs: number; retrying: boolean }) => void;
   /**
    * A call that has produced no output at all after this long (model load and prompt evaluation included) is stopped.
    * Default 300 s, or PANDESH_MODEL_FIRST_OUTPUT_TIMEOUT_MS.
@@ -234,7 +243,9 @@ export function createPiOllamaFetch(options: PiOllamaFetchOptions): typeof fetch
       history: messages.filter((m) => m.role !== 'system' && m.role !== 'developer').reduce((n, m) => n + contentChars(m), 0),
       tools: tools.length ? JSON.stringify(tools).length : 0,
     };
-    const numCtx = options.numCtx(Math.ceil((chars.system + chars.history + chars.tools) / 4));
+    // Calibrated per model from Ollama's real prompt_eval_count (chars / 4 under-counted JSON-heavy prompts by ~22%).
+    const sentChars = chars.system + chars.history + chars.tools;
+    const numCtx = options.numCtx(estimatePromptTokens(sentChars, String(params.model)));
     const effort = params.reasoning_effort;
     const think: boolean | string = effort === 'none' ? false : typeof effort === 'string' ? true : options.think;
     const ollamaOptions: Record<string, unknown> = { num_ctx: numCtx };
@@ -272,9 +283,19 @@ export function createPiOllamaFetch(options: PiOllamaFetchOptions): typeof fetch
     let upstream: Awaited<ReturnType<typeof streamOllamaChatNdjson>>;
     try {
       // Ollama sends its response headers with the first streamed frame, after loading the model and reading the prompt.
-      upstream = await streamOllamaChatNdjson({ baseUrl: options.baseUrl, body, signal: init.signal ?? undefined, headersTimeoutMs: firstOutputMs });
+      // A first-output stall produced nothing, so repeating the same request cannot duplicate an effect (tool calls only
+      // come from a reply, and none arrived): one bounded retry, announced, then the stall is reported.
+      try {
+        upstream = await streamOllamaChatNdjson({ baseUrl: options.baseUrl, body, signal: init.signal ?? undefined, headersTimeoutMs: firstOutputMs });
+      } catch (first) {
+        if ((first as { code?: string })?.code !== 'UND_ERR_HEADERS_TIMEOUT' || init.signal?.aborted) throw first;
+        metrics.stallRetried = true;
+        try { options.onStall?.({ waitedMs: firstOutputMs, retrying: true }); } catch { /* status only */ }
+        upstream = await streamOllamaChatNdjson({ baseUrl: options.baseUrl, body, signal: init.signal ?? undefined, headersTimeoutMs: firstOutputMs });
+      }
     } catch (err) {
       const stalled = (err as { code?: string })?.code === 'UND_ERR_HEADERS_TIMEOUT' ? new ModelStalledError(firstOutputMs, 'first_output') : null;
+      if (stalled) { try { options.onStall?.({ waitedMs: firstOutputMs, retrying: false }); } catch { /* status only */ } }
       metrics.status = init.signal?.aborted ? 'aborted' : 'error';
       metrics.error = stalled ? stalled.message : err instanceof Error ? err.message : String(err);
       report();
@@ -404,10 +425,13 @@ export function createPiOllamaFetch(options: PiOllamaFetchOptions): typeof fetch
               }
               sawDone = true;
               metrics.promptTokens = frame.prompt_eval_count ?? 0;
+              recordPromptCalibration(String(params.model), sentChars, metrics.promptTokens);
               metrics.promptMs = Math.round((frame.prompt_eval_duration ?? 0) / 1e6);
               metrics.outputTokens = frame.eval_count ?? 0;
               metrics.generationMs = Math.round((frame.eval_duration ?? 0) / 1e6);
               metrics.loadMs = Math.round((frame.load_duration ?? 0) / 1e6);
+              if (frame.done_reason) metrics.finishReason = frame.done_reason;
+              if (contextExhausted(metrics.promptTokens, metrics.outputTokens, numCtx)) metrics.contextExhausted = true;
               const finish = metrics.toolCalls ? 'tool_calls' : frame.done_reason === 'length' ? 'length' : 'stop';
               push(chunk({}, finish, { prompt_tokens: metrics.promptTokens, completion_tokens: metrics.outputTokens, total_tokens: metrics.promptTokens + metrics.outputTokens }));
             }
