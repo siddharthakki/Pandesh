@@ -5161,6 +5161,11 @@ Report this to the user, saying the ${name} agent did the work. Do not add facts
       } catch { /* telemetry only */ }
     }
     const availableToolNames = new Set<string>(activeToolNames);
+    // The workspace and coding rules (~4K characters) and the contract-extraction rules (~2K) are about specific work; the
+    // request says when it is that work. A mail search or a chat carries neither (production 2026-11-28: 20K-character prompt).
+    const needsWorkspaceRules = /\b(?:projects?|workspace|folders?|director(?:y|ies)|repos?|repositor(?:y|ies)|files?|code|coding|readme|source|scripts?|implement|refactor|tests?|build|fix|bug|app|website|html|python|node|npm)\b/i.test(requestText) || ['run_checks', 'delegate_to_opencode', 'find_project_roots', 'request_search_permission'].some((t) => availableToolNames.has(t));
+    const needsContractRules = /\b(?:contracts?|agreements?|leases?|mietvertr(?:ag|äge)|vertr(?:ag|äge)|nda|inventory)\b/i.test(requestText);
+
 
     let mobileCompanionState = 'Mobile Companion State: no phone has been paired.';
     const pairedPhones = pairedPhoneCount(ctx.dataDir);
@@ -5695,11 +5700,6 @@ ${needsContractRules ? `- Gmail contract extraction & inventory:
     } catch (err) {
       console.warn('[piAgentEngine] permission prompt section unavailable:', err);
     }
-
-    // The workspace and coding rules (~4K characters) and the contract-extraction rules (~2K) are about specific work; the
-    // request says when it is that work. A mail search or a chat carries neither (production 2026-11-28: 20K-character prompt).
-    const needsWorkspaceRules = /\b(?:projects?|workspace|folders?|director(?:y|ies)|repos?|repositor(?:y|ies)|files?|code|coding|readme|source|scripts?|implement|refactor|tests?|build|fix|bug|app|website|html|python|node|npm)\b/i.test(requestText) || ['run_checks', 'delegate_to_opencode', 'find_project_roots', 'request_search_permission'].some((t) => availableToolNames.has(t));
-    const needsContractRules = /\b(?:contracts?|agreements?|leases?|mietvertr(?:ag|äge)|vertr(?:ag|äge)|nda|inventory)\b/i.test(requestText);
 
     const simpleSystemPrompt = `You are Pandesh, the personal AI assistant for KarkeDikha (KKD). Assistant Name: Pandesh. Active model: ${selectedModel} via local Ollama provider (${apiBase}). Running on ${process.platform}. Current local time: ${new Date().toLocaleString('en-GB', { timeZone: localTimeZone, weekday: 'long', year: 'numeric', month: 'long', day: 'numeric', hour: '2-digit', minute: '2-digit' })} in time zone ${localTimeZone}. Answer only the user's most recent message; never repeat or re-deliver an earlier answer unless asked. Answer simple conversational questions directly and concisely. When asked what model you are running or what model is active, state that you are running on '${selectedModel}' via local Ollama. If the user asks you to perform an action, search emails or files, or access tools, offer to do so directly. Never expose secrets or perform destructive actions.`;
 
