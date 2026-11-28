@@ -64,8 +64,12 @@ export const TOOL_GROUPS: Record<string, ToolGroup> = {
     pattern: /\b(?:browser|browse|web ?pages?|websites?|open (?:the |that |this )?(?:site|page|link|url)s?)\b/i,
   },
   email: {
-    purpose: 'Gmail: search, read, draft, send, organize email',
+    purpose: 'Gmail: search and read email, attachments, invoices and documents in it',
     pattern: /\b(?:e-?mails?|mail|gmail|posteingang|(?<![\\/_-])inbox(?![-_.]\w)(?!['"`’”]?\s+(?:folder|directory|dir)\b)(?<!\b(?:folder|directory|dir)\s+(?:called\s+|named\s+)?['"`‘“]?inbox)|drafts?|replies|reply to|newsletters?|attachments?)\b|[\w.+-]+@[\w-]+\.\w+/i, // "inbox" is mail only when it is not a folder on disk (live runs sent "the inbox folder" to Gmail tools)
+  },
+  email_manage: {
+    purpose: 'Gmail: write or send a draft, organize the inbox in bulk (labels, archive, cleanup), long multi-batch mail tasks',
+    pattern: /\b(?:draft|compose|reply|respond|send|sent|forward|e-?mail(?:ed)?\s+(?:the|this|that|it|him|her|them|my|an?)|organi[sz]e|clean ?up|declutter|sort|label|archive|unsubscribe|bulk|sweep|tidy)\b/i,
   },
   calendar: {
     purpose: 'Google Calendar: events, availability, create or change an event',
@@ -210,9 +214,16 @@ const GATED_CAPABILITIES = new Set(['ollama-management', 'capability-inventory']
 
 export interface CapabilityMark { capabilityId?: string; deferred?: boolean }
 
+/** Gmail tools that change or create something. A search for an email does not need their definitions. */
+const EMAIL_MANAGE_TOOLS = new Set([
+  'gmail_create_draft', 'gmail_send_draft', 'gmail_plan_changes', 'gmail_apply_plan', 'gmail_undo_plan',
+  'gmail_create_task', 'gmail_task_next_batch', 'gmail_task_status',
+]);
+
 export function groupOfTool(name: string, capability?: CapabilityMark): string | null {
   if (BASE_TOOLS.has(name)) return null;
   if (NATIVE_GROUP[name]) return NATIVE_GROUP[name];
+  if (EMAIL_MANAGE_TOOLS.has(name)) return 'email_manage';
   if (name.startsWith('gmail_')) return 'email';
   if (name.startsWith('calendar_')) return 'calendar';
   if (name.startsWith('memory_')) return 'memory';
@@ -276,11 +287,18 @@ export function selectChatTools(allNames: readonly string[], input: ToolSelectio
   const caps = input.capabilities ?? new Map<string, CapabilityMark>();
   const matched = new Map<string, 'request' | 'previous_message' | 'recent_tool'>();
   for (const g of groupsForText(input.requestText)) matched.set(g, 'request');
-  for (const g of groupsForText(input.previousUserText ?? '')) if (!matched.has(g)) matched.set(g, 'previous_message');
-  for (const name of input.recentToolNames ?? []) {
-    const g = groupOfTool(name, caps.get(name));
-    if (g && !matched.has(g)) matched.set(g, 'recent_tool');
+  // A request that names its own subject gets that subject's tools only. Earlier turns' groups carry over just for a
+  // follow-up that points at nothing itself ("and the second one?"): an extra group costs ~2K tokens on every call, and
+  // request_tools adds a missed one.
+  if (matched.size === 0) {
+    for (const g of groupsForText(input.previousUserText ?? '')) if (!matched.has(g)) matched.set(g, 'previous_message');
+    for (const name of input.recentToolNames ?? []) {
+      const g = groupOfTool(name, caps.get(name));
+      if (g && !matched.has(g)) matched.set(g, 'recent_tool');
+    }
   }
+  // Managing mail needs the reading tools too (find the message, then draft or sort).
+  if (matched.has('email_manage') && !matched.has('email')) matched.set('email', matched.get('email_manage')!);
   const offered = new Set<string>();
   for (const name of allNames) {
     if (BASE_TOOLS.has(name)) { offered.add(name); continue; }

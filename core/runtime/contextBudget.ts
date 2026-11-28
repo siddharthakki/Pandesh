@@ -163,8 +163,11 @@ export function endsMidSentence(text: string | null | undefined): boolean {
   if ((trimmed.match(/```/g)?.length ?? 0) % 2 === 1) return true;
   if (/[,:;(\[{\-–—]$/.test(trimmed)) return true;
   if (/[.!?…)"'»”\]}`*]$/.test(trimmed)) return false;
-  const last = trimmed.split(/\s+/).pop()!.toLowerCase().replace(/[^\p{L}]/gu, '');
-  return DANGLING_LAST_WORD.has(last);
+  // Only a fragment of a few words is judged by its last word; anything longer relies on how the generation ended
+  // (token limit, full window), which is a fact and not a guess about language.
+  const words = trimmed.split(/\s+/);
+  if (words.length > 4) return false;
+  return DANGLING_LAST_WORD.has(words[words.length - 1].toLowerCase().replace(/[^\p{L}]/gu, ''));
 }
 
 /** The call used (almost) the whole window: whatever came back was limited by the context, not finished by the model. */
