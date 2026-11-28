@@ -287,10 +287,13 @@ export function selectChatTools(allNames: readonly string[], input: ToolSelectio
   const caps = input.capabilities ?? new Map<string, CapabilityMark>();
   const matched = new Map<string, 'request' | 'previous_message' | 'recent_tool'>();
   for (const g of groupsForText(input.requestText)) matched.set(g, 'request');
-  // A request that names its own subject gets that subject's tools only. Earlier turns' groups carry over just for a
-  // follow-up that points at nothing itself ("and the second one?"): an extra group costs ~2K tokens on every call, and
-  // request_tools adds a missed one.
-  if (matched.size === 0) {
+  // A request that names its own subject gets that subject's tools only. Earlier turns' groups carry over for a
+  // follow-up: one that points at nothing itself ("and the second one?"), or a short one that refers back ("it's blocked: the
+  // insurer has to send the policy number" mentions sending but continues the task). An extra group costs ~2K tokens on
+  // every call, and request_tools adds a missed one.
+  const words = input.requestText.trim().split(/\s+/).length;
+  const refersBack = words <= 14 && /\b(?:it|its|it's|that|this|those|them|they|he|she|also|too|again|same|one)\b/i.test(input.requestText);
+  if (matched.size === 0 || refersBack) {
     for (const g of groupsForText(input.previousUserText ?? '')) if (!matched.has(g)) matched.set(g, 'previous_message');
     for (const name of input.recentToolNames ?? []) {
       const g = groupOfTool(name, caps.get(name));

@@ -7141,7 +7141,7 @@ When the user asks to continue, resume, or check progress/updates, resume this w
           }
           const synthMsg = await synthStream.result();
           const synthText = (synthMsg.content || []).filter((c: any) => c.type === 'text').map((c: any) => c.text).join('\n').trim();
-          if (synthText.trim() && !isTruncationArtifact(synthText) && !isIncompleteReply(synthText, false)) {
+          if (synthText.length >= 20 && !isTruncationArtifact(synthText) && !isIncompleteReply(synthText, false)) {
             finalReply = synthText;
             safeRecordRuntimeEvent(db, broadcaster, attemptId, 'tool_evidence_synthesis_completed', { replyLength: finalReply.length }, actor);
           }
