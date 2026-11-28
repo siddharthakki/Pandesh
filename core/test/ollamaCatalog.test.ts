@@ -23,6 +23,17 @@ describe('Ollama installed-model catalog', () => {
     await expect(fetchOllamaCatalog({ fetchFn: fetchFn as typeof fetch })).resolves.toEqual({ models: [], reachable: false });
   });
 
+  it('tries once more when Ollama misses the first short window (busy loading a model)', async () => {
+    let calls = 0;
+    const fetchFn = async () => {
+      calls += 1;
+      if (calls === 1) throw new Error('aborted');
+      return new Response(JSON.stringify({ models: [{ name: 'alpha:latest' }] }), { status: 200 });
+    };
+    await expect(fetchOllamaCatalog({ fetchFn: fetchFn as typeof fetch })).resolves.toEqual({ reachable: true, models: ['alpha:latest'] });
+    expect(calls).toBe(2);
+  });
+
   it('returns unreachable for non-success and malformed responses', async () => {
     const badStatus = async () => new Response('no', { status: 503 });
     const malformed = async () => new Response(JSON.stringify({ models: 'wrong' }), { status: 200 });
