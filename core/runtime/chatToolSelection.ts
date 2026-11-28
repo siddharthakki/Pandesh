@@ -65,7 +65,7 @@ export const TOOL_GROUPS: Record<string, ToolGroup> = {
   },
   email: {
     purpose: 'Gmail: search and read email, attachments, invoices and documents in it',
-    pattern: /\b(?:e-?mails?|mail|gmail|posteingang|(?<![\\/_-])inbox(?![-_.]\w)(?!['"`’”]?\s+(?:folder|directory|dir)\b)(?<!\b(?:folder|directory|dir)\s+(?:called\s+|named\s+)?['"`‘“]?inbox)|drafts?|replies|reply to|newsletters?|attachments?)\b|[\w.+-]+@[\w-]+\.\w+/i, // "inbox" is mail only when it is not a folder on disk (live runs sent "the inbox folder" to Gmail tools)
+    pattern: /\b(?:e-?mails?|mail|gmail|posteingang|(?<![\\/_-])inbox(?![-_.]\w)(?!['"`’”]?\s+(?:folder|directory|dir)\b)(?<!\b(?:folder|directory|dir)\s+(?:called\s+|named\s+)?['"`‘“]?inbox)|drafts?|replies|reply to|newsletters?|attachments?)\b|\b(?:invoices?|receipts?|bills?|rechnung\w*)\b[^.?!]{0,60}\b(?:from|von)\s+\w+|[\w.+-]+@[\w-]+\.\w+/i, // "inbox" is mail only when it is not a folder on disk (live runs sent "the inbox folder" to Gmail tools)
   },
   email_manage: {
     purpose: 'Gmail: write or send a draft, organize the inbox in bulk (labels, archive, cleanup), long multi-batch mail tasks',
