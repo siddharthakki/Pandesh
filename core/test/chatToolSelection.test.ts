@@ -101,8 +101,8 @@ describe('shortest path: only what the request points at', () => {
 });
 
 describe('invoices from a sender are mail', () => {
-  it('offers the Gmail reading tools, not only the file tools (Build 194: it searched files for Conficars)', () => {
-    const o = selectChatTools(ALL, { requestText: 'Find all invoices from Conficars since January and give me the total', capabilities: CAPS }).offered;
+  it('offers the Gmail reading tools, not only the file tools (Build 194: it searched files instead of mail)', () => {
+    const o = selectChatTools(ALL, { requestText: 'Find all invoices from Acme since January and give me the total', capabilities: CAPS }).offered;
     expect(o.has('gmail_search')).toBe(true);
     expect(o.has('gmail_create_draft')).toBe(false);
   });
